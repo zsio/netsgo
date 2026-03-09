@@ -1,0 +1,24 @@
+# 编译产物
+bin/
+*.exe
+tmp/
+
+# Go 相关
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 前端 (Phase 2)
+web/node_modules/
+web/dist/
+!web/dist/placeholder.md
