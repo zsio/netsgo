@@ -11,6 +11,7 @@ const (
 	MsgTypeProbeReport  = "probe_report"   // Agent → Server: 探针数据上报
 	MsgTypeProxyNew     = "proxy_new"      // Agent/Server: 请求创建代理隧道
 	MsgTypeProxyNewResp = "proxy_new_resp" // Server → Agent: 创建代理响应
+	MsgTypeProxyClose   = "proxy_close"    // 双向: 关闭某条代理隧道
 )
 
 // Message 是控制通道上传输的统一消息结构
@@ -68,4 +69,10 @@ type ProxyNewResponse struct {
 	Success    bool   `json:"success"`
 	Message    string `json:"message,omitempty"`
 	RemotePort int    `json:"remote_port,omitempty"` // 实际分配的公网端口
+}
+
+// ProxyCloseRequest 关闭某条代理隧道
+type ProxyCloseRequest struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason,omitempty"`
 }

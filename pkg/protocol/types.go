@@ -49,3 +49,18 @@ const (
 	ProxyStatusStopped = "stopped"
 	ProxyStatusError   = "error"
 )
+
+// 数据通道握手魔数 — Agent 连接 Server 数据通道时，首字节发送此值以区分 HTTP 流量
+const DataChannelMagic byte = 0x4E // 'N' for NetsGo
+
+// 数据通道握手状态码
+const (
+	DataHandshakeOK   byte = 0x00
+	DataHandshakeFail byte = 0x01
+)
+
+// StreamHeader 每个 yamux stream 开头发送的头部
+// Server 打开 stream 后写入此头部，告诉 Agent 这个 stream 属于哪条代理隧道
+type StreamHeader struct {
+	ProxyName string `json:"proxy_name"`
+}

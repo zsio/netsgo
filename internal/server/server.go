@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/hashicorp/yamux"
 
 	"netsgo/pkg/protocol"
 )
@@ -20,11 +22,15 @@ type Server struct {
 
 // AgentConn 代表一个已连接的 Agent
 type AgentConn struct {
-	ID       string
-	Info     protocol.AgentInfo
-	Stats    *protocol.SystemStats
-	conn     *websocket.Conn
-	mu       sync.Mutex
+	ID          string
+	Info        protocol.AgentInfo
+	Stats       *protocol.SystemStats
+	conn        *websocket.Conn // 控制通道
+	mu          sync.Mutex
+	dataSession *yamux.Session           // 数据通道 yamux Session
+	dataMu      sync.RWMutex             // 保护 dataSession
+	proxies     map[string]*ProxyTunnel  // 代理隧道 name -> tunnel
+	proxyMu     sync.RWMutex             // 保护 proxies
 }
 
 // New 创建一个新的 Server 实例
@@ -32,8 +38,41 @@ func New(port int) *Server {
 	return &Server{Port: port}
 }
 
-// Start 启动服务端，监听单端口提供所有服务
+// Start 启动服务端，单端口同时处理 HTTP/WebSocket 和数据通道。
+// 通过 peek 首字节区分：HTTP 请求 vs 数据通道魔数 (0x4E)。
 func (s *Server) Start() error {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Port))
+	if err != nil {
+		return fmt.Errorf("监听端口 %d 失败: %w", s.Port, err)
+	}
+
+	addr := ln.Addr().(*net.TCPAddr)
+	s.Port = addr.Port // 更新为实际端口（当 Port=0 时有用）
+
+	log.Printf("🚀 NetsGo Server 已启动，监听 :%d", s.Port)
+	log.Printf("📊 Web 面板: http://localhost:%d", s.Port)
+	log.Printf("🔌 控制通道: ws://localhost:%d/ws/control", s.Port)
+	log.Printf("🔗 数据通道: 同端口 (魔数 0x4E)")
+
+	// HTTP 服务器（处理 WebSocket + API + Web 面板）
+	httpServer := &http.Server{Handler: s.newHTTPMux()}
+
+	// 包装 listener：peek 分发
+	peekLn := &PeekListener{
+		Listener: ln,
+		server:   s,
+	}
+
+	return httpServer.Serve(peekLn)
+}
+
+// StartHTTPOnly 仅启动 HTTP 模式（用于测试，不做 peek 分发）
+func (s *Server) StartHTTPOnly() *http.ServeMux {
+	return s.newHTTPMux()
+}
+
+// newHTTPMux 创建 HTTP 路由
+func (s *Server) newHTTPMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Web 面板 — 静态文件（go:embed）
@@ -46,15 +85,65 @@ func (s *Server) Start() error {
 	// 控制通道 WebSocket
 	mux.HandleFunc("/ws/control", s.handleControlWS)
 
-	// 数据通道 WebSocket（Phase 1 占位）
-	mux.HandleFunc("/ws/data", s.handleDataWS)
+	// 数据通道端点信息（不再是 501）
+	mux.HandleFunc("/ws/data", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"info": "数据通道已迁移到同端口 TCP 二进制协议，魔数 0x4E",
+		})
+	})
 
-	addr := fmt.Sprintf(":%d", s.Port)
-	log.Printf("🚀 NetsGo Server 已启动，监听 %s", addr)
-	log.Printf("📊 Web 面板: http://localhost%s", addr)
-	log.Printf("🔌 控制通道: ws://localhost%s/ws/control", addr)
+	return mux
+}
 
-	return http.ListenAndServe(addr, mux)
+// PeekListener 包装 net.Listener，peek 首字节区分 HTTP 和数据通道。
+// HTTP 连接直接交给 http.Server，数据通道连接交给 handleDataConn。
+type PeekListener struct {
+	net.Listener
+	server  *Server
+	pending chan net.Conn
+	once    sync.Once
+}
+
+func (pl *PeekListener) Accept() (net.Conn, error) {
+	pl.once.Do(func() {
+		pl.pending = make(chan net.Conn, 64)
+		go pl.dispatchLoop()
+	})
+
+	conn, ok := <-pl.pending
+	if !ok {
+		return nil, net.ErrClosed
+	}
+	return conn, nil
+}
+
+// dispatchLoop 从底层 Listener Accept 连接，peek 首字节分发。
+func (pl *PeekListener) dispatchLoop() {
+	defer close(pl.pending)
+
+	for {
+		conn, err := pl.Listener.Accept()
+		if err != nil {
+			return
+		}
+
+		pc := &PeekConn{Conn: conn}
+		b, err := pc.PeekByte()
+		if err != nil {
+			conn.Close()
+			continue
+		}
+
+		if b == protocol.DataChannelMagic {
+			// 数据通道：消费掉魔数字节，交给 handleDataConn
+			pc.hasPeek = false // 消费掉已 peek 的魔数
+			go pl.server.handleDataConn(pc)
+		} else {
+			// HTTP/WebSocket：送入 pending channel 交给 http.Server
+			pl.pending <- pc
+		}
+	}
 }
 
 // --- WebSocket 升级器 ---
@@ -89,6 +178,13 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	// 保存 Agent 连接
 	s.agents.Store(agent.ID, agent)
 	defer func() {
+		// 清理：停止所有代理隧道，关闭数据通道
+		s.StopAllProxies(agent)
+		agent.dataMu.Lock()
+		if agent.dataSession != nil {
+			agent.dataSession.Close()
+		}
+		agent.dataMu.Unlock()
 		s.agents.Delete(agent.ID)
 		log.Printf("🔌 Agent 已断开: %s [ID: %s]", agent.Info.Hostname, agent.ID)
 	}()
@@ -128,9 +224,10 @@ func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
 	}
 
 	return &AgentConn{
-		ID:   agentID,
-		Info: authReq.Agent,
-		conn: conn,
+		ID:      agentID,
+		Info:    authReq.Agent,
+		conn:    conn,
+		proxies: make(map[string]*ProxyTunnel),
 	}, nil
 }
 
@@ -164,16 +261,53 @@ func (s *Server) controlLoop(agent *AgentConn) {
 			log.Printf("📊 [%s] CPU: %.1f%% | 内存: %.1f%% | 磁盘: %.1f%%",
 				agent.Info.Hostname, stats.CPUUsage, stats.MemUsage, stats.DiskUsage)
 
+		case protocol.MsgTypeProxyNew:
+			// 收到创建代理隧道请求
+			var req protocol.ProxyNewRequest
+			if err := msg.ParsePayload(&req); err != nil {
+				log.Printf("⚠️ 解析代理请求失败 [%s]: %v", agent.ID, err)
+				continue
+			}
+
+			err := s.StartProxy(agent, req)
+			var resp *protocol.Message
+			if err != nil {
+				log.Printf("❌ 创建代理失败 [%s]: %v", agent.ID, err)
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+					Success: false,
+					Message: err.Error(),
+				})
+			} else {
+				agent.proxyMu.RLock()
+				tunnel := agent.proxies[req.Name]
+				actualPort := tunnel.Config.RemotePort
+				agent.proxyMu.RUnlock()
+
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+					Success:    true,
+					Message:    "代理隧道创建成功",
+					RemotePort: actualPort,
+				})
+			}
+
+			agent.mu.Lock()
+			agent.conn.WriteJSON(resp)
+			agent.mu.Unlock()
+
+		case protocol.MsgTypeProxyClose:
+			var req protocol.ProxyCloseRequest
+			if err := msg.ParsePayload(&req); err != nil {
+				log.Printf("⚠️ 解析关闭代理请求失败 [%s]: %v", agent.ID, err)
+				continue
+			}
+			if err := s.StopProxy(agent, req.Name); err != nil {
+				log.Printf("⚠️ 关闭代理失败 [%s]: %v", agent.ID, err)
+			}
+
 		default:
 			log.Printf("⚠️ 未知消息类型 [%s]: %s", agent.ID, msg.Type)
 		}
 	}
-}
-
-// --- 数据通道处理（Phase 1 占位）---
-
-func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "数据通道尚未实现 (Phase 2)", http.StatusNotImplemented)
 }
 
 // --- Web 面板 ---
@@ -275,7 +409,7 @@ const placeholderHTML = `<!DOCTYPE html>
         <h1>🚀 <span>NetsGo</span></h1>
         <p>新一代内网穿透与边缘管控平台</p>
         <p>服务端已启动，Web 面板正在开发中…</p>
-        <div class="badge">Phase 1 — MVP</div>
+        <div class="badge">Phase 2 — yamux 数据面</div>
     </div>
 </body>
 </html>`

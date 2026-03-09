@@ -5,20 +5,52 @@ tmp/
 
 # Go 相关
 vendor/
+*.test
+cover.out
+cover.html
+*.prof
+*.pprof
 
 # IDE
 .idea/
 .vscode/
+!.vscode/extensions.json
 *.swp
 *.swo
 *~
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 
 # OS
 .DS_Store
 Thumbs.db
 Desktop.ini
 
-# 前端 (Phase 2)
+# 环境配置
+.env
+.env.local
+.env.*.local
+
+# AI 工具
+.gemini/
+.agent/
+.agents/
+.claude
+.codex
+.cursor
+
+# 前端 (web/)
 web/node_modules/
 web/dist/
+web/dist-ssr/
 !web/dist/placeholder.md
+*.local
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*

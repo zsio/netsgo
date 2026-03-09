@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,14 +23,7 @@ import (
 func setupWSTest(t *testing.T) (*Server, *websocket.Conn, *httptest.Server, func()) {
 	t.Helper()
 	s := New(0)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/control", s.handleControlWS)
-	mux.HandleFunc("/api/status", s.handleAPIStatus)
-	mux.HandleFunc("/api/agents", s.handleAPIAgents)
-	mux.HandleFunc("/ws/data", s.handleDataWS)
-	mux.HandleFunc("/", s.handleWeb)
-
-	ts := httptest.NewServer(mux)
+	ts := httptest.NewServer(s.newHTTPMux())
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -49,14 +43,7 @@ func setupWSTest(t *testing.T) (*Server, *websocket.Conn, *httptest.Server, func
 func setupWSTestNoConn(t *testing.T) (*Server, *httptest.Server, func()) {
 	t.Helper()
 	s := New(0)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/control", s.handleControlWS)
-	mux.HandleFunc("/api/status", s.handleAPIStatus)
-	mux.HandleFunc("/api/agents", s.handleAPIAgents)
-	mux.HandleFunc("/ws/data", s.handleDataWS)
-	mux.HandleFunc("/", s.handleWeb)
-
-	ts := httptest.NewServer(mux)
+	ts := httptest.NewServer(s.newHTTPMux())
 	return s, ts, ts.Close
 }
 
@@ -155,12 +142,9 @@ func TestAPI_Status_WithAgents(t *testing.T) {
 	_, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	// 此时 WS 已连接但未认证，先获取 status
-	// 需要建立一个已认证的连接
 	conn2, _ := connectAndAuth(t, ts, "agent-host")
 	defer conn2.Close()
 
-	// 等 Server 处理完
 	time.Sleep(50 * time.Millisecond)
 
 	result := getAPIJSON(t, ts, "/api/status")
@@ -177,15 +161,12 @@ func TestAPI_Status_AfterDisconnect(t *testing.T) {
 	conn2, _ := connectAndAuth(t, ts, "temp-agent")
 	time.Sleep(50 * time.Millisecond)
 
-	// 验证 agent 存在
 	result := getAPIJSON(t, ts, "/api/status")
 	before := result["agent_count"].(float64)
 
-	// 断开
 	conn2.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	// 验证已移除
 	result2 := getAPIJSON(t, ts, "/api/status")
 	after := result2["agent_count"].(float64)
 
@@ -229,7 +210,6 @@ func TestAPI_Agents_Multiple(t *testing.T) {
 		t.Errorf("期望至少 3 个 Agent，得到 %d", len(agents))
 	}
 
-	// 验证每个 agent 都有 id 和 info
 	for i, a := range agents {
 		if a["id"] == nil {
 			t.Errorf("Agent[%d] 缺少 id", i)
@@ -247,7 +227,6 @@ func TestAPI_Agents_WithStats(t *testing.T) {
 	conn1, _ := connectAndAuth(t, ts, "stats-host")
 	defer conn1.Close()
 
-	// 发送探针数据
 	stats := protocol.SystemStats{CPUUsage: 55.5, MemUsage: 70.0, NumCPU: 8}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
 	conn1.WriteJSON(msg)
@@ -263,7 +242,6 @@ func TestAPI_Agents_WithStats(t *testing.T) {
 		t.Fatal("期望至少 1 个 Agent")
 	}
 
-	// 查找有 stats 的 agent
 	found := false
 	for _, a := range agents {
 		if a["stats"] != nil {
@@ -286,13 +264,11 @@ func TestAPI_Agents_StatsUpdated(t *testing.T) {
 	conn1, authResp := connectAndAuth(t, ts, "update-host")
 	defer conn1.Close()
 
-	// 第一次上报
 	stats1 := protocol.SystemStats{CPUUsage: 20.0}
 	msg1, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats1)
 	conn1.WriteJSON(msg1)
 	time.Sleep(50 * time.Millisecond)
 
-	// 第二次上报（应覆盖）
 	stats2 := protocol.SystemStats{CPUUsage: 80.0}
 	msg2, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats2)
 	conn1.WriteJSON(msg2)
@@ -309,7 +285,7 @@ func TestAPI_Agents_StatsUpdated(t *testing.T) {
 }
 
 // ============================================================
-// Web 面板测试 (3)
+// Web 面板测试 (2)
 // ============================================================
 
 func TestWeb_Root(t *testing.T) {
@@ -340,17 +316,6 @@ func TestWeb_NotFound(t *testing.T) {
 	}
 }
 
-func TestWeb_DataWSNotImpl(t *testing.T) {
-	s := New(8080)
-	req := httptest.NewRequest(http.MethodGet, "/ws/data", nil)
-	w := httptest.NewRecorder()
-	s.handleDataWS(w, req)
-
-	if w.Code != http.StatusNotImplemented {
-		t.Errorf("状态码期望 501，得到 %d", w.Code)
-	}
-}
-
 // ============================================================
 // 控制通道 — 认证 (5)
 // ============================================================
@@ -378,7 +343,6 @@ func TestAuth_EmptyToken(t *testing.T) {
 
 	authResp := doAuthWithInfo(t, conn, "host", "")
 
-	// Phase 1 允许空 Token
 	if !authResp.Success {
 		t.Errorf("Phase1 空 token 应允许连接: %s", authResp.Message)
 	}
@@ -390,7 +354,6 @@ func TestAuth_EmptyHostname(t *testing.T) {
 
 	authResp := doAuthWithInfo(t, conn, "", "token")
 
-	// 空主机名不应崩溃
 	if !authResp.Success {
 		t.Errorf("空主机名不应导致认证失败: %s", authResp.Message)
 	}
@@ -403,11 +366,9 @@ func TestAuth_WrongMsgType(t *testing.T) {
 	_, conn, _, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	// 发送非认证消息
 	msg, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 	conn.WriteJSON(msg)
 
-	// Server 应关闭连接
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var resp protocol.Message
 	err := conn.ReadJSON(&resp)
@@ -427,10 +388,8 @@ func TestAuth_MalformedJSON(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// 发送畸形 JSON
 	conn.WriteMessage(websocket.TextMessage, []byte(`{invalid json!!!`))
 
-	// Server 应关闭连接
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, _, readErr := conn.ReadMessage()
 	if readErr == nil {
@@ -531,7 +490,6 @@ func TestProbe_MultipleReports(t *testing.T) {
 
 	authResp := doAuth(t, conn)
 
-	// 连续上报 5 次，每次 CPU 值不同
 	for i := 0; i < 5; i++ {
 		cpuVal := float64(i+1) * 10.0
 		stats := protocol.SystemStats{CPUUsage: cpuVal, NumCPU: 8}
@@ -544,7 +502,6 @@ func TestProbe_MultipleReports(t *testing.T) {
 
 	val, _ := s.agents.Load(authResp.AgentID)
 	agent := val.(*AgentConn)
-	// 最后一次上报的 CPU 是 50.0
 	if agent.Stats.CPUUsage != 50.0 {
 		t.Errorf("最终 CPUUsage 应为 50.0（最后一次上报），得到 %f", agent.Stats.CPUUsage)
 	}
@@ -558,19 +515,15 @@ func TestLifecycle_Full(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	// 1. 连接 + 认证
 	conn, authResp := connectAndAuth(t, ts, "lifecycle-host")
 
-	// 等待 Server 完成 agents.Store（auth 响应先于 Store 发送）
 	time.Sleep(50 * time.Millisecond)
 
-	// 2. 验证已注册
 	_, ok := s.agents.Load(authResp.AgentID)
 	if !ok {
 		t.Fatal("认证后 Agent 应已注册")
 	}
 
-	// 3. 心跳
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 	conn.WriteJSON(ping)
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -580,7 +533,6 @@ func TestLifecycle_Full(t *testing.T) {
 		t.Errorf("心跳: 期望 pong，得到 %s", pong.Type)
 	}
 
-	// 4. 探针上报
 	stats := protocol.SystemStats{CPUUsage: 33.3, NumCPU: 2}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
 	conn.WriteJSON(msg)
@@ -591,11 +543,9 @@ func TestLifecycle_Full(t *testing.T) {
 		t.Error("探针数据未正确更新")
 	}
 
-	// 5. 断开
 	conn.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	// 6. 验证已清理
 	_, ok = s.agents.Load(authResp.AgentID)
 	if ok {
 		t.Error("断开后 Agent 应已从 map 中移除")
@@ -613,7 +563,7 @@ func TestMultipleAgents_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			hostname := strings.Repeat("h", idx+1) // h, hh, hhh...
+			hostname := strings.Repeat("h", idx+1)
 			wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 			if err != nil {
@@ -622,7 +572,6 @@ func TestMultipleAgents_Concurrent(t *testing.T) {
 			}
 			defer conn.Close()
 
-			// 认证
 			authReq := protocol.AuthRequest{
 				Token: "token",
 				Agent: protocol.AgentInfo{Hostname: hostname, OS: "linux", Arch: "amd64", Version: "0.1.0"},
@@ -644,7 +593,6 @@ func TestMultipleAgents_Concurrent(t *testing.T) {
 				return
 			}
 
-			// 发送心跳验证连接正常
 			ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 			conn.WriteJSON(ping)
 			conn.ReadJSON(&resp)
@@ -663,24 +611,20 @@ func TestAgent_DisconnectCleansUp(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	// 建两个 Agent
 	conn1, auth1 := connectAndAuth(t, ts, "stay-host")
 	conn2, auth2 := connectAndAuth(t, ts, "leave-host")
 
 	time.Sleep(50 * time.Millisecond)
 
-	// 验证两个都在
 	_, ok1 := s.agents.Load(auth1.AgentID)
 	_, ok2 := s.agents.Load(auth2.AgentID)
 	if !ok1 || !ok2 {
 		t.Fatal("两个 Agent 都应已注册")
 	}
 
-	// 断开 Agent2
 	conn2.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	// Agent1 应仍在，Agent2 应已移除
 	_, ok1 = s.agents.Load(auth1.AgentID)
 	_, ok2 = s.agents.Load(auth2.AgentID)
 	if !ok1 {
@@ -691,4 +635,84 @@ func TestAgent_DisconnectCleansUp(t *testing.T) {
 	}
 
 	conn1.Close()
+}
+
+// ============================================================
+// PeekConn 测试 (2)
+// ============================================================
+
+func TestPeekConn_PeekByte(t *testing.T) {
+	// 创建一个 net.Pipe 来测试
+	client, server := pipeConn()
+	defer client.Close()
+	defer server.Close()
+
+	// 向 server 端写入数据
+	go func() {
+		server.Write([]byte("Hello"))
+	}()
+
+	pc := &PeekConn{Conn: client}
+
+	// Peek 应返回 'H' 但不消费
+	b, err := pc.PeekByte()
+	if err != nil {
+		t.Fatalf("PeekByte 失败: %v", err)
+	}
+	if b != 'H' {
+		t.Errorf("PeekByte 期望 'H'，得到 %c", b)
+	}
+
+	// 再次 Peek 应返回相同值
+	b2, _ := pc.PeekByte()
+	if b2 != 'H' {
+		t.Errorf("重复 PeekByte 期望 'H'，得到 %c", b2)
+	}
+
+	// Read 应先返回 'H'，然后正常继续
+	buf := make([]byte, 5)
+	n, err := pc.Read(buf)
+	if err != nil {
+		t.Fatalf("Read 失败: %v", err)
+	}
+	if string(buf[:n]) != "Hello" {
+		t.Errorf("Read 期望 'Hello'，得到 %q", buf[:n])
+	}
+}
+
+func TestPeekConn_ReadWithoutPeek(t *testing.T) {
+	client, server := pipeConn()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		server.Write([]byte("World"))
+	}()
+
+	pc := &PeekConn{Conn: client}
+
+	// 不 Peek 直接 Read
+	buf := make([]byte, 5)
+	n, err := pc.Read(buf)
+	if err != nil {
+		t.Fatalf("Read 失败: %v", err)
+	}
+	if string(buf[:n]) != "World" {
+		t.Errorf("Read 期望 'World'，得到 %q", buf[:n])
+	}
+}
+
+// pipeConn 创建一对 net.Conn 用于测试
+func pipeConn() (net.Conn, net.Conn) {
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	var serverConn net.Conn
+	done := make(chan struct{})
+	go func() {
+		serverConn, _ = ln.Accept()
+		close(done)
+	}()
+	clientConn, _ := net.Dial("tcp", ln.Addr().String())
+	<-done
+	ln.Close()
+	return clientConn, serverConn
 }

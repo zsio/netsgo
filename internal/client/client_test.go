@@ -149,8 +149,8 @@ func TestClient_HeartbeatSent(t *testing.T) {
 
 	go c.Start()
 
-	// 等待足够时间让心跳触发（心跳间隔 5s，等 7s 至少能收到 1 次）
-	time.Sleep(7 * time.Second)
+	// 数据通道连接会快速失败（~1s），然后心跳间隔 5s，等 8s 应收到至少 1 次
+	time.Sleep(8 * time.Second)
 
 	msgs := ms.getReceivedMsgs()
 	pingCount := 0
@@ -177,8 +177,8 @@ func TestClient_ProbeReportSent(t *testing.T) {
 
 	go c.Start()
 
-	// 探针立即上报一次 + 10s 间隔，等 3 秒应该至少收到第一次
-	time.Sleep(3 * time.Second)
+	// 探针在数据通道失败（~2s）后上报，CPU 采样约 1s，等 5s 足够
+	time.Sleep(5 * time.Second)
 
 	msgs := ms.getReceivedMsgs()
 	probeCount := 0
