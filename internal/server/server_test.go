@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
 
@@ -279,8 +281,8 @@ func TestAPI_Agents_StatsUpdated(t *testing.T) {
 		t.Fatal("Agent 未找到")
 	}
 	agent := val.(*AgentConn)
-	if agent.Stats.CPUUsage != 80.0 {
-		t.Errorf("Stats 应被更新为最新值 80.0，得到 %f", agent.Stats.CPUUsage)
+	if agent.GetStats().CPUUsage != 80.0 {
+		t.Errorf("Stats 应被更新为最新值 80.0，得到 %f", agent.GetStats().CPUUsage)
 	}
 }
 
@@ -332,8 +334,10 @@ func TestAuth_Success(t *testing.T) {
 	if authResp.AgentID == "" {
 		t.Error("AgentID 不应为空")
 	}
-	if !strings.HasPrefix(authResp.AgentID, "agent_test-host_") {
-		t.Errorf("AgentID 格式错误: %q", authResp.AgentID)
+	// AgentID 应为 UUID v4 格式: 8-4-4-4-12
+	uuidPattern := `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
+	if matched, _ := regexp.MatchString(uuidPattern, authResp.AgentID); !matched {
+		t.Errorf("AgentID 应为 UUID v4 格式，得到: %q", authResp.AgentID)
 	}
 }
 
@@ -470,17 +474,17 @@ func TestProbe_SingleReport(t *testing.T) {
 		t.Fatal("Agent 未注册")
 	}
 	agent := val.(*AgentConn)
-	if agent.Stats == nil {
+	if agent.GetStats() == nil {
 		t.Fatal("Stats 不应为 nil")
 	}
-	if agent.Stats.CPUUsage != 42.5 {
-		t.Errorf("CPUUsage 期望 42.5，得到 %f", agent.Stats.CPUUsage)
+	if agent.GetStats().CPUUsage != 42.5 {
+		t.Errorf("CPUUsage 期望 42.5，得到 %f", agent.GetStats().CPUUsage)
 	}
-	if agent.Stats.MemUsage != 60.0 {
-		t.Errorf("MemUsage 期望 60.0，得到 %f", agent.Stats.MemUsage)
+	if agent.GetStats().MemUsage != 60.0 {
+		t.Errorf("MemUsage 期望 60.0，得到 %f", agent.GetStats().MemUsage)
 	}
-	if agent.Stats.NumCPU != 4 {
-		t.Errorf("NumCPU 期望 4，得到 %d", agent.Stats.NumCPU)
+	if agent.GetStats().NumCPU != 4 {
+		t.Errorf("NumCPU 期望 4，得到 %d", agent.GetStats().NumCPU)
 	}
 }
 
@@ -502,8 +506,8 @@ func TestProbe_MultipleReports(t *testing.T) {
 
 	val, _ := s.agents.Load(authResp.AgentID)
 	agent := val.(*AgentConn)
-	if agent.Stats.CPUUsage != 50.0 {
-		t.Errorf("最终 CPUUsage 应为 50.0（最后一次上报），得到 %f", agent.Stats.CPUUsage)
+	if agent.GetStats().CPUUsage != 50.0 {
+		t.Errorf("最终 CPUUsage 应为 50.0（最后一次上报），得到 %f", agent.GetStats().CPUUsage)
 	}
 }
 
@@ -539,7 +543,7 @@ func TestLifecycle_Full(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	val, _ := s.agents.Load(authResp.AgentID)
-	if val.(*AgentConn).Stats.CPUUsage != 33.3 {
+	if val.(*AgentConn).GetStats().CPUUsage != 33.3 {
 		t.Error("探针数据未正确更新")
 	}
 
@@ -637,6 +641,54 @@ func TestAgent_DisconnectCleansUp(t *testing.T) {
 	conn1.Close()
 }
 
+func TestControlLoop_ProxyMessages(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	conn, authResp := connectAndAuth(t, ts, "proxy-msg-host")
+	defer conn.Close()
+
+	// 欺骗其拥有 DataSession
+	val, _ := s.agents.Load(authResp.AgentID)
+	agent := val.(*AgentConn)
+	cPipe, sPipe := net.Pipe()
+	defer cPipe.Close()
+	defer sPipe.Close()
+	agent.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
+
+	// 测试 MsgTypeProxyNew
+	req := protocol.ProxyNewRequest{
+		Name:       "ws-tunnel-1",
+		RemotePort: 0,
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, req)
+	conn.WriteJSON(msg)
+
+	var resp protocol.Message
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("读取创建代理响应失败: %v", err)
+	}
+
+	if resp.Type != protocol.MsgTypeProxyNewResp {
+		t.Errorf("期望返回 %s，得到 %s", protocol.MsgTypeProxyNewResp, resp.Type)
+	}
+
+	// 测试 MsgTypeProxyClose
+	closeReq := protocol.ProxyCloseRequest{Name: "ws-tunnel-1"}
+	closeMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyClose, closeReq)
+	conn.WriteJSON(closeMsg)
+	time.Sleep(100 * time.Millisecond)
+
+	agent.proxyMu.RLock()
+	_, exists := agent.proxies["ws-tunnel-1"]
+	agent.proxyMu.RUnlock()
+
+	if exists {
+		t.Error("发送 ProxyClose 后代理隧道仍存在")
+	}
+}
+
 // ============================================================
 // PeekConn 测试 (2)
 // ============================================================
@@ -716,3 +768,174 @@ func pipeConn() (net.Conn, net.Conn) {
 	ln.Close()
 	return clientConn, serverConn
 }
+
+// ============================================================
+// PeekListener 分发测试 (2)
+// ============================================================
+
+func TestPeekListener_HTTPDispatch(t *testing.T) {
+	s := New(0)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("监听失败: %v", err)
+	}
+	defer ln.Close()
+
+	pl := &PeekListener{
+		Listener: ln,
+		server:   s,
+	}
+
+	// 发送 HTTP 首字节 'G' (GET)
+	go func() {
+		conn, _ := net.Dial("tcp", ln.Addr().String())
+		conn.Write([]byte("GET / HTTP/1.1\r\n\r\n"))
+		time.Sleep(200 * time.Millisecond)
+		conn.Close()
+	}()
+
+	// Accept 应该把 HTTP 连接送入 pending channel
+	accepted, err := pl.Accept()
+	if err != nil {
+		t.Fatalf("Accept 失败: %v", err)
+	}
+	defer accepted.Close()
+
+	// 读取内容验证是 HTTP
+	buf := make([]byte, 3)
+	accepted.Read(buf)
+	if string(buf) != "GET" {
+		t.Errorf("期望读到 GET，得到 %q", string(buf))
+	}
+}
+
+func TestPeekListener_DataChannelDispatch(t *testing.T) {
+	s := New(0)
+	agentID := "peek-dispatch-agent"
+	agent := &AgentConn{
+		ID:      agentID,
+		proxies: make(map[string]*ProxyTunnel),
+	}
+	s.agents.Store(agentID, agent)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("监听失败: %v", err)
+	}
+	defer ln.Close()
+
+	pl := &PeekListener{
+		Listener: ln,
+		server:   s,
+	}
+
+	// 启动 dispatch loop
+	pl.once.Do(func() {
+		pl.pending = make(chan net.Conn, 64)
+		go pl.dispatchLoop()
+	})
+
+	// 发送数据通道魔数 + 握手
+	go func() {
+		conn, _ := net.Dial("tcp", ln.Addr().String())
+		handshake := DataHandshakeBytes(agentID)
+		conn.Write(handshake)
+
+		// 读取响应
+		resp := make([]byte, 1)
+		conn.Read(resp)
+		// 不关注结果，重点是走通了 dispatchLoop 的数据通道分支
+		time.Sleep(100 * time.Millisecond)
+		conn.Close()
+	}()
+
+	// 数据通道连接不应出现在 pending channel 里
+	// 等一下看 pending 是否为空
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case conn := <-pl.pending:
+		// 如果收到了连接，说明被错误路由到了 HTTP
+		conn.Close()
+		t.Error("数据通道连接不应出现在 pending channel")
+	default:
+		// 正确：数据通道被 handleDataConn 处理了
+	}
+}
+
+// ============================================================
+// controlLoop 边缘场景测试 (2)
+// ============================================================
+
+func TestControlLoop_UnknownMsgType(t *testing.T) {
+	_, conn, _, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	doAuth(t, conn)
+
+	// 发送一个未知消息类型
+	unknownMsg, _ := protocol.NewMessage("unknown_type_xyz", nil)
+	conn.WriteJSON(unknownMsg)
+
+	// Server 不应崩溃，继续正常工作
+	// 发一个 ping 验证连接仍然正常
+	time.Sleep(50 * time.Millisecond)
+	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
+	conn.WriteJSON(ping)
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var resp protocol.Message
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("发送未知消息后连接应保持正常: %v", err)
+	}
+	if resp.Type != protocol.MsgTypePong {
+		t.Errorf("期望 pong，得到 %s", resp.Type)
+	}
+}
+
+func TestControlLoop_MalformedProbeReport(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+
+	conn, authResp := connectAndAuth(t, ts, "malformed-probe-host")
+
+	// 发送一个 payload 字段类型不匹配的 probe_report
+	// (JSON 格式有效, 但 cpu_usage 的类型是 string 不是 float —— ParsePayload 会失败)
+	badMsg := protocol.Message{
+		Type:    protocol.MsgTypeProbeReport,
+		Payload: json.RawMessage(`{"cpu_usage": "not_a_number", "mem_usage": "bad"}`),
+	}
+	conn.WriteJSON(badMsg)
+
+	// 连接仍然正常 — 发 ping 验证 (如果 controlLoop 没崩溃，就能回 pong)
+	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
+	conn.WriteJSON(ping)
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var resp protocol.Message
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("发送畸形探针后连接应保持正常: %v", err)
+	}
+	if resp.Type != protocol.MsgTypePong {
+		t.Errorf("期望 pong，得到 %s", resp.Type)
+	}
+
+	// Agent 的 stats 应该没被更新（还是 nil）
+	val, ok := s.agents.Load(authResp.AgentID)
+	if !ok {
+		t.Fatal("Agent 应该仍然已注册")
+	}
+	agent := val.(*AgentConn)
+	if agent.GetStats() != nil {
+		t.Error("畸形 probe_report 不应导致 stats 被更新")
+	}
+
+	conn.Close()
+	cleanup()
+}
+
+func TestServer_StartHTTPOnly(t *testing.T) {
+	s := New(0)
+	mux := s.StartHTTPOnly()
+	if mux == nil {
+		t.Fatal("StartHTTPOnly 应返回非空 ServeMux")
+	}
+}
+

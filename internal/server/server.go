@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -24,13 +25,28 @@ type Server struct {
 type AgentConn struct {
 	ID          string
 	Info        protocol.AgentInfo
-	Stats       *protocol.SystemStats
+	stats       *protocol.SystemStats
+	statsMu     sync.RWMutex             // 保护 stats
 	conn        *websocket.Conn // 控制通道
 	mu          sync.Mutex
 	dataSession *yamux.Session           // 数据通道 yamux Session
 	dataMu      sync.RWMutex             // 保护 dataSession
 	proxies     map[string]*ProxyTunnel  // 代理隧道 name -> tunnel
 	proxyMu     sync.RWMutex             // 保护 proxies
+}
+
+// SetStats 安全地更新探针数据
+func (a *AgentConn) SetStats(s *protocol.SystemStats) {
+	a.statsMu.Lock()
+	a.stats = s
+	a.statsMu.Unlock()
+}
+
+// GetStats 安全地读取探针数据
+func (a *AgentConn) GetStats() *protocol.SystemStats {
+	a.statsMu.RLock()
+	defer a.statsMu.RUnlock()
+	return a.stats
 }
 
 // New 创建一个新的 Server 实例
@@ -211,7 +227,7 @@ func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
 
 	// Phase 1: 简单的 Token 验证（后续可接入更复杂的鉴权）
 	// 目前先接受所有连接
-	agentID := fmt.Sprintf("agent_%s_%d", authReq.Agent.Hostname, generateID())
+	agentID := generateUUID()
 
 	// 发送认证响应
 	resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
@@ -257,7 +273,7 @@ func (s *Server) controlLoop(agent *AgentConn) {
 				log.Printf("⚠️ 解析探针数据失败 [%s]: %v", agent.ID, err)
 				continue
 			}
-			agent.Stats = &stats
+			agent.SetStats(&stats)
 			log.Printf("📊 [%s] CPU: %.1f%% | 内存: %.1f%% | 磁盘: %.1f%%",
 				agent.Info.Hostname, stats.CPUUsage, stats.MemUsage, stats.DiskUsage)
 
@@ -353,7 +369,7 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 		agents = append(agents, agentView{
 			ID:    a.ID,
 			Info:  a.Info,
-			Stats: a.Stats,
+			Stats: a.GetStats(),
 		})
 		return true
 	})
@@ -364,14 +380,16 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 
 // --- 辅助 ---
 
-var idCounter int64
-var idMu sync.Mutex
-
-func generateID() int64 {
-	idMu.Lock()
-	defer idMu.Unlock()
-	idCounter++
-	return idCounter
+// generateUUID 生成一个 UUID v4 (基于 crypto/rand，不可预测)
+func generateUUID() string {
+	var buf [16]byte
+	_, _ = rand.Read(buf[:])
+	// 设置 version 4 (bits 12-15 of time_hi_and_version)
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	// 设置 variant (bits 6-7 of clk_seq_hi_and_reserved)
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
 
 // 占位 HTML 页面
