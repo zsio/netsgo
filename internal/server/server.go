@@ -54,6 +54,24 @@ func New(port int) *Server {
 	return &Server{Port: port}
 }
 
+// RangeAgents 遍历所有已连接的 Agent
+func (s *Server) RangeAgents(fn func(id string, agent *AgentConn) bool) {
+	s.agents.Range(func(key, value any) bool {
+		return fn(key.(string), value.(*AgentConn))
+	})
+}
+
+// RangeProxies 遍历 Agent 的所有代理隧道
+func (a *AgentConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool) {
+	a.proxyMu.RLock()
+	defer a.proxyMu.RUnlock()
+	for name, tunnel := range a.proxies {
+		if !fn(name, tunnel) {
+			return
+		}
+	}
+}
+
 // Start 启动服务端，单端口同时处理 HTTP/WebSocket 和数据通道。
 // 通过 peek 首字节区分：HTTP 请求 vs 数据通道魔数 (0x4E)。
 func (s *Server) Start() error {
@@ -225,7 +243,7 @@ func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
 		return nil, fmt.Errorf("解析认证数据失败: %w", err)
 	}
 
-	// Phase 1: 简单的 Token 验证（后续可接入更复杂的鉴权）
+	// Phase 1: 简单的 Key 验证（后续可接入更复杂的鉴权）
 	// 目前先接受所有连接
 	agentID := generateUUID()
 

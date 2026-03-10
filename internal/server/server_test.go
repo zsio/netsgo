@@ -51,14 +51,14 @@ func setupWSTestNoConn(t *testing.T) (*Server, *httptest.Server, func()) {
 
 // doAuth 完成认证，返回响应
 func doAuth(t *testing.T, conn *websocket.Conn) protocol.AuthResponse {
-	return doAuthWithInfo(t, conn, "test-host", "test-token")
+	return doAuthWithInfo(t, conn, "test-host", "test-key")
 }
 
 // doAuthWithInfo 用指定信息完成认证
-func doAuthWithInfo(t *testing.T, conn *websocket.Conn, hostname, token string) protocol.AuthResponse {
+func doAuthWithInfo(t *testing.T, conn *websocket.Conn, hostname, key string) protocol.AuthResponse {
 	t.Helper()
 	authReq := protocol.AuthRequest{
-		Token: token,
+		Key: key,
 		Agent: protocol.AgentInfo{
 			Hostname: hostname,
 			OS:       "linux",
@@ -94,7 +94,7 @@ func connectAndAuth(t *testing.T, ts *httptest.Server, hostname string) (*websoc
 	if err != nil {
 		t.Fatalf("WebSocket 连接失败: %v", err)
 	}
-	authResp := doAuthWithInfo(t, conn, hostname, "token")
+	authResp := doAuthWithInfo(t, conn, hostname,  "key")
 	return conn, authResp
 }
 
@@ -341,14 +341,14 @@ func TestAuth_Success(t *testing.T) {
 	}
 }
 
-func TestAuth_EmptyToken(t *testing.T) {
+func TestAuth_EmptyKey(t *testing.T) {
 	_, conn, _, cleanup := setupWSTest(t)
 	defer cleanup()
 
 	authResp := doAuthWithInfo(t, conn, "host", "")
 
 	if !authResp.Success {
-		t.Errorf("Phase1 空 token 应允许连接: %s", authResp.Message)
+		t.Errorf("Phase1 空 key 应允许连接: %s", authResp.Message)
 	}
 }
 
@@ -356,7 +356,7 @@ func TestAuth_EmptyHostname(t *testing.T) {
 	_, conn, _, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	authResp := doAuthWithInfo(t, conn, "", "token")
+	authResp := doAuthWithInfo(t, conn, "",  "key")
 
 	if !authResp.Success {
 		t.Errorf("空主机名不应导致认证失败: %s", authResp.Message)
@@ -577,7 +577,7 @@ func TestMultipleAgents_Concurrent(t *testing.T) {
 			defer conn.Close()
 
 			authReq := protocol.AuthRequest{
-				Token: "token",
+				Key: "key",
 				Agent: protocol.AgentInfo{Hostname: hostname, OS: "linux", Arch: "amd64", Version: "0.1.0"},
 			}
 			msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)

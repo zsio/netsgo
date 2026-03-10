@@ -54,7 +54,7 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 	fmt.Sscanf(backend.Listener.Addr().String(), "127.0.0.1:%d", &localPort)
 
 	// 3. 启动 Client，并自动请求创建一个代理
-	c := client.New(serverWsAddr, "e2e-token")
+	c := client.New(serverWsAddr, "e2e-key")
 	proxyName := "e2e-tunnel"
 	
 	c.ProxyConfigs = []protocol.ProxyNewRequest{

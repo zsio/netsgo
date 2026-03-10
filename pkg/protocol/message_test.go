@@ -12,7 +12,7 @@ import (
 
 func TestNewMessage_WithPayload(t *testing.T) {
 	authReq := AuthRequest{
-		Token: "test-token",
+		Key: "test-key",
 		Agent: AgentInfo{
 			Hostname: "test-host",
 			OS:       "linux",
@@ -38,8 +38,8 @@ func TestNewMessage_WithPayload(t *testing.T) {
 	if err := msg.ParsePayload(&parsed); err != nil {
 		t.Fatalf("ParsePayload 失败: %v", err)
 	}
-	if parsed.Token != authReq.Token {
-		t.Errorf("Token 期望 %q，得到 %q", authReq.Token, parsed.Token)
+	if parsed.Key != authReq.Key {
+		t.Errorf("Key 期望 %q，得到 %q", authReq.Key, parsed.Key)
 	}
 	if parsed.Agent.Hostname != authReq.Agent.Hostname {
 		t.Errorf("Hostname 期望 %q，得到 %q", authReq.Agent.Hostname, parsed.Agent.Hostname)
@@ -86,7 +86,7 @@ func TestNewMessage_EmptyType(t *testing.T) {
 
 func TestParsePayload_AuthRequest(t *testing.T) {
 	original := AuthRequest{
-		Token: "my-secret-token",
+		Key: "my-secret-key",
 		Agent: AgentInfo{
 			Hostname: "production-server",
 			OS:       "linux",
@@ -102,8 +102,8 @@ func TestParsePayload_AuthRequest(t *testing.T) {
 		t.Fatalf("ParsePayload 失败: %v", err)
 	}
 
-	if parsed.Token != original.Token {
-		t.Errorf("Token 不匹配")
+	if parsed.Key != original.Key {
+		t.Errorf("Key 不匹配")
 	}
 	if parsed.Agent.Hostname != original.Agent.Hostname {
 		t.Errorf("Hostname 不匹配")
@@ -214,7 +214,7 @@ func TestRoundTrip_Message(t *testing.T) {
 
 func TestRoundTrip_AuthRequest(t *testing.T) {
 	original := AuthRequest{
-		Token: "round-trip-token",
+		Key: "round-trip-key",
 		Agent: AgentInfo{
 			Hostname: "nested-host",
 			OS:       "darwin",
@@ -234,8 +234,8 @@ func TestRoundTrip_AuthRequest(t *testing.T) {
 		t.Fatalf("Unmarshal 失败: %v", err)
 	}
 
-	if restored.Token != original.Token {
-		t.Errorf("Token 不匹配")
+	if restored.Key != original.Key {
+		t.Errorf("Key 不匹配")
 	}
 	if restored.Agent != original.Agent {
 		t.Errorf("AgentInfo 不匹配: 期望 %+v, 得到 %+v", original.Agent, restored.Agent)
@@ -361,7 +361,7 @@ func TestUnicodeFields(t *testing.T) {
 		Version:  "1.0.0",
 	}
 	msg, _ := NewMessage(MsgTypeAuth, AuthRequest{
-		Token: "emoji-token-🔑",
+		Key: "emoji-key-🔑",
 		Agent: agent,
 	})
 
@@ -376,8 +376,8 @@ func TestUnicodeFields(t *testing.T) {
 	if parsed.Agent.Hostname != "中文主机名" {
 		t.Errorf("中文 Hostname 丢失: 得到 %q", parsed.Agent.Hostname)
 	}
-	if parsed.Token != "emoji-token-🔑" {
-		t.Errorf("Emoji Token 丢失: 得到 %q", parsed.Token)
+	if parsed.Key != "emoji-key-🔑" {
+		t.Errorf("Emoji Key 丢失: 得到 %q", parsed.Key)
 	}
 }
 

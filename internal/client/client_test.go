@@ -113,7 +113,7 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-token")
+	c := New(wsURL, "test-key")
 
 	// 在后台启动 Client（Start 会阻塞在 controlLoop 里）
 	errCh := make(chan error, 1)
@@ -147,7 +147,7 @@ func TestClient_HeartbeatSent(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-token")
+	c := New(wsURL, "test-key")
 
 	go c.Start()
 
@@ -175,7 +175,7 @@ func TestClient_ProbeReportSent(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-token")
+	c := New(wsURL, "test-key")
 
 	go c.Start()
 
@@ -219,7 +219,7 @@ func TestClient_ServerDisconnect(t *testing.T) {
 	ts := httptest.NewServer(mux)
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-token")
+	c := New(wsURL, "test-key")
 
 	// 后台启动 Client
 	started := make(chan struct{})
@@ -259,7 +259,7 @@ func TestClient_AuthFailed(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "wrong-token")
+	c := New(wsURL, "wrong-key")
 
 	err := c.Start()
 	if err == nil || !strings.Contains(err.Error(), "认证被拒绝") {
@@ -269,7 +269,7 @@ func TestClient_AuthFailed(t *testing.T) {
 
 func TestClient_DataChannelConnectErrorHandling(t *testing.T) {
 	// 创建一个没有提供 HTTP Server 而是直接关闭了监听的 mock
-	c := New("ws://127.0.0.1:11111", "token")
+	c := New("ws://127.0.0.1:11111", "key")
 	err := c.connectDataChannel()
 	if err == nil {
 		t.Error("期望连不上目标服务器时报错")
@@ -281,13 +281,13 @@ func TestClient_DataChannelConnectErrorHandling(t *testing.T) {
 // ============================================================
 
 func TestClient_AcceptStreamLoop_NilSession(t *testing.T) {
-	c := New("ws://localhost:8080", "token")
+	c := New("ws://localhost:8080", "key")
 	// dataSession = nil, 应该直接 return 不 panic
 	c.acceptStreamLoop()
 }
 
 func TestClient_AcceptStreamLoop_SessionClosed(t *testing.T) {
-	c := New("ws://localhost:8080", "token")
+	c := New("ws://localhost:8080", "key")
 
 	clientConn, serverConn := net.Pipe()
 	session, _ := mux.NewClientSession(clientConn, mux.DefaultConfig())
@@ -326,7 +326,7 @@ func TestClient_RequestProxy(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-token")
+	c := New(wsURL, "test-key")
 
 	// 启动 Client（后台阻塞在 controlLoop）
 	go c.Start()
@@ -375,7 +375,7 @@ func TestClient_ControlLoop_ProxyNewResp_Success(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-token")
+	c := New(wsURL, "test-key")
 
 	go c.Start()
 	time.Sleep(500 * time.Millisecond)
@@ -404,7 +404,7 @@ func TestClient_ControlLoop_ProxyNewResp_Failure(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-token")
+	c := New(wsURL, "test-key")
 
 	go c.Start()
 	time.Sleep(500 * time.Millisecond)
@@ -460,7 +460,7 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 		time.Sleep(1 * time.Second)
 	}()
 
-	c := New("ws://"+ln.Addr().String(), "token")
+	c := New("ws://"+ln.Addr().String(), "key")
 	c.AgentID = "test-agent-dc"
 
 	err = c.connectDataChannel()
@@ -499,7 +499,7 @@ func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
 		conn.Write([]byte{protocol.DataHandshakeFail})
 	}()
 
-	c := New("ws://"+ln.Addr().String(), "token")
+	c := New("ws://"+ln.Addr().String(), "key")
 	c.AgentID = "rejected-agent"
 
 	err = c.connectDataChannel()
@@ -513,7 +513,7 @@ func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
 
 func TestClient_ConnectDataChannel_NoPort(t *testing.T) {
 	// ServerAddr 没有端口的情况
-	c := New("ws://some-host-without-port-1234567.invalid", "token")
+	c := New("ws://some-host-without-port-1234567.invalid", "key")
 	c.AgentID = "no-port-agent"
 	err := c.connectDataChannel()
 	if err == nil {

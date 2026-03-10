@@ -22,7 +22,7 @@ import (
 // Client 是客户端/Agent 的核心结构体
 type Client struct {
 	ServerAddr  string // Server 的 WebSocket 地址 (ws://host:port)
-	Token       string // 认证令牌
+	Key         string // 认证密钥
 	AgentID     string // Server 分配的 Agent ID
 	conn        *websocket.Conn
 	mu          sync.Mutex
@@ -30,15 +30,15 @@ type Client struct {
 	dataSession *yamux.Session // 数据通道 yamux Session
 	dataMu      sync.RWMutex
 	proxies     sync.Map // proxy_name -> ProxyNewRequest
-	// ProxyConfigs 启动时自动请求创建的代理配置
+	// ProxyConfigs 由服务端下发，Benchmark 测试也可手动设置
 	ProxyConfigs []protocol.ProxyNewRequest
 }
 
 // New 创建一个新的 Client 实例
-func New(serverAddr, token string) *Client {
+func New(serverAddr, key string) *Client {
 	return &Client{
 		ServerAddr: serverAddr,
-		Token:      token,
+		Key:        key,
 		done:       make(chan struct{}),
 	}
 }
@@ -79,7 +79,7 @@ func (c *Client) Start() error {
 	// 5. 启动探针上报协程
 	go c.probeLoop()
 
-	// 6. 自动请求创建代理隧道
+	// 6. 如果有预设代理配置（Benchmark 模式），主动请求创建
 	for _, cfg := range c.ProxyConfigs {
 		go c.requestProxy(cfg)
 	}
@@ -95,7 +95,7 @@ func (c *Client) authenticate() error {
 	hostname, _ := os.Hostname()
 
 	authReq := protocol.AuthRequest{
-		Token: c.Token,
+		Key: c.Key,
 		Agent: protocol.AgentInfo{
 			Hostname: hostname,
 			OS:       runtime.GOOS,
@@ -370,7 +370,20 @@ func (c *Client) controlLoop() {
 		case protocol.MsgTypePong:
 			// 心跳回复，忽略
 
+		case protocol.MsgTypeProxyNew:
+			// 服务端下发: 创建代理隧道
+			var req protocol.ProxyNewRequest
+			if err := msg.ParsePayload(&req); err != nil {
+				log.Printf("⚠️ 解析代理指令失败: %v", err)
+				continue
+			}
+			log.Printf("📥 收到服务端代理指令: %s (本地 %s:%d → 公网 :%d)",
+				req.Name, req.LocalIP, req.LocalPort, req.RemotePort)
+			// 注册本地代理配置，后续 Stream 会根据 proxy_name 查找
+			c.proxies.Store(req.Name, req)
+
 		case protocol.MsgTypeProxyNewResp:
+			// 代理创建响应（客户端主动请求场景，如 Benchmark）
 			var resp protocol.ProxyNewResponse
 			if err := msg.ParsePayload(&resp); err != nil {
 				log.Printf("⚠️ 解析代理响应失败: %v", err)
@@ -381,6 +394,16 @@ func (c *Client) controlLoop() {
 			} else {
 				log.Printf("❌ 代理隧道创建失败: %s", resp.Message)
 			}
+
+		case protocol.MsgTypeProxyClose:
+			// 服务端下发: 关闭代理隧道
+			var req protocol.ProxyCloseRequest
+			if err := msg.ParsePayload(&req); err != nil {
+				log.Printf("⚠️ 解析关闭代理指令失败: %v", err)
+				continue
+			}
+			c.proxies.Delete(req.Name)
+			log.Printf("🔌 代理隧道已关闭: %s (原因: %s)", req.Name, req.Reason)
 
 		default:
 			log.Printf("📩 收到控制消息: %s", msg.Type)

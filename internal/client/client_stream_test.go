@@ -30,7 +30,7 @@ w.Header().Set("X-Backend", "ok")
 	fmt.Sscanf(backend.Listener.Addr().String(), "127.0.0.1:%d", &localPort)
 
 	// 2. 初始化 Client
-	c := New("ws://localhost:8080", "token")
+	c := New("ws://localhost:8080", "key")
 	proxyName := "test-backend"
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
 Name:      proxyName,
@@ -119,7 +119,7 @@ LocalPort: localPort,
 }
 
 func TestClient_HandleStream_InvalidHeader(t *testing.T) {
-	c := New("ws://localhost:8080", "token")
+	c := New("ws://localhost:8080", "key")
 
 	clientConn, serverConn := net.Pipe()
 	clientSession, _ := mux.NewClientSession(clientConn, mux.DefaultConfig())
@@ -144,7 +144,7 @@ func TestClient_HandleStream_InvalidHeader(t *testing.T) {
 }
 
 func TestClient_HandleStream_DialFail(t *testing.T) {
-	c := New("ws://localhost:8080", "token")
+	c := New("ws://localhost:8080", "key")
 	proxyName := "fail-proxy"
 	// 设置一个一定连不上的端口
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
