@@ -49,9 +49,10 @@ type AuthRequest struct {
 
 // AuthResponse Server 返回的认证结果
 type AuthResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message,omitempty"`
-	AgentID string `json:"agent_id,omitempty"` // Server 分配的唯一 ID
+	Success   bool   `json:"success"`
+	Message   string `json:"message,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`   // Server 分配的唯一 ID
+	DataToken string `json:"data_token,omitempty"` // 数据通道一次性认证令牌
 }
 
 // ProxyNewRequest 请求创建一条新的代理隧道

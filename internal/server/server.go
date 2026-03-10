@@ -1,12 +1,17 @@
 package server
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
@@ -16,21 +21,33 @@ import (
 
 // Server 是服务端的核心结构体
 type Server struct {
-	Port   int
-	agents sync.Map // agentID -> *AgentConn
+	Port       int
+	agents     sync.Map // agentID -> *AgentConn
+	dataTokens sync.Map // one-time DataToken -> agentID
+	httpServer *http.Server
 }
 
 // AgentConn 代表一个已连接的 Agent
 type AgentConn struct {
 	ID          string
 	Info        protocol.AgentInfo
-	Stats       *protocol.SystemStats
-	conn        *websocket.Conn // 控制通道
+	stats       atomic.Pointer[protocol.SystemStats] // 用 atomic.Pointer 消除数据竞争
+	conn        *websocket.Conn                      // 控制通道
 	mu          sync.Mutex
-	dataSession *yamux.Session           // 数据通道 yamux Session
-	dataMu      sync.RWMutex             // 保护 dataSession
-	proxies     map[string]*ProxyTunnel  // 代理隧道 name -> tunnel
-	proxyMu     sync.RWMutex             // 保护 proxies
+	dataSession *yamux.Session          // 数据通道 yamux Session
+	dataMu      sync.RWMutex            // 保护 dataSession
+	proxies     map[string]*ProxyTunnel // 代理隧道 name -> tunnel
+	proxyMu     sync.RWMutex            // 保护 proxies
+}
+
+// GetStats 安全地返回当前 Stats 快照（原子读）
+func (a *AgentConn) GetStats() *protocol.SystemStats {
+	return a.stats.Load()
+}
+
+// SetStats 原子地更新 Stats
+func (a *AgentConn) SetStats(s *protocol.SystemStats) {
+	a.stats.Store(s)
 }
 
 // New 创建一个新的 Server 实例
@@ -55,7 +72,7 @@ func (s *Server) Start() error {
 	log.Printf("🔗 数据通道: 同端口 (魔数 0x4E)")
 
 	// HTTP 服务器（处理 WebSocket + API + Web 面板）
-	httpServer := &http.Server{Handler: s.newHTTPMux()}
+	s.httpServer = &http.Server{Handler: s.newHTTPMux()}
 
 	// 包装 listener：peek 分发
 	peekLn := &PeekListener{
@@ -63,7 +80,17 @@ func (s *Server) Start() error {
 		server:   s,
 	}
 
-	return httpServer.Serve(peekLn)
+	return s.httpServer.Serve(peekLn)
+}
+
+// Stop 优雅地关闭服务端，等待活跃连接最多 5 秒后强制退出。
+func (s *Server) Stop() error {
+	if s.httpServer == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.httpServer.Shutdown(ctx)
 }
 
 // StartHTTPOnly 仅启动 HTTP 模式（用于测试，不做 peek 分发）
@@ -107,7 +134,7 @@ type PeekListener struct {
 
 func (pl *PeekListener) Accept() (net.Conn, error) {
 	pl.once.Do(func() {
-		pl.pending = make(chan net.Conn, 64)
+		pl.pending = make(chan net.Conn, 1024) // 足够大的缓冲，防止 dispatchLoop 阻塞
 		go pl.dispatchLoop()
 	})
 
@@ -140,8 +167,13 @@ func (pl *PeekListener) dispatchLoop() {
 			pc.hasPeek = false // 消费掉已 peek 的魔数
 			go pl.server.handleDataConn(pc)
 		} else {
-			// HTTP/WebSocket：送入 pending channel 交给 http.Server
-			pl.pending <- pc
+			// HTTP/WebSocket：非阻塞写入 pending channel；满时丢弃并关闭连接
+			select {
+			case pl.pending <- pc:
+			default:
+				log.Printf("⚠️ HTTP 连接队列已满，丢弃连接 %s", pc.RemoteAddr())
+				pc.Close()
+			}
 		}
 	}
 }
@@ -178,7 +210,7 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	// 保存 Agent 连接
 	s.agents.Store(agent.ID, agent)
 	defer func() {
-		// 清理：停止所有代理隧道，关闭数据通道
+		// 清理：停止所有代理隧道、关闭数据通道、删除残留 DataToken
 		s.StopAllProxies(agent)
 		agent.dataMu.Lock()
 		if agent.dataSession != nil {
@@ -209,26 +241,32 @@ func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
 		return nil, fmt.Errorf("解析认证数据失败: %w", err)
 	}
 
-	// Phase 1: 简单的 Token 验证（后续可接入更复杂的鉴权）
-	// 目前先接受所有连接
-	agentID := fmt.Sprintf("agent_%s_%d", authReq.Agent.Hostname, generateID())
+	// 生成随机 AgentID 和数据通道一次性令牌
+	agentID := fmt.Sprintf("agent_%s_%s", authReq.Agent.Hostname, generateRandSuffix())
+	dataToken := generateRandSuffix()
 
-	// 发送认证响应
+	// 发送认证响应（含 DataToken）
 	resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
-		Success: true,
-		Message: "认证成功",
-		AgentID: agentID,
+		Success:   true,
+		Message:   "认证成功",
+		AgentID:   agentID,
+		DataToken: dataToken,
 	})
 	if err := conn.WriteJSON(resp); err != nil {
 		return nil, fmt.Errorf("发送认证响应失败: %w", err)
 	}
 
-	return &AgentConn{
+	agent := &AgentConn{
 		ID:      agentID,
 		Info:    authReq.Agent,
 		conn:    conn,
 		proxies: make(map[string]*ProxyTunnel),
-	}, nil
+	}
+
+	// 注册 DataToken，供数据通道握手使用（一次性，用后即删）
+	s.dataTokens.Store(dataToken, agentID)
+
+	return agent, nil
 }
 
 // controlLoop 持续处理控制通道上的消息
@@ -257,7 +295,7 @@ func (s *Server) controlLoop(agent *AgentConn) {
 				log.Printf("⚠️ 解析探针数据失败 [%s]: %v", agent.ID, err)
 				continue
 			}
-			agent.Stats = &stats
+			agent.SetStats(&stats)
 			log.Printf("📊 [%s] CPU: %.1f%% | 内存: %.1f%% | 磁盘: %.1f%%",
 				agent.Info.Hostname, stats.CPUUsage, stats.MemUsage, stats.DiskUsage)
 
@@ -353,7 +391,7 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 		agents = append(agents, agentView{
 			ID:    a.ID,
 			Info:  a.Info,
-			Stats: a.Stats,
+			Stats: a.GetStats(),
 		})
 		return true
 	})
@@ -364,14 +402,15 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 
 // --- 辅助 ---
 
-var idCounter int64
-var idMu sync.Mutex
-
-func generateID() int64 {
-	idMu.Lock()
-	defer idMu.Unlock()
-	idCounter++
-	return idCounter
+// generateRandSuffix 返回一个 16 字节 (128-bit) 的随机十六进制字符串，
+// 用于生成不可预测的 AgentID 后缀和数据通道一次性令牌。
+func generateRandSuffix() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// 极少发生；退化为全零会被后续逻辑捕获
+		panic("crypto/rand 失败: " + err.Error())
+	}
+	return hex.EncodeToString(b)
 }
 
 // 占位 HTML 页面

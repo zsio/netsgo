@@ -29,18 +29,15 @@ func (s *Server) StartProxy(agent *AgentConn, req protocol.ProxyNewRequest) erro
 		return fmt.Errorf("Agent [%s] 数据通道未建立，无法创建代理", agent.ID)
 	}
 
-	// 检查是否已存在同名代理
-	agent.proxyMu.Lock()
-	if agent.proxies == nil {
-		agent.proxies = make(map[string]*ProxyTunnel)
-	}
-	if _, exists := agent.proxies[req.Name]; exists {
-		agent.proxyMu.Unlock()
+	// 第一次检查：是否已存在同名代理（快速失败，避免无谓的端口绑定）
+	agent.proxyMu.RLock()
+	_, exists := agent.proxies[req.Name]
+	agent.proxyMu.RUnlock()
+	if exists {
 		return fmt.Errorf("代理隧道 %q 已存在", req.Name)
 	}
-	agent.proxyMu.Unlock()
 
-	// 监听公网端口
+	// 监听公网端口（在持锁之外执行，避免长时间持锁）
 	addr := fmt.Sprintf(":%d", req.RemotePort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -64,7 +61,16 @@ func (s *Server) StartProxy(agent *AgentConn, req protocol.ProxyNewRequest) erro
 		done:     make(chan struct{}),
 	}
 
+	// 第二次检查（持写锁）：防止并发调用时 TOCTOU 窗口内产生重复隧道
 	agent.proxyMu.Lock()
+	if agent.proxies == nil {
+		agent.proxies = make(map[string]*ProxyTunnel)
+	}
+	if _, exists := agent.proxies[req.Name]; exists {
+		agent.proxyMu.Unlock()
+		ln.Close() // 回收已监听的端口
+		return fmt.Errorf("代理隧道 %q 已存在", req.Name)
+	}
 	agent.proxies[req.Name] = tunnel
 	agent.proxyMu.Unlock()
 

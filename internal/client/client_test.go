@@ -58,9 +58,10 @@ func (ms *mockServer) handler(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case protocol.MsgTypeAuth:
 			resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
-				Success: ms.authSuccess,
-				Message: "mock response",
-				AgentID: "mock_agent_1",
+				Success:   ms.authSuccess,
+				Message:   "mock response",
+				AgentID:   "mock_agent_1",
+				DataToken: "mock_data_token_1",
 			})
 			conn.WriteJSON(resp)
 
@@ -119,8 +120,12 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 		errCh <- c.Start()
 	}()
 
-	// 等 Client 完成认证
-	time.Sleep(500 * time.Millisecond)
+	// 等 Client 完成认证（通过 authenticated channel 同步，而非 time.Sleep）
+	select {
+	case <-c.authenticated:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Client 认证超时")
+	}
 
 	// 验证 AgentID 被设置
 	if c.AgentID != "mock_agent_1" {
@@ -228,6 +233,12 @@ func TestClient_ServerDisconnect(t *testing.T) {
 	<-started
 
 	// 等 Client 完成认证和至少一次探针采集
+	select {
+	case <-c.authenticated:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Client 认证超时")
+	}
+	// 再等待数据通道尝试完成及探针上报
 	time.Sleep(3 * time.Second)
 
 	// 验证连接正常

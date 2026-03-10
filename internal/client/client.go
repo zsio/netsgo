@@ -21,15 +21,18 @@ import (
 
 // Client 是客户端/Agent 的核心结构体
 type Client struct {
-	ServerAddr  string // Server 的 WebSocket 地址 (ws://host:port)
-	Token       string // 认证令牌
-	AgentID     string // Server 分配的 Agent ID
-	conn        *websocket.Conn
-	mu          sync.Mutex
-	done        chan struct{}
-	dataSession *yamux.Session // 数据通道 yamux Session
-	dataMu      sync.RWMutex
-	proxies     sync.Map // proxy_name -> ProxyNewRequest
+	ServerAddr    string // Server 的 WebSocket 地址 (ws://host:port)
+	Token         string // 认证令牌
+	AgentID       string // Server 分配的 Agent ID
+	DataToken     string // 数据通道一次性认证令牌
+	conn          *websocket.Conn
+	mu            sync.Mutex
+	done          chan struct{}
+	authenticated chan struct{}  // 认证成功时关闭，用于同步等待
+	dataReady     chan struct{}  // 数据通道就绪信号
+	dataSession   *yamux.Session // 数据通道 yamux Session
+	dataMu        sync.RWMutex
+	proxies       sync.Map // proxy_name -> ProxyNewRequest
 	// ProxyConfigs 启动时自动请求创建的代理配置
 	ProxyConfigs []protocol.ProxyNewRequest
 }
@@ -37,9 +40,11 @@ type Client struct {
 // New 创建一个新的 Client 实例
 func New(serverAddr, token string) *Client {
 	return &Client{
-		ServerAddr: serverAddr,
-		Token:      token,
-		done:       make(chan struct{}),
+		ServerAddr:    serverAddr,
+		Token:         token,
+		done:          make(chan struct{}),
+		authenticated: make(chan struct{}),
+		dataReady:     make(chan struct{}),
 	}
 }
 
@@ -68,6 +73,7 @@ func (c *Client) Start() error {
 	if err := c.connectDataChannel(); err != nil {
 		log.Printf("⚠️ 数据通道建立失败（代理功能不可用）: %v", err)
 	} else {
+		close(c.dataReady) // 通知等待者数据通道已就绪
 		log.Printf("✅ 数据通道已建立")
 		// 启动 Stream 接收循环
 		go c.acceptStreamLoop()
@@ -133,6 +139,8 @@ func (c *Client) authenticate() error {
 	}
 
 	c.AgentID = authResp.AgentID
+	c.DataToken = authResp.DataToken
+	close(c.authenticated) // 通知等待者认证已完成
 	return nil
 }
 
@@ -160,12 +168,12 @@ func (c *Client) connectDataChannel() error {
 	// 设置握手超时（Server 应当即时回复，2s 足够）
 	tcpConn.SetDeadline(time.Now().Add(2 * time.Second))
 
-	// 发送握手包: [1B 魔数] [2B AgentID长度] [NB AgentID]
-	agentIDBytes := []byte(c.AgentID)
-	handshake := make([]byte, 1+2+len(agentIDBytes))
+	// 发送握手包: [1B 魔数] [2B DataToken长度] [NB DataToken]
+	tokenBytes := []byte(c.DataToken)
+	handshake := make([]byte, 1+2+len(tokenBytes))
 	handshake[0] = protocol.DataChannelMagic
-	binary.BigEndian.PutUint16(handshake[1:3], uint16(len(agentIDBytes)))
-	copy(handshake[3:], agentIDBytes)
+	binary.BigEndian.PutUint16(handshake[1:3], uint16(len(tokenBytes)))
+	copy(handshake[3:], tokenBytes)
 
 	if _, err := tcpConn.Write(handshake); err != nil {
 		tcpConn.Close()
@@ -277,10 +285,25 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 	mux.Relay(stream, localConn)
 }
 
+// waitForDataChannel 等待数据通道就绪，最多等待 timeout 时间。
+// 返回 true 表示数据通道已就绪，false 表示超时。
+func (c *Client) waitForDataChannel(timeout time.Duration) bool {
+	select {
+	case <-c.dataReady:
+		return true
+	case <-time.After(timeout):
+		return false
+	case <-c.done:
+		return false
+	}
+}
+
 // requestProxy 通过控制通道请求创建代理隧道
 func (c *Client) requestProxy(cfg protocol.ProxyNewRequest) {
-	// 等待数据通道就绪
-	time.Sleep(500 * time.Millisecond)
+	// 等待数据通道就绪（最多 3 秒），再请求代理，避免服务端因无数据通道而拒绝
+	if !c.waitForDataChannel(3 * time.Second) {
+		log.Printf("⚠️ 等待数据通道超时，代理 [%s] 将在无数据通道状态下请求（可能失败）", cfg.Name)
+	}
 
 	// 先注册本地代理配置
 	c.proxies.Store(cfg.Name, cfg)

@@ -279,8 +279,8 @@ func TestAPI_Agents_StatsUpdated(t *testing.T) {
 		t.Fatal("Agent 未找到")
 	}
 	agent := val.(*AgentConn)
-	if agent.Stats.CPUUsage != 80.0 {
-		t.Errorf("Stats 应被更新为最新值 80.0，得到 %f", agent.Stats.CPUUsage)
+	if agent.GetStats().CPUUsage != 80.0 {
+		t.Errorf("Stats 应被更新为最新值 80.0，得到 %f", agent.GetStats().CPUUsage)
 	}
 }
 
@@ -334,6 +334,9 @@ func TestAuth_Success(t *testing.T) {
 	}
 	if !strings.HasPrefix(authResp.AgentID, "agent_test-host_") {
 		t.Errorf("AgentID 格式错误: %q", authResp.AgentID)
+	}
+	if authResp.DataToken == "" {
+		t.Error("DataToken 不应为空")
 	}
 }
 
@@ -470,17 +473,17 @@ func TestProbe_SingleReport(t *testing.T) {
 		t.Fatal("Agent 未注册")
 	}
 	agent := val.(*AgentConn)
-	if agent.Stats == nil {
+	if agent.GetStats() == nil {
 		t.Fatal("Stats 不应为 nil")
 	}
-	if agent.Stats.CPUUsage != 42.5 {
-		t.Errorf("CPUUsage 期望 42.5，得到 %f", agent.Stats.CPUUsage)
+	if agent.GetStats().CPUUsage != 42.5 {
+		t.Errorf("CPUUsage 期望 42.5，得到 %f", agent.GetStats().CPUUsage)
 	}
-	if agent.Stats.MemUsage != 60.0 {
-		t.Errorf("MemUsage 期望 60.0，得到 %f", agent.Stats.MemUsage)
+	if agent.GetStats().MemUsage != 60.0 {
+		t.Errorf("MemUsage 期望 60.0，得到 %f", agent.GetStats().MemUsage)
 	}
-	if agent.Stats.NumCPU != 4 {
-		t.Errorf("NumCPU 期望 4，得到 %d", agent.Stats.NumCPU)
+	if agent.GetStats().NumCPU != 4 {
+		t.Errorf("NumCPU 期望 4，得到 %d", agent.GetStats().NumCPU)
 	}
 }
 
@@ -502,8 +505,8 @@ func TestProbe_MultipleReports(t *testing.T) {
 
 	val, _ := s.agents.Load(authResp.AgentID)
 	agent := val.(*AgentConn)
-	if agent.Stats.CPUUsage != 50.0 {
-		t.Errorf("最终 CPUUsage 应为 50.0（最后一次上报），得到 %f", agent.Stats.CPUUsage)
+	if agent.GetStats().CPUUsage != 50.0 {
+		t.Errorf("最终 CPUUsage 应为 50.0（最后一次上报），得到 %f", agent.GetStats().CPUUsage)
 	}
 }
 
@@ -539,7 +542,7 @@ func TestLifecycle_Full(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	val, _ := s.agents.Load(authResp.AgentID)
-	if val.(*AgentConn).Stats.CPUUsage != 33.3 {
+	if val.(*AgentConn).GetStats().CPUUsage != 33.3 {
 		t.Error("探针数据未正确更新")
 	}
 
