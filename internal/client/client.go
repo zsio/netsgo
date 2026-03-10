@@ -19,6 +19,9 @@ import (
 	"netsgo/pkg/protocol"
 )
 
+// dataChannelReadyTimeout 是等待数据通道建立的最大超时时间
+const dataChannelReadyTimeout = 3 * time.Second
+
 // Client 是客户端/Agent 的核心结构体
 type Client struct {
 	ServerAddr    string // Server 的 WebSocket 地址 (ws://host:port)
@@ -300,8 +303,8 @@ func (c *Client) waitForDataChannel(timeout time.Duration) bool {
 
 // requestProxy 通过控制通道请求创建代理隧道
 func (c *Client) requestProxy(cfg protocol.ProxyNewRequest) {
-	// 等待数据通道就绪（最多 3 秒），再请求代理，避免服务端因无数据通道而拒绝
-	if !c.waitForDataChannel(3 * time.Second) {
+	// 等待数据通道就绪（最多 dataChannelReadyTimeout），再请求代理，避免服务端因无数据通道而拒绝
+	if !c.waitForDataChannel(dataChannelReadyTimeout) {
 		log.Printf("⚠️ 等待数据通道超时，代理 [%s] 将在无数据通道状态下请求（可能失败）", cfg.Name)
 	}
 

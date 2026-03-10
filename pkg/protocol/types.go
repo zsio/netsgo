@@ -59,6 +59,9 @@ const (
 	DataHandshakeFail byte = 0x01
 )
 
+// DataTokenMaxLen 数据通道一次性令牌的最大字节长度（防止过大的恶意输入）
+const DataTokenMaxLen = 256
+
 // StreamHeader 每个 yamux stream 开头发送的头部
 // Server 打开 stream 后写入此头部，告诉 Agent 这个 stream 属于哪条代理隧道
 type StreamHeader struct {

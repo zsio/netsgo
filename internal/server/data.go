@@ -30,7 +30,7 @@ func (s *Server) handleDataConn(conn net.Conn) {
 		return
 	}
 	tokenLen := binary.BigEndian.Uint16(lenBuf[:])
-	if tokenLen == 0 || tokenLen > 256 {
+	if tokenLen == 0 || tokenLen > protocol.DataTokenMaxLen {
 		log.Printf("❌ 数据通道: Token 长度异常: %d", tokenLen)
 		conn.Write([]byte{protocol.DataHandshakeFail})
 		conn.Close()
