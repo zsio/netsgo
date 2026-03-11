@@ -1,0 +1,55 @@
+import { Server as ServerIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import type { Agent } from '@/types';
+
+interface AgentHeaderProps {
+  agent: Agent;
+}
+
+const osLabels: Record<string, string> = {
+  darwin: 'macOS',
+  linux: 'Linux',
+  windows: 'Windows',
+};
+
+export function AgentHeader({ agent }: AgentHeaderProps) {
+  const isOnline = agent.stats !== null;
+
+  return (
+    <div className="flex items-start justify-between">
+      <div>
+        <div className="flex items-center gap-3 mb-2">
+          <div className="p-2.5 bg-muted rounded-xl border border-border/50">
+            <ServerIcon className="h-6 w-6 text-foreground" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
+              {agent.info.hostname}
+              {isOnline ? (
+                <span className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">🟢 在线</span>
+              ) : (
+                <span className="px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground border border-border">🔴 离线</span>
+              )}
+            </h1>
+            <div className="text-sm text-muted-foreground flex items-center gap-2 mt-1">
+              <span className="font-mono bg-muted/50 px-1.5 py-0.5 rounded">ID: {agent.id.slice(0, 8)}</span>
+              <span>•</span>
+              <span>{osLabels[agent.info.os] ?? agent.info.os} / {agent.info.arch}</span>
+              <span>•</span>
+              <span>{agent.info.ip}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <Button variant="outline">
+          Web Terminal
+        </Button>
+        <Button variant="default" className="shadow-sm shadow-primary/20">
+          添加隧道
+        </Button>
+      </div>
+    </div>
+  );
+}

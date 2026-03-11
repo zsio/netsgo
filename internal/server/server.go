@@ -18,7 +18,8 @@ import (
 // Server 是服务端的核心结构体
 type Server struct {
 	Port   int
-	agents sync.Map // agentID -> *AgentConn
+	agents sync.Map  // agentID -> *AgentConn
+	events *EventBus // SSE 事件总线
 }
 
 // AgentConn 代表一个已连接的 Agent
@@ -51,7 +52,10 @@ func (a *AgentConn) GetStats() *protocol.SystemStats {
 
 // New 创建一个新的 Server 实例
 func New(port int) *Server {
-	return &Server{Port: port}
+	return &Server{
+		Port:   port,
+		events: NewEventBus(),
+	}
 }
 
 // RangeAgents 遍历所有已连接的 Agent
@@ -113,13 +117,18 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 	mux.HandleFunc("/", s.handleWeb)
 
 	// API
-	mux.HandleFunc("/api/status", s.handleAPIStatus)
-	mux.HandleFunc("/api/agents", s.handleAPIAgents)
+	mux.HandleFunc("GET /api/status", s.handleAPIStatus)
+	mux.HandleFunc("GET /api/agents", s.handleAPIAgents)
+	mux.HandleFunc("POST /api/agents/{id}/tunnels", s.handleCreateTunnel)
+	mux.HandleFunc("DELETE /api/agents/{id}/tunnels/{name}", s.handleDeleteTunnel)
+
+	// SSE 实时事件流
+	mux.HandleFunc("GET /api/events", s.handleSSE)
 
 	// 控制通道 WebSocket
 	mux.HandleFunc("/ws/control", s.handleControlWS)
 
-	// 数据通道端点信息（不再是 501）
+	// 数据通道端点信息
 	mux.HandleFunc("/ws/data", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -211,6 +220,13 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 
 	// 保存 Agent 连接
 	s.agents.Store(agent.ID, agent)
+
+	// 发布 Agent 上线事件
+	s.events.PublishJSON("agent_online", map[string]any{
+		"agent_id": agent.ID,
+		"info":     agent.Info,
+	})
+
 	defer func() {
 		// 清理：停止所有代理隧道，关闭数据通道
 		s.StopAllProxies(agent)
@@ -221,6 +237,11 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 		agent.dataMu.Unlock()
 		s.agents.Delete(agent.ID)
 		log.Printf("🔌 Agent 已断开: %s [ID: %s]", agent.Info.Hostname, agent.ID)
+
+		// 发布 Agent 离线事件
+		s.events.PublishJSON("agent_offline", map[string]any{
+			"agent_id": agent.ID,
+		})
 	}()
 
 	// 持续读取控制消息
@@ -294,6 +315,12 @@ func (s *Server) controlLoop(agent *AgentConn) {
 			agent.SetStats(&stats)
 			log.Printf("📊 [%s] CPU: %.1f%% | 内存: %.1f%% | 磁盘: %.1f%%",
 				agent.Info.Hostname, stats.CPUUsage, stats.MemUsage, stats.DiskUsage)
+
+			// 发布探针数据更新事件
+			s.events.PublishJSON("stats_update", map[string]any{
+				"agent_id": agent.ID,
+				"stats":    stats,
+			})
 
 		case protocol.MsgTypeProxyNew:
 			// 收到创建代理隧道请求
@@ -376,24 +403,120 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 	type agentView struct {
-		ID    string                `json:"id"`
-		Info  protocol.AgentInfo    `json:"info"`
-		Stats *protocol.SystemStats `json:"stats,omitempty"`
+		ID      string                 `json:"id"`
+		Info    protocol.AgentInfo     `json:"info"`
+		Stats   *protocol.SystemStats  `json:"stats,omitempty"`
+		Proxies []protocol.ProxyConfig `json:"proxies"`
 	}
 
 	var agents []agentView
 	s.agents.Range(func(_, value any) bool {
 		a := value.(*AgentConn)
+		// 收集 Agent 的所有隧道配置
+		var proxies []protocol.ProxyConfig
+		a.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
+			proxies = append(proxies, tunnel.Config)
+			return true
+		})
+		if proxies == nil {
+			proxies = []protocol.ProxyConfig{} // 确保 JSON 输出 [] 而非 null
+		}
 		agents = append(agents, agentView{
-			ID:    a.ID,
-			Info:  a.Info,
-			Stats: a.GetStats(),
+			ID:      a.ID,
+			Info:    a.Info,
+			Stats:   a.GetStats(),
+			Proxies: proxies,
 		})
 		return true
 	})
+	if agents == nil {
+		agents = []agentView{} // 确保 JSON 输出 [] 而非 null
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(agents)
+}
+
+// --- 隧道 CRUD API ---
+
+func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	val, ok := s.agents.Load(agentID)
+	if !ok {
+		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
+		return
+	}
+	agent := val.(*AgentConn)
+
+	var req protocol.ProxyNewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := s.StartProxy(agent, req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// 获取实际分配的端口
+	agent.proxyMu.RLock()
+	tunnel := agent.proxies[req.Name]
+	actualPort := tunnel.Config.RemotePort
+	config := tunnel.Config
+	agent.proxyMu.RUnlock()
+
+	// 发布隧道创建事件
+	s.events.PublishJSON("tunnel_changed", map[string]any{
+		"agent_id": agentID,
+		"tunnel":   config,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{
+		"success":     true,
+		"message":     "代理隧道创建成功",
+		"remote_port": actualPort,
+	})
+}
+
+func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	tunnelName := r.PathValue("name")
+
+	val, ok := s.agents.Load(agentID)
+	if !ok {
+		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
+		return
+	}
+	agent := val.(*AgentConn)
+
+	if err := s.StopProxy(agent, tunnelName); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// 发布隧道删除事件
+	s.events.PublishJSON("tunnel_changed", map[string]any{
+		"agent_id": agentID,
+		"tunnel": protocol.ProxyConfig{
+			Name:    tunnelName,
+			AgentID: agentID,
+			Status:  protocol.ProxyStatusStopped,
+		},
+	})
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- 辅助 ---
