@@ -2,7 +2,8 @@ import {
   Cpu, HardDrive, Globe, ActivitySquare,
   ArrowDownCircle, ArrowUpCircle,
 } from 'lucide-react';
-import { formatBytes, formatPercent } from '@/lib/format';
+import { formatBytes, formatPercent, formatNetSpeed } from '@/lib/format';
+import { useNetSpeed } from '@/hooks/use-net-speed';
 import type { Agent } from '@/types';
 
 interface AgentStatsGridProps {
@@ -11,6 +12,7 @@ interface AgentStatsGridProps {
 
 export function AgentStatsGrid({ agent }: AgentStatsGridProps) {
   const stats = agent.stats;
+  const netSpeed = useNetSpeed(agent);
 
   if (!stats) {
     return (
@@ -88,22 +90,25 @@ export function AgentStatsGrid({ agent }: AgentStatsGridProps) {
         </div>
       </div>
 
-      {/* Network I/O */}
+      {/* Network I/O — 实时速率 */}
       <div className="p-4 rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm flex flex-col justify-between hover:bg-card/80 transition-colors">
         <div className="flex items-center justify-between text-muted-foreground mb-3">
-          <span className="text-sm font-medium">累计网络 I/O</span>
+          <span className="text-sm font-medium">实时网络 I/O</span>
           <Globe className="h-4 w-4" />
         </div>
         <div className="flex flex-col gap-2">
           <div className="flex items-center text-sm">
             <ArrowDownCircle className="h-4 w-4 text-emerald-500 mr-2" />
             <span className="text-muted-foreground w-12">下行</span>
-            <span className="font-mono font-medium">{formatBytes(stats.net_recv)}</span>
+            <span className="font-mono font-medium">{formatNetSpeed(netSpeed.download)}</span>
           </div>
           <div className="flex items-center text-sm">
             <ArrowUpCircle className="h-4 w-4 text-blue-500 mr-2" />
             <span className="text-muted-foreground w-12">上行</span>
-            <span className="font-mono font-medium">{formatBytes(stats.net_sent)}</span>
+            <span className="font-mono font-medium">{formatNetSpeed(netSpeed.upload)}</span>
+          </div>
+          <div className="text-[10px] text-muted-foreground/60 mt-1">
+            累计: ↓{formatBytes(stats.net_recv)} / ↑{formatBytes(stats.net_sent)}
           </div>
         </div>
       </div>

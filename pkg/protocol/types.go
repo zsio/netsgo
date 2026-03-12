@@ -33,7 +33,19 @@ type ProxyConfig struct {
 	RemotePort int    `json:"remote_port"` // 公网暴露端口
 	Domain     string `json:"domain"`      // HTTP 类型时的域名
 	AgentID    string `json:"agent_id"`    // 所属 Agent ID
-	Status     string `json:"status"`      // 状态: active, stopped, error
+	Status     string `json:"status"`      // 状态: active, paused, stopped, error
+}
+
+// ToProxyNewRequest 将 ProxyConfig 转换为 ProxyNewRequest（用于发送给 Agent）
+func (c ProxyConfig) ToProxyNewRequest() ProxyNewRequest {
+	return ProxyNewRequest{
+		Name:       c.Name,
+		Type:       c.Type,
+		LocalIP:    c.LocalIP,
+		LocalPort:  c.LocalPort,
+		RemotePort: c.RemotePort,
+		Domain:     c.Domain,
+	}
 }
 
 // 代理隧道类型常量
@@ -46,6 +58,7 @@ const (
 // 代理隧道状态常量
 const (
 	ProxyStatusActive  = "active"
+	ProxyStatusPaused  = "paused"
 	ProxyStatusStopped = "stopped"
 	ProxyStatusError   = "error"
 )

@@ -1,527 +1,461 @@
-# NetsGo Web 前端实施计划（全面修订版）
+# NetsGo Dashboard & 系统管理 实施计划
 
-本文档是 NetsGo 前端架构落地的完整指南。基于对现有代码库（`web/src/App.tsx`、`internal/server/server.go`、`pkg/protocol/types.go`）的深度分析，以及对前后端 API 合约缺口的梳理而制定。
-
-无论是人类开发者还是 AI Assistant，在进入下一步开发前，请务必参考此文档以确保架构的一致性。
+本文档规划两大功能迭代：**第一期 Dashboard 全局仪表盘** 和 **第二期系统管理**。
 
 ---
 
-## 阶段概述
+## 第一期：Dashboard 全局仪表盘
 
-整个落地过程分为 **8 个步骤**，按依赖顺序编排：
+### 背景与目标
 
-| Step | 名称 | 领域 | 前置条件 |
-|:----:|------|------|:--------:|
-| 0 | 开发体验基建 | 工程配置 | 无 |
-| 1 | 基础设施（依赖与类型） | 工程配置 | Step 0 |
-| 2 | 业务组件拆分 | 前端 UI | Step 1 |
-| 3 | 路由骨架搭建 | 前端架构 | Step 2 |
-| 4 | 客户端状态管理 | 前端架构 | Step 2 |
-| 5 | 接入服务端数据 | 前端 + 后端 | Step 1, 4 |
-| 6 | SSE 实时同步 | 前端 + 后端 | Step 5 |
-| 7 | 暗黑模式与持久化 | 体验完善 | Step 4 |
+当前问题：当没有 Agent 连接或未选中 Agent 时，右侧主区域仅显示一个空白引导 (`AgentEmptyState`)，信息量为零。
 
-> **注意**：Step 3 和 Step 4 可以并行。Step 7 的 CSS 变量部分已在 Step 0 中前置处理（防闪烁），Step 7 只处理交互切换和持久化。
+目标：在左侧 Sidebar 顶部增加一个固定的 **Dashboard** 菜单入口，点击后右侧展示服务端全局概览，包括：
+- 统计卡片（Agent 在线/离线数、隧道活跃/停止数）
+- 服务端信息卡（版本、端口、运行时长、存储路径）
+- Agent 总表（所有 Agent 一览，含在线/离线状态，可点击跳转）
+- 隧道总表（所有隧道汇总，按状态筛选）
+
+### 交互方案
+
+采用 **方案 A：Sidebar 顶部固定项**。
+
+- 在 `AgentSidebar` 搜索框下方、Agent 分组上方，增加一个固定的 "📊 Dashboard" 菜单项
+- 点击后，右侧主区域切换为 Dashboard 全局概览视图
+- 点击具体 Agent 时，切回原有的 Agent 详情视图
+- 当无 Agent 连接时，默认展示 Dashboard 视图
 
 ---
 
-## Step 0: 开发体验基建
+### 后端改动
 
-### 0.1 为什么要这一步？
-在写任何业务代码之前，需要先确保开发环境顺畅：能联调后端、有环境变量区分、暗黑模式不闪烁。这些基建看似微小，但如果推迟做，会在后续每一步都造成摩擦。
+#### [MODIFY] [server.go](file:///Users/dyy/projects/code/netsgo/internal/server/server.go)
 
-### 0.2 具体怎么做？
+**扩展 `handleAPIStatus` 响应**，增加以下字段：
 
-**1. Vite 开发代理**
+```diff
+ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
++    // 计算各类统计
+     agentCount := 0
++    tunnelActive := 0
++    tunnelPaused := 0
++    tunnelStopped := 0
+     s.agents.Range(func(_, value any) bool {
+         agentCount++
++        a := value.(*AgentConn)
++        a.RangeProxies(func(_ string, t *ProxyTunnel) bool {
++            switch t.Config.Status {
++            case protocol.ProxyStatusActive:
++                tunnelActive++
++            case protocol.ProxyStatusPaused:
++                tunnelPaused++
++            case protocol.ProxyStatusStopped:
++                tunnelStopped++
++            }
++            return true
++        })
+         return true
+     })
 
-修改 `web/vite.config.ts`，添加 `server.proxy` 配置，将 `/api` 和 `/ws` 请求代理到 Go 后端，前端开发时不再遇到跨域问题：
+     w.Header().Set("Content-Type", "application/json")
+     json.NewEncoder(w).Encode(map[string]any{
+         "status":        "running",
+         "agent_count":   agentCount,
+         "version":       "0.1.0",
++        "listen_port":   s.Port,
++        "uptime":        int64(time.Since(s.startTime).Seconds()),
++        "store_path":    s.getStorePath(),
++        "tunnel_active": tunnelActive,
++        "tunnel_paused": tunnelPaused,
++        "tunnel_stopped": tunnelStopped,
+     })
+ }
+```
+
+需要在 `Server` 结构体中增加 `startTime time.Time` 字段，在 `Start()` 方法开头设置 `s.startTime = time.Now()`。增加 `getStorePath()` 辅助方法返回 store 的实际路径。
+
+---
+
+### 前端改动
+
+#### 新增类型
+
+##### [MODIFY] [index.ts](file:///Users/dyy/projects/code/netsgo/web/src/types/index.ts)
+
+扩展 `ServerStatus` 接口以匹配新的 `/api/status` 响应：
+
 ```typescript
-server: {
-  proxy: {
-    '/api': 'http://localhost:7900',
-    '/ws': {
-      target: 'ws://localhost:7900',
-      ws: true,
-    },
-  },
-},
-```
-
-**2. 暗黑模式防闪烁 (FOUC Prevention)**
-
-修改 `web/index.html`，在 `<head>` 中注入 blocking script，在 DOM 渲染前读取 localStorage 并设置 `dark` class：
-```html
-<script>
-  (function() {
-    const stored = localStorage.getItem('netsgo-theme');
-    const isDark = stored === 'dark' ||
-      (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    if (isDark) document.documentElement.classList.add('dark');
-  })();
-</script>
-```
-
-同时将 `<title>` 从 `web` 改为 `NetsGo Console`。
-
----
-
-## Step 1: 基础设施（依赖与类型）
-
-### 1.1 为什么要这一步？
-引入 TanStack 生态和 Zustand 作为核心依赖。同时，将 Go 后端的数据结构翻译为 TypeScript 类型，确保前后端数据对齐。
-
-### 1.2 具体怎么做？
-
-**1. 安装依赖**
-```bash
-pnpm add @tanstack/react-router @tanstack/react-query zustand
-```
-
-**2. 定义 TypeScript 类型**
-
-新建 `src/types/index.ts`，必须对齐 `pkg/protocol/types.go`：
-
-```typescript
-// 对齐 protocol.AgentInfo
-export interface AgentInfo {
-  hostname: string;
-  os: string;        // "windows" | "linux" | "darwin"
-  arch: string;      // "amd64" | "arm64"
-  ip: string;
+export interface ServerStatus {
+  status: string;
+  agent_count: number;
   version: string;
+  listen_port: number;
+  uptime: number;         // seconds
+  store_path: string;
+  tunnel_active: number;
+  tunnel_paused: number;
+  tunnel_stopped: number;
 }
-
-// 对齐 protocol.SystemStats
-export interface SystemStats {
-  cpu_usage: number;
-  mem_total: number;   // bytes
-  mem_used: number;    // bytes
-  mem_usage: number;
-  disk_total: number;  // bytes
-  disk_used: number;   // bytes
-  disk_usage: number;
-  net_sent: number;    // bytes (cumulative)
-  net_recv: number;    // bytes (cumulative)
-  uptime: number;      // seconds
-  num_cpu: number;
-}
-
-// 对齐 /api/agents 响应中的 agentView（server.go handleAPIAgents）
-export interface Agent {
-  id: string;
-  info: AgentInfo;
-  stats: SystemStats | null;  // ⚠️ 可能为 null（Agent 刚连接还没上报时）
-}
-
-// 对齐 protocol.ProxyConfig
-export interface ProxyConfig {
-  name: string;
-  type: "tcp" | "udp" | "http";
-  local_ip: string;
-  local_port: number;
-  remote_port: number;
-  domain: string;
-  agent_id: string;
-  status: "active" | "stopped" | "error";
-}
-```
-
-> ⚠️ 当前后端 `/api/agents` **不返回隧道列表 (proxies)**。在 Step 5 实施前，后端需要扩展 API（方案见 Step 5）。
-
-**3. 数据格式化工具**
-
-新建 `src/lib/format.ts`。后端返回的 `mem_total` / `mem_used` 是 `uint64` (bytes)，`uptime` 是秒数。前端需要转换为人类可读格式：
-
-```typescript
-export function formatBytes(bytes: number): string { /* 1073741824 → "1.0 GB" */ }
-export function formatUptime(seconds: number): string { /* 86400 → "1 天 0 小时" */ }
-export function formatPercent(value: number): string { /* 45.23 → "45.2%" */ }
-```
-
-**4. API 请求器与 QueryClient**
-
-新建 `src/lib/api.ts`：封装 `fetch` 的请求器，统一错误处理。后续业务代码不直接写 `fetch`。
-
-新建 `src/lib/query-client.ts`：导出 `QueryClient` 实例，配置默认策略：
-```typescript
-export const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 2,
-      retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
-      staleTime: 5000,
-    },
-  },
-});
 ```
 
 ---
 
-## Step 2: 业务组件拆分
+#### UI Store 改动
 
-### 2.1 为什么要这一步？
-当前 `App.tsx` 长达 420+ 行，所有状态和 DOM 揉在一起。必须按业务域拆分，为后续路由和状态管理做准备。
+##### [MODIFY] [ui-store.ts](file:///Users/dyy/projects/code/netsgo/web/src/stores/ui-store.ts)
 
-> **重要**：这一步**先于路由**进行。先把组件拆干净，再把它们装进路由页面里，逻辑更自然。
+增加 `activeView` 状态，用于区分 Dashboard 视图和 Agent 详情视图：
 
-### 2.2 具体怎么做？
+```typescript
+type ActiveView = 'dashboard' | 'agent';
 
-使用 `components/custom/` 目录（与 shadcn `ui/` 不冲突）。
+interface UIState {
+  activeView: ActiveView;
+  setActiveView: (view: ActiveView) => void;
+  selectedAgentId: string | null;
+  setSelectedAgentId: (id: string | null) => void;
+  // ...existing...
+}
+```
 
-**1. 布局层** (`components/custom/layout/`)
+- `setSelectedAgentId` 被调用时（选中某 Agent），自动切换 `activeView` 为 `'agent'`
+- 点击 Dashboard 菜单时，调用 `setActiveView('dashboard')` 并将 `selectedAgentId` 置为 `null`
+- 初始值为 `'dashboard'`
 
-| 文件 | 来源 | 说明 |
-|------|------|------|
-| `TopBar.tsx` | App.tsx L41-L66 | Logo、压测/停止按钮、设置、**连接状态灯** |
-| `ErrorFallback.tsx` | 新增 | API 不可达时的全局错误回退 |
+---
 
-**2. Agent 管控域** (`components/custom/agent/`)
+#### 新增 Hook
 
-| 文件 | 来源 | 说明 |
-|------|------|------|
-| `AgentSidebar.tsx` | App.tsx L72-L171 | 左侧大纲视图：搜索框 + 分组折叠 + Agent 列表 |
-| `AgentHeader.tsx` | App.tsx L183-L217 | 右侧顶部：Agent 名称、状态徽章、OS 信息、操作按钮 |
-| `AgentStatsGrid.tsx` | App.tsx L220-L278 | 四宫格指标卡片：CPU、内存、磁盘、网络 I/O |
-| `AgentEmptyState.tsx` | App.tsx L409-L413 | 未选中 Agent 时的占位引导 |
+##### [NEW] [use-server-status.ts](file:///Users/dyy/projects/code/netsgo/web/src/hooks/use-server-status.ts)
 
-**3. 隧道管控域** (`components/custom/tunnel/`)
+```typescript
+export function useServerStatus() {
+  return useQuery({
+    queryKey: ['server-status'],
+    queryFn: () => api.get<ServerStatus>('/api/status'),
+    refetchInterval: 10000, // 10s 轮询（status 无 SSE 推送）
+  });
+}
+```
 
-| 文件 | 来源 | 说明 |
-|------|------|------|
-| `TunnelTable.tsx` | App.tsx L280-L380 | 隧道列表表格（含搜索、状态、操作列） |
-| `AddTunnelDialog.tsx` | 新增 | "添加隧道"的 Dialog 表单（名称、类型、端口） |
+---
 
-**4. 图表域** (`components/custom/chart/`)
+#### Sidebar 改动
 
-| 文件 | 来源 | 说明 |
-|------|------|------|
-| `TrafficChart.tsx` | App.tsx L382-L405 | 流量趋势图（当前是静态 SVG，后续接真实数据） |
+##### [MODIFY] [AgentSidebar.tsx](file:///Users/dyy/projects/code/netsgo/web/src/components/custom/agent/AgentSidebar.tsx)
 
-**5. 通用交互组件** (`components/custom/common/`)
+在搜索框下方增加固定的 Dashboard 菜单项：
 
-| 文件 | 说明 |
-|------|------|
-| `ConfirmDialog.tsx` | 危险操作二次确认（停止全隧道、删除隧道等） |
-| `ConnectionIndicator.tsx` | TopBar 中的连接状态灯（绿/黄/红），后续绑定 SSE 状态 |
-
-**6. 页面组装**
-
-将 `App.tsx` 从 420+ 行缩减为 ~30 行的组件拼装：
 ```tsx
-export default function App() {
+{/* Dashboard 固定入口 */}
+<div
+  className={`flex items-center py-2 px-3 mx-2 rounded-md cursor-pointer text-sm transition-colors ${
+    activeView === 'dashboard'
+      ? 'bg-primary/10 text-primary font-medium'
+      : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+  }`}
+  onClick={() => setActiveView('dashboard')}
+>
+  <LayoutDashboard className="h-4 w-4 mr-2" />
+  Dashboard
+</div>
+<div className="mx-3 my-2 border-t border-border/30" />
+```
+
+---
+
+#### 新增 Dashboard 组件
+
+##### [NEW] [OverviewPage.tsx](file:///Users/dyy/projects/code/netsgo/web/src/components/custom/dashboard/OverviewPage.tsx)
+
+Dashboard 全局概览页，组装以下子模块：
+
+```tsx
+export function OverviewPage() {
   return (
-    <div className="flex flex-col h-screen ...">
-      <TopBar />
-      <div className="flex flex-1 overflow-hidden">
-        <AgentSidebar />
-        <DashboardContent />
-      </div>
+    <div className="p-8 max-w-6xl mx-auto w-full flex flex-col gap-8 z-10">
+      <OverviewHeader />
+      <OverviewStatsGrid />
+      <ServerInfoCard />
+      <DashboardAgentTable />
+      <DashboardTunnelTable />
     </div>
   );
 }
 ```
 
-拆分完成后，视觉效果必须与拆分前**完全一致**（回归验证）。
+##### [NEW] [OverviewHeader.tsx](file:///Users/dyy/projects/code/netsgo/web/src/components/custom/dashboard/OverviewHeader.tsx)
+
+Dashboard 顶部标题区域，包含 "Dashboard" 标题和简要描述。
+
+##### [NEW] [OverviewStatsGrid.tsx](file:///Users/dyy/projects/code/netsgo/web/src/components/custom/dashboard/OverviewStatsGrid.tsx)
+
+四张统计卡片：
+
+| 卡片 | 数据来源 | 图标 |
+|------|----------|------|
+| 在线 Agent 数 | `useAgents()` 中 `stats !== null` 的数量 | `Monitor` |
+| 离线 Agent 数 | `useAgents()` 中 `stats === null` 的数量 | `MonitorOff` |
+| 活跃隧道数 | `useServerStatus().tunnel_active` | `Zap` |
+| 停止/暂停隧道数 | `useServerStatus().tunnel_paused + tunnel_stopped` | `Pause` |
+
+卡片样式复用现有 `AgentStatsGrid` 的设计语言（glassmorphism 卡片 + 图标着色）。
+
+##### [NEW] [ServerInfoCard.tsx](file:///Users/dyy/projects/code/netsgo/web/src/components/custom/dashboard/ServerInfoCard.tsx)
+
+服务端信息卡，展示：
+- 服务端版本号
+- 监听端口
+- 运行时长（使用 `formatUptime`）
+- 隧道配置存储路径
+
+使用横向排列的信息条目，风格类似 Agent 详情的 `AgentHeader`。
+
+##### [NEW] [DashboardAgentTable.tsx](file:///Users/dyy/projects/code/netsgo/web/src/components/custom/dashboard/DashboardAgentTable.tsx)
+
+Agent 总表，列出所有 Agent（在线 + 离线）：
+
+| 列 | 说明 |
+|----|------|
+| 状态 | 绿色圆点 (在线) / 灰色圆点 (离线) |
+| Hostname | Agent 主机名 |
+| IP | 地址 |
+| OS / Arch | 如 `linux/amd64` |
+| 隧道数 | 该 Agent 上的隧道数量 |
+| 操作 | "查看详情" 按钮，点击切换到 Agent 视图 |
+
+数据来源：`useAgents()` hook。
+
+##### [NEW] [DashboardTunnelTable.tsx](file:///Users/dyy/projects/code/netsgo/web/src/components/custom/dashboard/DashboardTunnelTable.tsx)
+
+隧道总表，汇总所有 Agent 上的隧道：
+
+| 列 | 说明 |
+|----|------|
+| 名称 | 隧道名 |
+| 类型 | TCP / UDP / HTTP |
+| 所属 Agent | hostname（可点击跳转） |
+| 映射 | `remote_port → local_ip:local_port` |
+| 状态 | active / paused / stopped 状态徽章 |
+
+支持按状态筛选的 Tab 或 Filter。数据来源：`useAgents()` 中聚合所有 `agent.proxies`。
 
 ---
 
-## Step 3: 路由骨架搭建 (TanStack Router)
+#### 路由 / 页面组装改动
 
-### 3.1 为什么要这一步？
-最终应用要打包嵌进 Go 二进制（`go:embed`），没有服务端路由支持。采用 `createHashHistory` 的 Hash 模式（`#/dashboard`）。为未来的 Web Terminal、Settings 等页面预留路由结构。
+##### [MODIFY] [dashboard.tsx](file:///Users/dyy/projects/code/netsgo/web/src/routes/dashboard.tsx)
 
-### 3.2 具体怎么做？
+修改 `DashboardPage` 组件，根据 `activeView` 状态决定右侧渲染内容：
 
-**1. 路由定义**
-
-| 文件 | 说明 |
-|------|------|
-| `src/routes/__root.tsx` | 根外壳：`<TopBar />` + `<Outlet />` + `<ScrollRestoration>` |
-| `src/routes/dashboard.tsx` | Dashboard 页面：组装 Step 2 拆好的组件 |
-| `src/routes/index.tsx` | `/` → redirect 到 `/dashboard` |
-
-**2. Router 实例**
-
-新建 `src/lib/router.ts`：
-```typescript
-import { createHashHistory, createRouter } from '@tanstack/react-router';
-const hashHistory = createHashHistory();
-export const router = createRouter({ routeTree, history: hashHistory });
-```
-
-**3. 改写入口**
-
-将 `main.tsx` 变成 Provider 容器：
 ```tsx
-<StrictMode>
-  <QueryClientProvider client={queryClient}>
-    <RouterProvider router={router} />
-  </QueryClientProvider>
-</StrictMode>
+// 核心变更逻辑
+const activeView = useUIStore((s) => s.activeView);
+
+// 右侧主区域
+{activeView === 'dashboard' ? (
+  <OverviewPage />
+) : selectedAgent ? (
+  <div className="p-8 max-w-6xl mx-auto w-full flex flex-col gap-8 z-10">
+    <AgentHeader agent={selectedAgent} />
+    <AgentStatsGrid agent={selectedAgent} />
+    <TunnelTable agent={selectedAgent} />
+    <TrafficChart />
+  </div>
+) : (
+  <AgentEmptyState />
+)}
 ```
 
-App.tsx 的职责被 `__root.tsx` 和 `dashboard.tsx` 接管，可以删除或转为纯 re-export。
+同时，将自动选中第一个 Agent 的逻辑改为：当 `activeView === 'agent'` 且 `selectedAgentId === null` 时才自动选中。初始加载时 `activeView` 为 `'dashboard'`，不自动选中 Agent。
 
 ---
 
-## Step 4: 客户端纯 UI 状态管理 (Zustand)
-
-### 4.1 为什么要这一步？
-`selectedAgentId`、分组折叠状态等是纯客户端 UI 状态，使用 Zustand 避免 Props Drilling。
-
-### 4.2 具体怎么做？
-
-新建 `src/stores/ui-store.ts`：
-
-```typescript
-interface UIState {
-  selectedAgentId: string | null;
-  setSelectedAgentId: (id: string | null) => void;
-  expandedGroups: Record<string, boolean>;
-  toggleGroup: (group: string) => void;
-}
-```
-
-删除原先 Dashboard 里的 `useState`，改为 Sidebar 内部触发 `setSelectedAgentId`，右侧内容区订阅这个 ID。
-
----
-
-## Step 5: 接入服务端基础数据 (TanStack Query)
-
-### 5.1 为什么要这一步？
-去掉 Dummy Data，让前端真正连接后端 API。
-
-### 5.2 前后端 API 合约
-
-> ⚠️ **重要**：以下标注了后端需要新增/扩展的端点。前端实施 Step 5 之前，后端必须先完成这些改动。
-
-| 端点 | 方法 | 状态 | 说明 |
-|------|:----:|:----:|------|
-| `/api/status` | GET | ✅ 已有 | 服务端状态（版本、Agent 数量） |
-| `/api/agents` | GET | ⚠️ 需扩展 | 需在 `agentView` 中增加 `proxies []ProxyConfig` 字段 |
-| `/api/agents/:id/tunnels` | POST | 🆕 需新增 | 为指定 Agent 创建隧道 |
-| `/api/agents/:id/tunnels/:name` | DELETE | 🆕 需新增 | 删除指定隧道 |
-| `/api/events` | GET (SSE) | 🆕 需新增 | Step 6 用，实时事件推送 |
-
-### 5.3 具体怎么做？
-
-新建 `src/hooks/use-agents.ts`：
-```typescript
-export function useAgents() {
-  return useQuery({
-    queryKey: ['agents'],
-    queryFn: () => api.get<Agent[]>('/api/agents'),
-  });
-}
-```
-
-新建 `src/hooks/use-tunnel-mutations.ts`：
-```typescript
-export function useCreateTunnel() {
-  return useMutation({
-    mutationFn: (data: CreateTunnelInput) =>
-      api.post(`/api/agents/${data.agentId}/tunnels`, data),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['agents'] }),
-  });
-}
-```
-
-**组件改造**：
-- `AgentSidebar`、`AgentStatsGrid`、`TunnelTable`：删除硬编码数据，改用 `useAgents()` Hook
-- 增加 `isLoading` → Skeleton UI
-- 增加 `isError` → ErrorFallback
-- 增加空数据态 → 引导用户安装 Agent 的空状态界面
-
----
-
-## Step 6: SSE 赋能（实时更新）
-
-### 6.1 为什么要这一步？
-Agent 探针数据每秒变化（CPU、内存、网络 I/O），靠轮询开销太大。使用 **SSE (Server-Sent Events)** 实现服务端 → 前端的实时推送。
-
-为什么选 SSE 而不是 WebSocket？
-- 数据流是**单向**的（Server → 前端），不需要双向通信
-- `EventSource` API **内置自动重连**，不需要手写断线重连逻辑
-- SSE 基于标准 HTTP，同端口复用无冲突（走 PeekListener 的 HTTP 分支）
-- 变更操作（创建/停止隧道等）是低频的，REST 即可
-
-> 💡 未来需要 Web Terminal 时，为 Terminal 单独开一条 WebSocket `/ws/terminal/:agentId` 即可。
-
-### 6.2 具体怎么做？
-
-**1. 后端新增 SSE 端点**
-
-后端需新增 `GET /api/events` 端点，当 Server 收到 Agent 的 `probe_report` 时广播给所有前端客户端。事件类型：
-
-| 事件名 | 数据 | 触发时机 |
-|--------|------|----------|
-| `stats_update` | `{ agent_id, stats: SystemStats }` | Agent 上报探针数据时 |
-| `agent_online` | `{ agent_id, info: AgentInfo }` | Agent 认证成功时 |
-| `agent_offline` | `{ agent_id }` | Agent 断开连接时 |
-| `tunnel_changed` | `{ agent_id, tunnel: ProxyConfig }` | 隧道创建/停止/异常时 |
-
-**2. 连接状态管理**
-
-新建 `src/stores/connection-store.ts`，管理 SSE 连接状态（connected / reconnecting / disconnected），驱动 TopBar 中的 `ConnectionIndicator`。
-
-**3. 事件流 Hook**
-
-新建 `src/hooks/use-event-stream.ts`：
-
-```typescript
-export function useEventStream() {
-  const queryClient = useQueryClient();
-
-  useEffect(() => {
-    const es = new EventSource('/api/events');
-
-    es.addEventListener('stats_update', (e) => {
-      const { agent_id, stats } = JSON.parse(e.data);
-      queryClient.setQueryData(['agents'], (old: Agent[] | undefined) =>
-        old?.map(a => a.id === agent_id ? { ...a, stats } : a)
-      );
-    });
-
-    es.addEventListener('agent_online', () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
-    });
-
-    es.addEventListener('agent_offline', () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
-    });
-
-    es.onerror = () => { /* 更新 connection-store → reconnecting */ };
-    es.onopen  = () => { /* 更新 connection-store → connected */ };
-
-    return () => es.close();
-  }, [queryClient]);
-}
-```
-
-核心策略：**SSE 推送写入 TanStack Query 缓存，自动触发组件重渲染**。不维护额外的 state，避免数据撕裂。
-
----
-
-## Step 7: 暗黑模式与持久化
-
-### 7.1 为什么要这一步？
-Step 0 已处理了防闪烁的 CSS 基础，这一步完善交互层面的主题切换和 localStorage 持久化。
-
-### 7.2 具体怎么做？
-
-在 `ui-store.ts` 中扩展（或新建 `src/stores/theme-store.ts`）：
-
-```typescript
-type Theme = "dark" | "light" | "system";
-
-interface ThemeState {
-  theme: Theme;
-  setTheme: (theme: Theme) => void;
-}
-```
-
-使用 Zustand 的 `persist` 中间件将主题偏好存入 `localStorage`。
-
-在 TopBar 的设置按钮中添加主题切换下拉菜单。
-
----
-
-## 新增文件总览
+### 新增文件总览 (第一期)
 
 ```
-src/
-├── types/
-│   └── index.ts                          [Step 1]
-├── lib/
-│   ├── api.ts                            [Step 1]
-│   ├── format.ts                         [Step 1]
-│   ├── query-client.ts                   [Step 1]
-│   └── router.ts                         [Step 3]
-├── stores/
-│   ├── ui-store.ts                       [Step 4]
-│   ├── connection-store.ts               [Step 6]
-│   └── theme-store.ts                    [Step 7]
+web/src/
 ├── hooks/
-│   ├── use-agents.ts                     [Step 5]
-│   ├── use-tunnel-mutations.ts           [Step 5]
-│   └── use-event-stream.ts              [Step 6]
-├── routes/
-│   ├── __root.tsx                        [Step 3]
-│   ├── index.tsx                         [Step 3]
-│   └── dashboard.tsx                     [Step 3]
-├── components/custom/
-│   ├── layout/
-│   │   ├── TopBar.tsx                    [Step 2]
-│   │   └── ErrorFallback.tsx             [Step 2]
-│   ├── agent/
-│   │   ├── AgentSidebar.tsx              [Step 2]
-│   │   ├── AgentHeader.tsx               [Step 2]
-│   │   ├── AgentStatsGrid.tsx            [Step 2]
-│   │   └── AgentEmptyState.tsx           [Step 2]
-│   ├── tunnel/
-│   │   ├── TunnelTable.tsx               [Step 2]
-│   │   └── AddTunnelDialog.tsx           [Step 2]
-│   ├── chart/
-│   │   └── TrafficChart.tsx              [Step 2]
-│   └── common/
-│       ├── ConfirmDialog.tsx             [Step 2]
-│       └── ConnectionIndicator.tsx       [Step 2]
+│   └── use-server-status.ts          [NEW]
+├── components/custom/dashboard/
+│   ├── OverviewPage.tsx              [NEW]
+│   ├── OverviewHeader.tsx            [NEW]
+│   ├── OverviewStatsGrid.tsx         [NEW]
+│   ├── ServerInfoCard.tsx            [NEW]
+│   ├── DashboardAgentTable.tsx       [NEW]
+│   └── DashboardTunnelTable.tsx      [NEW]
+
+internal/server/
+└── server.go                         [MODIFY]
 ```
-
-## 后端需配合的改动
-
-| 改动 | 关联 Step | 优先级 |
-|------|:---------:|:------:|
-| `/api/agents` 响应增加 `proxies` 字段 | Step 5 | 🔴 高 |
-| 新增 `POST /api/agents/:id/tunnels` | Step 5 | 🔴 高 |
-| 新增 `DELETE /api/agents/:id/tunnels/:name` | Step 5 | 🔴 高 |
-| 新增 `GET /api/events` SSE 端点 | Step 6 | 🔴 高 |
 
 ---
 
-## Verification Plan
+## 第二期：系统管理
 
-### 每个 Step 完成后的构建检查
+### 背景与目标
 
-在 `web/` 目录下执行，确保无编译错误：
-```bash
-cd web && npx tsc --noEmit && pnpm run build
+为 NetsGo 服务端增加完整的管理能力，包括安全认证、访问控制、审计日志和隧道策略。所有管理功能统一放在 `/admin` 路由下。
+
+### 路由结构
+
+```
+/dashboard           → 全局仪表盘（第一期，已实现）
+/dashboard           → 选中 Agent 时展示 Agent 详情
+/admin               → 系统管理（第二期）
+  /admin/keys        → Key / Token 管理
+  /admin/accounts    → 管理员账号管理
+  /admin/logs        → 系统日志查看
+  /admin/policies    → 隧道策略（端口范围、白名单）
+  /admin/events      → 事件时间线
 ```
 
-### Step 2 视觉回归验证
+### 功能列表
 
-组件拆分后，启动开发服务器，对比拆分前后页面是否视觉一致：
-```bash
-cd web && pnpm run dev
+#### 1. Key 管理 (`/admin/keys`)
+
+**后端**：
+- 新增数据模型 `APIKey`：`id`, `name`, `key_hash`, `permissions`, `created_at`, `expires_at`, `is_active`
+- 新增 CRUD API：`GET/POST/PUT/DELETE /api/admin/keys`
+- 改造 `handleAuth`：验证 Agent 提供的 Key 是否在有效 Key 列表中
+
+**前端**：
+- Key 列表表格（名称、权限、创建时间、到期时间、状态）
+- 创建/编辑 Key 的 Dialog
+- 支持禁用/启用 Key
+- 复制 Key 到剪贴板
+
+#### 2. 管理员账号 (`/admin/accounts`)
+
+**后端**：
+- 新增数据模型 `AdminUser`：`id`, `username`, `password_hash`, `role`, `created_at`, `last_login`
+- 新增认证中间件（JWT 或 Session）
+- 新增 API：`POST /api/auth/login`, `GET/POST/PUT/DELETE /api/admin/accounts`
+- Web 面板的 API 请求需要携带认证信息
+
+**前端**：
+- 登录页面
+- 账号列表表格
+- 创建/编辑账号的 Dialog
+- 角色分配（admin / viewer）
+
+#### 3. 系统日志 (`/admin/logs`)
+
+**后端**：
+- 在 Server 中增加 ring buffer（容量 N 条）存储结构化日志
+- 新增 API：`GET /api/admin/logs?level=&limit=&offset=`
+- 可选：通过 SSE 实时推送新日志
+
+**前端**：
+- 日志列表，按时间倒序
+- 支持按级别筛选（INFO / WARN / ERROR）
+- 自动滚动 + 暂停滚动功能
+- 日志条目高亮（ERROR 红色、WARN 黄色）
+
+#### 4. 隧道策略 (`/admin/policies`)
+
+**后端**：
+- 新增数据模型 `TunnelPolicy`：允许的端口范围（`min_port`, `max_port`）、端口黑名单、Agent 白名单
+- 新增 API：`GET/PUT /api/admin/policies`
+- 在 `StartProxy` 中校验策略：拒绝不在范围内的端口
+
+**前端**：
+- 端口范围配置（起始-结束）
+- 保留端口黑名单编辑器
+- Agent 白名单管理
+- 配置变更确认提示
+
+#### 5. 事件时间线 (`/admin/events`)
+
+**后端**：
+- 新增 `EventStore` 持久化最近 N 条事件（基于现有 `EventBus`）
+- 新增 API：`GET /api/admin/events?type=&limit=&since=`
+
+**前端**：
+- 时间线组件，展示 agent_online / agent_offline / tunnel_changed 等事件
+- 按事件类型筛选
+- 时间范围选择
+
+### 前端架构改动 (第二期)
+
+#### 路由扩展
+
+##### [MODIFY] [router.ts](file:///Users/dyy/projects/code/netsgo/web/src/lib/router.ts)
+
+```typescript
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  dashboardRoute,
+  adminRoute.addChildren([
+    adminKeysRoute,
+    adminAccountsRoute,
+    adminLogsRoute,
+    adminPoliciesRoute,
+    adminEventsRoute,
+  ]),
+]);
 ```
-手动检查：
-1. 打开 `http://localhost:5173`
-2. 确认 TopBar、Sidebar、Stats 卡片、隧道表格、流量图的渲染与拆分前一致
-3. 确认点击 Agent 切换、分组折叠/展开交互正常
 
-### Step 5 API 联调验证
+##### [NEW] 新增路由文件
 
-启动 Go 后端和前端 dev server，连接一个 Agent：
+- `src/routes/admin.tsx` — Admin 布局（左侧导航 + 右侧内容）
+- `src/routes/admin/keys.tsx`
+- `src/routes/admin/accounts.tsx`
+- `src/routes/admin/logs.tsx`
+- `src/routes/admin/policies.tsx`
+- `src/routes/admin/events.tsx`
+
+#### 导航变更
+
+在 `TopBar` 中增加管理入口（齿轮图标或菜单），点击跳转到 `/admin`。
+
+---
+
+## 验证计划
+
+### 第一期验证
+
+#### 后端单元测试
+
+在现有 `internal/server/server_test.go` 中新增测试：
+
 ```bash
-# 终端 1: 启动后端
-go run ./cmd/server
-
-# 终端 2: 启动前端
-cd web && pnpm run dev
-
-# 终端 3: 启动一个 Agent
-go run ./cmd/client
+cd /Users/dyy/projects/code/netsgo && go test ./internal/server/ -run TestAPI_Status -v
 ```
-手动检查：
-1. 前端 Sidebar 显示已连接的 Agent（而非 Dummy Data）
-2. Agent 的 CPU/内存指标显示真实数据（非 null 时）
-3. 隧道列表正确展示
 
-### Step 6 SSE 实时性验证
+新增测试覆盖 `/api/status` 扩展字段：
+- `TestAPI_Status_ExtendedFields`：验证返回值包含 `listen_port`, `uptime`, `store_path`, `tunnel_active`, `tunnel_paused`, `tunnel_stopped`
+- `TestAPI_Status_UptimeIncreasing`：验证 `uptime` 随时间递增
+- `TestAPI_Status_TunnelCounts`：创建隧道后验证各状态计数正确
 
-在 Step 5 的环境基础上：
-1. 打开浏览器 DevTools → Network → EventStream，确认 `/api/events` 连接建立
-2. 观察 Agent Stats 指标是否每隔几秒自动更新（无需手动刷新）
-3. 断开 Agent，确认前端状态更新为离线
-4. 断开后端，确认 TopBar 连接状态灯变红，后端恢复后自动重连
+#### 前端构建检查
+
+```bash
+cd /Users/dyy/projects/code/netsgo/web && npx tsc --noEmit && pnpm run build
+```
+
+确保无编译错误。
+
+#### 手动验证
+
+1. 启动后端和前端开发服务器：
+   ```bash
+   # 终端 1
+   cd /Users/dyy/projects/code/netsgo && go run ./cmd/server
+   # 终端 2
+   cd /Users/dyy/projects/code/netsgo/web && pnpm run dev
+   ```
+2. 打开浏览器，确认：
+   - 左侧 Sidebar 顶部出现 "Dashboard" 菜单项
+   - 点击 Dashboard 后，右侧展示全局概览（统计卡片 + 服务端信息 + Agent 表 + 隧道表）
+   - 服务端信息显示正确的版本号、端口、运行时长
+   - 连接一个 Agent 后，Agent 表和统计卡片实时更新
+   - 点击 Agent 表中的 "查看详情" 后，切换到 Agent 详情视图
+   - 点击 Sidebar 的 Agent 后，切到 Agent 详情；再点 Dashboard 可切回全局视图
+
+### 第二期验证
+
+> 第二期开始实施时，将根据具体模块制定详细的测试计划。初步预计：
+> - 每个后端 API 模块增加对应的 `_test.go` 测试
+> - 前端走构建检查 + 手动流程验证
+> - 认证相关功能增加安全性测试（无效 Token、过期 Token 等）

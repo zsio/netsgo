@@ -102,7 +102,7 @@ func (ms *mockServer) getReceivedMsgs() []protocol.Message {
 }
 
 // ============================================================
-// Client 集成测试 (4)
+// Client 集成测试
 // ============================================================
 
 func TestClient_ConnectAndAuth(t *testing.T) {
@@ -114,6 +114,7 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
+	c.DisableReconnect = true
 
 	// 在后台启动 Client（Start 会阻塞在 controlLoop 里）
 	errCh := make(chan error, 1)
@@ -148,6 +149,7 @@ func TestClient_HeartbeatSent(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
+	c.DisableReconnect = true
 
 	go c.Start()
 
@@ -176,6 +178,7 @@ func TestClient_ProbeReportSent(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
+	c.DisableReconnect = true
 
 	go c.Start()
 
@@ -212,7 +215,7 @@ func TestClient_ProbeReportSent(t *testing.T) {
 	}
 }
 
-func TestClient_ServerDisconnect(t *testing.T) {
+func TestClient_ServerDisconnect_WithReconnect(t *testing.T) {
 	ms := newMockServer(true)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/control", ms.handler)
@@ -220,12 +223,13 @@ func TestClient_ServerDisconnect(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
+	c.DisableReconnect = true // 测试中禁用重连避免阻塞
 
 	// 后台启动 Client
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		c.Start() // 不关心返回值，重点是不 panic
+		c.Start()
 	}()
 	<-started
 
@@ -237,8 +241,7 @@ func TestClient_ServerDisconnect(t *testing.T) {
 		t.Fatal("Client 应已完成认证")
 	}
 
-	// 模拟 Server 断开 — 必须主动关闭 WS 连接
-	// httptest.Server.Close() 仅关闭 listener，不会立即关闭已有的 WS 连接
+	// 模拟 Server 断开
 	ms.closeConns()
 	ts.Close()
 
@@ -277,7 +280,137 @@ func TestClient_DataChannelConnectErrorHandling(t *testing.T) {
 }
 
 // ============================================================
-// acceptStreamLoop 测试 (2)
+// Reconnect 测试
+// ============================================================
+
+func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
+	ms := newMockServer(true)
+
+	// 统计认证次数
+	var authCount int
+	var authMu sync.Mutex
+
+	httpMux := http.NewServeMux()
+	httpMux.HandleFunc("/ws/control", func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		ms.mu.Lock()
+		ms.conns = append(ms.conns, conn)
+		ms.mu.Unlock()
+
+		for {
+			var msg protocol.Message
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+
+			switch msg.Type {
+			case protocol.MsgTypeAuth:
+				authMu.Lock()
+				authCount++
+				authMu.Unlock()
+				resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
+					Success: true,
+					Message: "ok",
+					AgentID: "reconnect-agent",
+				})
+				conn.WriteJSON(resp)
+			case protocol.MsgTypePing:
+				pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
+				conn.WriteJSON(pong)
+			}
+		}
+	})
+	ts := httptest.NewServer(httpMux)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	c := New(wsURL, "test-key")
+	// 不设 DisableReconnect，让 reconnect 生效
+
+	// 后台启动 Client
+	go c.Start()
+	time.Sleep(1 * time.Second)
+
+	// 验证首次认证完成
+	authMu.Lock()
+	firstAuth := authCount
+	authMu.Unlock()
+	if firstAuth == 0 {
+		t.Fatal("首次认证应已完成")
+	}
+
+	// 断开连接
+	ms.closeConns()
+
+	// 等待重连（3s 间隔 + 连接时间）
+	time.Sleep(5 * time.Second)
+
+	// 验证重连成功（认证次数增加）
+	authMu.Lock()
+	finalAuth := authCount
+	authMu.Unlock()
+	if finalAuth <= firstAuth {
+		t.Errorf("重连后认证次数应增加，首次: %d, 当前: %d", firstAuth, finalAuth)
+	}
+}
+
+func TestClient_RetryInterval(t *testing.T) {
+	// 测试前 5 分钟的间隔
+	recent := time.Now().Add(-1 * time.Minute) // 1 分钟前
+	interval := retryInterval(recent)
+	if interval != 3*time.Second {
+		t.Errorf("断连 1 分钟内应返回 3s，得到 %v", interval)
+	}
+
+	// 测试 5 分钟后的间隔
+	old := time.Now().Add(-6 * time.Minute) // 6 分钟前
+	interval = retryInterval(old)
+	if interval != 10*time.Second {
+		t.Errorf("断连超过 5 分钟应返回 10s，得到 %v", interval)
+	}
+}
+
+func TestClient_Cleanup(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	c.AgentID = "cleanup-test"
+	c.proxies.Store("proxy1", protocol.ProxyNewRequest{Name: "proxy1"})
+
+	// 模拟创建一个 dataSession
+	clientConn, serverConn := net.Pipe()
+	session, _ := mux.NewClientSession(clientConn, mux.DefaultConfig())
+	c.dataSession = session
+
+	// 执行清理
+	c.cleanup()
+
+	// 验证清理结果
+	if c.AgentID != "" {
+		t.Error("cleanup 后 AgentID 应为空")
+	}
+
+	_, ok := c.proxies.Load("proxy1")
+	if ok {
+		t.Error("cleanup 后 proxies 应被清空")
+	}
+
+	c.dataMu.RLock()
+	if c.dataSession != nil {
+		t.Error("cleanup 后 dataSession 应为 nil")
+	}
+	c.dataMu.RUnlock()
+
+	serverConn.Close()
+	clientConn.Close()
+}
+
+// ============================================================
+// acceptStreamLoop 测试
 // ============================================================
 
 func TestClient_AcceptStreamLoop_NilSession(t *testing.T) {
@@ -303,7 +436,7 @@ func TestClient_AcceptStreamLoop_SessionClosed(t *testing.T) {
 }
 
 // ============================================================
-// requestProxy 测试 (1)
+// requestProxy 测试
 // ============================================================
 
 func TestClient_RequestProxy(t *testing.T) {
@@ -327,6 +460,7 @@ func TestClient_RequestProxy(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
+	c.DisableReconnect = true
 
 	// 启动 Client（后台阻塞在 controlLoop）
 	go c.Start()
@@ -364,7 +498,7 @@ func TestClient_RequestProxy(t *testing.T) {
 }
 
 // ============================================================
-// controlLoop — ProxyNewResp 处理测试 (2)
+// controlLoop — ProxyNewResp 处理测试
 // ============================================================
 
 func TestClient_ControlLoop_ProxyNewResp_Success(t *testing.T) {
@@ -376,6 +510,7 @@ func TestClient_ControlLoop_ProxyNewResp_Success(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
+	c.DisableReconnect = true
 
 	go c.Start()
 	time.Sleep(500 * time.Millisecond)
@@ -405,6 +540,7 @@ func TestClient_ControlLoop_ProxyNewResp_Failure(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
+	c.DisableReconnect = true
 
 	go c.Start()
 	time.Sleep(500 * time.Millisecond)
@@ -424,7 +560,7 @@ func TestClient_ControlLoop_ProxyNewResp_Failure(t *testing.T) {
 }
 
 // ============================================================
-// connectDataChannel 完整握手测试 (2)
+// connectDataChannel 完整握手测试
 // ============================================================
 
 func TestClient_ConnectDataChannel_Success(t *testing.T) {

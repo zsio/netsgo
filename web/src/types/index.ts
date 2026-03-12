@@ -38,7 +38,7 @@ export interface Agent {
 // --- Tunnel / Proxy ---
 
 export type ProxyType = "tcp" | "udp" | "http";
-export type ProxyStatus = "active" | "stopped" | "error";
+export type ProxyStatus = "active" | "paused" | "stopped" | "error";
 
 /** 对齐 protocol.ProxyConfig */
 export interface ProxyConfig {
@@ -90,4 +90,60 @@ export interface ServerStatus {
   status: string;
   agent_count: number;
   version: string;
+  listen_port: number;
+  uptime: number;         // seconds
+  store_path: string;
+  tunnel_active: number;
+  tunnel_paused: number;
+  tunnel_stopped: number;
+}
+
+// --- Admin System ---
+
+export interface APIKey {
+  id: string;
+  name: string;
+  permissions: string[];
+  created_at: string;
+  expires_at?: string;
+  is_active: boolean;
+}
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  role: string;
+  created_at: string;
+  last_login?: string;
+}
+
+export interface TunnelPolicy {
+  min_port: number;
+  max_port: number;
+  blocked_ports: number[];
+  agent_whitelist: string[];
+}
+
+export interface SystemLogEntry {
+  id: string;
+  timestamp: string;
+  level: string;
+  message: string;
+  source: string;
+}
+
+export interface EventRecord {
+  id: string;
+  timestamp: string;
+  type: string;
+  data: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: {
+    id: string;
+    username: string;
+    role: string;
+  };
 }

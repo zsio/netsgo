@@ -23,12 +23,31 @@ async function request<T>(
   url: string,
   options?: RequestInit,
 ): Promise<T> {
+  let token = '';
+  try {
+    const authStoreStr = localStorage.getItem('netsgo-auth');
+    if (authStoreStr) {
+      const state = JSON.parse(authStoreStr).state;
+      if (state && state.token) {
+        token = state.token;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to parse auth store from local storage', e);
+  }
+
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    ...options?.headers,
+  });
+
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
   const res = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
     ...options,
+    headers,
   });
 
   if (!res.ok) {

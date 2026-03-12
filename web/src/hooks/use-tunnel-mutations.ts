@@ -24,6 +24,42 @@ export function useCreateTunnel() {
   });
 }
 
+export function usePauseTunnel() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ agentId, tunnelName }: { agentId: string; tunnelName: string }) =>
+      api.put(`/api/agents/${agentId}/tunnels/${tunnelName}/pause`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
+  });
+}
+
+export function useResumeTunnel() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ agentId, tunnelName }: { agentId: string; tunnelName: string }) =>
+      api.put(`/api/agents/${agentId}/tunnels/${tunnelName}/resume`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
+  });
+}
+
+export function useStopTunnel() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ agentId, tunnelName }: { agentId: string; tunnelName: string }) =>
+      api.put(`/api/agents/${agentId}/tunnels/${tunnelName}/stop`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
+  });
+}
+
 export function useDeleteTunnel() {
   const queryClient = useQueryClient();
 

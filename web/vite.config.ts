@@ -19,10 +19,11 @@ export default defineConfig({
     },
   },
   server: {
+    host: '127.0.0.1',
     proxy: {
-      '/api': 'http://localhost:7900',
+      '/api': 'http://localhost:8080',
       '/ws': {
-        target: 'ws://localhost:7900',
+        target: 'ws://localhost:8080',
         ws: true,
       },
     },

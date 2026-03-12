@@ -7,7 +7,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
@@ -17,9 +20,13 @@ import (
 
 // Server 是服务端的核心结构体
 type Server struct {
-	Port   int
-	agents sync.Map  // agentID -> *AgentConn
-	events *EventBus // SSE 事件总线
+	Port      int
+	StorePath string       // 隧道配置文件路径（空则使用默认）
+	agents    sync.Map     // agentID -> *AgentConn
+	events    *EventBus    // SSE 事件总线
+	store      *TunnelStore // 隧道持久化存储
+	startTime  time.Time    // 服务器启动时间
+	adminStore *AdminStore  // 系统管理后台数据存储
 }
 
 // AgentConn 代表一个已连接的 Agent
@@ -53,9 +60,41 @@ func (a *AgentConn) GetStats() *protocol.SystemStats {
 // New 创建一个新的 Server 实例
 func New(port int) *Server {
 	return &Server{
-		Port:   port,
-		events: NewEventBus(),
+		Port:      port,
+		events:    NewEventBus(),
+		startTime: time.Now(),
 	}
+}
+
+// initStore 初始化持久化存储
+func (s *Server) initStore() error {
+	path := s.StorePath
+	if path == "" {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, ".netsgo", "tunnels.json")
+	}
+	store, err := NewTunnelStore(path)
+	if err != nil {
+		return err
+	}
+	s.store = store
+	log.Printf("📦 隧道配置存储: %s", path)
+
+	adminPath := s.StorePath
+	if adminPath == "" {
+		home, _ := os.UserHomeDir()
+		adminPath = filepath.Join(home, ".netsgo", "admin.json")
+	} else {
+		adminPath = filepath.Join(filepath.Dir(s.StorePath), "admin.json")
+	}
+	adminStore, err := NewAdminStore(adminPath)
+	if err != nil {
+		return err
+	}
+	s.adminStore = adminStore
+	log.Printf("📦 系统管理存储: %s", adminPath)
+
+	return nil
 }
 
 // RangeAgents 遍历所有已连接的 Agent
@@ -79,6 +118,16 @@ func (a *AgentConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool)
 // Start 启动服务端，单端口同时处理 HTTP/WebSocket 和数据通道。
 // 通过 peek 首字节区分：HTTP 请求 vs 数据通道魔数 (0x4E)。
 func (s *Server) Start() error {
+	s.startTime = time.Now()
+
+	// 启动持久化事件循环
+	go s.persistEventsLoop()
+
+	// 初始化隧道持久化存储
+	if err := s.initStore(); err != nil {
+		return fmt.Errorf("初始化隧道存储失败: %w", err)
+	}
+
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Port))
 	if err != nil {
 		return fmt.Errorf("监听端口 %d 失败: %w", s.Port, err)
@@ -119,8 +168,21 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 	// API
 	mux.HandleFunc("GET /api/status", s.handleAPIStatus)
 	mux.HandleFunc("GET /api/agents", s.handleAPIAgents)
+	// 隧道 CRUD (为了安全性，理想情况下这里也加上 Auth，但这里遵循按原始计划或先兼容旧调用)
 	mux.HandleFunc("POST /api/agents/{id}/tunnels", s.handleCreateTunnel)
+	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/pause", s.handlePauseTunnel)
+	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/resume", s.handleResumeTunnel)
+	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/stop", s.handleStopTunnel)
 	mux.HandleFunc("DELETE /api/agents/{id}/tunnels/{name}", s.handleDeleteTunnel)
+
+	// Admin API
+	mux.HandleFunc("POST /api/auth/login", s.handleAPILogin)
+	mux.Handle("GET /api/admin/keys", RequireAuth(s.handleAPIAdminKeys))
+	mux.Handle("POST /api/admin/keys", RequireAuth(s.handleAPIAdminKeys))
+	mux.Handle("GET /api/admin/policies", RequireAuth(s.handleAPIAdminPolicies))
+	mux.Handle("PUT /api/admin/policies", RequireAuth(s.handleAPIAdminPolicies))
+	mux.Handle("GET /api/admin/logs", RequireAuth(s.handleAPIAdminLogs))
+	mux.Handle("GET /api/admin/events", RequireAuth(s.handleAPIAdminEvents))
 
 	// SSE 实时事件流
 	mux.HandleFunc("GET /api/events", s.handleSSE)
@@ -221,15 +283,23 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	// 保存 Agent 连接
 	s.agents.Store(agent.ID, agent)
 
+	// 迁移 store 中的旧 AgentID 到新的
+	if s.store != nil {
+		s.store.UpdateAgentID(agent.Info.Hostname, "", agent.ID)
+	}
+
 	// 发布 Agent 上线事件
 	s.events.PublishJSON("agent_online", map[string]any{
 		"agent_id": agent.ID,
 		"info":     agent.Info,
 	})
 
+	// 启动隧道恢复（等数据通道建立后执行）
+	go s.restoreTunnels(agent)
+
 	defer func() {
-		// 清理：停止所有代理隧道，关闭数据通道
-		s.StopAllProxies(agent)
+		// 清理：停止所有活跃的代理隧道监听（保留 store 中的配置）
+		s.PauseAllProxies(agent)
 		agent.dataMu.Lock()
 		if agent.dataSession != nil {
 			agent.dataSession.Close()
@@ -264,8 +334,16 @@ func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
 		return nil, fmt.Errorf("解析认证数据失败: %w", err)
 	}
 
-	// Phase 1: 简单的 Key 验证（后续可接入更复杂的鉴权）
-	// 目前先接受所有连接
+	// 验证 Key
+	if s.adminStore != nil {
+		valid, err := s.adminStore.ValidateAgentKey(authReq.Key)
+		if !valid {
+			log.Printf("❌ Agent Key 验证失败 [%s]: %v", conn.RemoteAddr().String(), err)
+			return nil, fmt.Errorf("认证失败: %w", err)
+		}
+	}
+
+	// 接受连接
 	agentID := generateUUID()
 
 	// 发送认证响应
@@ -342,12 +420,19 @@ func (s *Server) controlLoop(agent *AgentConn) {
 				agent.proxyMu.RLock()
 				tunnel := agent.proxies[req.Name]
 				actualPort := tunnel.Config.RemotePort
+				config := tunnel.Config
 				agent.proxyMu.RUnlock()
 
 				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
 					Success:    true,
 					Message:    "代理隧道创建成功",
 					RemotePort: actualPort,
+				})
+
+				// 发布隧道创建事件（通知前端）
+				s.events.PublishJSON("tunnel_changed", map[string]any{
+					"agent_id": agent.ID,
+					"tunnel":   config,
 				})
 			}
 
@@ -363,10 +448,31 @@ func (s *Server) controlLoop(agent *AgentConn) {
 			}
 			if err := s.StopProxy(agent, req.Name); err != nil {
 				log.Printf("⚠️ 关闭代理失败 [%s]: %v", agent.ID, err)
+			} else {
+				// 发布隧道关闭事件（通知前端）
+				s.events.PublishJSON("tunnel_changed", map[string]any{
+					"agent_id": agent.ID,
+					"tunnel":   map[string]any{"name": req.Name},
+				})
 			}
 
 		default:
 			log.Printf("⚠️ 未知消息类型 [%s]: %s", agent.ID, msg.Type)
+		}
+	}
+}
+
+// persistEventsLoop 订阅事件总线并将关键事件持久化到 AdminStore
+func (s *Server) persistEventsLoop() {
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+
+	for event := range ch {
+		if s.adminStore != nil {
+			// 过滤掉探针数据，避免日志过多
+			if event.Type != "stats_update" {
+				s.adminStore.AddEvent(event.Type, event.Data)
+			}
 		}
 	}
 }
@@ -388,17 +494,47 @@ func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	agentCount := 0
-	s.agents.Range(func(_, _ any) bool {
+	tunnelActive := 0
+	tunnelPaused := 0
+	tunnelStopped := 0
+
+	s.agents.Range(func(_, value any) bool {
 		agentCount++
+		a := value.(*AgentConn)
+		a.RangeProxies(func(_ string, t *ProxyTunnel) bool {
+			switch t.Config.Status {
+			case protocol.ProxyStatusActive:
+				tunnelActive++
+			case protocol.ProxyStatusPaused:
+				tunnelPaused++
+			case protocol.ProxyStatusStopped:
+				tunnelStopped++
+			}
+			return true
+		})
 		return true
 	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":      "running",
-		"agent_count": agentCount,
-		"version":     "0.1.0",
+		"status":         "running",
+		"agent_count":    agentCount,
+		"version":        "0.1.0",
+		"listen_port":    s.Port,
+		"uptime":         int64(time.Since(s.startTime).Seconds()),
+		"store_path":     s.getStorePath(),
+		"tunnel_active":  tunnelActive,
+		"tunnel_paused":  tunnelPaused,
+		"tunnel_stopped": tunnelStopped,
 	})
+}
+
+// getStorePath 获取实际的 store 路径
+func (s *Server) getStorePath() string {
+	if s.store != nil {
+		return s.store.path
+	}
+	return s.StorePath
 }
 
 func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
@@ -471,6 +607,24 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	config := tunnel.Config
 	agent.proxyMu.RUnlock()
 
+	// 通知 Agent 注册本地代理配置
+	proxyMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, req)
+	agent.mu.Lock()
+	if err := agent.conn.WriteJSON(proxyMsg); err != nil {
+		log.Printf("⚠️ 通知 Agent 代理配置失败 [%s]: %v", agent.ID, err)
+	}
+	agent.mu.Unlock()
+
+	// 持久化到 store
+	if s.store != nil {
+		s.store.AddTunnel(StoredTunnel{
+			ProxyNewRequest: req,
+			Status:          protocol.ProxyStatusActive,
+			AgentID:         agentID,
+			Hostname:        agent.Info.Hostname,
+		})
+	}
+
 	// 发布隧道创建事件
 	s.events.PublishJSON("tunnel_changed", map[string]any{
 		"agent_id": agentID,
@@ -486,6 +640,191 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	tunnelName := r.PathValue("name")
+
+	val, ok := s.agents.Load(agentID)
+	if !ok {
+		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
+		return
+	}
+	agent := val.(*AgentConn)
+
+	// 检查隧道是否存在且为 active 状态
+	agent.proxyMu.RLock()
+	tunnel, exists := agent.proxies[tunnelName]
+	agent.proxyMu.RUnlock()
+	if !exists {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
+		return
+	}
+	if tunnel.Config.Status != protocol.ProxyStatusActive {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "只有 active 状态的隧道才能暂停"})
+		return
+	}
+
+	// 暂停：关闭 Listener 但保留配置
+	if err := s.PauseProxy(agent, tunnelName); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	// 通知 Agent 移除本地代理配置
+	closeMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyClose, protocol.ProxyCloseRequest{
+		Name:   tunnelName,
+		Reason: "paused",
+	})
+	agent.mu.Lock()
+	agent.conn.WriteJSON(closeMsg)
+	agent.mu.Unlock()
+
+	// 更新 store
+	if s.store != nil {
+		s.store.UpdateStatus(agent.Info.Hostname, tunnelName, protocol.ProxyStatusPaused)
+	}
+
+	// 发布事件
+	s.events.PublishJSON("tunnel_changed", map[string]any{
+		"agent_id": agentID,
+		"tunnel": protocol.ProxyConfig{
+			Name:    tunnelName,
+			AgentID: agentID,
+			Status:  protocol.ProxyStatusPaused,
+		},
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "隧道已暂停"})
+}
+
+func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	tunnelName := r.PathValue("name")
+
+	val, ok := s.agents.Load(agentID)
+	if !ok {
+		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
+		return
+	}
+	agent := val.(*AgentConn)
+
+	// 检查隧道是否为 paused 或 stopped 状态
+	agent.proxyMu.RLock()
+	tunnel, exists := agent.proxies[tunnelName]
+	agent.proxyMu.RUnlock()
+	if !exists {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
+		return
+	}
+	if tunnel.Config.Status != protocol.ProxyStatusPaused && tunnel.Config.Status != protocol.ProxyStatusStopped {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "只有 paused 或 stopped 状态的隧道才能恢复"})
+		return
+	}
+
+	// 恢复：重新监听端口
+	if err := s.ResumeProxy(agent, tunnelName); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	// 通知 Agent 重新注册代理配置
+	proxyMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, tunnel.Config.ToProxyNewRequest())
+	agent.mu.Lock()
+	agent.conn.WriteJSON(proxyMsg)
+	agent.mu.Unlock()
+
+	// 更新 store
+	if s.store != nil {
+		s.store.UpdateStatus(agent.Info.Hostname, tunnelName, protocol.ProxyStatusActive)
+	}
+
+	// 发布事件
+	s.events.PublishJSON("tunnel_changed", map[string]any{
+		"agent_id": agentID,
+		"tunnel": protocol.ProxyConfig{
+			Name:    tunnelName,
+			AgentID: agentID,
+			Status:  protocol.ProxyStatusActive,
+		},
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "隧道已恢复"})
+}
+
+func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	tunnelName := r.PathValue("name")
+
+	val, ok := s.agents.Load(agentID)
+	if !ok {
+		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
+		return
+	}
+	agent := val.(*AgentConn)
+
+	agent.proxyMu.RLock()
+	tunnel, exists := agent.proxies[tunnelName]
+	agent.proxyMu.RUnlock()
+	if !exists {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
+		return
+	}
+
+	// 如果是 active 状态需要先关闭 Listener
+	if tunnel.Config.Status == protocol.ProxyStatusActive {
+		s.PauseProxy(agent, tunnelName)
+		// 通知 Agent 移除本地配置
+		closeMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyClose, protocol.ProxyCloseRequest{
+			Name:   tunnelName,
+			Reason: "stopped",
+		})
+		agent.mu.Lock()
+		agent.conn.WriteJSON(closeMsg)
+		agent.mu.Unlock()
+	}
+
+	// 更新状态为 stopped
+	agent.proxyMu.Lock()
+	if t, ok := agent.proxies[tunnelName]; ok {
+		t.Config.Status = protocol.ProxyStatusStopped
+	}
+	agent.proxyMu.Unlock()
+
+	// 更新 store
+	if s.store != nil {
+		s.store.UpdateStatus(agent.Info.Hostname, tunnelName, protocol.ProxyStatusStopped)
+	}
+
+	// 发布事件
+	s.events.PublishJSON("tunnel_changed", map[string]any{
+		"agent_id": agentID,
+		"tunnel": protocol.ProxyConfig{
+			Name:    tunnelName,
+			AgentID: agentID,
+			Status:  protocol.ProxyStatusStopped,
+		},
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "隧道已停止"})
+}
+
 func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("id")
 	tunnelName := r.PathValue("name")
@@ -497,13 +836,35 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	agent := val.(*AgentConn)
 
-	if err := s.StopProxy(agent, tunnelName); err != nil {
+	// 检查隧道是否存在
+	agent.proxyMu.RLock()
+	tunnel, exists := agent.proxies[tunnelName]
+	agent.proxyMu.RUnlock()
+	if !exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
+		return
+	}
+
+	// 只有 stopped 状态才能删除
+	if tunnel.Config.Status != protocol.ProxyStatusStopped {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{
-			"error": err.Error(),
+			"error": fmt.Sprintf("隧道当前状态为 %q，只有 stopped 状态才能删除", tunnel.Config.Status),
 		})
 		return
+	}
+
+	// 从内存中移除
+	agent.proxyMu.Lock()
+	delete(agent.proxies, tunnelName)
+	agent.proxyMu.Unlock()
+
+	// 从 store 中移除
+	if s.store != nil {
+		s.store.RemoveTunnel(agent.Info.Hostname, tunnelName)
 	}
 
 	// 发布隧道删除事件
@@ -517,6 +878,75 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// restoreTunnels 在 Agent 重连后恢复之前的隧道配置
+func (s *Server) restoreTunnels(agent *AgentConn) {
+	if s.store == nil {
+		return
+	}
+
+	tunnels := s.store.GetTunnelsByHostname(agent.Info.Hostname)
+	if len(tunnels) == 0 {
+		return
+	}
+
+	// 等待数据通道建立
+	for i := 0; i < 30; i++ {
+		agent.dataMu.RLock()
+		hasData := agent.dataSession != nil && !agent.dataSession.IsClosed()
+		agent.dataMu.RUnlock()
+		if hasData {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	restoredCount := 0
+	for _, st := range tunnels {
+		switch st.Status {
+		case protocol.ProxyStatusActive:
+			// 恢复 active 隧道
+			log.Printf("🔄 恢复隧道: %s (:%d → %s:%d)", st.Name, st.RemotePort, st.LocalIP, st.LocalPort)
+			if err := s.StartProxy(agent, st.ProxyNewRequest); err != nil {
+				log.Printf("⚠️ 恢复隧道失败 [%s]: %v", st.Name, err)
+				continue
+			}
+			// 通知 Agent
+			proxyMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, st.ProxyNewRequest)
+			agent.mu.Lock()
+			agent.conn.WriteJSON(proxyMsg)
+			agent.mu.Unlock()
+			restoredCount++
+
+		case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped:
+			// paused/stopped 隧道只恢复配置记录，不启动监听
+			agent.proxyMu.Lock()
+			agent.proxies[st.Name] = &ProxyTunnel{
+				Config: protocol.ProxyConfig{
+					Name:       st.Name,
+					Type:       st.Type,
+					LocalIP:    st.LocalIP,
+					LocalPort:  st.LocalPort,
+					RemotePort: st.RemotePort,
+					AgentID:    agent.ID,
+					Status:     st.Status,
+				},
+				done: make(chan struct{}),
+			}
+			agent.proxyMu.Unlock()
+			restoredCount++
+		}
+	}
+
+	// 恢复完成后一次性通知前端刷新
+	if restoredCount > 0 {
+		s.events.PublishJSON("tunnel_changed", map[string]any{
+			"agent_id": agent.ID,
+			"action":   "restored",
+			"count":    restoredCount,
+		})
+	}
 }
 
 // --- 辅助 ---

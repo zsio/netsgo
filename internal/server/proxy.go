@@ -21,6 +21,40 @@ type ProxyTunnel struct {
 // StartProxy 启动一条新的代理隧道。
 // 在 RemotePort 上监听外部连接，每收到一个连接就通过 yamux 转发给 Agent。
 func (s *Server) StartProxy(agent *AgentConn, req protocol.ProxyNewRequest) error {
+	// 1. 策略校验
+	if s.adminStore != nil {
+		policy := s.adminStore.GetTunnelPolicy()
+		
+		// 校验 Agent 白名单
+		if len(policy.AgentWhitelist) > 0 {
+			allowed := false
+			for _, allowHost := range policy.AgentWhitelist {
+				if agent.Info.Hostname == allowHost {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("Agent 不在允许创建隧道的白名单中")
+			}
+		}
+
+		// 校验端口范围和黑名单
+		if req.RemotePort != 0 {
+			if policy.MinPort > 0 && req.RemotePort < policy.MinPort {
+				return fmt.Errorf("请求端口 %d 小于允许的最小端口 %d", req.RemotePort, policy.MinPort)
+			}
+			if policy.MaxPort > 0 && req.RemotePort > policy.MaxPort {
+				return fmt.Errorf("请求端口 %d 大于允许的最大端口 %d", req.RemotePort, policy.MaxPort)
+			}
+			for _, blocked := range policy.BlockedPorts {
+				if req.RemotePort == blocked {
+					return fmt.Errorf("请求端口 %d 在黑名单中", req.RemotePort)
+				}
+			}
+		}
+	}
+
 	// 检查 Agent 数据通道
 	agent.dataMu.RLock()
 	hasData := agent.dataSession != nil && !agent.dataSession.IsClosed()
@@ -144,7 +178,90 @@ func (s *Server) StopAllProxies(agent *AgentConn) {
 	for _, tunnel := range proxies {
 		tunnel.once.Do(func() {
 			close(tunnel.done)
-			tunnel.Listener.Close()
+			if tunnel.Listener != nil {
+				tunnel.Listener.Close()
+			}
 		})
+	}
+}
+
+// PauseProxy 暂停一条代理隧道（关闭 Listener 但保留配置记录）
+func (s *Server) PauseProxy(agent *AgentConn, name string) error {
+	agent.proxyMu.Lock()
+	tunnel, exists := agent.proxies[name]
+	if !exists {
+		agent.proxyMu.Unlock()
+		return fmt.Errorf("代理隧道 %q 不存在", name)
+	}
+
+	// 关闭 Listener
+	tunnel.once.Do(func() {
+		close(tunnel.done)
+		if tunnel.Listener != nil {
+			tunnel.Listener.Close()
+		}
+	})
+	tunnel.Config.Status = protocol.ProxyStatusPaused
+	agent.proxyMu.Unlock()
+
+	log.Printf("⏸️ 代理隧道已暂停: %s", name)
+	return nil
+}
+
+// ResumeProxy 恢复一条暂停的代理隧道（重新监听端口）
+func (s *Server) ResumeProxy(agent *AgentConn, name string) error {
+	agent.proxyMu.Lock()
+	tunnel, exists := agent.proxies[name]
+	if !exists {
+		agent.proxyMu.Unlock()
+		return fmt.Errorf("代理隧道 %q 不存在", name)
+	}
+	agent.proxyMu.Unlock()
+
+	// 检查 Agent 数据通道
+	agent.dataMu.RLock()
+	hasData := agent.dataSession != nil && !agent.dataSession.IsClosed()
+	agent.dataMu.RUnlock()
+	if !hasData {
+		return fmt.Errorf("Agent [%s] 数据通道未建立，无法恢复代理", agent.ID)
+	}
+
+	// 重新监听端口
+	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("重新监听端口 %d 失败: %w", tunnel.Config.RemotePort, err)
+	}
+
+	// 重置 tunnel 状态
+	agent.proxyMu.Lock()
+	tunnel.Listener = ln
+	tunnel.done = make(chan struct{})
+	tunnel.once = sync.Once{}
+	tunnel.Config.Status = protocol.ProxyStatusActive
+	agent.proxyMu.Unlock()
+
+	// 启动 Accept 循环
+	go s.proxyAcceptLoop(agent, tunnel)
+
+	log.Printf("▶️ 代理隧道已恢复: %s [:%d]", name, tunnel.Config.RemotePort)
+	return nil
+}
+
+// PauseAllProxies 暂停 Agent 的所有活跃代理隧道（保留配置，断连时使用）
+func (s *Server) PauseAllProxies(agent *AgentConn) {
+	agent.proxyMu.Lock()
+	defer agent.proxyMu.Unlock()
+
+	for _, tunnel := range agent.proxies {
+		if tunnel.Config.Status == protocol.ProxyStatusActive {
+			tunnel.once.Do(func() {
+				close(tunnel.done)
+				if tunnel.Listener != nil {
+					tunnel.Listener.Close()
+				}
+			})
+			tunnel.Config.Status = protocol.ProxyStatusPaused
+		}
 	}
 }

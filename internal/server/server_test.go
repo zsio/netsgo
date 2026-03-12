@@ -140,6 +140,75 @@ func TestAPI_Status_NoAgents(t *testing.T) {
 	}
 }
 
+func TestAPI_Status_ExtendedFields(t *testing.T) {
+	_, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	result := getAPIJSON(t, ts, "/api/status")
+
+	if result["status"] != "running" {
+		t.Errorf("status 期望 'running'，得到 %v", result["status"])
+	}
+	if result["listen_port"] == nil || result["listen_port"].(float64) < 0 {
+		t.Errorf("listen_port 无效: %v", result["listen_port"])
+	}
+	if result["uptime"] == nil || result["uptime"].(float64) < 0 {
+		t.Errorf("uptime 无效: %v", result["uptime"])
+	}
+	if result["store_path"] == nil {
+		t.Errorf("store_path 无效: %v", result["store_path"])
+	}
+	if result["tunnel_active"].(float64) != 0 {
+		t.Errorf("tunnel_active 期望 0，得到 %v", result["tunnel_active"])
+	}
+}
+
+func TestAPI_Status_TunnelCounts(t *testing.T) {
+	s, conn, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	authResp := doAuth(t, conn)
+	time.Sleep(50 * time.Millisecond)
+
+	val, _ := s.agents.Load(authResp.AgentID)
+	agent := val.(*AgentConn)
+
+	agent.proxyMu.Lock()
+	agent.proxies["tunnel1"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusActive}, done: make(chan struct{})}
+	agent.proxies["tunnel2"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusPaused}, done: make(chan struct{})}
+	agent.proxies["tunnel3"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusStopped}, done: make(chan struct{})}
+	agent.proxyMu.Unlock()
+
+	result := getAPIJSON(t, ts, "/api/status")
+
+	if result["tunnel_active"].(float64) != 1 {
+		t.Errorf("tunnel_active 期望 1，得到 %v", result["tunnel_active"])
+	}
+	if result["tunnel_paused"].(float64) != 1 {
+		t.Errorf("tunnel_paused 期望 1，得到 %v", result["tunnel_paused"])
+	}
+	if result["tunnel_stopped"].(float64) != 1 {
+		t.Errorf("tunnel_stopped 期望 1，得到 %v", result["tunnel_stopped"])
+	}
+}
+
+func TestAPI_Status_UptimeIncreasing(t *testing.T) {
+	_, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	result1 := getAPIJSON(t, ts, "/api/status")
+	uptime1 := result1["uptime"].(float64)
+
+	time.Sleep(1100 * time.Millisecond)
+
+	result2 := getAPIJSON(t, ts, "/api/status")
+	uptime2 := result2["uptime"].(float64)
+
+	if uptime2 <= uptime1 {
+		t.Errorf("uptime 应该增加. 之前: %v, 现在: %v", uptime1, uptime2)
+	}
+}
+
 func TestAPI_Status_WithAgents(t *testing.T) {
 	_, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()

@@ -2,8 +2,36 @@ import { createHashHistory, createRouter } from '@tanstack/react-router';
 import { rootRoute } from '@/routes/__root';
 import { indexRoute } from '@/routes/index';
 import { dashboardRoute } from '@/routes/dashboard';
+import { dashboardIndexRoute } from '@/routes/dashboard/index';
+import { dashboardAgentRoute } from '@/routes/dashboard/agents.$agentId';
 
-const routeTree = rootRoute.addChildren([indexRoute, dashboardRoute]);
+import { loginRoute } from '@/routes/login';
+import { adminRoute } from '@/routes/admin';
+import { adminKeysRoute } from '@/routes/admin/keys';
+import { adminAccountsRoute } from '@/routes/admin/accounts';
+import { adminPoliciesRoute } from '@/routes/admin/policies';
+import { adminLogsRoute } from '@/routes/admin/logs';
+import { adminEventsRoute } from '@/routes/admin/events';
+
+const adminRouteTree = adminRoute.addChildren([
+  adminKeysRoute,
+  adminAccountsRoute,
+  adminPoliciesRoute,
+  adminLogsRoute,
+  adminEventsRoute,
+]);
+
+const dashboardRouteTree = dashboardRoute.addChildren([
+  dashboardIndexRoute,
+  dashboardAgentRoute,
+]);
+
+const routeTree = rootRoute.addChildren([
+  indexRoute, 
+  dashboardRouteTree,
+  loginRoute,
+  adminRouteTree,
+]);
 
 const hashHistory = createHashHistory();
 

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,8 @@ type Client struct {
 	proxies     sync.Map // proxy_name -> ProxyNewRequest
 	// ProxyConfigs 由服务端下发，Benchmark 测试也可手动设置
 	ProxyConfigs []protocol.ProxyNewRequest
+	// DisableReconnect 禁用自动重连（用于测试等场景）
+	DisableReconnect bool
 }
 
 // New 创建一个新的 Client 实例
@@ -43,8 +46,124 @@ func New(serverAddr, key string) *Client {
 	}
 }
 
-// Start 启动客户端，连接 Server 并开始工作
+// retryInterval 根据首次断连时间计算重试间隔
+// 前 5 分钟每 3 秒重试，之后每 10 秒重试
+func retryInterval(disconnectTime time.Time) time.Duration {
+	elapsed := time.Since(disconnectTime)
+	if elapsed < 5*time.Minute {
+		return 3 * time.Second
+	}
+	return 10 * time.Second
+}
+
+// Start 启动客户端，连接 Server 并开始工作。
+// 如果连接断开，自动重连（认证失败等致命错误除外）。
 func (c *Client) Start() error {
+	for {
+		err := c.connectAndRun()
+		if err != nil {
+			// 认证失败是致命错误，不重连
+			if c.DisableReconnect {
+				return err
+			}
+			if isFatalError(err) {
+				return err
+			}
+
+			log.Printf("⚠️ 连接断开: %v", err)
+		}
+
+		if c.DisableReconnect {
+			return err
+		}
+
+		// 清理旧连接资源
+		c.cleanup()
+
+		// 重连循环
+		disconnectTime := time.Now()
+		for {
+			interval := retryInterval(disconnectTime)
+			log.Printf("🔄 将在 %v 后重连...", interval)
+			time.Sleep(interval)
+
+			log.Printf("🔄 正在尝试重连 %s ...", c.ServerAddr)
+			err := c.connectAndRun()
+			if err == nil {
+				// connectAndRun 正常返回（连接又断了），开始新一轮重连
+				break
+			}
+			if isFatalError(err) {
+				return err
+			}
+			log.Printf("⚠️ 重连失败: %v", err)
+			c.cleanup()
+		}
+
+		// connectAndRun 正常返回，准备再次重连
+		c.cleanup()
+	}
+}
+
+// isFatalError 判断是否为致命错误（不应重连）
+func isFatalError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	// 认证失败不应重连
+	if strings.HasPrefix(errMsg, "认证") {
+		return true
+	}
+	return false
+}
+
+// cleanup 清理旧连接资源，为重连做准备
+func (c *Client) cleanup() {
+	// 先关闭 done channel（如果还没关闭），通知所有 goroutine 退出
+	select {
+	case <-c.done:
+		// 已经关闭
+	default:
+		close(c.done)
+	}
+
+	// 等待 goroutine 退出（它们通过 done channel 感知退出信号）
+	time.Sleep(100 * time.Millisecond)
+
+	// 关闭 dataSession
+	c.dataMu.Lock()
+	if c.dataSession != nil && !c.dataSession.IsClosed() {
+		c.dataSession.Close()
+	}
+	c.dataSession = nil
+	c.dataMu.Unlock()
+
+	// 关闭 WebSocket
+	c.mu.Lock()
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+	}
+	c.mu.Unlock()
+
+	// 清空 proxies
+	c.proxies.Range(func(key, _ any) bool {
+		c.proxies.Delete(key)
+		return true
+	})
+
+	// 重置 done channel
+	c.done = make(chan struct{})
+
+	// 重置 AgentID
+	c.AgentID = ""
+}
+
+// connectAndRun 执行完整的连接流程并阻塞直到断连。
+// 返回 nil 表示连接曾经成功但后来断开（可以重连），
+// 返回 error 表示连接或认证失败。
+func (c *Client) connectAndRun() error {
 	// 1. 连接控制通道
 	controlURL := fmt.Sprintf("%s/ws/control", c.ServerAddr)
 	log.Printf("🔌 正在连接 Server: %s", controlURL)
@@ -54,12 +173,12 @@ func (c *Client) Start() error {
 		return fmt.Errorf("连接 Server 失败: %w", err)
 	}
 	c.conn = conn
-	defer conn.Close()
 
 	log.Printf("✅ 已连接到 Server")
 
 	// 2. 发送认证
 	if err := c.authenticate(); err != nil {
+		conn.Close()
 		return fmt.Errorf("认证失败: %w", err)
 	}
 	log.Printf("✅ 认证成功，Agent ID: %s", c.AgentID)
@@ -84,7 +203,7 @@ func (c *Client) Start() error {
 		go c.requestProxy(cfg)
 	}
 
-	// 7. 监听控制消息（阻塞）
+	// 7. 监听控制消息（阻塞，断连后返回）
 	c.controlLoop()
 
 	return nil
@@ -307,6 +426,12 @@ func (c *Client) heartbeatLoop() {
 		case <-ticker.C:
 			msg, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 			c.mu.Lock()
+			conn := c.conn
+			c.mu.Unlock()
+			if conn == nil {
+				return
+			}
+			c.mu.Lock()
 			err := c.conn.WriteJSON(msg)
 			c.mu.Unlock()
 			if err != nil {
@@ -346,6 +471,12 @@ func (c *Client) reportProbe() {
 	}
 
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
 	c.mu.Lock()
 	err = c.conn.WriteJSON(msg)
 	c.mu.Unlock()
