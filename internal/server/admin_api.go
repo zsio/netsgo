@@ -6,6 +6,109 @@ import (
 	"strconv"
 )
 
+// ========= Setup API (初始化) =========
+
+func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
+	initialized := false
+	if s.adminStore != nil {
+		initialized = s.adminStore.IsInitialized()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"initialized": initialized,
+	})
+}
+
+func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
+	if s.adminStore == nil {
+		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// 直接尝试初始化，由 Initialize 内部的互斥锁保证原子性和幂等性
+	// 不做前置检查以避免 TOCTOU 竞态
+	var req struct {
+		Admin struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		} `json:"admin"`
+		ServerAddr   string      `json:"server_addr"`
+		AllowedPorts []PortRange `json:"allowed_ports"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	// 基本校验
+	if req.Admin.Username == "" {
+		http.Error(w, `{"error":"用户名不能为空"}`, http.StatusBadRequest)
+		return
+	}
+
+	// 执行初始化（内部持有锁，重复调用会返回错误）
+	if err := s.adminStore.Initialize(req.Admin.Username, req.Admin.Password, req.ServerAddr, req.AllowedPorts); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		// 区分"已初始化"和其他错误（如密码不合规）
+		if s.adminStore.IsInitialized() {
+			w.WriteHeader(http.StatusForbidden)
+		} else {
+			w.WriteHeader(http.StatusBadRequest)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// 验证新建的管理员并创建 session
+	user, err := s.adminStore.ValidateAdminPassword(req.Admin.Username, req.Admin.Password)
+	if err != nil {
+		http.Error(w, `{"error":"internal error: cannot validate newly created admin"}`, http.StatusInternalServerError)
+		return
+	}
+
+	session := s.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		http.Error(w, `{"error":"failed to generate token"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// 自动生成首个 Agent Key
+	rawKey := "sk-" + generateUUID()
+	agentKey, err := s.adminStore.AddAPIKey("default", rawKey, []string{"connect"}, nil)
+	if err != nil {
+		// Key 创建失败不阻塞初始化
+		rawKey = ""
+		agentKey = nil
+	}
+
+	s.adminStore.AddSystemLog("INFO", "服务初始化完成，管理员: "+req.Admin.Username, "setup")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+
+	resp := map[string]any{
+		"success": true,
+		"token":   token,
+		"message": "初始化成功",
+		"user": map[string]any{
+			"id":       user.ID,
+			"username": user.Username,
+			"role":     user.Role,
+		},
+	}
+	if agentKey != nil {
+		resp["agent_key"] = map[string]any{
+			"name":    agentKey.Name,
+			"raw_key": rawKey,
+		}
+	}
+	json.NewEncoder(w).Encode(resp)
+}
+
 // ========= Auth API =========
 
 func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +138,10 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := GenerateAdminToken(user)
+	// 创建 session（会自动踢出旧 session → 单端登录）
+	session := s.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
+
+	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		http.Error(w, `{"error":"failed to generate token"}`, http.StatusInternalServerError)
 		return
@@ -137,10 +243,10 @@ func (s *Server) handleAPIAdminPolicies(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		
-		claims := GetAdminFromContext(r.Context())
+		info := GetSessionFromContext(r.Context())
 		adminName := "unknown"
-		if claims != nil {
-		    adminName = claims.Username
+		if info != nil {
+		    adminName = info.Username
 		}
 		s.adminStore.AddSystemLog("INFO", "Tunnel policy updated by " + adminName, "admin")
 		

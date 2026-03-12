@@ -384,7 +384,13 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 	}
 	cfg := val.(protocol.ProxyNewRequest)
 
-	// 连接本地服务
+	// 按代理类型分发
+	if cfg.Type == protocol.ProxyTypeUDP {
+		c.handleUDPStream(stream, cfg)
+		return
+	}
+
+	// TCP 类型：连接本地服务
 	localAddr := net.JoinHostPort(cfg.LocalIP, fmt.Sprintf("%d", cfg.LocalPort))
 	localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
 	if err != nil {

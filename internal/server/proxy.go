@@ -13,7 +13,8 @@ import (
 // ProxyTunnel 代表一条活跃的代理隧道
 type ProxyTunnel struct {
 	Config   protocol.ProxyConfig
-	Listener net.Listener // 监听 RemotePort 的公网 listener
+	Listener net.Listener    // 监听 RemotePort 的公网 listener（TCP 隧道使用）
+	UDPState *UDPProxyState  // UDP 代理运行时状态（TCP 隧道为 nil）
 	done     chan struct{}
 	once     sync.Once
 }
@@ -39,8 +40,13 @@ func (s *Server) StartProxy(agent *AgentConn, req protocol.ProxyNewRequest) erro
 			}
 		}
 
-		// 校验端口范围和黑名单
+		// 校验端口白名单（新版 AllowedPorts 优先；为空时回退旧逻辑）
 		if req.RemotePort != 0 {
+			if s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(req.RemotePort) {
+				return fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort)
+			}
+
+			// 旧版策略回退（AllowedPorts 为空时，IsPortAllowed 返回 true，这里不会执行）
 			if policy.MinPort > 0 && req.RemotePort < policy.MinPort {
 				return fmt.Errorf("请求端口 %d 小于允许的最小端口 %d", req.RemotePort, policy.MinPort)
 			}
@@ -74,7 +80,35 @@ func (s *Server) StartProxy(agent *AgentConn, req protocol.ProxyNewRequest) erro
 	}
 	agent.proxyMu.Unlock()
 
-	// 监听公网端口
+	// UDP 类型：走 startUDPProxy 分支
+	if req.Type == protocol.ProxyTypeUDP {
+		tunnel := &ProxyTunnel{
+			Config: protocol.ProxyConfig{
+				Name:       req.Name,
+				Type:       req.Type,
+				LocalIP:    req.LocalIP,
+				LocalPort:  req.LocalPort,
+				RemotePort: req.RemotePort,
+				AgentID:    agent.ID,
+				Status:     protocol.ProxyStatusActive,
+			},
+			done: make(chan struct{}),
+		}
+
+		agent.proxyMu.Lock()
+		agent.proxies[req.Name] = tunnel
+		agent.proxyMu.Unlock()
+
+		if err := s.startUDPProxy(agent, tunnel); err != nil {
+			agent.proxyMu.Lock()
+			delete(agent.proxies, req.Name)
+			agent.proxyMu.Unlock()
+			return err
+		}
+		return nil
+	}
+
+	// TCP 类型：监听公网端口
 	addr := fmt.Sprintf(":%d", req.RemotePort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -161,7 +195,12 @@ func (s *Server) StopProxy(agent *AgentConn, name string) error {
 
 	tunnel.once.Do(func() {
 		close(tunnel.done)
-		tunnel.Listener.Close()
+		if tunnel.UDPState != nil {
+			tunnel.UDPState.Close()
+		}
+		if tunnel.Listener != nil {
+			tunnel.Listener.Close()
+		}
 	})
 
 	log.Printf("🛑 代理隧道已停止: %s", name)
@@ -178,6 +217,9 @@ func (s *Server) StopAllProxies(agent *AgentConn) {
 	for _, tunnel := range proxies {
 		tunnel.once.Do(func() {
 			close(tunnel.done)
+			if tunnel.UDPState != nil {
+				tunnel.UDPState.Close()
+			}
 			if tunnel.Listener != nil {
 				tunnel.Listener.Close()
 			}
@@ -197,6 +239,9 @@ func (s *Server) PauseProxy(agent *AgentConn, name string) error {
 	// 关闭 Listener
 	tunnel.once.Do(func() {
 		close(tunnel.done)
+		if tunnel.UDPState != nil {
+			tunnel.UDPState.Close()
+		}
 		if tunnel.Listener != nil {
 			tunnel.Listener.Close()
 		}
@@ -226,7 +271,34 @@ func (s *Server) ResumeProxy(agent *AgentConn, name string) error {
 		return fmt.Errorf("Agent [%s] 数据通道未建立，无法恢复代理", agent.ID)
 	}
 
-	// 重新监听端口
+	// UDP 类型：重新启动 UDP 代理
+	if tunnel.Config.Type == protocol.ProxyTypeUDP {
+		addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
+		packetConn, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return fmt.Errorf("重新监听 UDP 端口 %d 失败: %w", tunnel.Config.RemotePort, err)
+		}
+
+		state := &UDPProxyState{
+			packetConn: packetConn,
+			done:       make(chan struct{}),
+		}
+
+		agent.proxyMu.Lock()
+		tunnel.UDPState = state
+		tunnel.done = make(chan struct{})
+		tunnel.once = sync.Once{}
+		tunnel.Config.Status = protocol.ProxyStatusActive
+		agent.proxyMu.Unlock()
+
+		go s.udpReadLoop(agent, tunnel, state)
+		go s.udpReaper(state)
+
+		log.Printf("▶️ UDP 代理隧道已恢复: %s [:%d]", name, tunnel.Config.RemotePort)
+		return nil
+	}
+
+	// TCP 类型：重新监听端口
 	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -257,6 +329,9 @@ func (s *Server) PauseAllProxies(agent *AgentConn) {
 		if tunnel.Config.Status == protocol.ProxyStatusActive {
 			tunnel.once.Do(func() {
 				close(tunnel.done)
+				if tunnel.UDPState != nil {
+					tunnel.UDPState.Close()
+				}
 				if tunnel.Listener != nil {
 					tunnel.Listener.Close()
 				}

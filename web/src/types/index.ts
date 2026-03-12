@@ -147,3 +147,39 @@ export interface LoginResponse {
     role: string;
   };
 }
+
+// --- Setup (初始化) ---
+
+export interface PortRange {
+  start: number;
+  end: number;
+}
+
+export interface SetupStatus {
+  initialized: boolean;
+}
+
+export interface SetupRequest {
+  admin: {
+    username: string;
+    password: string;
+  };
+  server_addr: string;
+  allowed_ports: PortRange[];
+}
+
+export interface SetupResponse {
+  success: boolean;
+  token: string;
+  user: {
+    id: string;
+    username: string;
+    role: string;
+  };
+  agent_key?: {
+    name: string;
+    raw_key: string;
+  };
+  message: string;
+}
+

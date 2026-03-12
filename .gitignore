@@ -8,6 +8,9 @@ vendor/
 *.test
 cover.out
 cover.html
+coverage.out
+coverage
+coverage_func.txt
 *.prof
 *.pprof
 

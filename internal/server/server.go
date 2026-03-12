@@ -4,11 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"netsgo/pkg/protocol"
+	"netsgo/web"
 )
 
 // Server 是服务端的核心结构体
@@ -27,6 +30,8 @@ type Server struct {
 	store      *TunnelStore // 隧道持久化存储
 	startTime  time.Time    // 服务器启动时间
 	adminStore *AdminStore  // 系统管理后台数据存储
+	webFS      fs.FS        // 嵌入的前端静态资源 (nil 表示开发模式)
+	webHandler http.Handler // 缓存的 FileServer (nil 表示开发模式)
 }
 
 // AgentConn 代表一个已连接的 Agent
@@ -120,6 +125,22 @@ func (a *AgentConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool)
 func (s *Server) Start() error {
 	s.startTime = time.Now()
 
+	// 初始化嵌入的前端资源
+	webFS, err := web.DistFS()
+	if err != nil {
+		return fmt.Errorf("加载前端资源失败: %w", err)
+	}
+	s.webFS = webFS
+	if s.webFS != nil {
+		s.webHandler = http.FileServerFS(s.webFS)
+	}
+
+	if web.IsDevMode() {
+		log.Printf("🔧 开发模式：前端资源未嵌入，请使用 cd web && pnpm dev 独立启动前端")
+	} else if s.webFS != nil {
+		log.Printf("📦 前端资源已嵌入到二进制中")
+	}
+
 	// 启动持久化事件循环
 	go s.persistEventsLoop()
 
@@ -137,7 +158,9 @@ func (s *Server) Start() error {
 	s.Port = addr.Port // 更新为实际端口（当 Port=0 时有用）
 
 	log.Printf("🚀 NetsGo Server 已启动，监听 :%d", s.Port)
-	log.Printf("📊 Web 面板: http://localhost:%d", s.Port)
+	if s.webFS != nil {
+		log.Printf("📊 Web 面板: http://localhost:%d", s.Port)
+	}
 	log.Printf("🔌 控制通道: ws://localhost:%d/ws/control", s.Port)
 	log.Printf("🔗 数据通道: 同端口 (魔数 0x4E)")
 
@@ -165,24 +188,28 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 	// Web 面板 — 静态文件（go:embed）
 	mux.HandleFunc("/", s.handleWeb)
 
+	// Setup API（初始化向导，无需鉴权）
+	mux.HandleFunc("GET /api/setup/status", s.handleSetupStatus)
+	mux.HandleFunc("POST /api/setup/init", s.handleSetupInit)
+
 	// API
 	mux.HandleFunc("GET /api/status", s.handleAPIStatus)
 	mux.HandleFunc("GET /api/agents", s.handleAPIAgents)
-	// 隧道 CRUD (为了安全性，理想情况下这里也加上 Auth，但这里遵循按原始计划或先兼容旧调用)
-	mux.HandleFunc("POST /api/agents/{id}/tunnels", s.handleCreateTunnel)
-	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/pause", s.handlePauseTunnel)
-	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/resume", s.handleResumeTunnel)
-	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/stop", s.handleStopTunnel)
-	mux.HandleFunc("DELETE /api/agents/{id}/tunnels/{name}", s.handleDeleteTunnel)
+	// 隧道 CRUD（服务初始化后需要鉴权）
+	mux.HandleFunc("POST /api/agents/{id}/tunnels", s.RequireAuthIfInitialized(s.handleCreateTunnel))
+	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/pause", s.RequireAuthIfInitialized(s.handlePauseTunnel))
+	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/resume", s.RequireAuthIfInitialized(s.handleResumeTunnel))
+	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/stop", s.RequireAuthIfInitialized(s.handleStopTunnel))
+	mux.HandleFunc("DELETE /api/agents/{id}/tunnels/{name}", s.RequireAuthIfInitialized(s.handleDeleteTunnel))
 
-	// Admin API
+	// Admin API (JWT + Session Binding 鉴权)
 	mux.HandleFunc("POST /api/auth/login", s.handleAPILogin)
-	mux.Handle("GET /api/admin/keys", RequireAuth(s.handleAPIAdminKeys))
-	mux.Handle("POST /api/admin/keys", RequireAuth(s.handleAPIAdminKeys))
-	mux.Handle("GET /api/admin/policies", RequireAuth(s.handleAPIAdminPolicies))
-	mux.Handle("PUT /api/admin/policies", RequireAuth(s.handleAPIAdminPolicies))
-	mux.Handle("GET /api/admin/logs", RequireAuth(s.handleAPIAdminLogs))
-	mux.Handle("GET /api/admin/events", RequireAuth(s.handleAPIAdminEvents))
+	mux.HandleFunc("GET /api/admin/keys", s.RequireAuth(s.handleAPIAdminKeys))
+	mux.HandleFunc("POST /api/admin/keys", s.RequireAuth(s.handleAPIAdminKeys))
+	mux.HandleFunc("GET /api/admin/policies", s.RequireAuth(s.handleAPIAdminPolicies))
+	mux.HandleFunc("PUT /api/admin/policies", s.RequireAuth(s.handleAPIAdminPolicies))
+	mux.HandleFunc("GET /api/admin/logs", s.RequireAuth(s.handleAPIAdminLogs))
+	mux.HandleFunc("GET /api/admin/events", s.RequireAuth(s.handleAPIAdminEvents))
 
 	// SSE 实时事件流
 	mux.HandleFunc("GET /api/events", s.handleSSE)
@@ -280,9 +307,6 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("✅ Agent 已连接: %s (%s/%s) [ID: %s]", agent.Info.Hostname, agent.Info.OS, agent.Info.Arch, agent.ID)
 
-	// 保存 Agent 连接
-	s.agents.Store(agent.ID, agent)
-
 	// 迁移 store 中的旧 AgentID 到新的
 	if s.store != nil {
 		s.store.UpdateAgentID(agent.Info.Hostname, "", agent.ID)
@@ -345,6 +369,16 @@ func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
 
 	// 接受连接
 	agentID := generateUUID()
+	agent := &AgentConn{
+		ID:      agentID,
+		Info:    authReq.Agent,
+		conn:    conn,
+		proxies: make(map[string]*ProxyTunnel),
+	}
+
+	// 先注册到 agents map，再发送认证响应
+	// 这样客户端收到响应时，服务端已经准备就绪
+	s.agents.Store(agentID, agent)
 
 	// 发送认证响应
 	resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
@@ -353,15 +387,12 @@ func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
 		AgentID: agentID,
 	})
 	if err := conn.WriteJSON(resp); err != nil {
+		// 发送失败，回滚注册
+		s.agents.Delete(agentID)
 		return nil, fmt.Errorf("发送认证响应失败: %w", err)
 	}
 
-	return &AgentConn{
-		ID:      agentID,
-		Info:    authReq.Agent,
-		conn:    conn,
-		proxies: make(map[string]*ProxyTunnel),
-	}, nil
+	return agent, nil
 }
 
 // controlLoop 持续处理控制通道上的消息
@@ -480,14 +511,55 @@ func (s *Server) persistEventsLoop() {
 // --- Web 面板 ---
 
 func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
-	// Phase 1: 返回简单的占位页面
-	// Phase 2 将使用 go:embed 嵌入真正的前端构建产物
-	if r.URL.Path != "/" {
+	// 如果前端资源未嵌入（开发模式），返回提示信息
+	if s.webFS == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, devModeHTML)
+		return
+	}
+
+	// 生产模式：从 embed.FS 服务前端 SPA
+	// 尝试直接匹配文件路径
+	path := r.URL.Path
+	if path == "/" {
+		path = "/index.html"
+	}
+
+	// 去掉前导 /
+	filePath := strings.TrimPrefix(path, "/")
+
+	// 尝试打开文件
+	f, err := s.webFS.Open(filePath)
+	if err == nil {
+		f.Close()
+		// 文件存在，直接服务
+		s.webHandler.ServeHTTP(w, r)
+		return
+	}
+
+	// 文件不存在 → SPA fallback：返回 index.html
+	// 这样前端路由 (/dashboard, /admin/keys 等) 都能正常工作
+	indexFile, err := s.webFS.Open("index.html")
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, placeholderHTML)
+	defer indexFile.Close()
+
+	// 读取 index.html 的信息
+	stat, err := indexFile.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// 使用 http.ServeContent 以便正确设置 Content-Type 和缓存头
+	rs, ok := indexFile.(readSeeker)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeContent(w, r, "index.html", stat.ModTime(), rs)
 }
 
 // --- API ---
@@ -963,13 +1035,19 @@ func generateUUID() string {
 		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
 
-// 占位 HTML 页面
-const placeholderHTML = `<!DOCTYPE html>
+// readSeeker 是 io.ReadSeeker 接口的别名，用于 http.ServeContent
+type readSeeker interface {
+	Read(p []byte) (n int, err error)
+	Seek(offset int64, whence int) (int64, error)
+}
+
+// devModeHTML 开发模式占位页面
+const devModeHTML = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetsGo 管控平台</title>
+    <title>NetsGo — 开发模式</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -983,6 +1061,7 @@ const placeholderHTML = `<!DOCTYPE html>
             background: rgba(255,255,255,0.05);
             border-radius: 16px; backdrop-filter: blur(10px);
             border: 1px solid rgba(255,255,255,0.1);
+            max-width: 520px;
         }
         h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
         h1 span { color: #7c3aed; }
@@ -991,14 +1070,22 @@ const placeholderHTML = `<!DOCTYPE html>
             display: inline-block; margin-top: 1rem; padding: 0.4rem 1rem;
             background: #7c3aed; border-radius: 20px; font-size: 0.85rem;
         }
+        code {
+            display: block; margin-top: 1rem; padding: 0.8rem 1.2rem;
+            background: rgba(255,255,255,0.08); border-radius: 8px;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.9rem; color: #c4b5fd; text-align: left;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🚀 <span>NetsGo</span></h1>
-        <p>新一代内网穿透与边缘管控平台</p>
-        <p>服务端已启动，Web 面板正在开发中…</p>
-        <div class="badge">Phase 2 — yamux 数据面</div>
+        <p>服务端已启动 — 开发模式</p>
+        <p>前端资源未嵌入，请独立启动 Vite 开发服务器：</p>
+        <code>cd web && pnpm dev</code>
+        <p>然后访问 Vite 管理面板地址（默认 <a href="http://localhost:5173" style="color:#a78bfa">localhost:5173</a>）。</p>
+        <div class="badge">Dev Mode 🔧</div>
     </div>
 </body>
 </html>`

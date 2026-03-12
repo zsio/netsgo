@@ -23,12 +23,36 @@ type AdminUser struct {
 	LastLogin    *time.Time `json:"last_login,omitempty"`
 }
 
-// TunnelPolicy 隧道策略控制
+// TunnelPolicy 隧道策略控制（旧版，保留向后兼容）
 type TunnelPolicy struct {
 	MinPort        int      `json:"min_port"`
 	MaxPort        int      `json:"max_port"`
 	BlockedPorts   []int    `json:"blocked_ports"`
 	AgentWhitelist []string `json:"agent_whitelist"` // 允许的 agent hostname 列表
+}
+
+// ServerConfig 服务端配置（初始化时设置）
+type ServerConfig struct {
+	ServerAddr   string      `json:"server_addr"`   // 对外服务地址 (如 https://tunnel.example.com)
+	AllowedPorts []PortRange `json:"allowed_ports"` // 允许穿透的端口白名单
+}
+
+// PortRange 端口范围 (Start==End 表示单端口)
+type PortRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// AdminSession 服务端 session 记录（实现 JWT + Session Binding）
+type AdminSession struct {
+	ID        string    `json:"id"`         // sessionID (UUID)
+	UserID    string    `json:"user_id"`    // 关联的管理员 ID
+	Username  string    `json:"username"`   // 冗余，方便日志
+	Role      string    `json:"role"`       // 用户角色
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"` // 服务端控制的过期时间
+	IP        string    `json:"ip"`         // 登录 IP
+	UserAgent string    `json:"user_agent"` // 浏览器信息
 }
 
 // EventRecord 审计/系统事件记录（持久化）
