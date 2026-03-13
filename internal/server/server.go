@@ -260,9 +260,9 @@ func (s *Server) Start() error {
 	// 注意：不设置 ReadTimeout / WriteTimeout，因为 WebSocket 和 SSE 是长连接
 	// ReadHeaderTimeout 足以防御 Slowloris 攻击（限制请求头读取时间）
 	httpServer := &http.Server{
-		Handler:           s.newHTTPMux(),
-		ReadHeaderTimeout: 10 * time.Second, // P14: 防御 Slowloris 慢速请求头攻击
-		IdleTimeout:       120 * time.Second, // P14: 空闲 keep-alive 连接超时
+		Handler:           securityHeaders(s.newHTTPMux()), // P10: 统一注入安全响应头
+		ReadHeaderTimeout: 10 * time.Second,                // P14: 防御 Slowloris 慢速请求头攻击
+		IdleTimeout:       120 * time.Second,                // P14: 空闲 keep-alive 连接超时
 	}
 
 	// 包装 listener：peek 分发
@@ -386,6 +386,17 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // 开发阶段允许所有来源
 	},
+}
+
+// securityHeaders 统一注入安全响应头（P10）
+// 注：不添加 HSTS，因为用户不一定有 TLS 证书
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // --- 控制通道处理 ---

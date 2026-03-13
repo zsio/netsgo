@@ -448,6 +448,63 @@ func TestWeb_DevMode_FallbackToDevPage(t *testing.T) {
 }
 
 // ============================================================
+// P10: 安全响应头 (1)
+// ============================================================
+
+func TestSecurityHeaders_Present(t *testing.T) {
+	handler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	tests := []struct {
+		header string
+		want   string
+	}{
+		{"X-Content-Type-Options", "nosniff"},
+		{"X-Frame-Options", "DENY"},
+		{"Referrer-Policy", "strict-origin-when-cross-origin"},
+	}
+
+	for _, tt := range tests {
+		got := w.Header().Get(tt.header)
+		if got != tt.want {
+			t.Errorf("%s 期望 %q，得到 %q", tt.header, tt.want, got)
+		}
+	}
+
+	// 不应包含 HSTS（用户可能没有 TLS）
+	if hsts := w.Header().Get("Strict-Transport-Security"); hsts != "" {
+		t.Errorf("不应设置 HSTS，得到 %q", hsts)
+	}
+}
+
+// ============================================================
+// P13: SSE 端点不应设置 CORS (1)
+// ============================================================
+
+func TestSSE_NoCORSHeader(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/events", nil)
+	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("SSE 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if cors := resp.Header.Get("Access-Control-Allow-Origin"); cors != "" {
+		t.Errorf("SSE 端点不应设置 Access-Control-Allow-Origin，得到 %q", cors)
+	}
+}
+
+// ============================================================
 // 控制通道 — 认证 (5)
 // ============================================================
 
