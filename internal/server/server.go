@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -49,6 +50,7 @@ type Server struct {
 	httpServer     *http.Server       // P15: 保存引用以便 Shutdown
 	listener       net.Listener       // P15: 保存引用以便关闭
 	done           chan struct{}       // P15: 通知后台 goroutine 退出
+	setupToken     string             // P8: 启动时生成的一次性 Setup Token，初始化完成后清空
 }
 
 // AgentConn 代表一个已连接的 Agent
@@ -241,6 +243,22 @@ func (s *Server) Start() error {
 	if s.adminStore != nil {
 		s.adminStore.CleanExpiredTokens()
 		go s.tokenCleanupLoop()
+	}
+
+	// P8: 如果服务尚未初始化，生成一次性 Setup Token 并打印到控制台
+	if s.adminStore != nil && !s.adminStore.IsInitialized() {
+		buf := make([]byte, 32)
+		if _, err := rand.Read(buf); err != nil {
+			return fmt.Errorf("生成 Setup Token 失败: %w", err)
+		}
+		s.setupToken = hex.EncodeToString(buf)
+		log.Printf("")
+		log.Printf("┌──────────────────────────────────────────────────────────────────┐")
+		log.Printf("│  ⚠️  服务尚未初始化                                              │")
+		log.Printf("│  请使用以下 Setup Token 完成初始化:                               │")
+		log.Printf("│  SETUP_TOKEN=%s │", s.setupToken)
+		log.Printf("└──────────────────────────────────────────────────────────────────┘")
+		log.Printf("")
 	}
 
 	// 初始化速率限制器

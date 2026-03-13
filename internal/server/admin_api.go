@@ -52,7 +52,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"initialized": initialized,
+		"initialized":          initialized,
+		"setup_token_required": !initialized && s.setupToken != "", // P8: 告知前端是否需要 Setup Token
 	})
 }
 
@@ -81,6 +82,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		} `json:"admin"`
 		ServerAddr   string      `json:"server_addr"`
 		AllowedPorts []PortRange `json:"allowed_ports"`
+		SetupToken   string      `json:"setup_token"` // P8: 一次性初始化令牌
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -92,6 +94,22 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	if req.Admin.Username == "" {
 		http.Error(w, `{"error":"用户名不能为空"}`, http.StatusBadRequest)
 		return
+	}
+
+	// P8: 校验 Setup Token
+	if s.setupToken != "" {
+		if req.SetupToken != s.setupToken {
+			if s.setupLimiter != nil {
+				s.setupLimiter.RecordFailure(ip)
+			}
+			s.adminStore.AddSystemLog("WARN", "Setup Token 验证失败: IP="+ip, "security")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": "Setup Token 无效，请检查服务端控制台输出",
+			})
+			return
+		}
 	}
 
 	// 执行初始化（内部持有锁，重复调用会返回错误）
@@ -136,6 +154,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.adminStore.AddSystemLog("INFO", "服务初始化完成，管理员: "+req.Admin.Username, "setup")
+	s.setupToken = "" // P8: 初始化成功，清空一次性 Token
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

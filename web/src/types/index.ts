@@ -193,6 +193,7 @@ export interface ServerConfig {
 
 export interface SetupStatus {
   initialized: boolean;
+  setup_token_required: boolean;
 }
 
 export interface SetupRequest {
@@ -202,6 +203,7 @@ export interface SetupRequest {
   };
   server_addr: string;
   allowed_ports: PortRange[];
+  setup_token?: string;
 }
 
 export interface SetupResponse {

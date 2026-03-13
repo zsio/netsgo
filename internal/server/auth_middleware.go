@@ -94,6 +94,16 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		// P6: Session Binding — 校验 User-Agent 是否与登录时一致
+		// 同一浏览器 session 内 UA 不会改变，变化说明 token 可能被盗用
+		if r.UserAgent() != session.UserAgent {
+			s.adminStore.AddSystemLog("WARN",
+				fmt.Sprintf("Session UA 不匹配，疑似 Token 盗用: session_id=%s, user=%s",
+					session.ID, session.Username), "security")
+			http.Error(w, `{"error":"session environment mismatch"}`, http.StatusUnauthorized)
+			return
+		}
+
 		// session 有效 → 注入用户信息到 Context
 		info := &SessionInfo{
 			SessionID: session.ID,

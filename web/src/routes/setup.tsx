@@ -1,12 +1,13 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { rootRoute } from './__root';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
+import { fetchSetupStatus } from '@/lib/auth';
 import type { SetupResponse, PortRange } from '@/types';
-import { Globe, Shield, Check, Copy, Plus, X, Sparkles, ArrowRight, ArrowLeft, AlertTriangle, User, Lock, Loader2, ShieldCheck, Server } from 'lucide-react';
+import { Globe, Shield, Check, Copy, Plus, X, Sparkles, ArrowRight, ArrowLeft, AlertTriangle, User, Lock, Loader2, ShieldCheck, Server, KeyRound } from 'lucide-react';
 import { requireSetupPage } from '@/lib/auth';
 import { useParticleCanvas } from '@/hooks/use-particle-canvas';
 import { motion, AnimatePresence } from 'motion/react';
@@ -57,15 +58,31 @@ function SetupPage() {
   const [result, setResult] = useState<SetupResponse | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // P8: Setup Token
+  const [setupToken, setSetupToken] = useState(() => {
+    // 支持 URL 参数 ?token=xxx 自动填入
+    const params = new URLSearchParams(window.location.search);
+    return params.get('token') || '';
+  });
+  const [setupTokenRequired, setSetupTokenRequired] = useState(false);
+
+  // 获取 setup 状态判断是否需要 token
+  useEffect(() => {
+    fetchSetupStatus().then((status) => {
+      setSetupTokenRequired(status.setup_token_required);
+    }).catch(() => {});
+  }, []);
+
   // Validation
   const validateStep1 = useCallback(() => {
+    if (setupTokenRequired && !setupToken.trim()) { setAdminError('请输入 Setup Token（见服务端控制台）'); return false; }
     if (!username.trim()) { setAdminError('用户名不能为空'); return false; }
     if (password.length < 8) { setAdminError('密码至少需要 8 个字符'); return false; }
     if (!/[a-zA-Z]/.test(password) || !/\d/.test(password)) { setAdminError('密码必须同时包含字母和数字'); return false; }
     if (password !== confirmPassword) { setAdminError('两次输入的密码不一致'); return false; }
     setAdminError('');
     return true;
-  }, [username, password, confirmPassword]);
+  }, [username, password, confirmPassword, setupToken, setupTokenRequired]);
 
   const validateStep2 = useCallback(() => {
     if (!serverAddr.trim()) { setAddrError('请填写服务地址'); return false; }
@@ -125,6 +142,7 @@ function SetupPage() {
         admin: { username, password },
         server_addr: serverAddr,
         allowed_ports: ports,
+        setup_token: setupToken || undefined, // P8: 携带 Setup Token
       });
       setResult(resp);
       setAuth(resp.token, resp.user);
@@ -230,6 +248,24 @@ function SetupPage() {
                   </div>
 
                   <form onSubmit={(e) => { e.preventDefault(); if (validateStep1()) setStep(1); }} className="space-y-4">
+                    {/* P8: Setup Token 输入 */}
+                    {setupTokenRequired && (
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium text-foreground">Setup Token</label>
+                        <div className="relative">
+                          <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                          <Input
+                            value={setupToken}
+                            onChange={(e) => setSetupToken(e.target.value)}
+                            placeholder="请粘贴服务端控制台输出的 Setup Token"
+                            autoComplete="off"
+                            className="pl-9 bg-background/50 backdrop-blur-sm font-mono text-sm"
+                          />
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">启动服务端时控制台会打印此 Token，用于防止未授权初始化</p>
+                      </div>
+                    )}
+
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium text-foreground">用户名</label>
                       <div className="relative">
