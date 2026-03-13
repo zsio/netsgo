@@ -29,6 +29,7 @@ type Client struct {
 	InstallID   string // 稳定安装 ID
 	StatePath   string // 安装 ID 持久化路径
 	AgentID     string // Server 分配的稳定 Agent ID
+	dataToken   string // P3: 从 auth_resp 获取的数据通道凭证
 	conn        *websocket.Conn
 	mu          sync.Mutex
 	done        chan struct{}
@@ -193,6 +194,7 @@ func (c *Client) cleanup() {
 
 	// 重置 AgentID
 	c.AgentID = ""
+	c.dataToken = "" // P3
 }
 
 // connectAndRun 执行完整的连接流程并阻塞直到断连。
@@ -291,6 +293,7 @@ func (c *Client) authenticate() error {
 			}
 			if authResp.Success {
 				c.AgentID = authResp.AgentID
+				c.dataToken = authResp.DataToken // P3
 				log.Printf("✅ Token 认证成功")
 				return nil
 			}
@@ -339,6 +342,7 @@ func (c *Client) authenticate() error {
 	}
 
 	c.AgentID = authResp.AgentID
+	c.dataToken = authResp.DataToken // P3
 
 	// 如果服务端返回了新 Token，保存它
 	if authResp.Token != "" {
@@ -377,12 +381,16 @@ func (c *Client) connectDataChannel() error {
 	// 设置握手超时（Server 应当即时回复，2s 足够）
 	tcpConn.SetDeadline(time.Now().Add(2 * time.Second))
 
-	// 发送握手包: [1B 魔数] [2B AgentID长度] [NB AgentID]
+	// 发送握手包: [1B 魔数] [2B AgentID长度] [NB AgentID] [2B DataToken长度] [NB DataToken]
 	agentIDBytes := []byte(c.AgentID)
-	handshake := make([]byte, 1+2+len(agentIDBytes))
+	dataTokenBytes := []byte(c.dataToken)
+	handshake := make([]byte, 1+2+len(agentIDBytes)+2+len(dataTokenBytes))
 	handshake[0] = protocol.DataChannelMagic
 	binary.BigEndian.PutUint16(handshake[1:3], uint16(len(agentIDBytes)))
 	copy(handshake[3:], agentIDBytes)
+	offset := 3 + len(agentIDBytes)
+	binary.BigEndian.PutUint16(handshake[offset:offset+2], uint16(len(dataTokenBytes)))
+	copy(handshake[offset+2:], dataTokenBytes)
 
 	if _, err := tcpConn.Write(handshake); err != nil {
 		tcpConn.Close()

@@ -60,9 +60,10 @@ func (ms *mockServer) handler(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case protocol.MsgTypeAuth:
 			resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
-				Success: ms.authSuccess,
-				Message: "mock response",
-				AgentID: "mock_agent_1",
+				Success:   ms.authSuccess,
+				Message:   "mock response",
+				AgentID:   "mock_agent_1",
+				DataToken: "mock-data-token", // P3
 			})
 			conn.WriteJSON(resp)
 
@@ -315,9 +316,10 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 				authCount++
 				authMu.Unlock()
 				resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
-					Success: true,
-					Message: "ok",
-					AgentID: "reconnect-agent",
+					Success:   true,
+					Message:   "ok",
+					AgentID:   "reconnect-agent",
+					DataToken: "reconnect-data-token", // P3
 				})
 				conn.WriteJSON(resp)
 			case protocol.MsgTypePing:
@@ -578,16 +580,22 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 		}
 		defer conn.Close()
 
-		// 读取握手: [1B 魔数] [2B len] [NB agentID]
+		// 读取握手: [1B 魔数] [2B len] [NB agentID] [2B tokenLen] [NB dataToken]
 		magic := make([]byte, 1)
 		conn.Read(magic)
 
 		lenBuf := make([]byte, 2)
 		conn.Read(lenBuf)
-
 		idLen := int(lenBuf[0])<<8 | int(lenBuf[1])
 		idBuf := make([]byte, idLen)
 		conn.Read(idBuf)
+
+		// P3: 读取 DataToken
+		tokenLenBuf := make([]byte, 2)
+		conn.Read(tokenLenBuf)
+		tokenLen := int(tokenLenBuf[0])<<8 | int(tokenLenBuf[1])
+		tokenBuf := make([]byte, tokenLen)
+		conn.Read(tokenBuf)
 
 		// 回复握手成功
 		conn.Write([]byte{protocol.DataHandshakeOK})
@@ -598,6 +606,7 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 
 	c := New("ws://"+ln.Addr().String(), "key")
 	c.AgentID = "test-agent-dc"
+	c.dataToken = "test-dc-token" // P3
 
 	err = c.connectDataChannel()
 	if err != nil {
@@ -627,8 +636,8 @@ func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
 		}
 		defer conn.Close()
 
-		// 读取握手
-		buf := make([]byte, 256)
+		// 读取完整握手包内容
+		buf := make([]byte, 512)
 		conn.Read(buf)
 
 		// 回复拒绝
@@ -637,6 +646,7 @@ func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
 
 	c := New("ws://"+ln.Addr().String(), "key")
 	c.AgentID = "rejected-agent"
+	c.dataToken = "some-token" // P3
 
 	err = c.connectDataChannel()
 	if err == nil {
@@ -651,6 +661,7 @@ func TestClient_ConnectDataChannel_NoPort(t *testing.T) {
 	// ServerAddr 没有端口的情况
 	c := New("ws://some-host-without-port-1234567.invalid", "key")
 	c.AgentID = "no-port-agent"
+	c.dataToken = "some-token" // P3
 	err := c.connectDataChannel()
 	if err == nil {
 		t.Error("无法连接时应返回错误")

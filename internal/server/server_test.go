@@ -1340,8 +1340,9 @@ func TestPeekListener_DataChannelDispatch(t *testing.T) {
 	s := New(0)
 	agentID := "peek-dispatch-agent"
 	agent := &AgentConn{
-		ID:      agentID,
-		proxies: make(map[string]*ProxyTunnel),
+		ID:        agentID,
+		proxies:   make(map[string]*ProxyTunnel),
+		dataToken: "peek-test-token",
 	}
 	s.agents.Store(agentID, agent)
 
@@ -1365,7 +1366,7 @@ func TestPeekListener_DataChannelDispatch(t *testing.T) {
 	// 发送数据通道魔数 + 握手
 	go func() {
 		conn, _ := net.Dial("tcp", ln.Addr().String())
-		handshake := DataHandshakeBytes(agentID)
+		handshake := DataHandshakeBytes(agentID, "peek-test-token")
 		conn.Write(handshake)
 
 		// 读取响应
@@ -1496,6 +1497,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		req, _ := http.NewRequest(method, ts.URL+path, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("User-Agent", "test") // P6: 必须与 CreateSession 的 UA 一致
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -1619,6 +1621,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	// 5. 删除隧道 (/api/agents/{id}/tunnels/{name})
 	req, _ := http.NewRequest(http.MethodDelete, ts.URL+fmt.Sprintf("/api/agents/%s/tunnels/test-tunnel", agentID), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "test") // P6: 必须与 CreateSession 的 UA 一致
 	respDel, _ := http.DefaultClient.Do(req)
 	if respDel.StatusCode != http.StatusNoContent {
 		t.Errorf("删除隧道期望 204 No Content，得到 %d", respDel.StatusCode)

@@ -14,13 +14,16 @@ import (
 // 数据通道处理测试 (handleDataConn & DataHandshakeBytes)
 // ============================================================
 
+const testDataToken = "test-data-token-abc123"
+
 func TestDataChannel_HandshakeSuccess(t *testing.T) {
 	s := New(0)
 	// 注册一个预设的 Agent
 	agentID := "test-agent-123"
 	agent := &AgentConn{
-		ID:      agentID,
-		proxies: make(map[string]*ProxyTunnel),
+		ID:        agentID,
+		proxies:   make(map[string]*ProxyTunnel),
+		dataToken: testDataToken, // P3: 设置 DataToken
 	}
 	s.agents.Store(agentID, agent)
 
@@ -36,9 +39,9 @@ func TestDataChannel_HandshakeSuccess(t *testing.T) {
 	}()
 
 	// 客户端发送合法的握手包体
-	// DataHandshakeBytes 返回 [1B 魔数] [2B AgentID长度] [NB AgentID]
-	// server 侧 handleDataConn 预期消费的只有 `[2B AgentID长度] [NB AgentID]`
-	handshakePkg := DataHandshakeBytes(agentID)
+	// DataHandshakeBytes 返回 [1B 魔数] [2B AgentID长度] [NB AgentID] [2B DataToken长度] [NB DataToken]
+	// server 侧 handleDataConn 预期消费的只有魔数之后的部分
+	handshakePkg := DataHandshakeBytes(agentID, testDataToken)
 	// 去掉第一个魔数字节
 	payload := handshakePkg[1:]
 
@@ -99,7 +102,7 @@ func TestDataChannel_Handshake_UnregisteredAgent(t *testing.T) {
 	go s.handleDataConn(serverConn)
 
 	unregisteredID := "ghost-agent"
-	handshakePkg := DataHandshakeBytes(unregisteredID)[1:]
+	handshakePkg := DataHandshakeBytes(unregisteredID, "some-token")[1:]
 	client.Write(handshakePkg)
 
 	respBuf := make([]byte, 1)
@@ -115,8 +118,9 @@ func TestDataChannel_Handshake_ReconnectClosesOldSession(t *testing.T) {
 	s := New(0)
 	agentID := "reconnect-agent"
 	agent := &AgentConn{
-		ID:      agentID,
-		proxies: make(map[string]*ProxyTunnel),
+		ID:        agentID,
+		proxies:   make(map[string]*ProxyTunnel),
+		dataToken: testDataToken,
 	}
 	s.agents.Store(agentID, agent)
 
@@ -124,7 +128,7 @@ func TestDataChannel_Handshake_ReconnectClosesOldSession(t *testing.T) {
 	client1, serverConn1 := net.Pipe()
 	go s.handleDataConn(serverConn1)
 
-	client1.Write(DataHandshakeBytes(agentID)[1:])
+	client1.Write(DataHandshakeBytes(agentID, testDataToken)[1:])
 	resp1 := make([]byte, 1)
 	client1.Read(resp1)
 
@@ -141,7 +145,7 @@ func TestDataChannel_Handshake_ReconnectClosesOldSession(t *testing.T) {
 	client2, serverConn2 := net.Pipe()
 	go s.handleDataConn(serverConn2)
 
-	client2.Write(DataHandshakeBytes(agentID)[1:])
+	client2.Write(DataHandshakeBytes(agentID, testDataToken)[1:])
 	resp2 := make([]byte, 1)
 	client2.Read(resp2)
 
@@ -165,7 +169,8 @@ func TestDataChannel_Handshake_ReconnectClosesOldSession(t *testing.T) {
 
 func TestDataHandshakeBytes(t *testing.T) {
 	agentID := "my-agent-id-1234"
-	res := DataHandshakeBytes(agentID)
+	dataToken := "test-token-xyz"
+	res := DataHandshakeBytes(agentID, dataToken)
 
 	if res[0] != protocol.DataChannelMagic {
 		t.Fatalf("首字节异常: 期望 %d, 得到 %d", protocol.DataChannelMagic, res[0])
@@ -173,14 +178,127 @@ func TestDataHandshakeBytes(t *testing.T) {
 
 	idLen := binary.BigEndian.Uint16(res[1:3])
 	if int(idLen) != len(agentID) {
-		t.Fatalf("长度编码异常: 期望 %d, 得到 %d", len(agentID), idLen)
+		t.Fatalf("AgentID 长度编码异常: 期望 %d, 得到 %d", len(agentID), idLen)
 	}
 
-	parsedID := string(res[3:])
+	parsedID := string(res[3 : 3+idLen])
 	if parsedID != agentID {
-		t.Fatalf("Payload异常: 期望 %q, 得到 %q", agentID, parsedID)
+		t.Fatalf("AgentID 异常: 期望 %q, 得到 %q", agentID, parsedID)
+	}
+
+	// 验证 DataToken 段
+	offset := 3 + int(idLen)
+	tokenLen := binary.BigEndian.Uint16(res[offset : offset+2])
+	if int(tokenLen) != len(dataToken) {
+		t.Fatalf("DataToken 长度编码异常: 期望 %d, 得到 %d", len(dataToken), tokenLen)
+	}
+
+	parsedToken := string(res[offset+2 : offset+2+int(tokenLen)])
+	if parsedToken != dataToken {
+		t.Fatalf("DataToken 异常: 期望 %q, 得到 %q", dataToken, parsedToken)
 	}
 }
+
+// ==================== P3: DataToken 校验测试 ====================
+
+func TestDataChannel_Handshake_WrongToken(t *testing.T) {
+	s := New(0)
+	agentID := "token-test-agent"
+	agent := &AgentConn{
+		ID:        agentID,
+		proxies:   make(map[string]*ProxyTunnel),
+		dataToken: "correct-token",
+	}
+	s.agents.Store(agentID, agent)
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	go s.handleDataConn(serverConn)
+
+	// 发送错误的 DataToken
+	handshakePkg := DataHandshakeBytes(agentID, "wrong-token")[1:]
+	client.Write(handshakePkg)
+
+	respBuf := make([]byte, 1)
+	client.SetReadDeadline(time.Now().Add(1 * time.Second))
+	client.Read(respBuf)
+
+	if respBuf[0] != protocol.DataHandshakeAuthFail {
+		t.Errorf("错误 DataToken 应返回 AuthFail(0x%02x)，得到 0x%02x",
+			protocol.DataHandshakeAuthFail, respBuf[0])
+	}
+}
+
+func TestDataChannel_Handshake_EmptyToken(t *testing.T) {
+	s := New(0)
+	agentID := "empty-token-agent"
+	agent := &AgentConn{
+		ID:        agentID,
+		proxies:   make(map[string]*ProxyTunnel),
+		dataToken: "some-valid-token",
+	}
+	s.agents.Store(agentID, agent)
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	go s.handleDataConn(serverConn)
+
+	// 发送空 DataToken（tokenLen=0 会被 tokenLen == 0 检查拒绝）
+	idBytes := []byte(agentID)
+	payload := make([]byte, 2+len(idBytes)+2)
+	binary.BigEndian.PutUint16(payload[0:2], uint16(len(idBytes)))
+	copy(payload[2:], idBytes)
+	// tokenLen = 0
+	binary.BigEndian.PutUint16(payload[2+len(idBytes):], 0)
+	client.Write(payload)
+
+	respBuf := make([]byte, 1)
+	client.SetReadDeadline(time.Now().Add(1 * time.Second))
+	client.Read(respBuf)
+
+	if respBuf[0] != protocol.DataHandshakeFail {
+		t.Errorf("空 DataToken 应返回 Fail(0x%02x)，得到 0x%02x",
+			protocol.DataHandshakeFail, respBuf[0])
+	}
+}
+
+func TestDataChannel_Handshake_AgentHasNoToken(t *testing.T) {
+	s := New(0)
+	agentID := "no-token-agent"
+	agent := &AgentConn{
+		ID:        agentID,
+		proxies:   make(map[string]*ProxyTunnel),
+		dataToken: "", // Agent 没有 DataToken（不应该发生，但需要防御）
+	}
+	s.agents.Store(agentID, agent)
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	go s.handleDataConn(serverConn)
+
+	// 发送任意 token，agent.dataToken 为空也应拒绝
+	handshakePkg := DataHandshakeBytes(agentID, "any-token")[1:]
+	client.Write(handshakePkg)
+
+	respBuf := make([]byte, 1)
+	client.SetReadDeadline(time.Now().Add(1 * time.Second))
+	client.Read(respBuf)
+
+	if respBuf[0] != protocol.DataHandshakeAuthFail {
+		t.Errorf("Agent 无 DataToken 时应返回 AuthFail(0x%02x)，得到 0x%02x",
+			protocol.DataHandshakeAuthFail, respBuf[0])
+	}
+}
+
+// ============================================================
+// openStreamToAgent 测试
+// ============================================================
 
 func TestOpenStreamToAgent_Success(t *testing.T) {
 	s := New(0)

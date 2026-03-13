@@ -79,8 +79,9 @@ const DataChannelMagic byte = 0x4E // 'N' for NetsGo
 
 // 数据通道握手状态码
 const (
-	DataHandshakeOK   byte = 0x00
-	DataHandshakeFail byte = 0x01
+	DataHandshakeOK       byte = 0x00
+	DataHandshakeFail     byte = 0x01
+	DataHandshakeAuthFail byte = 0x02 // P3: DataToken 校验失败
 )
 
 // StreamHeader 每个 yamux stream 开头发送的头部

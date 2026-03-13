@@ -51,10 +51,11 @@ type AuthRequest struct {
 
 // AuthResponse Server 返回的认证结果
 type AuthResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message,omitempty"`
-	AgentID string `json:"agent_id,omitempty"` // Server 分配的唯一 ID
-	Token   string `json:"token,omitempty"`    // 服务端下发的新 Token（仅兑换时）
+	Success   bool   `json:"success"`
+	Message   string `json:"message,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"` // Server 分配的唯一 ID
+	Token     string `json:"token,omitempty"`    // 服务端下发的新 Token（仅兑换时）
+	DataToken string `json:"data_token,omitempty"` // P3: 数据通道握手凭证
 }
 
 // ProxyNewRequest 请求创建一条新的代理隧道

@@ -67,8 +67,16 @@ type AgentConn struct {
 	mu          sync.Mutex
 	dataSession *yamux.Session          // 数据通道 yamux Session
 	dataMu      sync.RWMutex            // 保护 dataSession
+	dataToken   string                  // P3: 数据通道认证 token，认证时生成
 	proxies     map[string]*ProxyTunnel // 代理隧道 name -> tunnel
 	proxyMu     sync.RWMutex            // 保护 proxies
+}
+
+// generateDataToken 生成 32 字节随机 hex 字符串，用作数据通道握手凭证
+func generateDataToken() string {
+	buf := make([]byte, 32)
+	rand.Read(buf)
+	return hex.EncodeToString(buf)
 }
 
 type agentView struct {
@@ -682,6 +690,7 @@ authPassed:
 		RemoteAddr: remoteAddr,
 		conn:       conn,
 		proxies:    make(map[string]*ProxyTunnel),
+		dataToken:  generateDataToken(), // P3: 数据通道认证凭证
 	}
 
 	var replaced *AgentConn
@@ -692,10 +701,11 @@ authPassed:
 
 	// 发送认证响应
 	authResp := protocol.AuthResponse{
-		Success: true,
-		Message: "认证成功",
-		AgentID: agentID,
-		Token:   newToken, // 仅 Key 兑换时非空
+		Success:   true,
+		Message:   "认证成功",
+		AgentID:   agentID,
+		Token:     newToken, // 仅 Key 兑换时非空
+		DataToken: agent.dataToken, // P3: 数据通道握手凭证
 	}
 	resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, authResp)
 	if err := conn.WriteJSON(resp); err != nil {
