@@ -24,7 +24,8 @@ import (
 // Client 是客户端/Agent 的核心结构体
 type Client struct {
 	ServerAddr  string // Server 的 WebSocket 地址 (ws://host:port)
-	Key         string // 认证密钥
+	Key         string // 认证密钥（用于兑换 Token）
+	Token       string // 客户端连接密钥（由 Key 兑换）
 	InstallID   string // 稳定安装 ID
 	StatePath   string // 安装 ID 持久化路径
 	AgentID     string // Server 分配的稳定 Agent ID
@@ -217,11 +218,13 @@ func (c *Client) connectAndRun() error {
 }
 
 // authenticate 发送认证请求
+// 优先使用 Token，失败后降级到 Key
 func (c *Client) authenticate() error {
 	hostname, _ := os.Hostname()
 
 	authReq := protocol.AuthRequest{
 		Key:       c.Key,
+		Token:     c.Token,
 		InstallID: c.InstallID,
 		Agent: protocol.AgentInfo{
 			Hostname: hostname,
@@ -231,6 +234,51 @@ func (c *Client) authenticate() error {
 		},
 	}
 
+	// 如果有 Token，先只发 Token（不发 Key，避免服务端在 Token 无效时消耗 Key）
+	if c.Token != "" {
+		tokenReq := authReq
+		tokenReq.Key = "" // 不发送 Key
+		msg, err := protocol.NewMessage(protocol.MsgTypeAuth, tokenReq)
+		if err != nil {
+			return err
+		}
+
+		if err := c.conn.WriteJSON(msg); err != nil {
+			return fmt.Errorf("发送认证消息失败: %w", err)
+		}
+
+		// 等待认证响应
+		var resp protocol.Message
+		if err := c.conn.ReadJSON(&resp); err != nil {
+			return fmt.Errorf("读取认证响应失败: %w", err)
+		}
+
+		if resp.Type == protocol.MsgTypeAuthResp {
+			var authResp protocol.AuthResponse
+			if err := resp.ParsePayload(&authResp); err != nil {
+				return fmt.Errorf("解析认证响应失败: %w", err)
+			}
+			if authResp.Success {
+				c.AgentID = authResp.AgentID
+				log.Printf("✅ Token 认证成功")
+				return nil
+			}
+			// Token 认证失败，清除本地 Token
+			log.Printf("⚠️ Token 认证失败: %s，将尝试 Key 认证", authResp.Message)
+			c.clearToken()
+		} else {
+			// 连接被关闭或异常响应，清除 Token 并重试
+			log.Printf("⚠️ Token 认证异常响应: %s，清除本地 Token", resp.Type)
+			c.clearToken()
+			return fmt.Errorf("认证失败: 服务端异常响应")
+		}
+
+		// Token 失败，需要重新建立连接后用 Key 重试
+		// 返回特定错误，由 connectAndRun 层面重连
+		return fmt.Errorf("认证失败: Token 无效，需要重新连接")
+	}
+
+	// 没有 Token，用 Key 认证
 	msg, err := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 	if err != nil {
 		return err
@@ -260,6 +308,17 @@ func (c *Client) authenticate() error {
 	}
 
 	c.AgentID = authResp.AgentID
+
+	// 如果服务端返回了新 Token，保存它
+	if authResp.Token != "" {
+		c.Token = authResp.Token
+		if err := c.saveToken(authResp.Token); err != nil {
+			log.Printf("⚠️ 保存 Token 失败: %v", err)
+		} else {
+			log.Printf("🔑 Token 已保存，后续重连将自动使用")
+		}
+	}
+
 	return nil
 }
 
