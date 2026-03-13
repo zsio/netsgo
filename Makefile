@@ -1,4 +1,4 @@
-.PHONY: build build-web build-go clean docs dev-server dev-client dev-bench
+.PHONY: build build-web build-go clean docs dev-server dev-client dev-bench dev-web test lint
 
 # 编译输出目录
 BIN_DIR=bin
@@ -9,7 +9,7 @@ build: build-web build-go
 # 仅构建前端
 build-web:
 	@echo "🌐 构建前端..."
-	cd web && bun install && bun run build
+	cd web && bun install --frozen-lockfile && bun run build
 	@echo "✅ 前端构建完成: web/dist/"
 
 # 仅构建后端（需要先构建前端，否则 go:embed 会失败）
@@ -37,12 +37,18 @@ dev-server:
 
 # 开发模式 - 启动前端开发服务器
 dev-web:
-	cd web && bun dev
+	cd web && bun run dev
 
-# 开发模式 - 启动客户端
+# 开发模式 - 启动客户端 (用法: make dev-client 或 make dev-client ARGS="--key sk-xxx")
 dev-client:
-	go run -tags dev ./cmd/netsgo/ client --server ws://localhost:8080
+	go run -tags dev ./cmd/netsgo/ client --server ws://localhost:8080 $(ARGS)
 
 # 开发模式 - 运行压测
 dev-bench:
 	go run -tags dev ./cmd/netsgo/ benchmark
+
+test:
+	go test ./...
+
+lint:
+	cd web && bun run lint

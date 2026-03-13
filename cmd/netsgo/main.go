@@ -3,11 +3,13 @@ package main
 import (
 	"os"
 
+	buildversion "netsgo/pkg/version"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-const version = "0.1.0"
+var version = buildversion.Summary()
 
 // rootCmd 是 CLI 的根命令
 var rootCmd = &cobra.Command{

@@ -219,6 +219,18 @@ func TestAdminStore_ValidateAgentKey_NoKeys(t *testing.T) {
 	}
 }
 
+func TestAdminStore_ValidateAgentKey_NoKeysAfterInit(t *testing.T) {
+	store := newInitializedAdminStore(t)
+
+	valid, err := store.ValidateAgentKey("")
+	if valid {
+		t.Error("初始化后未配置 Key 不应开放连接")
+	}
+	if err == nil {
+		t.Error("初始化后未配置 Key 应返回错误")
+	}
+}
+
 func TestAdminStore_ValidateAgentKey_Valid(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-test-key-123"
@@ -281,11 +293,76 @@ func TestAdminStore_AddAndGetAPIKeys(t *testing.T) {
 	}
 
 	store.AddAPIKey("key1", "sk-key1", []string{"connect"}, nil)
-	store.AddAPIKey("key2", "sk-key2", []string{"connect", "manage"}, nil)
+	if _, err := store.AddAPIKey("key2", "sk-key2", []string{"manage"}, nil); err == nil {
+		t.Fatal("不支持的权限应返回错误")
+	}
 
 	keys = store.GetAPIKeys()
-	if len(keys) != 2 {
-		t.Errorf("期望 2 个 Key，得到 %d", len(keys))
+	if len(keys) != 1 {
+		t.Errorf("期望 1 个可用 Key，得到 %d", len(keys))
+	}
+}
+
+func TestAdminStore_APIKey_DisableEnableDeleteLifecycle(t *testing.T) {
+	store := newInitializedAdminStore(t)
+
+	rawKey := "sk-lifecycle-key"
+	key, err := store.AddAPIKey("lifecycle", rawKey, []string{"connect"}, nil)
+	if err != nil {
+		t.Fatalf("AddAPIKey 失败: %v", err)
+	}
+
+	if valid, err := store.ValidateAgentKey(rawKey); !valid || err != nil {
+		t.Fatalf("新建 Key 应可用: valid=%v err=%v", valid, err)
+	}
+
+	if err := store.SetAPIKeyActive(key.ID, false); err != nil {
+		t.Fatalf("禁用 Key 失败: %v", err)
+	}
+	if valid, err := store.ValidateAgentKey(rawKey); valid || err == nil {
+		t.Fatalf("禁用后应拒绝 Key: valid=%v err=%v", valid, err)
+	}
+
+	if err := store.SetAPIKeyActive(key.ID, true); err != nil {
+		t.Fatalf("启用 Key 失败: %v", err)
+	}
+	if valid, err := store.ValidateAgentKey(rawKey); !valid || err != nil {
+		t.Fatalf("重新启用后应允许 Key: valid=%v err=%v", valid, err)
+	}
+
+	if err := store.DeleteAPIKey(key.ID); err != nil {
+		t.Fatalf("删除 Key 失败: %v", err)
+	}
+	if valid, err := store.ValidateAgentKey(rawKey); valid || err == nil {
+		t.Fatalf("删除后应拒绝 Key: valid=%v err=%v", valid, err)
+	}
+}
+
+func TestAdminStore_PersistedSecretsSurviveReload(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "admin.json")
+
+	store, err := NewAdminStore(path)
+	if err != nil {
+		t.Fatalf("NewAdminStore 失败: %v", err)
+	}
+	if err := store.Initialize("admin", "Admin1234", "https://example.com", nil); err != nil {
+		t.Fatalf("Initialize 失败: %v", err)
+	}
+	if _, err := store.AddAPIKey("persisted", "sk-persisted", []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey 失败: %v", err)
+	}
+
+	reloaded, err := NewAdminStore(path)
+	if err != nil {
+		t.Fatalf("重新加载 AdminStore 失败: %v", err)
+	}
+
+	if _, err := reloaded.ValidateAdminPassword("admin", "Admin1234"); err != nil {
+		t.Fatalf("重载后管理员密码应仍可验证: %v", err)
+	}
+	if valid, err := reloaded.ValidateAgentKey("sk-persisted"); !valid || err != nil {
+		t.Fatalf("重载后 API Key 应仍可验证: valid=%v err=%v", valid, err)
 	}
 }
 

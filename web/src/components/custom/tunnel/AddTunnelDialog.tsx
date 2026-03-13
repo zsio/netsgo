@@ -3,9 +3,11 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog';
+import { AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useCreateTunnel } from '@/hooks/use-tunnel-mutations';
+import { useServerStatus } from '@/hooks/use-server-status';
 import type { ProxyType } from '@/types';
 
 interface AddTunnelDialogProps {
@@ -27,6 +29,7 @@ export function AddTunnelDialog({ agentId }: AddTunnelDialogProps) {
   const [remotePort, setRemotePort] = useState('');
 
   const createTunnel = useCreateTunnel();
+  const { data: status } = useServerStatus();
 
   const resetForm = () => {
     setName('');
@@ -144,7 +147,22 @@ export function AddTunnelDialog({ agentId }: AddTunnelDialogProps) {
               min={0}
               max={65535}
             />
+            {status?.allowed_ports && (
+              <p className="text-[11px] text-muted-foreground mt-1.5">
+                可用端口范围：
+                {status.allowed_ports.length > 0
+                  ? status.allowed_ports.map(p => p.start === p.end ? p.start : `${p.start}-${p.end}`).join(', ')
+                  : '1-65535 (无限制)'}
+              </p>
+            )}
           </div>
+
+          {createTunnel.isError && (
+            <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg mt-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              {(createTunnel.error as Error).message}
+            </div>
+          )}
 
           <DialogFooter>
             <Button
@@ -154,12 +172,6 @@ export function AddTunnelDialog({ agentId }: AddTunnelDialogProps) {
               {createTunnel.isPending ? '创建中…' : '创建隧道'}
             </Button>
           </DialogFooter>
-
-          {createTunnel.isError && (
-            <p className="text-xs text-destructive mt-2">
-              创建失败: {(createTunnel.error as Error).message}
-            </p>
-          )}
         </form>
       </DialogContent>
     </Dialog>

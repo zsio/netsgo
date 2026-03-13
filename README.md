@@ -19,6 +19,16 @@ make build
 # 产物: bin/netsgo
 ```
 
+### Docker 构建
+
+```bash
+# Dockerfile 依赖已生成的 web/dist
+make build-web
+
+docker build -t netsgo:local .
+docker run --rm -p 8080:8080 netsgo:local
+```
+
 ### 运行
 
 ```bash
@@ -61,6 +71,12 @@ go run ./cmd/netsgo/ benchmark
 # 查看版本
 ./bin/netsgo version
 ```
+
+## 自动发布
+
+- CI: GitHub Actions 会在 `push main/master` / `pull_request` 时执行前端构建、`go test ./...` 和跨平台 smoke build
+- Release: 推送 `v*` tag（例如 `v0.1.0`）后，会自动发布 Linux / macOS / Windows 二进制，并构建多架构 Docker 镜像
+- Docker 镜像: 默认发布到 `ghcr.io/<owner>/netsgo`，如果配置了 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`，也会同步推送到 Docker Hub
 
 ## 项目结构
 

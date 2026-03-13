@@ -18,13 +18,16 @@ import (
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
+	buildversion "netsgo/pkg/version"
 )
 
 // Client 是客户端/Agent 的核心结构体
 type Client struct {
 	ServerAddr  string // Server 的 WebSocket 地址 (ws://host:port)
 	Key         string // 认证密钥
-	AgentID     string // Server 分配的 Agent ID
+	InstallID   string // 稳定安装 ID
+	StatePath   string // 安装 ID 持久化路径
+	AgentID     string // Server 分配的稳定 Agent ID
 	conn        *websocket.Conn
 	mu          sync.Mutex
 	done        chan struct{}
@@ -164,6 +167,10 @@ func (c *Client) cleanup() {
 // 返回 nil 表示连接曾经成功但后来断开（可以重连），
 // 返回 error 表示连接或认证失败。
 func (c *Client) connectAndRun() error {
+	if err := c.ensureInstallID(); err != nil {
+		return fmt.Errorf("初始化客户端身份失败: %w", err)
+	}
+
 	// 1. 连接控制通道
 	controlURL := fmt.Sprintf("%s/ws/control", c.ServerAddr)
 	log.Printf("🔌 正在连接 Server: %s", controlURL)
@@ -214,12 +221,13 @@ func (c *Client) authenticate() error {
 	hostname, _ := os.Hostname()
 
 	authReq := protocol.AuthRequest{
-		Key: c.Key,
+		Key:       c.Key,
+		InstallID: c.InstallID,
 		Agent: protocol.AgentInfo{
 			Hostname: hostname,
 			OS:       runtime.GOOS,
 			Arch:     runtime.GOARCH,
-			Version:  "0.2.0",
+			Version:  buildversion.Current,
 		},
 	}
 

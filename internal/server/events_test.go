@@ -69,7 +69,7 @@ func TestEventBus_PublishTimeout(t *testing.T) {
 
 	// 检查通道里面应该只有 64 个
 	count := 0
-	loop:
+loop:
 	for {
 		select {
 		case <-ch:
@@ -87,7 +87,7 @@ func TestEventBus_PublishTimeout(t *testing.T) {
 func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 	s := New(0)
 	// mock auth: SSE 不需要认证 (实际中前面会有 RequireAuth)，这里直接调 handleSSE
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
 	req = req.WithContext(ctx)
@@ -111,9 +111,17 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 		t.Errorf("期望有一个订阅者，得到 %d", subCount)
 	}
 
+	if !strings.Contains(w.Body.String(), "event: ready\ndata: {}\n\n") {
+		t.Fatalf("期望 SSE 连接建立后立即发送 ready 事件，实际 body: %q", w.Body.String())
+	}
+
 	// 发送事件
 	s.events.PublishJSON("foo", "bar")
 	time.Sleep(50 * time.Millisecond)
+
+	if !strings.Contains(w.Body.String(), "event: foo\ndata: \"bar\"\n\n") {
+		t.Fatalf("期望收到业务事件，实际 body: %q", w.Body.String())
+	}
 
 	// 模拟客户端断开连接 (Cancel context)
 	cancel()

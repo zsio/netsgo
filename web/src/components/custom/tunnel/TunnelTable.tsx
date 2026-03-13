@@ -1,8 +1,14 @@
 import { useState, useMemo } from 'react';
 import {
-  Search, Play, Pause, Trash2, ShieldCheck,
+  Search, Play, Pause, Trash2, ShieldCheck, HelpCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
 import {
   usePauseTunnel, useResumeTunnel, useDeleteTunnel,
@@ -14,7 +20,6 @@ interface TunnelTableProps {
 }
 
 export function TunnelTable({ agent }: TunnelTableProps) {
-  const tunnels = agent.proxies ?? [];
   const pauseTunnel = usePauseTunnel();
   const resumeTunnel = useResumeTunnel();
   const deleteTunnel = useDeleteTunnel();
@@ -22,6 +27,7 @@ export function TunnelTable({ agent }: TunnelTableProps) {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const filteredTunnels = useMemo(() => {
+    const tunnels = agent.proxies ?? [];
     if (!searchQuery.trim()) return tunnels;
     const q = searchQuery.toLowerCase();
     return tunnels.filter(
@@ -29,12 +35,14 @@ export function TunnelTable({ agent }: TunnelTableProps) {
         t.name.toLowerCase().includes(q) ||
         t.type.toLowerCase().includes(q),
     );
-  }, [tunnels, searchQuery]);
+  }, [agent.proxies, searchQuery]);
+
+  const tunnels = agent.proxies ?? [];
 
   const args = (name: string) => ({ agentId: agent.id, tunnelName: name });
 
   return (
-    <>
+    <TooltipProvider delayDuration={200}>
       <div className="rounded-xl border border-border/40 bg-card/30 backdrop-blur-sm shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-border/40 flex items-center justify-between bg-card/50">
           <h3 className="font-semibold text-lg flex items-center gap-2">
@@ -113,6 +121,16 @@ export function TunnelTable({ agent }: TunnelTableProps) {
                           <div className="flex items-center text-destructive">
                             <div className="h-2 w-2 rounded-full bg-destructive mr-2" />
                             异常
+                            {tunnel.error && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <HelpCircle className="h-3.5 w-3.5 ml-1.5 opacity-70 hover:opacity-100 cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top">
+                                  <p>{tunnel.error}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
                           </div>
                         )}
                       </td>
@@ -185,6 +203,6 @@ export function TunnelTable({ agent }: TunnelTableProps) {
         }}
         onCancel={() => setDeleteTarget(null)}
       />
-    </>
+    </TooltipProvider>
   );
 }

@@ -7,10 +7,12 @@ import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 import type { SetupResponse, PortRange } from '@/types';
 import { Server, Globe, Shield, Check, Copy, Plus, X, Sparkles, ArrowRight, ArrowLeft, AlertTriangle } from 'lucide-react';
+import { requireSetupPage } from '@/lib/auth';
 
 export const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/setup',
+  beforeLoad: requireSetupPage,
   component: SetupPage,
 });
 
@@ -33,7 +35,10 @@ function SetupPage() {
   const [adminError, setAdminError] = useState('');
 
   // Step 2: Server address
-  const [serverAddr, setServerAddr] = useState('');
+  const [serverAddr, setServerAddr] = useState(() => {
+    // 默认填入当前访问地址
+    return window.location.origin;
+  });
   const [addrError, setAddrError] = useState('');
 
   // Step 3: Ports
@@ -93,6 +98,20 @@ function SetupPage() {
 
   const totalPorts = ports.reduce((sum, p) => sum + (p.end - p.start + 1), 0);
 
+  // 检测当前访问是否为不安全的方式 (HTTP / IP / 非标准端口)
+  const currentOrigin = window.location.origin;
+  const isInsecureAccess = (() => {
+    try {
+      const url = new URL(currentOrigin);
+      const isHTTP = url.protocol === 'http:';
+      const isIP = /^\d{1,3}(\.\d{1,3}){3}$/.test(url.hostname) || url.hostname === 'localhost' || url.hostname === '[::]' || url.hostname.startsWith('[');
+      const hasPort = !!url.port;
+      return isHTTP || isIP || hasPort;
+    } catch {
+      return false;
+    }
+  })();
+
   // Submit
   const handleSubmit = async () => {
     if (ports.length === 0) { setPortError('请至少添加一个端口规则'); return; }
@@ -107,8 +126,8 @@ function SetupPage() {
       setResult(resp);
       setAuth(resp.token, resp.user);
       setStep(3); // Success page
-    } catch (err: any) {
-      setSubmitError(err.message || '初始化失败');
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : '初始化失败');
     } finally {
       setLoading(false);
     }
@@ -267,6 +286,27 @@ function SetupPage() {
                     </div>
                   </div>
                 </div>
+
+                {isInsecureAccess && serverAddr === currentOrigin && (
+                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-4 text-sm space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                      <div className="text-muted-foreground">
+                        <p className="font-medium text-amber-600 dark:text-amber-400 mb-1">检测到当前使用不安全方式访问</p>
+                        <p>
+                          当前地址为 <code className="px-1 py-0.5 bg-muted rounded text-xs">{currentOrigin}</code>，
+                          {currentOrigin.startsWith('http:') && '使用了未加密的 HTTP 协议'}
+                          {/\d{1,3}(\.\d{1,3}){3}/.test(currentOrigin) && '，且通过 IP 直接访问'}
+                          。
+                        </p>
+                        <p className="mt-1">
+                          生产环境中强烈建议配置域名并启用 HTTPS（如 <code className="px-1 py-0.5 bg-muted rounded text-xs">https://tunnel.example.com</code>），
+                          以保证 Agent Key 等敏感信息的传输安全。
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {addrError && (
                   <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">

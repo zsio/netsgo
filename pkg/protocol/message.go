@@ -43,8 +43,9 @@ func (m *Message) ParsePayload(target any) error {
 
 // AuthRequest Agent 连接时发送的认证请求
 type AuthRequest struct {
-	Key      string    `json:"key"`       // 认证密钥
-	Agent    AgentInfo `json:"agent"`     // Agent 基本信息
+	Key       string    `json:"key"`        // 认证密钥
+	InstallID string    `json:"install_id"` // Agent 稳定安装 ID
+	Agent     AgentInfo `json:"agent"`      // Agent 基本信息
 }
 
 // AuthResponse Server 返回的认证结果

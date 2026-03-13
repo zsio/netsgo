@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  web-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+      - name: Build web assets
+        working-directory: web
+        run: bun run build
+      - name: Pack web dist
+        run: tar -czf /tmp/web-dist.tgz -C web dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: /tmp/web-dist.tgz
+          if-no-files-found: error
+
+  test:
+    runs-on: ubuntu-latest
+    needs: web-dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: /tmp/web-dist
+      - name: Restore web dist
+        run: tar -xzf /tmp/web-dist/web-dist.tgz -C web
+      - name: Run Go tests
+        run: go test ./...
+
+  cross-build:
+    runs-on: ubuntu-latest
+    needs: web-dist
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            goarm: ""
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            goarm: ""
+            ext: ""
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            goarm: ""
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            goarm: ""
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            goarm: ""
+            ext: .exe
+          - goos: windows
+            goarch: arm64
+            goarm: ""
+            ext: .exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: /tmp/web-dist
+      - name: Restore web dist
+        run: tar -xzf /tmp/web-dist/web-dist.tgz -C web
+      - name: Cross-compile ${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.goarm != '' && format('/v{0}', matrix.goarm) || '' }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          OUTPUT_EXT: ${{ matrix.ext }}
+        run: |
+          set -euo pipefail
+          export CGO_ENABLED=0
+          if [ -n "${GOARM}" ]; then
+            export GOARM
+          fi
+          output="${RUNNER_TEMP}/netsgo${OUTPUT_EXT}"
+          go build -trimpath -ldflags "-s -w" -o "${output}" ./cmd/netsgo
+          test -f "${output}"

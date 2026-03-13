@@ -29,6 +29,7 @@ import (
 func setupWSTest(t *testing.T) (*Server, *websocket.Conn, *httptest.Server, func()) {
 	t.Helper()
 	s := New(0)
+	initTestAdminStore(t, s)
 	ts := httptest.NewServer(s.newHTTPMux())
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 
@@ -49,20 +50,54 @@ func setupWSTest(t *testing.T) (*Server, *websocket.Conn, *httptest.Server, func
 func setupWSTestNoConn(t *testing.T) (*Server, *httptest.Server, func()) {
 	t.Helper()
 	s := New(0)
+	initTestAdminStore(t, s)
 	ts := httptest.NewServer(s.newHTTPMux())
 	return s, ts, ts.Close
 }
 
+func initTestAdminStore(t *testing.T, s *Server) {
+	t.Helper()
+
+	storePath := filepath.Join(t.TempDir(), "admin.json")
+	store, err := NewAdminStore(storePath)
+	if err != nil {
+		t.Fatalf("创建 AdminStore 失败: %v", err)
+	}
+	if err := store.Initialize("admin", "password123", "localhost", nil); err != nil {
+		t.Fatalf("初始化 AdminStore 失败: %v", err)
+	}
+	if _, err := store.AddAPIKey("default", "test-key", []string{"connect"}, nil); err != nil {
+		t.Fatalf("创建测试 API Key 失败: %v", err)
+	}
+	s.adminStore = store
+}
+
+func issueAdminToken(t *testing.T, s *Server) string {
+	t.Helper()
+
+	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "server-test")
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 Admin Token 失败: %v", err)
+	}
+	return token
+}
+
 // doAuth 完成认证，返回响应
 func doAuth(t *testing.T, conn *websocket.Conn) protocol.AuthResponse {
-	return doAuthWithInfo(t, conn, "test-host", "test-key")
+	return doAuthWithInstallID(t, conn, "test-host", "install-test-host", "test-key")
 }
 
 // doAuthWithInfo 用指定信息完成认证
 func doAuthWithInfo(t *testing.T, conn *websocket.Conn, hostname, key string) protocol.AuthResponse {
+	return doAuthWithInstallID(t, conn, hostname, "install-"+hostname, key)
+}
+
+func doAuthWithInstallID(t *testing.T, conn *websocket.Conn, hostname, installID, key string) protocol.AuthResponse {
 	t.Helper()
 	authReq := protocol.AuthRequest{
-		Key: key,
+		Key:       key,
+		InstallID: installID,
 		Agent: protocol.AgentInfo{
 			Hostname: hostname,
 			OS:       "linux",
@@ -92,20 +127,30 @@ func doAuthWithInfo(t *testing.T, conn *websocket.Conn, hostname, key string) pr
 
 // connectAndAuth 建立新 WS 连接并完成认证
 func connectAndAuth(t *testing.T, ts *httptest.Server, hostname string) (*websocket.Conn, protocol.AuthResponse) {
+	return connectAndAuthWithInstallID(t, ts, hostname, "install-"+hostname)
+}
+
+func connectAndAuthWithInstallID(t *testing.T, ts *httptest.Server, hostname, installID string) (*websocket.Conn, protocol.AuthResponse) {
 	t.Helper()
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("WebSocket 连接失败: %v", err)
 	}
-	authResp := doAuthWithInfo(t, conn, hostname,  "key")
+	authResp := doAuthWithInstallID(t, conn, hostname, installID, "test-key")
 	return conn, authResp
 }
 
 // getAPIJSON 发起 HTTP GET 请求并解析 JSON
-func getAPIJSON(t *testing.T, ts *httptest.Server, path string) map[string]any {
+func getAPIJSON(t *testing.T, s *Server, ts *httptest.Server, path string) map[string]any {
 	t.Helper()
-	resp, err := http.Get(ts.URL + path)
+	req, err := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+	if err != nil {
+		t.Fatalf("创建 HTTP 请求 %s 失败: %v", path, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("HTTP GET %s 失败: %v", path, err)
 	}
@@ -145,10 +190,10 @@ func TestAPI_Status_NoAgents(t *testing.T) {
 }
 
 func TestAPI_Status_ExtendedFields(t *testing.T) {
-	_, _, ts, cleanup := setupWSTest(t)
+	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	result := getAPIJSON(t, ts, "/api/status")
+	result := getAPIJSON(t, s, ts, "/api/status")
 
 	if result["status"] != "running" {
 		t.Errorf("status 期望 'running'，得到 %v", result["status"])
@@ -183,7 +228,7 @@ func TestAPI_Status_TunnelCounts(t *testing.T) {
 	agent.proxies["tunnel3"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusStopped}, done: make(chan struct{})}
 	agent.proxyMu.Unlock()
 
-	result := getAPIJSON(t, ts, "/api/status")
+	result := getAPIJSON(t, s, ts, "/api/status")
 
 	if result["tunnel_active"].(float64) != 1 {
 		t.Errorf("tunnel_active 期望 1，得到 %v", result["tunnel_active"])
@@ -197,15 +242,15 @@ func TestAPI_Status_TunnelCounts(t *testing.T) {
 }
 
 func TestAPI_Status_UptimeIncreasing(t *testing.T) {
-	_, ts, cleanup := setupWSTestNoConn(t)
+	s, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
 
-	result1 := getAPIJSON(t, ts, "/api/status")
+	result1 := getAPIJSON(t, s, ts, "/api/status")
 	uptime1 := result1["uptime"].(float64)
 
 	time.Sleep(1100 * time.Millisecond)
 
-	result2 := getAPIJSON(t, ts, "/api/status")
+	result2 := getAPIJSON(t, s, ts, "/api/status")
 	uptime2 := result2["uptime"].(float64)
 
 	if uptime2 <= uptime1 {
@@ -214,7 +259,7 @@ func TestAPI_Status_UptimeIncreasing(t *testing.T) {
 }
 
 func TestAPI_Status_WithAgents(t *testing.T) {
-	_, _, ts, cleanup := setupWSTest(t)
+	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
 	conn2, _ := connectAndAuth(t, ts, "agent-host")
@@ -222,7 +267,7 @@ func TestAPI_Status_WithAgents(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	result := getAPIJSON(t, ts, "/api/status")
+	result := getAPIJSON(t, s, ts, "/api/status")
 	count := result["agent_count"].(float64)
 	if count < 1 {
 		t.Errorf("agent_count 期望 ≥ 1，得到 %v", count)
@@ -230,19 +275,19 @@ func TestAPI_Status_WithAgents(t *testing.T) {
 }
 
 func TestAPI_Status_AfterDisconnect(t *testing.T) {
-	_, _, ts, cleanup := setupWSTest(t)
+	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
 	conn2, _ := connectAndAuth(t, ts, "temp-agent")
 	time.Sleep(50 * time.Millisecond)
 
-	result := getAPIJSON(t, ts, "/api/status")
+	result := getAPIJSON(t, s, ts, "/api/status")
 	before := result["agent_count"].(float64)
 
 	conn2.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	result2 := getAPIJSON(t, ts, "/api/status")
+	result2 := getAPIJSON(t, s, ts, "/api/status")
 	after := result2["agent_count"].(float64)
 
 	if after >= before {
@@ -263,7 +308,7 @@ func TestAPI_Agents_Empty(t *testing.T) {
 }
 
 func TestAPI_Agents_Multiple(t *testing.T) {
-	_, _, ts, cleanup := setupWSTest(t)
+	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
 	conn1, _ := connectAndAuth(t, ts, "host-A")
@@ -275,7 +320,9 @@ func TestAPI_Agents_Multiple(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	resp, _ := http.Get(ts.URL + "/api/agents")
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
+	resp, _ := http.DefaultClient.Do(req)
 	defer resp.Body.Close()
 
 	var agents []map[string]any
@@ -296,7 +343,7 @@ func TestAPI_Agents_Multiple(t *testing.T) {
 }
 
 func TestAPI_Agents_WithStats(t *testing.T) {
-	_, _, ts, cleanup := setupWSTest(t)
+	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
 	conn1, _ := connectAndAuth(t, ts, "stats-host")
@@ -307,7 +354,9 @@ func TestAPI_Agents_WithStats(t *testing.T) {
 	conn1.WriteJSON(msg)
 	time.Sleep(100 * time.Millisecond)
 
-	resp, _ := http.Get(ts.URL + "/api/agents")
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
+	resp, _ := http.DefaultClient.Do(req)
 	defer resp.Body.Close()
 
 	var agents []map[string]any
@@ -393,8 +442,8 @@ func TestWeb_DevMode_FallbackToDevPage(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "NetsGo") {
 		t.Error("页面应包含 'NetsGo'")
 	}
-	if !strings.Contains(w.Body.String(), "pnpm dev") {
-		t.Error("开发模式页面应包含 pnpm dev 提示")
+	if !strings.Contains(w.Body.String(), "bun run dev") {
+		t.Error("开发模式页面应包含 bun run dev 提示")
 	}
 }
 
@@ -425,10 +474,25 @@ func TestAuth_EmptyKey(t *testing.T) {
 	_, conn, _, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	authResp := doAuthWithInfo(t, conn, "host", "")
+	authReq := protocol.AuthRequest{
+		Key:       "",
+		InstallID: "install-empty-key",
+		Agent: protocol.AgentInfo{
+			Hostname: "host",
+			OS:       "linux",
+			Arch:     "amd64",
+			Version:  "0.1.0",
+		},
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("发送认证消息失败: %v", err)
+	}
 
-	if !authResp.Success {
-		t.Errorf("Phase1 空 key 应允许连接: %s", authResp.Message)
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	var resp protocol.Message
+	if err := conn.ReadJSON(&resp); err == nil {
+		t.Fatal("缺少 API Key 时服务端应拒绝连接")
 	}
 }
 
@@ -436,13 +500,58 @@ func TestAuth_EmptyHostname(t *testing.T) {
 	_, conn, _, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	authResp := doAuthWithInfo(t, conn, "",  "key")
+	authResp := doAuthWithInfo(t, conn, "", "test-key")
 
 	if !authResp.Success {
 		t.Errorf("空主机名不应导致认证失败: %s", authResp.Message)
 	}
 	if authResp.AgentID == "" {
 		t.Error("AgentID 不应为空")
+	}
+}
+
+func TestAuth_ReconnectSameInstallIDReplacesOldConnection(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	conn1, auth1 := connectAndAuthWithInstallID(t, ts, "stable-host", "install-stable-host")
+	defer conn1.Close()
+
+	time.Sleep(50 * time.Millisecond)
+	previous, ok := s.agents.Load(auth1.AgentID)
+	if !ok {
+		t.Fatal("第一次认证后 Agent 应已注册")
+	}
+
+	conn2, auth2 := connectAndAuthWithInstallID(t, ts, "stable-host", "install-stable-host")
+	defer conn2.Close()
+
+	if auth2.AgentID != auth1.AgentID {
+		t.Fatalf("相同 install_id 重连后应保持稳定 AgentID: %s != %s", auth2.AgentID, auth1.AgentID)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	current, ok := s.agents.Load(auth1.AgentID)
+	if !ok {
+		t.Fatal("重连后 Agent 应仍然在线")
+	}
+	if current == previous {
+		t.Error("重连后应以新连接替换旧连接")
+	}
+
+	conn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	if _, _, err := conn1.ReadMessage(); err == nil {
+		t.Error("旧连接应被服务端主动断开")
+	}
+
+	count := 0
+	s.RangeAgents(func(_ string, _ *AgentConn) bool {
+		count++
+		return true
+	})
+	if count != 1 {
+		t.Errorf("相同 install_id 在线会话应被收敛为 1 个，得到 %d", count)
 	}
 }
 
@@ -657,8 +766,9 @@ func TestMultipleAgents_Concurrent(t *testing.T) {
 			defer conn.Close()
 
 			authReq := protocol.AuthRequest{
-				Key: "key",
-				Agent: protocol.AgentInfo{Hostname: hostname, OS: "linux", Arch: "amd64", Version: "0.1.0"},
+				Key:       "test-key",
+				InstallID: "install-" + hostname,
+				Agent:     protocol.AgentInfo{Hostname: hostname, OS: "linux", Arch: "amd64", Version: "0.1.0"},
 			}
 			msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 			conn.WriteJSON(msg)
@@ -719,6 +829,84 @@ func TestAgent_DisconnectCleansUp(t *testing.T) {
 	}
 
 	conn1.Close()
+}
+
+func TestHandleControlWS_MigratesLegacyTunnelsToStableAgentID(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+	s.store = store
+
+	seedLegacyTunnels(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "legacy-tunnel", Type: "tcp", RemotePort: 18080},
+		Status:          protocol.ProxyStatusPaused,
+		Hostname:        "legacy-host",
+		Binding:         TunnelBindingLegacyHostname,
+	})
+
+	conn, authResp := connectAndAuthWithInstallID(t, ts, "legacy-host", "install-legacy-host")
+	defer conn.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	migrated := s.store.GetTunnelsByAgentID(authResp.AgentID)
+	if len(migrated) != 1 {
+		t.Fatalf("期望迁移出 1 条稳定绑定隧道，得到 %d", len(migrated))
+	}
+	if migrated[0].Binding != TunnelBindingAgentID {
+		t.Errorf("迁移后 Binding 应为 %s，得到 %s", TunnelBindingAgentID, migrated[0].Binding)
+	}
+	if migrated[0].Hostname != "legacy-host" {
+		t.Errorf("迁移后 Hostname 应保留 legacy-host，得到 %s", migrated[0].Hostname)
+	}
+
+	pending := s.store.GetLegacyTunnelsByHostname("legacy-host")
+	if len(pending) != 0 {
+		t.Errorf("迁移后不应再保留 legacy 记录，得到 %d 条", len(pending))
+	}
+}
+
+func TestHandleControlWS_SkipsLegacyMigrationForAmbiguousHostname(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+	s.store = store
+
+	seedLegacyTunnels(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "legacy-tunnel", Type: "tcp", RemotePort: 18081},
+		Status:          protocol.ProxyStatusPaused,
+		Hostname:        "shared-host",
+		Binding:         TunnelBindingLegacyHostname,
+	})
+
+	if _, err := s.adminStore.GetOrCreateAgent("install-existing-host", protocol.AgentInfo{
+		Hostname: "shared-host",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1"); err != nil {
+		t.Fatalf("预注册旧 Agent 失败: %v", err)
+	}
+
+	conn, authResp := connectAndAuthWithInstallID(t, ts, "shared-host", "install-new-host")
+	defer conn.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	if migrated := s.store.GetTunnelsByAgentID(authResp.AgentID); len(migrated) != 0 {
+		t.Fatalf("hostname 冲突时不应自动迁移 legacy 隧道，得到 %d 条", len(migrated))
+	}
+	if pending := s.store.GetLegacyTunnelsByHostname("shared-host"); len(pending) != 1 {
+		t.Fatalf("hostname 冲突时应保留 legacy 记录，得到 %d 条", len(pending))
+	}
 }
 
 func TestControlLoop_ProxyMessages(t *testing.T) {
@@ -1035,6 +1223,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, _ := NewAdminStore(dbPath)
 	store.Initialize("admin", "password123", "localhost", nil)
+	store.AddAPIKey("default", "test-key", []string{"connect"}, nil)
 
 	s := New(0)
 	s.adminStore = store
@@ -1052,13 +1241,13 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		req, _ := http.NewRequest(method, ts.URL+path, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
-		
+
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("API 请求失败 %s: %v", path, err)
 		}
 		defer resp.Body.Close()
-		
+
 		var result map[string]any
 		json.NewDecoder(resp.Body).Decode(&result)
 		return resp.StatusCode, result
@@ -1073,8 +1262,9 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	defer wsConn.Close()
 
 	authReq := protocol.AuthRequest{
-		Key: "",
-		Agent: protocol.AgentInfo{Hostname: "lifecycle-agent", OS: "linux", Version: "1.0.0"},
+		Key:       "test-key",
+		InstallID: "install-lifecycle-agent",
+		Agent:     protocol.AgentInfo{Hostname: "lifecycle-agent", OS: "linux", Version: "1.0.0"},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 	wsConn.WriteJSON(msg)
@@ -1083,7 +1273,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	wsConn.ReadJSON(&authRespMsg)
 	var authResp protocol.AuthResponse
 	authRespMsg.ParsePayload(&authResp)
-	
+
 	agentID := authResp.AgentID
 	time.Sleep(50 * time.Millisecond) // 等待 agent 注册到 s.agents
 
@@ -1103,13 +1293,13 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	// 1. 创建隧道 (/api/agents/{id}/tunnels)
 	createReq := []byte(`{"name":"test-tunnel","type":"tcp","local_ip":"127.0.0.1","local_port":8080,"remote_port":18080}`)
 	code, resp := doRequest(http.MethodPost, fmt.Sprintf("/api/agents/%s/tunnels", agentID), createReq)
-	
+
 	if code != http.StatusCreated {
 		t.Errorf("创建隧道期望 201 Created，得到 %d, 响应: %v", code, resp)
 	}
 
 	// 验证隧道在 Store 中生成
-	tunnel, ok := s.store.GetTunnel("lifecycle-agent", "test-tunnel")
+	tunnel, ok := s.store.GetTunnel(agentID, "test-tunnel")
 	if !ok {
 		t.Fatal("Tunnel 未写入 Store")
 	}
@@ -1127,7 +1317,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // 等待服务端处理状态更新
 
 	// 二次检查 Store，状态应为 active
-	tunnel, _ = s.store.GetTunnel("lifecycle-agent", "test-tunnel")
+	tunnel, _ = s.store.GetTunnel(agentID, "test-tunnel")
 	if tunnel.Status != protocol.ProxyStatusActive {
 		t.Errorf("隧道已成功创建，状态应为 active，但仍为 %s", tunnel.Status)
 	}
@@ -1140,7 +1330,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	tunnel, _ = s.store.GetTunnel("lifecycle-agent", "test-tunnel")
+	tunnel, _ = s.store.GetTunnel(agentID, "test-tunnel")
 	if tunnel.Status != protocol.ProxyStatusPaused {
 		t.Errorf("隧道暂停后，状态应为 paused，得到 %s", tunnel.Status)
 	}
@@ -1153,7 +1343,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	tunnel, _ = s.store.GetTunnel("lifecycle-agent", "test-tunnel")
+	tunnel, _ = s.store.GetTunnel(agentID, "test-tunnel")
 	if tunnel.Status != protocol.ProxyStatusActive {
 		t.Errorf("隧道恢复后，状态应为 active，得到 %s", tunnel.Status)
 	}
@@ -1166,7 +1356,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	tunnel, _ = s.store.GetTunnel("lifecycle-agent", "test-tunnel")
+	tunnel, _ = s.store.GetTunnel(agentID, "test-tunnel")
 	if tunnel.Status != protocol.ProxyStatusStopped {
 		t.Errorf("隧道停止后，状态应为 stopped，得到 %s", tunnel.Status)
 	}
@@ -1180,7 +1370,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	}
 	respDel.Body.Close()
 
-	if _, ok := s.store.GetTunnel("lifecycle-agent", "test-tunnel"); ok {
+	if _, ok := s.store.GetTunnel(agentID, "test-tunnel"); ok {
 		t.Error("删除后，Store 中不应再有此隧道")
 	}
 }
@@ -1195,19 +1385,21 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 
 	tunnelStorePath := filepath.Join(tmpDir, "tunnels.json")
 	tStore, _ := NewTunnelStore(tunnelStorePath)
-	
-	// 在 Store 预先写入两个隧道 (代表服务器重启读取旧数据)
+
+	// 在 Store 预先写入两个隧道 (代表服务器重启读取持久化数据)
 	tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel1", Type: "tcp", RemotePort: 1234},
 		Status:          protocol.ProxyStatusActive,
 		AgentID:         "agent-1",
 		Hostname:        "restore-host",
+		Binding:         TunnelBindingAgentID,
 	})
 	tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel2", Type: "tcp", RemotePort: 5678},
 		Status:          protocol.ProxyStatusPaused,
 		AgentID:         "agent-1",
 		Hostname:        "restore-host",
+		Binding:         TunnelBindingAgentID,
 	})
 
 	s := New(0)
@@ -1254,14 +1446,53 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	// 但实际上在我们的 restoreTunnels 逻辑中，如果 StartProxy 失败，状态没有通过 proxyMu 进行修改。
 	// 不过既然 s.StartProxy 失败，它不会出现在 agent.proxies 里。
 	// 为了简化断言，我们直接使用 store.GetTunnel。
-	t1, _ := s.store.GetTunnel("restore-host", "tunnel1")
+	t1, _ := s.store.GetTunnel("agent-1", "tunnel1")
 	if t1.Status != protocol.ProxyStatusActive {
 		t.Logf("⚠️ tunnel1 恢复后状态为 %s (restoreTunnels 失败时不降级，符合预期)", t1.Status)
 	}
 
-	t2, _ := s.store.GetTunnel("restore-host", "tunnel2")
+	t2, _ := s.store.GetTunnel("agent-1", "tunnel2")
 	if t2.Status != protocol.ProxyStatusPaused {
 		t.Errorf("Paused 隧道重启时应维持 paused，得到 %s", t2.Status)
 	}
 }
 
+func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
+	s := New(0)
+
+	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+	s.store = store
+
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "paused-only", Type: "tcp", RemotePort: 19090},
+		Status:          protocol.ProxyStatusPaused,
+		AgentID:         "agent-restore",
+		Hostname:        "restore-host",
+	})
+
+	agent := &AgentConn{
+		ID:      "agent-restore",
+		Info:    protocol.AgentInfo{Hostname: "restore-host"},
+		proxies: make(map[string]*ProxyTunnel),
+	}
+
+	start := time.Now()
+	s.restoreTunnels(agent)
+	elapsed := time.Since(start)
+	if elapsed > time.Second {
+		t.Fatalf("仅恢复 paused 隧道不应等待数据通道，耗时 %v", elapsed)
+	}
+
+	agent.proxyMu.RLock()
+	tunnel, ok := agent.proxies["paused-only"]
+	agent.proxyMu.RUnlock()
+	if !ok {
+		t.Fatal("paused 隧道应被恢复到内存态")
+	}
+	if tunnel.Config.Status != protocol.ProxyStatusPaused {
+		t.Errorf("恢复后的状态应保持 paused，得到 %s", tunnel.Config.Status)
+	}
+}

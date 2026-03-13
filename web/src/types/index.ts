@@ -21,6 +21,7 @@ export interface SystemStats {
   disk_total: number;     // bytes
   disk_used: number;      // bytes
   disk_usage: number;     // 0-100
+  disk_partitions: DiskPartition[];
   net_sent: number;       // bytes (cumulative)
   net_recv: number;       // bytes (cumulative)
   uptime: number;         // seconds
@@ -33,6 +34,9 @@ export interface Agent {
   info: AgentInfo;
   stats: SystemStats | null;
   proxies?: ProxyConfig[];
+  online: boolean;
+  last_seen?: string;
+  last_ip?: string;
 }
 
 // --- Tunnel / Proxy ---
@@ -50,6 +54,7 @@ export interface ProxyConfig {
   domain: string;
   agent_id: string;
   status: ProxyStatus;
+  error?: string;
 }
 
 /** 创建隧道请求体 */
@@ -86,6 +91,12 @@ export interface TunnelChangedEvent {
 
 // --- API ---
 
+export interface DiskPartition {
+  path: string;
+  used: number;
+  total: number;
+}
+
 export interface ServerStatus {
   status: string;
   agent_count: number;
@@ -96,6 +107,21 @@ export interface ServerStatus {
   tunnel_active: number;
   tunnel_paused: number;
   tunnel_stopped: number;
+  server_addr: string;
+  allowed_ports: PortRange[];
+  os_arch: string;
+  go_version: string;
+  hostname: string;
+  ip_address: string;
+  cpu_usage: number;
+  cpu_cores: number;
+  mem_used: number;
+  mem_total: number;
+  app_mem_used: number;
+  disk_used: number;
+  disk_total: number;
+  disk_partitions: DiskPartition[];
+  goroutine_count: number;
 }
 
 // --- Admin System ---
@@ -107,6 +133,8 @@ export interface APIKey {
   created_at: string;
   expires_at?: string;
   is_active: boolean;
+  max_uses: number;
+  use_count: number;
 }
 
 export interface AdminUser {
@@ -155,6 +183,11 @@ export interface PortRange {
   end: number;
 }
 
+export interface ServerConfig {
+  server_addr: string;
+  allowed_ports: PortRange[];
+}
+
 export interface SetupStatus {
   initialized: boolean;
 }
@@ -182,4 +215,3 @@ export interface SetupResponse {
   };
   message: string;
 }
-

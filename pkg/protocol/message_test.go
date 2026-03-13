@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -319,7 +320,7 @@ func TestRoundTrip_SystemStats(t *testing.T) {
 		t.Fatalf("Unmarshal 失败: %v", err)
 	}
 
-	if restored != original {
+	if !reflect.DeepEqual(restored, original) {
 		t.Errorf("SystemStats 不匹配:\n期望: %+v\n得到: %+v", original, restored)
 	}
 }
@@ -361,7 +362,7 @@ func TestUnicodeFields(t *testing.T) {
 		Version:  "1.0.0",
 	}
 	msg, _ := NewMessage(MsgTypeAuth, AuthRequest{
-		Key: "emoji-key-🔑",
+		Key:   "emoji-key-🔑",
 		Agent: agent,
 	})
 
@@ -446,8 +447,8 @@ func TestAllStructs_JSONTags(t *testing.T) {
 		},
 		{
 			"SystemStats",
-			SystemStats{CPUUsage: 1, MemTotal: 1, MemUsed: 1, MemUsage: 1, DiskTotal: 1, DiskUsed: 1, DiskUsage: 1, NetSent: 1, NetRecv: 1, Uptime: 1, NumCPU: 1},
-			[]string{"cpu_usage", "mem_total", "mem_used", "mem_usage", "disk_total", "disk_used", "disk_usage", "net_sent", "net_recv", "uptime", "num_cpu"},
+			SystemStats{CPUUsage: 1, MemTotal: 1, MemUsed: 1, MemUsage: 1, DiskTotal: 1, DiskUsed: 1, DiskUsage: 1, DiskPartitions: []DiskPartition{{Path: "/", Used: 1, Total: 1}}, NetSent: 1, NetRecv: 1, Uptime: 1, NumCPU: 1},
+			[]string{"cpu_usage", "mem_total", "mem_used", "mem_usage", "disk_total", "disk_used", "disk_usage", "disk_partitions", "net_sent", "net_recv", "uptime", "num_cpu"},
 		},
 		{
 			"ProxyConfig",

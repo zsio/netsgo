@@ -3,6 +3,7 @@ import { rootRoute } from './__root';
 import { AgentSidebar } from '@/components/custom/agent/AgentSidebar';
 import { ErrorFallback } from '@/components/custom/layout/ErrorFallback';
 import { useAgents } from '@/hooks/use-agents';
+import { requireConsoleAuth } from '@/lib/auth';
 
 function DashboardLayout() {
   const { data: agents, isLoading, isError, error, refetch } = useAgents();
@@ -31,5 +32,6 @@ function DashboardLayout() {
 export const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/dashboard',
+  beforeLoad: requireConsoleAuth,
   component: DashboardLayout,
 });

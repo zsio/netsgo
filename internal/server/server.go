@@ -10,23 +10,30 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/mem"
 
 	"netsgo/pkg/protocol"
+	buildversion "netsgo/pkg/version"
 	"netsgo/web"
 )
 
 // Server 是服务端的核心结构体
 type Server struct {
-	Port      int
-	StorePath string       // 隧道配置文件路径（空则使用默认）
-	agents    sync.Map     // agentID -> *AgentConn
-	events    *EventBus    // SSE 事件总线
+	Port       int
+	StorePath  string       // 隧道配置文件路径（空则使用默认）
+	agents     sync.Map     // stable agentID -> *AgentConn
+	events     *EventBus    // SSE 事件总线
 	store      *TunnelStore // 隧道持久化存储
 	startTime  time.Time    // 服务器启动时间
 	adminStore *AdminStore  // 系统管理后台数据存储
@@ -37,15 +44,17 @@ type Server struct {
 // AgentConn 代表一个已连接的 Agent
 type AgentConn struct {
 	ID          string
+	InstallID   string
 	Info        protocol.AgentInfo
+	RemoteAddr  string
 	stats       *protocol.SystemStats
-	statsMu     sync.RWMutex             // 保护 stats
-	conn        *websocket.Conn // 控制通道
+	statsMu     sync.RWMutex // 保护 stats
+	conn        *websocket.Conn
 	mu          sync.Mutex
-	dataSession *yamux.Session           // 数据通道 yamux Session
-	dataMu      sync.RWMutex             // 保护 dataSession
-	proxies     map[string]*ProxyTunnel  // 代理隧道 name -> tunnel
-	proxyMu     sync.RWMutex             // 保护 proxies
+	dataSession *yamux.Session          // 数据通道 yamux Session
+	dataMu      sync.RWMutex            // 保护 dataSession
+	proxies     map[string]*ProxyTunnel // 代理隧道 name -> tunnel
+	proxyMu     sync.RWMutex            // 保护 proxies
 }
 
 // SetStats 安全地更新探针数据
@@ -136,7 +145,7 @@ func (s *Server) Start() error {
 	}
 
 	if web.IsDevMode() {
-		log.Printf("🔧 开发模式：前端资源未嵌入，请使用 cd web && pnpm dev 独立启动前端")
+		log.Printf("🔧 开发模式：前端资源未嵌入，请使用 cd web && bun run dev 独立启动前端")
 	} else if s.webFS != nil {
 		log.Printf("📦 前端资源已嵌入到二进制中")
 	}
@@ -193,26 +202,30 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/setup/init", s.handleSetupInit)
 
 	// API
-	mux.HandleFunc("GET /api/status", s.handleAPIStatus)
-	mux.HandleFunc("GET /api/agents", s.handleAPIAgents)
-	// 隧道 CRUD（服务初始化后需要鉴权）
-	mux.HandleFunc("POST /api/agents/{id}/tunnels", s.RequireAuthIfInitialized(s.handleCreateTunnel))
-	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/pause", s.RequireAuthIfInitialized(s.handlePauseTunnel))
-	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/resume", s.RequireAuthIfInitialized(s.handleResumeTunnel))
-	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/stop", s.RequireAuthIfInitialized(s.handleStopTunnel))
-	mux.HandleFunc("DELETE /api/agents/{id}/tunnels/{name}", s.RequireAuthIfInitialized(s.handleDeleteTunnel))
+	mux.HandleFunc("GET /api/status", s.RequireAuth(s.handleAPIStatus))
+	mux.HandleFunc("GET /api/agents", s.RequireAuth(s.handleAPIAgents))
+	mux.HandleFunc("POST /api/agents/{id}/tunnels", s.RequireAuth(s.handleCreateTunnel))
+	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/pause", s.RequireAuth(s.handlePauseTunnel))
+	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/resume", s.RequireAuth(s.handleResumeTunnel))
+	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/stop", s.RequireAuth(s.handleStopTunnel))
+	mux.HandleFunc("DELETE /api/agents/{id}/tunnels/{name}", s.RequireAuth(s.handleDeleteTunnel))
 
 	// Admin API (JWT + Session Binding 鉴权)
 	mux.HandleFunc("POST /api/auth/login", s.handleAPILogin)
+	mux.HandleFunc("POST /api/auth/logout", s.RequireAuth(s.handleAPILogout))
 	mux.HandleFunc("GET /api/admin/keys", s.RequireAuth(s.handleAPIAdminKeys))
 	mux.HandleFunc("POST /api/admin/keys", s.RequireAuth(s.handleAPIAdminKeys))
+	mux.HandleFunc("PUT /api/admin/keys/{id}/{action}", s.RequireAuth(s.handleAPIAdminKeyItem))
+	mux.HandleFunc("DELETE /api/admin/keys/{id}", s.RequireAuth(s.handleAPIAdminKeyItem))
 	mux.HandleFunc("GET /api/admin/policies", s.RequireAuth(s.handleAPIAdminPolicies))
 	mux.HandleFunc("PUT /api/admin/policies", s.RequireAuth(s.handleAPIAdminPolicies))
 	mux.HandleFunc("GET /api/admin/logs", s.RequireAuth(s.handleAPIAdminLogs))
 	mux.HandleFunc("GET /api/admin/events", s.RequireAuth(s.handleAPIAdminEvents))
+	mux.HandleFunc("GET /api/admin/config", s.RequireAuth(s.handleAPIAdminConfig))
+	mux.HandleFunc("PUT /api/admin/config", s.RequireAuth(s.handleAPIAdminConfig))
 
 	// SSE 实时事件流
-	mux.HandleFunc("GET /api/events", s.handleSSE)
+	mux.HandleFunc("GET /api/events", s.RequireAuth(s.handleSSE))
 
 	// 控制通道 WebSocket
 	mux.HandleFunc("/ws/control", s.handleControlWS)
@@ -299,17 +312,27 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	log.Printf("📡 新的控制通道连接: %s", r.RemoteAddr)
 
 	// 等待 Agent 发送认证消息
-	agent, err := s.handleAuth(conn)
+	agent, replaced, err := s.handleAuth(conn, r.RemoteAddr)
 	if err != nil {
 		log.Printf("❌ Agent 认证失败 [%s]: %v", r.RemoteAddr, err)
 		return
 	}
 
+	if replaced != nil {
+		s.forceDisconnectAgent(replaced)
+	}
+
 	log.Printf("✅ Agent 已连接: %s (%s/%s) [ID: %s]", agent.Info.Hostname, agent.Info.OS, agent.Info.Arch, agent.ID)
 
-	// 迁移 store 中的旧 AgentID 到新的
 	if s.store != nil {
-		s.store.UpdateAgentID(agent.Info.Hostname, "", agent.ID)
+		if err := s.store.UpdateHostname(agent.ID, agent.Info.Hostname); err != nil {
+			log.Printf("⚠️ 更新隧道展示主机名失败 [%s]: %v", agent.ID, err)
+		}
+	}
+	if migrated, err := s.migrateLegacyTunnels(agent); err != nil {
+		log.Printf("⚠️ 迁移旧版隧道失败 [%s]: %v", agent.ID, err)
+	} else if migrated > 0 {
+		log.Printf("🔄 已迁移 %d 条旧版 hostname 绑定隧道 [%s]", migrated, agent.ID)
 	}
 
 	// 发布 Agent 上线事件
@@ -322,20 +345,22 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	go s.restoreTunnels(agent)
 
 	defer func() {
-		// 清理：停止所有活跃的代理隧道监听（保留 store 中的配置）
+		current, ok := s.agents.Load(agent.ID)
+		isCurrent := ok && current == agent
+
 		s.PauseAllProxies(agent)
 		agent.dataMu.Lock()
-		if agent.dataSession != nil {
+		if agent.dataSession != nil && !agent.dataSession.IsClosed() {
 			agent.dataSession.Close()
 		}
 		agent.dataMu.Unlock()
-		s.agents.Delete(agent.ID)
-		log.Printf("🔌 Agent 已断开: %s [ID: %s]", agent.Info.Hostname, agent.ID)
-
-		// 发布 Agent 离线事件
-		s.events.PublishJSON("agent_offline", map[string]any{
-			"agent_id": agent.ID,
-		})
+		if isCurrent {
+			s.agents.Delete(agent.ID)
+			log.Printf("🔌 Agent 已断开: %s [ID: %s]", agent.Info.Hostname, agent.ID)
+			s.events.PublishJSON("agent_offline", map[string]any{
+				"agent_id": agent.ID,
+			})
+		}
 	}()
 
 	// 持续读取控制消息
@@ -343,19 +368,22 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAuth 处理 Agent 的认证流程
-func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
+func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn, *AgentConn, error) {
 	// 读取认证消息
 	var msg protocol.Message
 	if err := conn.ReadJSON(&msg); err != nil {
-		return nil, fmt.Errorf("读取认证消息失败: %w", err)
+		return nil, nil, fmt.Errorf("读取认证消息失败: %w", err)
 	}
 	if msg.Type != protocol.MsgTypeAuth {
-		return nil, fmt.Errorf("期望认证消息，收到: %s", msg.Type)
+		return nil, nil, fmt.Errorf("期望认证消息，收到: %s", msg.Type)
 	}
 
 	var authReq protocol.AuthRequest
 	if err := msg.ParsePayload(&authReq); err != nil {
-		return nil, fmt.Errorf("解析认证数据失败: %w", err)
+		return nil, nil, fmt.Errorf("解析认证数据失败: %w", err)
+	}
+	if authReq.InstallID == "" {
+		return nil, nil, fmt.Errorf("认证失败: install_id 不能为空")
 	}
 
 	// 验证 Key
@@ -363,21 +391,32 @@ func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
 		valid, err := s.adminStore.ValidateAgentKey(authReq.Key)
 		if !valid {
 			log.Printf("❌ Agent Key 验证失败 [%s]: %v", conn.RemoteAddr().String(), err)
-			return nil, fmt.Errorf("认证失败: %w", err)
+			return nil, nil, fmt.Errorf("认证失败: %w", err)
 		}
 	}
 
-	// 接受连接
-	agentID := generateUUID()
-	agent := &AgentConn{
-		ID:      agentID,
-		Info:    authReq.Agent,
-		conn:    conn,
-		proxies: make(map[string]*ProxyTunnel),
+	agentID := "unmanaged-" + authReq.InstallID
+	if s.adminStore != nil {
+		record, err := s.adminStore.GetOrCreateAgent(authReq.InstallID, authReq.Agent, remoteAddr)
+		if err != nil {
+			return nil, nil, fmt.Errorf("登记 Agent 失败: %w", err)
+		}
+		agentID = record.ID
 	}
 
-	// 先注册到 agents map，再发送认证响应
-	// 这样客户端收到响应时，服务端已经准备就绪
+	agent := &AgentConn{
+		ID:         agentID,
+		InstallID:  authReq.InstallID,
+		Info:       authReq.Agent,
+		RemoteAddr: remoteAddr,
+		conn:       conn,
+		proxies:    make(map[string]*ProxyTunnel),
+	}
+
+	var replaced *AgentConn
+	if current, loaded := s.agents.Load(agentID); loaded {
+		replaced = current.(*AgentConn)
+	}
 	s.agents.Store(agentID, agent)
 
 	// 发送认证响应
@@ -387,12 +426,13 @@ func (s *Server) handleAuth(conn *websocket.Conn) (*AgentConn, error) {
 		AgentID: agentID,
 	})
 	if err := conn.WriteJSON(resp); err != nil {
-		// 发送失败，回滚注册
-		s.agents.Delete(agentID)
-		return nil, fmt.Errorf("发送认证响应失败: %w", err)
+		if current, ok := s.agents.Load(agentID); ok && current == agent {
+			s.agents.Delete(agentID)
+		}
+		return nil, nil, fmt.Errorf("发送认证响应失败: %w", err)
 	}
 
-	return agent, nil
+	return agent, replaced, nil
 }
 
 // controlLoop 持续处理控制通道上的消息
@@ -422,6 +462,11 @@ func (s *Server) controlLoop(agent *AgentConn) {
 				continue
 			}
 			agent.SetStats(&stats)
+			if s.adminStore != nil {
+				if err := s.adminStore.TouchAgent(agent.ID, agent.Info, agent.RemoteAddr); err != nil {
+					log.Printf("⚠️ 更新 Agent 最近活跃时间失败 [%s]: %v", agent.ID, err)
+				}
+			}
 			log.Printf("📊 [%s] CPU: %.1f%% | 内存: %.1f%% | 磁盘: %.1f%%",
 				agent.Info.Hostname, stats.CPUUsage, stats.MemUsage, stats.DiskUsage)
 
@@ -460,11 +505,7 @@ func (s *Server) controlLoop(agent *AgentConn) {
 					RemotePort: actualPort,
 				})
 
-				// 发布隧道创建事件（通知前端）
-				s.events.PublishJSON("tunnel_changed", map[string]any{
-					"agent_id": agent.ID,
-					"tunnel":   config,
-				})
+				s.emitTunnelChanged(agent.ID, config, "created_by_agent")
 			}
 
 			agent.mu.Lock()
@@ -480,11 +521,11 @@ func (s *Server) controlLoop(agent *AgentConn) {
 			if err := s.StopProxy(agent, req.Name); err != nil {
 				log.Printf("⚠️ 关闭代理失败 [%s]: %v", agent.ID, err)
 			} else {
-				// 发布隧道关闭事件（通知前端）
-				s.events.PublishJSON("tunnel_changed", map[string]any{
-					"agent_id": agent.ID,
-					"tunnel":   map[string]any{"name": req.Name},
-				})
+				s.emitTunnelChanged(agent.ID, protocol.ProxyConfig{
+					Name:    req.Name,
+					AgentID: agent.ID,
+					Status:  protocol.ProxyStatusStopped,
+				}, "closed_by_agent")
 			}
 
 		default:
@@ -587,18 +628,164 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		return true
 	})
 
+	serverAddr := ""
+	var allowedPorts []PortRange
+	if s.adminStore != nil {
+		config := s.adminStore.GetServerConfig()
+		serverAddr = config.ServerAddr
+		allowedPorts = config.AllowedPorts
+	}
+	if allowedPorts == nil {
+		allowedPorts = []PortRange{}
+	}
+
+	osArch := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+	goVersion := runtime.Version()
+	goroutines := runtime.NumGoroutine()
+	hostname, _ := os.Hostname()
+
+	ipAddr := getOutboundIP()
+
+	cpuPercents, _ := cpu.Percent(0, false)
+	cpuUsage := 0.0
+	if len(cpuPercents) > 0 {
+		cpuUsage = cpuPercents[0]
+	}
+	cpuCores, _ := cpu.Counts(true)
+
+	v, _ := mem.VirtualMemory()
+	memUsed := uint64(0)
+	memTotal := uint64(0)
+	if v != nil {
+		memUsed = v.Used
+		memTotal = v.Total
+	}
+
+	type diskPartition struct {
+		Path  string `json:"path"`
+		Used  uint64 `json:"used"`
+		Total uint64 `json:"total"`
+	}
+	var diskPartitions []diskPartition
+	diskUsed := uint64(0)
+	diskTotal := uint64(0)
+
+	partitions, err := disk.Partitions(false)
+	if err == nil {
+		seenDevices := map[string]bool{}
+		for _, p := range partitions {
+			// Filter virtual/pseudo filesystems
+			switch p.Fstype {
+			case "tmpfs", "devtmpfs", "devfs", "squashfs", "overlay", "proc", "sysfs",
+				"cgroup", "cgroup2", "pstore", "securityfs", "debugfs", "tracefs", "autofs":
+				continue
+			}
+			if strings.HasPrefix(p.Fstype, "fuse.") {
+				continue
+			}
+
+			// Determine dedup key:
+			// - APFS (macOS): multiple volumes share one physical disk's capacity,
+			//   so dedup by base disk name (e.g. /dev/disk3s1s1 → "disk3")
+			// - Other FS (Linux ext4/xfs, Windows NTFS): each partition has its own
+			//   real capacity, so dedup by exact device path to avoid double counting
+			//   bind-mounts of the same partition only.
+			dedupKey := p.Device
+			if p.Fstype == "apfs" {
+				dedupKey = baseDiskName(p.Device)
+			}
+			if seenDevices[dedupKey] {
+				continue
+			}
+
+			d, err := disk.Usage(p.Mountpoint)
+			if err == nil && d.Total > 0 {
+				seenDevices[dedupKey] = true
+				diskPartitions = append(diskPartitions, diskPartition{
+					Path:  p.Mountpoint,
+					Used:  d.Used,
+					Total: d.Total,
+				})
+				diskUsed += d.Used
+				diskTotal += d.Total
+			}
+		}
+	}
+
+	// Fallback if no valid partitions found
+	if len(diskPartitions) == 0 {
+		d, _ := disk.Usage(filepath.Dir(s.getStorePath()))
+		if d == nil {
+			d, _ = disk.Usage("/")
+		}
+		if d != nil {
+			diskUsed = d.Used
+			diskTotal = d.Total
+			diskPartitions = append(diskPartitions, diskPartition{
+				Path:  d.Path,
+				Used:  d.Used,
+				Total: d.Total,
+			})
+		}
+	}
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	appMemUsed := m.Alloc
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":         "running",
-		"agent_count":    agentCount,
-		"version":        "0.1.0",
-		"listen_port":    s.Port,
-		"uptime":         int64(time.Since(s.startTime).Seconds()),
-		"store_path":     s.getStorePath(),
-		"tunnel_active":  tunnelActive,
-		"tunnel_paused":  tunnelPaused,
-		"tunnel_stopped": tunnelStopped,
+		"status":          "running",
+		"agent_count":     agentCount,
+		"version":         buildversion.Current,
+		"listen_port":     s.Port,
+		"uptime":          int64(time.Since(s.startTime).Seconds()),
+		"store_path":      s.getStorePath(),
+		"tunnel_active":   tunnelActive,
+		"tunnel_paused":   tunnelPaused,
+		"tunnel_stopped":  tunnelStopped,
+		"server_addr":     serverAddr,
+		"allowed_ports":   allowedPorts,
+		"os_arch":         osArch,
+		"go_version":      goVersion,
+		"hostname":        hostname,
+		"ip_address":      ipAddr,
+		"cpu_usage":       cpuUsage,
+		"cpu_cores":       cpuCores,
+		"mem_used":        memUsed,
+		"mem_total":       memTotal,
+		"app_mem_used":    appMemUsed,
+		"disk_used":       diskUsed,
+		"disk_total":      diskTotal,
+		"disk_partitions": diskPartitions,
+		"goroutine_count": goroutines,
 	})
+}
+
+// getOutboundIP 尝试获取当前机器的有效内网/公网 IP
+func getOutboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
+}
+
+// baseDiskName 从设备路径提取物理磁盘基础名，用于去重。
+// macOS APFS: /dev/disk3s1s1, /dev/disk3s5 → "disk3"
+// Linux SCSI: /dev/sda1 → "sda"
+// Linux NVMe: /dev/nvme0n1p1 → "nvme0n1"
+var reDiskBase = regexp.MustCompile(`(disk\d+|sd[a-z]+|nvme\d+n\d+|[A-Z]:)`)
+
+func baseDiskName(device string) string {
+	m := reDiskBase.FindString(device)
+	if m != "" {
+		return m
+	}
+	return device // fallback: 用完整路径
 }
 
 // getStorePath 获取实际的 store 路径
@@ -611,35 +798,84 @@ func (s *Server) getStorePath() string {
 
 func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 	type agentView struct {
-		ID      string                 `json:"id"`
-		Info    protocol.AgentInfo     `json:"info"`
-		Stats   *protocol.SystemStats  `json:"stats,omitempty"`
-		Proxies []protocol.ProxyConfig `json:"proxies"`
+		ID       string                 `json:"id"`
+		Info     protocol.AgentInfo     `json:"info"`
+		Stats    *protocol.SystemStats  `json:"stats,omitempty"`
+		Proxies  []protocol.ProxyConfig `json:"proxies"`
+		Online   bool                   `json:"online"`
+		LastSeen *time.Time             `json:"last_seen,omitempty"`
+		LastIP   string                 `json:"last_ip,omitempty"`
 	}
 
-	var agents []agentView
+	views := make(map[string]agentView)
+
+	if s.adminStore != nil {
+		for _, registered := range s.adminStore.GetRegisteredAgents() {
+			lastSeen := registered.LastSeen
+			view := agentView{
+				ID:       registered.ID,
+				Info:     registered.Info,
+				Proxies:  []protocol.ProxyConfig{},
+				Online:   false,
+				LastSeen: &lastSeen,
+				LastIP:   registered.LastIP,
+			}
+			if s.store != nil {
+				stored := s.store.GetTunnelsByAgentID(registered.ID)
+				view.Proxies = make([]protocol.ProxyConfig, 0, len(stored))
+				for _, tunnel := range stored {
+					view.Proxies = append(view.Proxies, protocol.ProxyConfig{
+						Name:       tunnel.Name,
+						Type:       tunnel.Type,
+						LocalIP:    tunnel.LocalIP,
+						LocalPort:  tunnel.LocalPort,
+						RemotePort: tunnel.RemotePort,
+						Domain:     tunnel.Domain,
+						AgentID:    registered.ID,
+						Status:     tunnel.Status,
+					})
+				}
+			}
+			views[registered.ID] = view
+		}
+	}
+
 	s.agents.Range(func(_, value any) bool {
-		a := value.(*AgentConn)
-		// 收集 Agent 的所有隧道配置
-		var proxies []protocol.ProxyConfig
-		a.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
+		agent := value.(*AgentConn)
+		proxies := make([]protocol.ProxyConfig, 0)
+		agent.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
 			proxies = append(proxies, tunnel.Config)
 			return true
 		})
-		if proxies == nil {
-			proxies = []protocol.ProxyConfig{} // 确保 JSON 输出 [] 而非 null
+		sort.Slice(proxies, func(i, j int) bool { return proxies[i].Name < proxies[j].Name })
+
+		view, ok := views[agent.ID]
+		if !ok {
+			view = agentView{
+				ID:      agent.ID,
+				Info:    agent.Info,
+				Proxies: []protocol.ProxyConfig{},
+			}
 		}
-		agents = append(agents, agentView{
-			ID:      a.ID,
-			Info:    a.Info,
-			Stats:   a.GetStats(),
-			Proxies: proxies,
-		})
+		now := time.Now()
+		view.Info = agent.Info
+		view.Stats = agent.GetStats()
+		view.Proxies = proxies
+		view.Online = true
+		view.LastSeen = &now
+		view.LastIP = remoteIP(agent.RemoteAddr)
+		views[agent.ID] = view
 		return true
 	})
-	if agents == nil {
-		agents = []agentView{} // 确保 JSON 输出 [] 而非 null
+
+	agents := make([]agentView, 0, len(views))
+	for _, agent := range views {
+		if agent.Proxies == nil {
+			agent.Proxies = []protocol.ProxyConfig{}
+		}
+		agents = append(agents, agent)
 	}
+	sort.Slice(agents, func(i, j int) bool { return agents[i].Info.Hostname < agents[j].Info.Hostname })
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(agents)
@@ -648,13 +884,10 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 // --- 隧道 CRUD API ---
 
 func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	val, ok := s.agents.Load(agentID)
+	agent, ok := s.readAgentFromPath(w, r)
 	if !ok {
-		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
 		return
 	}
-	agent := val.(*AgentConn)
 
 	var req protocol.ProxyNewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -662,66 +895,28 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.StartProxy(agent, req); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(map[string]any{
+	config, err := s.createManagedTunnel(agent, req, true, "created")
+	if err != nil {
+		encodeJSON(w, http.StatusConflict, map[string]any{
 			"success": false,
-			"message": err.Error(),
+			"error":   err.Error(),
 		})
 		return
 	}
 
-	// 获取实际分配的端口
-	agent.proxyMu.RLock()
-	tunnel := agent.proxies[req.Name]
-	actualPort := tunnel.Config.RemotePort
-	config := tunnel.Config
-	agent.proxyMu.RUnlock()
-
-	// 通知 Agent 注册本地代理配置
-	proxyMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, req)
-	agent.mu.Lock()
-	if err := agent.conn.WriteJSON(proxyMsg); err != nil {
-		log.Printf("⚠️ 通知 Agent 代理配置失败 [%s]: %v", agent.ID, err)
-	}
-	agent.mu.Unlock()
-
-	// 持久化到 store
-	if s.store != nil {
-		s.store.AddTunnel(StoredTunnel{
-			ProxyNewRequest: req,
-			Status:          protocol.ProxyStatusActive,
-			AgentID:         agentID,
-			Hostname:        agent.Info.Hostname,
-		})
-	}
-
-	// 发布隧道创建事件
-	s.events.PublishJSON("tunnel_changed", map[string]any{
-		"agent_id": agentID,
-		"tunnel":   config,
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{
+	encodeJSON(w, http.StatusCreated, map[string]any{
 		"success":     true,
 		"message":     "代理隧道创建成功",
-		"remote_port": actualPort,
+		"remote_port": config.RemotePort,
 	})
 }
 
 func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	tunnelName := r.PathValue("name")
-
-	val, ok := s.agents.Load(agentID)
+	agent, ok := s.readAgentFromPath(w, r)
 	if !ok {
-		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
 		return
 	}
-	agent := val.(*AgentConn)
+	tunnelName := r.PathValue("name")
 
 	// 检查隧道是否存在且为 active 状态
 	agent.proxyMu.RLock()
@@ -740,52 +935,20 @@ func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 暂停：关闭 Listener 但保留配置
-	if err := s.PauseProxy(agent, tunnelName); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+	if err := s.pauseManagedTunnel(agent, tunnelName); err != nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 
-	// 通知 Agent 移除本地代理配置
-	closeMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyClose, protocol.ProxyCloseRequest{
-		Name:   tunnelName,
-		Reason: "paused",
-	})
-	agent.mu.Lock()
-	agent.conn.WriteJSON(closeMsg)
-	agent.mu.Unlock()
-
-	// 更新 store
-	if s.store != nil {
-		s.store.UpdateStatus(agent.Info.Hostname, tunnelName, protocol.ProxyStatusPaused)
-	}
-
-	// 发布事件
-	s.events.PublishJSON("tunnel_changed", map[string]any{
-		"agent_id": agentID,
-		"tunnel": protocol.ProxyConfig{
-			Name:    tunnelName,
-			AgentID: agentID,
-			Status:  protocol.ProxyStatusPaused,
-		},
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "隧道已暂停"})
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已暂停"})
 }
 
 func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	tunnelName := r.PathValue("name")
-
-	val, ok := s.agents.Load(agentID)
+	agent, ok := s.readAgentFromPath(w, r)
 	if !ok {
-		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
 		return
 	}
-	agent := val.(*AgentConn)
+	tunnelName := r.PathValue("name")
 
 	// 检查隧道是否为 paused 或 stopped 状态
 	agent.proxyMu.RLock()
@@ -804,52 +967,23 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 恢复：重新监听端口
-	if err := s.ResumeProxy(agent, tunnelName); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+	if err := s.resumeManagedTunnel(agent, tunnelName); err != nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 
-	// 通知 Agent 重新注册代理配置
-	proxyMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, tunnel.Config.ToProxyNewRequest())
-	agent.mu.Lock()
-	agent.conn.WriteJSON(proxyMsg)
-	agent.mu.Unlock()
-
-	// 更新 store
-	if s.store != nil {
-		s.store.UpdateStatus(agent.Info.Hostname, tunnelName, protocol.ProxyStatusActive)
-	}
-
-	// 发布事件
-	s.events.PublishJSON("tunnel_changed", map[string]any{
-		"agent_id": agentID,
-		"tunnel": protocol.ProxyConfig{
-			Name:    tunnelName,
-			AgentID: agentID,
-			Status:  protocol.ProxyStatusActive,
-		},
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "隧道已恢复"})
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已恢复"})
 }
 
 func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	tunnelName := r.PathValue("name")
-
-	val, ok := s.agents.Load(agentID)
+	agent, ok := s.readAgentFromPath(w, r)
 	if !ok {
-		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
 		return
 	}
-	agent := val.(*AgentConn)
+	tunnelName := r.PathValue("name")
 
 	agent.proxyMu.RLock()
-	tunnel, exists := agent.proxies[tunnelName]
+	_, exists := agent.proxies[tunnelName]
 	agent.proxyMu.RUnlock()
 	if !exists {
 		w.Header().Set("Content-Type", "application/json")
@@ -858,55 +992,20 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 如果是 active 状态需要先关闭 Listener
-	if tunnel.Config.Status == protocol.ProxyStatusActive {
-		s.PauseProxy(agent, tunnelName)
-		// 通知 Agent 移除本地配置
-		closeMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyClose, protocol.ProxyCloseRequest{
-			Name:   tunnelName,
-			Reason: "stopped",
-		})
-		agent.mu.Lock()
-		agent.conn.WriteJSON(closeMsg)
-		agent.mu.Unlock()
+	if err := s.stopManagedTunnel(agent, tunnelName); err != nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
 	}
 
-	// 更新状态为 stopped
-	agent.proxyMu.Lock()
-	if t, ok := agent.proxies[tunnelName]; ok {
-		t.Config.Status = protocol.ProxyStatusStopped
-	}
-	agent.proxyMu.Unlock()
-
-	// 更新 store
-	if s.store != nil {
-		s.store.UpdateStatus(agent.Info.Hostname, tunnelName, protocol.ProxyStatusStopped)
-	}
-
-	// 发布事件
-	s.events.PublishJSON("tunnel_changed", map[string]any{
-		"agent_id": agentID,
-		"tunnel": protocol.ProxyConfig{
-			Name:    tunnelName,
-			AgentID: agentID,
-			Status:  protocol.ProxyStatusStopped,
-		},
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "隧道已停止"})
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已停止"})
 }
 
 func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	tunnelName := r.PathValue("name")
-
-	val, ok := s.agents.Load(agentID)
+	agent, ok := s.readAgentFromPath(w, r)
 	if !ok {
-		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
 		return
 	}
-	agent := val.(*AgentConn)
+	tunnelName := r.PathValue("name")
 
 	// 检查隧道是否存在
 	agent.proxyMu.RLock()
@@ -929,25 +1028,10 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 从内存中移除
-	agent.proxyMu.Lock()
-	delete(agent.proxies, tunnelName)
-	agent.proxyMu.Unlock()
-
-	// 从 store 中移除
-	if s.store != nil {
-		s.store.RemoveTunnel(agent.Info.Hostname, tunnelName)
+	if err := s.deleteManagedTunnel(agent, tunnelName); err != nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
 	}
-
-	// 发布隧道删除事件
-	s.events.PublishJSON("tunnel_changed", map[string]any{
-		"agent_id": agentID,
-		"tunnel": protocol.ProxyConfig{
-			Name:    tunnelName,
-			AgentID: agentID,
-			Status:  protocol.ProxyStatusStopped,
-		},
-	})
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -958,41 +1042,78 @@ func (s *Server) restoreTunnels(agent *AgentConn) {
 		return
 	}
 
-	tunnels := s.store.GetTunnelsByHostname(agent.Info.Hostname)
+	tunnels := s.store.GetTunnelsByAgentID(agent.ID)
 	if len(tunnels) == 0 {
 		return
 	}
 
-	// 等待数据通道建立
-	for i := 0; i < 30; i++ {
-		agent.dataMu.RLock()
-		hasData := agent.dataSession != nil && !agent.dataSession.IsClosed()
-		agent.dataMu.RUnlock()
-		if hasData {
+	needsDataSession := false
+	for _, st := range tunnels {
+		if st.Status == protocol.ProxyStatusActive {
+			needsDataSession = true
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+	}
+
+	if needsDataSession {
+		// 仅在需要恢复 active 隧道时等待数据通道建立。
+		for i := 0; i < 30; i++ {
+			agent.dataMu.RLock()
+			hasData := agent.dataSession != nil && !agent.dataSession.IsClosed()
+			agent.dataMu.RUnlock()
+			if hasData {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 
 	restoredCount := 0
 	for _, st := range tunnels {
+		// 检查端口是否仍在白名单范围内
+		if st.RemotePort != 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(st.RemotePort) {
+			log.Printf("⚠️ 隧道 %s 端口 %d 不在当前允许范围内，标记为 error", st.Name, st.RemotePort)
+			errMsg := fmt.Sprintf("端口 %d 不在允许范围内", st.RemotePort)
+			agent.proxyMu.Lock()
+			agent.proxies[st.Name] = &ProxyTunnel{
+				Config: protocol.ProxyConfig{
+					Name:       st.Name,
+					Type:       st.Type,
+					LocalIP:    st.LocalIP,
+					LocalPort:  st.LocalPort,
+					RemotePort: st.RemotePort,
+					AgentID:    agent.ID,
+					Status:     protocol.ProxyStatusError,
+					Error:      errMsg,
+				},
+				done: make(chan struct{}),
+			}
+			agent.proxyMu.Unlock()
+			if s.store != nil {
+				_ = s.store.UpdateStatus(agent.ID, st.Name, protocol.ProxyStatusError)
+			}
+			s.emitTunnelChanged(agent.ID, protocol.ProxyConfig{
+				Name:       st.Name,
+				Type:       st.Type,
+				RemotePort: st.RemotePort,
+				AgentID:    agent.ID,
+				Status:     protocol.ProxyStatusError,
+				Error:      errMsg,
+			}, "port_not_allowed")
+			restoredCount++
+			continue
+		}
+
 		switch st.Status {
 		case protocol.ProxyStatusActive:
-			// 恢复 active 隧道
 			log.Printf("🔄 恢复隧道: %s (:%d → %s:%d)", st.Name, st.RemotePort, st.LocalIP, st.LocalPort)
-			if err := s.StartProxy(agent, st.ProxyNewRequest); err != nil {
+			if err := s.restoreManagedTunnel(agent, st); err != nil {
 				log.Printf("⚠️ 恢复隧道失败 [%s]: %v", st.Name, err)
 				continue
 			}
-			// 通知 Agent
-			proxyMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, st.ProxyNewRequest)
-			agent.mu.Lock()
-			agent.conn.WriteJSON(proxyMsg)
-			agent.mu.Unlock()
 			restoredCount++
 
-		case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped:
-			// paused/stopped 隧道只恢复配置记录，不启动监听
+		case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped, protocol.ProxyStatusError:
 			agent.proxyMu.Lock()
 			agent.proxies[st.Name] = &ProxyTunnel{
 				Config: protocol.ProxyConfig{
@@ -1015,7 +1136,7 @@ func (s *Server) restoreTunnels(agent *AgentConn) {
 	if restoredCount > 0 {
 		s.events.PublishJSON("tunnel_changed", map[string]any{
 			"agent_id": agent.ID,
-			"action":   "restored",
+			"action":   "restored_batch",
 			"count":    restoredCount,
 		})
 	}
@@ -1083,7 +1204,7 @@ const devModeHTML = `<!DOCTYPE html>
         <h1>🚀 <span>NetsGo</span></h1>
         <p>服务端已启动 — 开发模式</p>
         <p>前端资源未嵌入，请独立启动 Vite 开发服务器：</p>
-        <code>cd web && pnpm dev</code>
+        <code>cd web && bun run dev</code>
         <p>然后访问 Vite 管理面板地址（默认 <a href="http://localhost:5173" style="color:#a78bfa">localhost:5173</a>）。</p>
         <div class="badge">Dev Mode 🔧</div>
     </div>

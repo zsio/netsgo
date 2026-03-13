@@ -12,8 +12,38 @@ export function useAdminKeys() {
 export function useCreateAPIKey() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (data: { name: string; permissions: string[] }) =>
-      api.post<{ key: APIKey; raw_key: string }>('/api/admin/keys', data),
+    mutationFn: (data: { name: string; permissions?: string[]; max_uses?: number; expires_in?: string }) =>
+      api.post<{ key: APIKey; raw_key: string; server_addr: string }>('/api/admin/keys', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-keys'] });
+    },
+  });
+}
+
+export function useEnableAPIKey() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.put(`/api/admin/keys/${id}/enable`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-keys'] });
+    },
+  });
+}
+
+export function useDisableAPIKey() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.put(`/api/admin/keys/${id}/disable`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-keys'] });
+    },
+  });
+}
+
+export function useDeleteAPIKey() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/api/admin/keys/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-keys'] });
     },

@@ -7,10 +7,12 @@ import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 import type { LoginResponse } from '@/types';
 import { Server } from 'lucide-react';
+import { requireLoginPage } from '@/lib/auth';
 
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
+  beforeLoad: requireLoginPage,
   component: LoginPage,
 });
 
@@ -30,9 +32,9 @@ function LoginPage() {
     try {
       const resp = await api.post<LoginResponse>('/api/auth/login', { username, password });
       setAuth(resp.token, resp.user);
-      navigate({ to: '/admin/keys' });
-    } catch (err: any) {
-      setError(err.message || '登录失败，请检查用户名和密码');
+      navigate({ to: '/dashboard' });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '登录失败，请检查用户名和密码');
     } finally {
       setLoading(false);
     }

@@ -5,6 +5,11 @@ export function ConnectionIndicator() {
   const status = useConnectionStore((s) => s.status);
 
   const config = {
+    connecting: {
+      color: 'bg-sky-500',
+      ping: 'bg-sky-400',
+      label: '连接中…',
+    },
     connected: {
       color: 'bg-emerald-500',
       ping: 'bg-emerald-400',

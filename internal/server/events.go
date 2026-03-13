@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // SSEEvent 代表一个 SSE 事件
@@ -77,19 +78,41 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	ch := s.events.Subscribe()
 	defer s.events.Unsubscribe(ch)
 
 	log.Printf("📡 SSE 客户端已连接: %s", r.RemoteAddr)
 
+	if _, err := fmt.Fprint(w, "event: ready\ndata: {}\n\n"); err != nil {
+		log.Printf("⚠️ SSE 初始握手写入失败: %v", err)
+		return
+	}
+	flusher.Flush()
+
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
+
 	for {
 		select {
-		case event := <-ch:
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, event.Data)
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, event.Data); err != nil {
+				log.Printf("⚠️ SSE 事件写入失败: %v", err)
+				return
+			}
+			flusher.Flush()
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				log.Printf("⚠️ SSE 心跳写入失败: %v", err)
+				return
+			}
 			flusher.Flush()
 		case <-r.Context().Done():
 			log.Printf("📡 SSE 客户端已断开: %s", r.RemoteAddr)

@@ -27,15 +27,15 @@ export function AgentSidebar({ agents, isLoading }: AgentSidebarProps) {
       (a) =>
         a.info.hostname.toLowerCase().includes(q) ||
         a.id.toLowerCase().includes(q) ||
-        a.info.ip.toLowerCase().includes(q),
+        (a.last_ip || a.info.ip || '').toLowerCase().includes(q),
     );
   }, [agents, searchQuery]);
 
   // 在线排前面，离线排后面
   const sortedAgents = useMemo(() => {
     return [...filteredAgents].sort((a, b) => {
-      const aOnline = a.stats !== null ? 0 : 1;
-      const bOnline = b.stats !== null ? 0 : 1;
+      const aOnline = a.online ? 0 : 1;
+      const bOnline = b.online ? 0 : 1;
       return aOnline - bOnline;
     });
   }, [filteredAgents]);
@@ -90,7 +90,7 @@ export function AgentSidebar({ agents, isLoading }: AgentSidebarProps) {
         ) : (
           <div className="space-y-0.5">
             {sortedAgents.map((agent) => {
-              const isOnline = agent.stats !== null;
+              const isOnline = agent.online;
               const isSelected = currentAgentId === agent.id;
 
               return (

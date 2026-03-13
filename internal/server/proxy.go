@@ -13,8 +13,8 @@ import (
 // ProxyTunnel 代表一条活跃的代理隧道
 type ProxyTunnel struct {
 	Config   protocol.ProxyConfig
-	Listener net.Listener    // 监听 RemotePort 的公网 listener（TCP 隧道使用）
-	UDPState *UDPProxyState  // UDP 代理运行时状态（TCP 隧道为 nil）
+	Listener net.Listener   // 监听 RemotePort 的公网 listener（TCP 隧道使用）
+	UDPState *UDPProxyState // UDP 代理运行时状态（TCP 隧道为 nil）
 	done     chan struct{}
 	once     sync.Once
 }
@@ -25,7 +25,7 @@ func (s *Server) StartProxy(agent *AgentConn, req protocol.ProxyNewRequest) erro
 	// 1. 策略校验
 	if s.adminStore != nil {
 		policy := s.adminStore.GetTunnelPolicy()
-		
+
 		// 校验 Agent 白名单
 		if len(policy.AgentWhitelist) > 0 {
 			allowed := false
@@ -105,6 +105,16 @@ func (s *Server) StartProxy(agent *AgentConn, req protocol.ProxyNewRequest) erro
 			agent.proxyMu.Unlock()
 			return err
 		}
+
+		// 自动分配端口后：检查分配到的端口是否在白名单内
+		if req.RemotePort == 0 && s.adminStore != nil && s.adminStore.IsInitialized() {
+			actualPort := tunnel.Config.RemotePort
+			if !s.adminStore.IsPortAllowed(actualPort) {
+				_ = s.StopProxy(agent, req.Name)
+				return fmt.Errorf("自动分配的端口 %d 不在允许范围内", actualPort)
+			}
+		}
+
 		return nil
 	}
 
@@ -117,6 +127,14 @@ func (s *Server) StartProxy(agent *AgentConn, req protocol.ProxyNewRequest) erro
 
 	// 获取实际分配的端口（如果 RemotePort 为 0，系统会随机分配）
 	actualPort := ln.Addr().(*net.TCPAddr).Port
+
+	// 自动分配端口后：检查分配到的端口是否在白名单内
+	if req.RemotePort == 0 && s.adminStore != nil && s.adminStore.IsInitialized() {
+		if !s.adminStore.IsPortAllowed(actualPort) {
+			ln.Close()
+			return fmt.Errorf("自动分配的端口 %d 不在允许范围内", actualPort)
+		}
+	}
 
 	tunnel := &ProxyTunnel{
 		Config: protocol.ProxyConfig{
@@ -262,6 +280,11 @@ func (s *Server) ResumeProxy(agent *AgentConn, name string) error {
 		return fmt.Errorf("代理隧道 %q 不存在", name)
 	}
 	agent.proxyMu.Unlock()
+
+	// 检查端口是否仍在白名单范围内
+	if tunnel.Config.RemotePort != 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
+		return fmt.Errorf("端口 %d 不在当前允许范围内，无法恢复", tunnel.Config.RemotePort)
+	}
 
 	// 检查 Agent 数据通道
 	agent.dataMu.RLock()

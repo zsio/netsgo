@@ -1,4 +1,3 @@
-import { Server as ServerIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AddTunnelDialog } from '@/components/custom/tunnel/AddTunnelDialog';
 import type { Agent } from '@/types';
@@ -21,9 +20,6 @@ export function AgentHeader({ agent }: AgentHeaderProps) {
     <div className="flex items-start justify-between">
       <div>
         <div className="flex items-center gap-3 mb-2">
-          <div className="p-2.5 bg-muted rounded-xl border border-border/50">
-            <ServerIcon className="h-6 w-6 text-foreground" />
-          </div>
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
               {agent.info.hostname}

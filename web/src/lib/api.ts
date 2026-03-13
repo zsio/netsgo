@@ -3,6 +3,8 @@
  * 所有业务代码通过此模块发起 HTTP 请求，不直接使用 fetch
  */
 
+import { clearStoredAuth, getStoredAuthState, useAuthStore } from '@/stores/auth-store';
+
 class ApiError extends Error {
   status: number;
   statusText: string;
@@ -23,18 +25,7 @@ async function request<T>(
   url: string,
   options?: RequestInit,
 ): Promise<T> {
-  let token = '';
-  try {
-    const authStoreStr = localStorage.getItem('netsgo-auth');
-    if (authStoreStr) {
-      const state = JSON.parse(authStoreStr).state;
-      if (state && state.token) {
-        token = state.token;
-      }
-    }
-  } catch (e) {
-    console.error('Failed to parse auth store from local storage', e);
-  }
+  const { token } = getStoredAuthState();
 
   const headers = new Headers({
     "Content-Type": "application/json",
@@ -51,8 +42,29 @@ async function request<T>(
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new ApiError(res.status, res.statusText, body || undefined);
+    if (res.status === 401) {
+      useAuthStore.getState().logout();
+      clearStoredAuth();
+      if (typeof window !== 'undefined' && !window.location.hash.startsWith('#/login')) {
+        window.location.hash = '#/login';
+      }
+    }
+    const bodyText = await res.text().catch(() => "");
+    let errorMessage = bodyText || undefined;
+    try {
+      if (bodyText) {
+        const json = JSON.parse(bodyText);
+        if (json && typeof json.error === 'string') {
+          errorMessage = json.error;
+        } else if (json && typeof json.message === 'string') {
+          errorMessage = json.message;
+        }
+      }
+    } catch {
+      // not JSON, fallback to raw string
+    }
+
+    throw new ApiError(res.status, res.statusText, errorMessage);
   }
 
   // 204 No Content

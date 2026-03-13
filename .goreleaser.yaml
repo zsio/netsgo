@@ -1,0 +1,66 @@
+version: 2
+
+project_name: netsgo
+
+release:
+  prerelease: auto
+
+builds:
+  - id: netsgo
+    main: ./cmd/netsgo
+    binary: netsgo
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w -X netsgo/pkg/version.Current={{ .Version }} -X netsgo/pkg/version.Commit={{ .FullCommit }} -X netsgo/pkg/version.Date={{ .Date }}
+  - id: netsgo-linux-armv7
+    main: ./cmd/netsgo
+    binary: netsgo
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - arm
+    goarm:
+      - "7"
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w -X netsgo/pkg/version.Current={{ .Version }} -X netsgo/pkg/version.Commit={{ .FullCommit }} -X netsgo/pkg/version.Date={{ .Date }}
+
+archives:
+  - id: release-bundles
+    files:
+      - README.md
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if and (eq .Arch "arm") .Arm }}v{{ .Arm }}{{ end }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"

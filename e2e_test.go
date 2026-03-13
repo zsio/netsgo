@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,8 +21,8 @@ import (
 // ============================================================
 
 func TestE2E_TCPProxyTunnel(t *testing.T) {
-	// 为了确保公网端口可知，我们指定一个未使用的端口
-	publicProxyPort := 64321
+	// 为了确保公网端口可知，预留一个空闲端口
+	publicProxyPort := reserveTCPPort(t)
 
 	// 1. 启动 Server（预分配端口以避免竞态）
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -31,7 +32,21 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 	serverPort := ln.Addr().(*net.TCPAddr).Port
 	ln.Close() // 释放端口给 Server
 
+	tmpDir := t.TempDir()
+	tunnelStorePath := filepath.Join(tmpDir, "tunnels.json")
+	adminStore, err := server.NewAdminStore(filepath.Join(tmpDir, "admin.json"))
+	if err != nil {
+		t.Fatalf("创建 AdminStore 失败: %v", err)
+	}
+	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
+		t.Fatalf("初始化 AdminStore 失败: %v", err)
+	}
+	if _, err := adminStore.AddAPIKey("e2e", "e2e-key", []string{"connect"}, nil); err != nil {
+		t.Fatalf("创建 E2E API Key 失败: %v", err)
+	}
+
 	srv := server.New(serverPort)
+	srv.StorePath = tunnelStorePath
 
 	go func() {
 		err := srv.Start()
@@ -55,8 +70,10 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 
 	// 3. 启动 Client，并自动请求创建一个代理
 	c := client.New(serverWsAddr, "e2e-key")
+	c.StatePath = filepath.Join(tmpDir, "client.json")
+	c.DisableReconnect = true
 	proxyName := "e2e-tunnel"
-	
+
 	c.ProxyConfigs = []protocol.ProxyNewRequest{
 		{
 			Name:       proxyName,
@@ -101,4 +118,16 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 	if !bytes.Contains(body, []byte("e2e backend response")) {
 		t.Errorf("返回内容错误: %s", string(body))
 	}
+}
+
+func reserveTCPPort(t *testing.T) int {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("预留端口失败: %v", err)
+	}
+	defer ln.Close()
+
+	return ln.Addr().(*net.TCPAddr).Port
 }

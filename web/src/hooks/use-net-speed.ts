@@ -1,50 +1,43 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Agent } from '@/types';
 
 interface NetSpeed {
-  upload: number;   // bytes/s
-  download: number; // bytes/s
+  upload: number;
+  download: number;
 }
 
-/**
- * 计算网络 I/O 实时速率
- * 基于前后两次 stats 的 net_sent / net_recv 差值
- */
 export function useNetSpeed(agent: Agent): NetSpeed {
-  const prevRef = useRef<{
+  const previousRef = useRef<{
     sent: number;
     recv: number;
     time: number;
   } | null>(null);
+  const [speed, setSpeed] = useState<NetSpeed>({ upload: 0, download: 0 });
 
-  const speedRef = useRef<NetSpeed>({ upload: 0, download: 0 });
-
-  if (agent.stats) {
-    const now = Date.now();
-    const prev = prevRef.current;
-
-    if (prev && prev.sent <= agent.stats.net_sent) {
-      const elapsed = (now - prev.time) / 1000; // seconds
-      if (elapsed > 0.5) { // 至少 0.5s 间隔才有意义
-        speedRef.current = {
-          upload: (agent.stats.net_sent - prev.sent) / elapsed,
-          download: (agent.stats.net_recv - prev.recv) / elapsed,
-        };
-        prevRef.current = {
-          sent: agent.stats.net_sent,
-          recv: agent.stats.net_recv,
-          time: now,
-        };
-      }
-    } else {
-      // 首次或数据重置
-      prevRef.current = {
-        sent: agent.stats.net_sent,
-        recv: agent.stats.net_recv,
-        time: now,
-      };
+  useEffect(() => {
+    if (!agent.stats) {
+      return;
     }
-  }
 
-  return speedRef.current;
+    const now = performance.now();
+    const previous = previousRef.current;
+
+    if (previous && previous.sent <= agent.stats.net_sent && previous.recv <= agent.stats.net_recv) {
+      const elapsed = (now - previous.time) / 1000;
+      if (elapsed > 0.5) {
+        setSpeed({
+          upload: (agent.stats.net_sent - previous.sent) / elapsed,
+          download: (agent.stats.net_recv - previous.recv) / elapsed,
+        });
+      }
+    }
+
+    previousRef.current = {
+      sent: agent.stats.net_sent,
+      recv: agent.stats.net_recv,
+      time: now,
+    };
+  }, [agent.stats]);
+
+  return speed;
 }

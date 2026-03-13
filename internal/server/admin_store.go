@@ -6,25 +6,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 	"unicode"
 
+	"netsgo/pkg/protocol"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
 // AdminData 包含所有持久化的管理数据
 type AdminData struct {
-	APIKeys      []APIKey       `json:"api_keys"`
-	AdminUsers   []AdminUser    `json:"admin_users"`
-	TunnelPolicy TunnelPolicy   `json:"tunnel_policy"`   // 旧版策略，保留向后兼容
-	Events       []EventRecord  `json:"events"`
-	ServerConfig ServerConfig   `json:"server_config"`   // 服务配置（初始化时设置）
-	Initialized  bool           `json:"initialized"`     // 是否已完成初始化
-	JWTSecret    string         `json:"jwt_secret"`      // 随机生成的 JWT 签名密钥
-	Sessions     []AdminSession `json:"sessions"`        // 服务端 session 列表
+	APIKeys      []APIKey          `json:"api_keys"`
+	AdminUsers   []AdminUser       `json:"admin_users"`
+	Agents       []RegisteredAgent `json:"agents"`
+	TunnelPolicy TunnelPolicy      `json:"tunnel_policy"` // 旧版策略，保留向后兼容
+	Events       []EventRecord     `json:"events"`
+	ServerConfig ServerConfig      `json:"server_config"` // 服务配置（初始化时设置）
+	Initialized  bool              `json:"initialized"`   // 是否已完成初始化
+	JWTSecret    string            `json:"jwt_secret"`    // 随机生成的 JWT 签名密钥
+	Sessions     []AdminSession    `json:"sessions"`      // 服务端 session 列表
 }
 
 // AdminStore 负责管理员账号、API Key、策略和 Session 的持久化
@@ -52,6 +56,7 @@ func NewAdminStore(path string) (*AdminStore, error) {
 		data: AdminData{
 			APIKeys:    []APIKey{},
 			AdminUsers: []AdminUser{},
+			Agents:     []RegisteredAgent{},
 			Events:     []EventRecord{},
 			Sessions:   []AdminSession{},
 		},
@@ -68,7 +73,7 @@ func NewAdminStore(path string) (*AdminStore, error) {
 		if err := store.load(); err != nil {
 			log.Printf("⚠️ 加载 admin 配置失败，将使用空配置: %v", err)
 			store.data = AdminData{
-				APIKeys: []APIKey{}, AdminUsers: []AdminUser{}, Events: []EventRecord{}, Sessions: []AdminSession{},
+				APIKeys: []APIKey{}, AdminUsers: []AdminUser{}, Agents: []RegisteredAgent{}, Events: []EventRecord{}, Sessions: []AdminSession{},
 			}
 		}
 	}
@@ -197,6 +202,14 @@ func (s *AdminStore) GetServerConfig() ServerConfig {
 	return s.data.ServerConfig
 }
 
+// UpdateServerConfig 更新服务端配置（初始化后可修改）
+func (s *AdminStore) UpdateServerConfig(config ServerConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data.ServerConfig = config
+	return s.save()
+}
+
 // ========== Port Whitelist ==========
 
 // IsPortAllowed 检查端口是否在白名单范围内
@@ -246,6 +259,97 @@ func (s *AdminStore) UpdateAdminLoginTime(id string) {
 			break
 		}
 	}
+}
+
+// ========== Agents ==========
+
+func (s *AdminStore) GetOrCreateAgent(installID string, info protocol.AgentInfo, remoteAddr string) (*RegisteredAgent, error) {
+	if installID == "" {
+		return nil, fmt.Errorf("install_id 不能为空")
+	}
+
+	lastIP := remoteIP(remoteAddr)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, agent := range s.data.Agents {
+		if agent.InstallID == installID {
+			s.data.Agents[i].Info = info
+			s.data.Agents[i].LastSeen = time.Now()
+			s.data.Agents[i].LastIP = lastIP
+			if err := s.save(); err != nil {
+				return nil, err
+			}
+			copy := s.data.Agents[i]
+			return &copy, nil
+		}
+	}
+
+	agent := RegisteredAgent{
+		ID:        generateUUID(),
+		InstallID: installID,
+		Info:      info,
+		CreatedAt: time.Now(),
+		LastSeen:  time.Now(),
+		LastIP:    lastIP,
+	}
+	s.data.Agents = append(s.data.Agents, agent)
+	if err := s.save(); err != nil {
+		return nil, err
+	}
+	return &agent, nil
+}
+
+func (s *AdminStore) TouchAgent(agentID string, info protocol.AgentInfo, remoteAddr string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, agent := range s.data.Agents {
+		if agent.ID == agentID {
+			s.data.Agents[i].Info = info
+			s.data.Agents[i].LastSeen = time.Now()
+			if ip := remoteIP(remoteAddr); ip != "" {
+				s.data.Agents[i].LastIP = ip
+			}
+			return s.save()
+		}
+	}
+
+	return fmt.Errorf("agent %q 不存在", agentID)
+}
+
+func (s *AdminStore) GetRegisteredAgents() []RegisteredAgent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	agents := make([]RegisteredAgent, len(s.data.Agents))
+	copy(agents, s.data.Agents)
+	return agents
+}
+
+func (s *AdminStore) GetRegisteredAgent(agentID string) (RegisteredAgent, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, agent := range s.data.Agents {
+		if agent.ID == agentID {
+			return agent, true
+		}
+	}
+	return RegisteredAgent{}, false
+}
+
+func (s *AdminStore) CountAgentsByHostname(hostname string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	count := 0
+	for _, agent := range s.data.Agents {
+		if agent.Info.Hostname == hostname {
+			count++
+		}
+	}
+	return count
 }
 
 // ========== Sessions ==========
@@ -353,18 +457,21 @@ func (s *AdminStore) CleanExpiredSessions() {
 // ValidateAgentKey 检查 Key 是否存在且处于启用状态并且没有过期
 // 如果没有任何 Key 存在，则开放所有连接
 func (s *AdminStore) ValidateAgentKey(key string) (bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if len(s.data.APIKeys) == 0 {
-		return true, nil // 向后兼容，没有 Key 时开放连接
+		if s.data.Initialized {
+			return false, fmt.Errorf("未配置可用 API Key")
+		}
+		return true, nil // 向后兼容，未初始化且没有 Key 时开放连接
 	}
 
 	if key == "" {
 		return false, fmt.Errorf("无有效 API Key 提供且已开启权限验证")
 	}
 
-	for _, k := range s.data.APIKeys {
+	for i, k := range s.data.APIKeys {
 		if err := bcrypt.CompareHashAndPassword([]byte(k.KeyHash), []byte(key)); err == nil {
 			if !k.IsActive {
 				return false, fmt.Errorf("API Key 已被禁用")
@@ -372,6 +479,12 @@ func (s *AdminStore) ValidateAgentKey(key string) (bool, error) {
 			if k.ExpiresAt != nil && k.ExpiresAt.Before(time.Now()) {
 				return false, fmt.Errorf("API Key 已过期")
 			}
+			if k.MaxUses > 0 && k.UseCount >= k.MaxUses {
+				return false, fmt.Errorf("API Key 已达到最大使用次数")
+			}
+			// 验证通过，增加使用计数
+			s.data.APIKeys[i].UseCount++
+			s.save()
 			return true, nil
 		}
 	}
@@ -380,6 +493,11 @@ func (s *AdminStore) ValidateAgentKey(key string) (bool, error) {
 }
 
 func (s *AdminStore) AddAPIKey(name, keyString string, permissions []string, expiresAt *time.Time) (*APIKey, error) {
+	permissions, err := normalizeKeyPermissions(permissions)
+	if err != nil {
+		return nil, err
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(keyString), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
@@ -409,6 +527,54 @@ func (s *AdminStore) GetAPIKeys() []APIKey {
 	keys := make([]APIKey, len(s.data.APIKeys))
 	copy(keys, s.data.APIKeys)
 	return keys
+}
+
+func (s *AdminStore) SetAPIKeyActive(id string, active bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, key := range s.data.APIKeys {
+		if key.ID == id {
+			s.data.APIKeys[i].IsActive = active
+			return s.save()
+		}
+	}
+	return fmt.Errorf("API Key %q 不存在", id)
+}
+
+func (s *AdminStore) DeleteAPIKey(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filtered := make([]APIKey, 0, len(s.data.APIKeys))
+	found := false
+	for _, key := range s.data.APIKeys {
+		if key.ID == id {
+			found = true
+			continue
+		}
+		filtered = append(filtered, key)
+	}
+	if !found {
+		return fmt.Errorf("API Key %q 不存在", id)
+	}
+
+	s.data.APIKeys = filtered
+	return s.save()
+}
+
+// SetAPIKeyMaxUses 设置 API Key 的最大使用次数
+func (s *AdminStore) SetAPIKeyMaxUses(id string, maxUses int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, key := range s.data.APIKeys {
+		if key.ID == id {
+			s.data.APIKeys[i].MaxUses = maxUses
+			return s.save()
+		}
+	}
+	return fmt.Errorf("API Key %q 不存在", id)
 }
 
 // ========== Tunnel Policy ==========
@@ -499,4 +665,35 @@ func (s *AdminStore) GetEvents(limit int) []EventRecord {
 	result := make([]EventRecord, count)
 	copy(result, s.data.Events[:count])
 	return result
+}
+
+func normalizeKeyPermissions(permissions []string) ([]string, error) {
+	if len(permissions) == 0 {
+		return []string{"connect"}, nil
+	}
+
+	normalized := make([]string, 0, len(permissions))
+	seen := map[string]struct{}{}
+	for _, permission := range permissions {
+		if permission != "connect" {
+			return nil, fmt.Errorf("不支持的 API Key 权限: %s", permission)
+		}
+		if _, ok := seen[permission]; ok {
+			continue
+		}
+		seen[permission] = struct{}{}
+		normalized = append(normalized, permission)
+	}
+	return normalized, nil
+}
+
+func remoteIP(remoteAddr string) string {
+	if remoteAddr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err == nil {
+		return host
+	}
+	return remoteAddr
 }

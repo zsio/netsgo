@@ -1,26 +1,42 @@
 package server
 
-import "time"
+import (
+	"time"
+
+	"netsgo/pkg/protocol"
+)
 
 // APIKey 表示一个 Agent 用于认证的密钥
 type APIKey struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	KeyHash     string    `json:"-"` // hash 后的 key，不直接返回
-	Permissions []string  `json:"permissions"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	KeyHash     string     `json:"key_hash"` // 仅供持久化存储，不应直接返回给前端
+	Permissions []string   `json:"permissions"`
+	CreatedAt   time.Time  `json:"created_at"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	IsActive    bool      `json:"is_active"`
+	IsActive    bool       `json:"is_active"`
+	MaxUses     int        `json:"max_uses"`  // 最大使用次数，0 表示无限制
+	UseCount    int        `json:"use_count"` // 已使用次数
 }
 
 // AdminUser 表示一个 Web 管理员账号
 type AdminUser struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"` // bcrypt hash
-	Role         string    `json:"role"` // admin, viewer
-	CreatedAt    time.Time `json:"created_at"`
+	ID           string     `json:"id"`
+	Username     string     `json:"username"`
+	PasswordHash string     `json:"password_hash"` // 仅供持久化存储，不应直接返回给前端
+	Role         string     `json:"role"`          // admin, viewer
+	CreatedAt    time.Time  `json:"created_at"`
 	LastLogin    *time.Time `json:"last_login,omitempty"`
+}
+
+// RegisteredAgent 表示一个具有稳定身份的 Agent 记录
+type RegisteredAgent struct {
+	ID        string             `json:"id"`
+	InstallID string             `json:"install_id"`
+	Info      protocol.AgentInfo `json:"info"`
+	CreatedAt time.Time          `json:"created_at"`
+	LastSeen  time.Time          `json:"last_seen"`
+	LastIP    string             `json:"last_ip"`
 }
 
 // TunnelPolicy 隧道策略控制（旧版，保留向后兼容）
@@ -45,10 +61,10 @@ type PortRange struct {
 
 // AdminSession 服务端 session 记录（实现 JWT + Session Binding）
 type AdminSession struct {
-	ID        string    `json:"id"`         // sessionID (UUID)
-	UserID    string    `json:"user_id"`    // 关联的管理员 ID
-	Username  string    `json:"username"`   // 冗余，方便日志
-	Role      string    `json:"role"`       // 用户角色
+	ID        string    `json:"id"`       // sessionID (UUID)
+	UserID    string    `json:"user_id"`  // 关联的管理员 ID
+	Username  string    `json:"username"` // 冗余，方便日志
+	Role      string    `json:"role"`     // 用户角色
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"` // 服务端控制的过期时间
 	IP        string    `json:"ip"`         // 登录 IP

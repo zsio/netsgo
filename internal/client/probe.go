@@ -1,9 +1,12 @@
 package client
 
 import (
-	"netsgo/pkg/protocol"
+	"regexp"
 	"runtime"
+	"strings"
 	"time"
+
+	"netsgo/pkg/protocol"
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
@@ -11,6 +14,21 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
 )
+
+// reDiskBase extracts the base physical disk identifier from device paths.
+// macOS APFS: /dev/disk3s1s1 → "disk3"
+// Linux SCSI: /dev/sda1 → "sda"
+// Linux NVMe: /dev/nvme0n1p1 → "nvme0n1"
+// Windows: C: → "C:"
+var reDiskBase = regexp.MustCompile(`(disk\d+|sd[a-z]+|nvme\d+n\d+|[A-Z]:)`)
+
+func baseDiskName(device string) string {
+	m := reDiskBase.FindString(device)
+	if m != "" {
+		return m
+	}
+	return device
+}
 
 // CollectSystemStats 采集当前系统的运行状态
 func CollectSystemStats() (*protocol.SystemStats, error) {
@@ -32,16 +50,61 @@ func CollectSystemStats() (*protocol.SystemStats, error) {
 		stats.MemUsage = memInfo.UsedPercent
 	}
 
-	// 磁盘信息（根目录）
-	diskRoot := "/"
-	if runtime.GOOS == "windows" {
-		diskRoot = "C:"
-	}
-	diskInfo, err := disk.Usage(diskRoot)
+	// 磁盘信息 — 聚合所有物理分区，APFS 按物理磁盘去重
+	partitions, err := disk.Partitions(false)
 	if err == nil {
-		stats.DiskTotal = diskInfo.Total
-		stats.DiskUsed = diskInfo.Used
-		stats.DiskUsage = diskInfo.UsedPercent
+		seenDevices := map[string]bool{}
+		for _, p := range partitions {
+			switch p.Fstype {
+			case "tmpfs", "devtmpfs", "devfs", "squashfs", "overlay", "proc", "sysfs",
+				"cgroup", "cgroup2", "pstore", "securityfs", "debugfs", "tracefs", "autofs":
+				continue
+			}
+			if strings.HasPrefix(p.Fstype, "fuse.") {
+				continue
+			}
+			dedupKey := p.Device
+			if p.Fstype == "apfs" {
+				dedupKey = baseDiskName(p.Device)
+			}
+			if seenDevices[dedupKey] {
+				continue
+			}
+			d, err := disk.Usage(p.Mountpoint)
+			if err == nil && d.Total > 0 {
+				seenDevices[dedupKey] = true
+				stats.DiskPartitions = append(stats.DiskPartitions, protocol.DiskPartition{
+					Path:  p.Mountpoint,
+					Used:  d.Used,
+					Total: d.Total,
+				})
+				stats.DiskUsed += d.Used
+				stats.DiskTotal += d.Total
+			}
+		}
+	}
+
+	// Fallback: 如果没有获取到任何有效分区
+	if len(stats.DiskPartitions) == 0 {
+		diskRoot := "/"
+		if runtime.GOOS == "windows" {
+			diskRoot = "C:"
+		}
+		diskInfo, err := disk.Usage(diskRoot)
+		if err == nil {
+			stats.DiskTotal = diskInfo.Total
+			stats.DiskUsed = diskInfo.Used
+			stats.DiskPartitions = append(stats.DiskPartitions, protocol.DiskPartition{
+				Path:  diskRoot,
+				Used:  diskInfo.Used,
+				Total: diskInfo.Total,
+			})
+		}
+	}
+
+	// 计算聚合使用率
+	if stats.DiskTotal > 0 {
+		stats.DiskUsage = float64(stats.DiskUsed) / float64(stats.DiskTotal) * 100
 	}
 
 	// 网络 IO（所有网卡累计）
