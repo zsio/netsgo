@@ -44,6 +44,7 @@ type Server struct {
 	loginLimiter   *RateLimiter       // 管理员登录速率限制
 	agentLimiter   *RateLimiter       // Agent 认证速率限制
 	setupLimiter   *RateLimiter       // 初始化接口速率限制
+	authTimeout    time.Duration      // WebSocket 认证阶段读超时（0 使用默认 30s）
 }
 
 // AgentConn 代表一个已连接的 Agent
@@ -256,7 +257,13 @@ func (s *Server) Start() error {
 	log.Printf("🔗 数据通道: 同端口 (魔数 0x4E)")
 
 	// HTTP 服务器（处理 WebSocket + API + Web 面板）
-	httpServer := &http.Server{Handler: s.newHTTPMux()}
+	// 注意：不设置 ReadTimeout / WriteTimeout，因为 WebSocket 和 SSE 是长连接
+	// ReadHeaderTimeout 足以防御 Slowloris 攻击（限制请求头读取时间）
+	httpServer := &http.Server{
+		Handler:           s.newHTTPMux(),
+		ReadHeaderTimeout: 10 * time.Second, // P14: 防御 Slowloris 慢速请求头攻击
+		IdleTimeout:       120 * time.Second, // P14: 空闲 keep-alive 连接超时
+	}
 
 	// 包装 listener：peek 分发
 	peekLn := &PeekListener{
@@ -464,11 +471,21 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn
 		}
 	}
 
+	// P16: 设置认证阶段读超时，防止恶意客户端连接后不发认证消息占资源
+	authTimeout := s.authTimeout
+	if authTimeout == 0 {
+		authTimeout = 30 * time.Second
+	}
+	conn.SetReadDeadline(time.Now().Add(authTimeout))
+
 	// 读取认证消息
 	var msg protocol.Message
 	if err := conn.ReadJSON(&msg); err != nil {
 		return nil, nil, fmt.Errorf("读取认证消息失败: %w", err)
 	}
+
+	// 认证消息已收到，清除读超时（后续 controlLoop 自行管理）
+	conn.SetReadDeadline(time.Time{})
 	if msg.Type != protocol.MsgTypeAuth {
 		return nil, nil, fmt.Errorf("期望认证消息，收到: %s", msg.Type)
 	}

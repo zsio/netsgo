@@ -591,6 +591,45 @@ func TestAuth_MalformedJSON(t *testing.T) {
 }
 
 // ============================================================
+// 控制通道 — 认证超时 P16 (1)
+// ============================================================
+
+// TestAuth_TimeoutNoMessage 验证 P16：连接后不发认证消息，服务端应在超时后断开
+func TestAuth_TimeoutNoMessage(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.authTimeout = 500 * time.Millisecond // 短超时方便测试
+
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 连接后什么都不发，等待服务端超时关闭
+	start := time.Now()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _, readErr := conn.ReadMessage()
+	elapsed := time.Since(start)
+
+	if readErr == nil {
+		t.Fatal("不发认证消息时，服务端应超时关闭连接")
+	}
+
+	// 验证断开时间在合理范围内（500ms ~ 2s）
+	if elapsed < 400*time.Millisecond {
+		t.Errorf("断开太快（%v），可能不是超时导致的", elapsed)
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("断开太慢（%v），超时可能未生效", elapsed)
+	}
+}
+
+// ============================================================
 // 控制通道 — 心跳 (2)
 // ============================================================
 
