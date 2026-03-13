@@ -11,16 +11,16 @@ import { Skeleton } from '@/components/ui/skeleton';
 function AgentDetailPage() {
   const { agentId } = useParams({ from: '/dashboard/agents/$agentId' });
   const navigate = useNavigate();
-  const { data: agents, isLoading } = useAgents();
+  const { data: agents, isLoading, isFetching } = useAgents();
 
   const agent = agents?.find((a) => a.id === agentId);
 
   // 如果加载完成但 agent 不存在，回到 dashboard 概览
   useEffect(() => {
-    if (!isLoading && agents && !agent) {
+    if (!isLoading && !isFetching && agents && !agent) {
       navigate({ to: '/dashboard' });
     }
-  }, [isLoading, agents, agent, navigate]);
+  }, [isLoading, isFetching, agents, agent, navigate]);
 
   if (isLoading) {
     return (

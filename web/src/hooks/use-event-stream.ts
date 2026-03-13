@@ -1,27 +1,129 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouterState } from '@tanstack/react-router';
+import { persistAgentsQueryCache, readAgentsCache } from '@/lib/agents-cache';
 import { useConnectionStore } from '@/stores/connection-store';
 import { useAuthStore } from '@/stores/auth-store';
-import type { Agent } from '@/types';
+import type { Agent, ServerStatus } from '@/types';
 
 function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: string, data: string) {
   switch (eventType) {
+    case 'snapshot': {
+      try {
+        const parsed = JSON.parse(data) as {
+          agents?: Agent[];
+          server_status?: ServerStatus;
+        };
+        if (Array.isArray(parsed.agents)) {
+          queryClient.setQueryData<Agent[]>(['agents'], parsed.agents);
+          persistAgentsQueryCache(queryClient);
+        }
+        if (parsed.server_status) {
+          queryClient.setQueryData<ServerStatus>(['server-status'], parsed.server_status);
+        }
+      } catch {
+        // ignore malformed events
+      }
+      return;
+    }
     case 'stats_update': {
       try {
         const parsed = JSON.parse(data) as { agent_id: string; stats: Agent['stats'] };
-        queryClient.setQueryData<Agent[]>(['agents'], (old) =>
-          old?.map((agent) => (agent.id === parsed.agent_id ? { ...agent, stats: parsed.stats } : agent)),
-        );
+        queryClient.setQueryData<Agent[]>(['agents'], (old) => {
+          const base = old ?? readAgentsCache()?.agents;
+          return base?.map((agent) =>
+            agent.id === parsed.agent_id ? { ...agent, stats: parsed.stats } : agent,
+          );
+        });
+        persistAgentsQueryCache(queryClient);
       } catch {
         // ignore malformed events
       }
       return;
     }
     case 'agent_online':
+      try {
+        const parsed = JSON.parse(data) as { agent_id: string; info: Agent['info'] };
+        queryClient.setQueryData<Agent[]>(['agents'], (old) => {
+          const base = old ?? readAgentsCache()?.agents ?? [];
+          const exists = base.some((agent) => agent.id === parsed.agent_id);
+          if (!exists) {
+            return [
+              ...base,
+              {
+                id: parsed.agent_id,
+                info: parsed.info,
+                stats: null,
+                proxies: [],
+                online: true,
+              },
+            ];
+          }
+          return base.map((agent) =>
+            agent.id === parsed.agent_id ? { ...agent, info: parsed.info, online: true } : agent,
+          );
+        });
+        persistAgentsQueryCache(queryClient);
+      } catch {
+        queryClient.invalidateQueries({ queryKey: ['agents'] });
+      }
+      return;
     case 'agent_offline':
+      try {
+        const parsed = JSON.parse(data) as { agent_id: string };
+        queryClient.setQueryData<Agent[]>(['agents'], (old) => {
+          const base = old ?? readAgentsCache()?.agents;
+          return base?.map((agent) =>
+            agent.id === parsed.agent_id ? { ...agent, online: false } : agent,
+          );
+        });
+        persistAgentsQueryCache(queryClient);
+      } catch {
+        queryClient.invalidateQueries({ queryKey: ['agents'] });
+      }
+      return;
     case 'tunnel_changed':
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      try {
+        const parsed = JSON.parse(data) as {
+          agent_id: string;
+          action?: string;
+          tunnel: NonNullable<Agent['proxies']>[number];
+        };
+        queryClient.setQueryData<Agent[]>(['agents'], (old) => {
+          const base = old ?? readAgentsCache()?.agents;
+          return base?.map((agent) => {
+            if (agent.id !== parsed.agent_id) {
+              return agent;
+            }
+
+            const proxies = agent.proxies ?? [];
+            if (parsed.action === 'deleted') {
+              return {
+                ...agent,
+                proxies: proxies.filter((proxy) => proxy.name !== parsed.tunnel.name),
+              };
+            }
+
+            const existingIndex = proxies.findIndex((proxy) => proxy.name === parsed.tunnel.name);
+            if (existingIndex === -1) {
+              return {
+                ...agent,
+                proxies: [...proxies, parsed.tunnel],
+              };
+            }
+
+            const nextProxies = [...proxies];
+            nextProxies[existingIndex] = parsed.tunnel;
+            return {
+              ...agent,
+              proxies: nextProxies,
+            };
+          });
+        });
+        persistAgentsQueryCache(queryClient);
+      } catch {
+        queryClient.invalidateQueries({ queryKey: ['agents'] });
+      }
       return;
     default:
       return;

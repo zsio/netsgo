@@ -29,7 +29,11 @@ export function AddTunnelDialog({ agentId }: AddTunnelDialogProps) {
   const [remotePort, setRemotePort] = useState('');
 
   const createTunnel = useCreateTunnel();
-  const { data: status } = useServerStatus();
+  const { data: status } = useServerStatus({
+    enabled: open,
+    refetchOnMount: 'always',
+    staleTime: 0,
+  });
 
   const resetForm = () => {
     setName('');

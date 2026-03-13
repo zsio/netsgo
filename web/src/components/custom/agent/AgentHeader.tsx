@@ -14,7 +14,7 @@ const osLabels: Record<string, string> = {
 };
 
 export function AgentHeader({ agent }: AgentHeaderProps) {
-  const isOnline = agent.stats !== null;
+  const isOnline = agent.online;
 
   return (
     <div className="flex items-start justify-between">

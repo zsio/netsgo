@@ -17,8 +17,8 @@ export function OverviewStatsGrid() {
     );
   }
 
-  const onlineAgents = agents?.filter((a) => a.stats !== null).length ?? 0;
-  const offlineAgents = agents?.filter((a) => a.stats === null).length ?? 0;
+  const onlineAgents = agents?.filter((a) => a.online).length ?? 0;
+  const offlineAgents = agents?.filter((a) => !a.online).length ?? 0;
   const activeTunnels = status?.tunnel_active ?? 0;
   const pausedOrStoppedTunnels = (status?.tunnel_paused ?? 0) + (status?.tunnel_stopped ?? 0);
 

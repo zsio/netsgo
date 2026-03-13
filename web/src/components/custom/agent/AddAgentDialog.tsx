@@ -37,7 +37,11 @@ export function AddAgentDialog({ open, onOpenChange }: AddAgentDialogProps) {
   const [copied, setCopied] = useState<'key' | 'cmd' | 'link' | null>(null);
 
   const createKey = useCreateAPIKey();
-  const { data: status } = useServerStatus();
+  const { data: status } = useServerStatus({
+    enabled: open,
+    refetchOnMount: 'always',
+    staleTime: 0,
+  });
 
   const handleReset = useCallback(() => {
     setStep('config');

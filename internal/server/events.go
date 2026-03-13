@@ -11,7 +11,7 @@ import (
 
 // SSEEvent 代表一个 SSE 事件
 type SSEEvent struct {
-	Type string // "stats_update" | "agent_online" | "agent_offline" | "tunnel_changed"
+	Type string // "ready" | "snapshot" | "stats_update" | "agent_online" | "agent_offline" | "tunnel_changed"
 	Data string // JSON 字符串
 }
 
@@ -69,6 +69,19 @@ func (eb *EventBus) PublishJSON(eventType string, data any) {
 	eb.Publish(SSEEvent{Type: eventType, Data: string(jsonBytes)})
 }
 
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string, data any) error {
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, jsonBytes); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
 // handleSSE 处理 SSE 连接 — GET /api/events
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
@@ -88,14 +101,19 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📡 SSE 客户端已连接: %s", r.RemoteAddr)
 
-	if _, err := fmt.Fprint(w, "event: ready\ndata: {}\n\n"); err != nil {
+	if err := writeSSEEvent(w, flusher, "ready", map[string]any{}); err != nil {
 		log.Printf("⚠️ SSE 初始握手写入失败: %v", err)
 		return
 	}
-	flusher.Flush()
+	if err := writeSSEEvent(w, flusher, "snapshot", s.collectSnapshot()); err != nil {
+		log.Printf("⚠️ SSE 初始快照写入失败: %v", err)
+		return
+	}
 
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
+	snapshotTicker := time.NewTicker(10 * time.Second)
+	defer snapshotTicker.Stop()
 
 	for {
 		select {
@@ -108,6 +126,11 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
+		case <-snapshotTicker.C:
+			if err := writeSSEEvent(w, flusher, "snapshot", s.collectSnapshot()); err != nil {
+				log.Printf("⚠️ SSE 快照写入失败: %v", err)
+				return
+			}
 		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
 				log.Printf("⚠️ SSE 心跳写入失败: %v", err)
