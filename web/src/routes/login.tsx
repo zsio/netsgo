@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 import type { LoginResponse } from '@/types';
-import { Server } from 'lucide-react';
+
 import { requireLoginPage } from '@/lib/auth';
 
 export const loginRoute = createRoute({
@@ -48,7 +48,7 @@ function LoginPage() {
         <div className="flex-1 flex w-full flex-col">
           <div className="flex flex-col items-center gap-4 mb-8 relative z-10">
             <div className="p-3 bg-primary/10 rounded-xl">
-              <Server className="w-8 h-8 text-primary" />
+              <img src="/logo.svg" alt="NetsGo" className="w-8 h-8" />
             </div>
             <h1 className="text-2xl font-bold tracking-tight">NetsGo 管理后台</h1>
             <p className="text-sm text-muted-foreground">请输入管理员账号密码继续</p>

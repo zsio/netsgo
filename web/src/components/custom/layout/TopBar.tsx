@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  UserPlus, Settings, Network, LogOut, Home
+  UserPlus, Settings, LogOut, Home
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAgents } from '@/hooks/use-agents';
@@ -51,9 +51,7 @@ export function TopBar() {
             className="flex items-center gap-2.5 cursor-pointer select-none hover:opacity-80 transition-opacity"
             onClick={() => navigate({ to: '/dashboard' })}
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-              <Network className="h-5 w-5" />
-            </div>
+            <img src="/logo.svg" alt="NetsGo" className="h-8 w-8" />
             <div className="flex flex-col -space-y-0.5">
               <span className="font-bold text-base tracking-tight leading-tight">NetsGo</span>
               <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest leading-tight">Console</span>
