@@ -41,6 +41,9 @@ type Server struct {
 	webHandler     http.Handler       // 缓存的 FileServer (nil 表示开发模式)
 	cachedStatus   *serverStatusView  // 后台采集的最新服务端状态
 	cachedStatusMu sync.RWMutex       // 保护 cachedStatus
+	loginLimiter   *RateLimiter       // 管理员登录速率限制
+	agentLimiter   *RateLimiter       // Agent 认证速率限制
+	setupLimiter   *RateLimiter       // 初始化接口速率限制
 }
 
 // AgentConn 代表一个已连接的 Agent
@@ -92,6 +95,7 @@ type serverStatusView struct {
 	MemUsed        uint64                   `json:"mem_used"`
 	MemTotal       uint64                   `json:"mem_total"`
 	AppMemUsed     uint64                   `json:"app_mem_used"`
+	AppMemSys      uint64                   `json:"app_mem_sys"`
 	DiskUsed       uint64                   `json:"disk_used"`
 	DiskTotal      uint64                   `json:"disk_total"`
 	DiskPartitions []protocol.DiskPartition `json:"disk_partitions"`
@@ -232,6 +236,9 @@ func (s *Server) Start() error {
 		s.adminStore.CleanExpiredTokens()
 		go s.tokenCleanupLoop()
 	}
+
+	// 初始化速率限制器
+	s.initRateLimiters()
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Port))
 	if err != nil {
@@ -445,6 +452,18 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 // handleAuth 处理 Agent 的认证流程
 // 认证优先级: Token > Key 兑换 Token
 func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn, *AgentConn, error) {
+	// 速率限制检查
+	ip := remoteIP(remoteAddr)
+	if s.agentLimiter != nil {
+		if allowed, retryAfter := s.agentLimiter.Allow(ip); !allowed {
+			log.Printf("🚫 Agent 认证被限速 [%s]: 需等待 %v", remoteAddr, retryAfter)
+			if s.adminStore != nil {
+				s.adminStore.AddSystemLog("WARN", "Agent 认证被限速: IP="+ip, "security")
+			}
+			return nil, nil, fmt.Errorf("认证失败")
+		}
+	}
+
 	// 读取认证消息
 	var msg protocol.Message
 	if err := conn.ReadJSON(&msg); err != nil {
@@ -484,10 +503,16 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn
 				}
 				// Token 认证通过，直接进入后续流程
 				log.Printf("🔑 Agent Token 认证通过 [install_id=%s]", authReq.InstallID)
+				if s.agentLimiter != nil {
+					s.agentLimiter.ResetFailures(ip)
+				}
 				goto authPassed
 			}
-			// Token 无效，继续尝试 Key
+			// Token 无效，记录失败
 			log.Printf("⚠️ Agent Token 验证失败 [%s]: %v, 将尝试 Key 认证", remoteAddr, err)
+			if s.agentLimiter != nil {
+				s.agentLimiter.RecordFailure(ip)
+			}
 		}
 
 		// 阶段 2: 尝试 Key 兑换 Token
@@ -501,10 +526,16 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn
 			tokenStr, _, err := s.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, record.ID, remoteAddr)
 			if err != nil {
 				log.Printf("❌ Agent Key 兑换 Token 失败 [%s]: %v", remoteAddr, err)
+				if s.agentLimiter != nil {
+					s.agentLimiter.RecordFailure(ip)
+				}
 				return nil, nil, fmt.Errorf("认证失败")
 			}
 			newToken = tokenStr
 			log.Printf("🔑 Agent Key 兑换 Token 成功 [install_id=%s]", authReq.InstallID)
+			if s.agentLimiter != nil {
+				s.agentLimiter.ResetFailures(ip)
+			}
 			goto authPassed
 		}
 
@@ -513,6 +544,9 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn
 		valid, err := s.adminStore.ValidateAgentKey("")
 		if !valid {
 			log.Printf("❌ Agent 认证失败 [%s]: 未提供 Token 或 Key, %v", remoteAddr, err)
+			if s.agentLimiter != nil {
+				s.agentLimiter.RecordFailure(ip)
+			}
 			return nil, nil, fmt.Errorf("认证失败")
 		}
 		// 开放模式，允许连接
@@ -991,6 +1025,7 @@ func (s *Server) collectServerStatus() serverStatusView {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	appMemUsed := m.Alloc
+	appMemSys := m.Sys
 
 	return serverStatusView{
 		Status:         "running",
@@ -1013,6 +1048,7 @@ func (s *Server) collectServerStatus() serverStatusView {
 		MemUsed:        memUsed,
 		MemTotal:       memTotal,
 		AppMemUsed:     appMemUsed,
+		AppMemSys:      appMemSys,
 		DiskUsed:       diskUsed,
 		DiskTotal:      diskTotal,
 		DiskPartitions: diskPartitions,

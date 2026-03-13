@@ -62,6 +62,16 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 速率限制检查
+	ip := clientIP(r)
+	if s.setupLimiter != nil {
+		if allowed, retryAfter := s.setupLimiter.Allow(ip); !allowed {
+			s.adminStore.AddSystemLog("WARN", "初始化接口被限速: IP="+ip, "security")
+			writeRateLimitResponse(w, retryAfter)
+			return
+		}
+	}
+
 	// 直接尝试初始化，由 Initialize 内部的互斥锁保证原子性和幂等性
 	// 不做前置检查以避免 TOCTOU 竞态
 	var req struct {
@@ -92,6 +102,9 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 		} else {
 			w.WriteHeader(http.StatusBadRequest)
+			if s.setupLimiter != nil {
+				s.setupLimiter.RecordFailure(ip)
+			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"error": err.Error(),
@@ -154,6 +167,18 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 速率限制检查
+	ip := clientIP(r)
+	if s.loginLimiter != nil {
+		if allowed, retryAfter := s.loginLimiter.Allow(ip); !allowed {
+			if s.adminStore != nil {
+				s.adminStore.AddSystemLog("WARN", "登录接口被限速: IP="+ip, "security")
+			}
+			writeRateLimitResponse(w, retryAfter)
+			return
+		}
+	}
+
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -171,6 +196,9 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 
 	user, err := s.adminStore.ValidateAdminPassword(req.Username, req.Password)
 	if err != nil {
+		if s.loginLimiter != nil {
+			s.loginLimiter.RecordFailure(ip)
+		}
 		http.Error(w, `{"error":"username or password incorrect"}`, http.StatusUnauthorized)
 		return
 	}
@@ -186,6 +214,9 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 
 	s.adminStore.UpdateAdminLoginTime(user.ID)
 	s.adminStore.AddSystemLog("INFO", "Admin user logged in: "+user.Username, "auth")
+	if s.loginLimiter != nil {
+		s.loginLimiter.ResetFailures(ip)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
