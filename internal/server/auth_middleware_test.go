@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,9 +39,16 @@ func setupMockAdminStore(t *testing.T) (*AdminStore, func()) {
 	return store, cleanup
 }
 
+func clearJWTSecretForTest(store *AdminStore) {
+	store.mu.Lock()
+	store.data.Initialized = true
+	store.data.JWTSecret = ""
+	store.mu.Unlock()
+}
+
 func TestAuthMiddleware_MissingHeader(t *testing.T) {
 	s := New(0)
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	w := httptest.NewRecorder()
 
@@ -57,7 +65,7 @@ func TestAuthMiddleware_MissingHeader(t *testing.T) {
 
 func TestAuthMiddleware_InvalidFormat(t *testing.T) {
 	s := New(0)
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "InvalidFormatToken")
 	w := httptest.NewRecorder()
@@ -99,6 +107,35 @@ func TestAuthMiddleware_InvalidTokenSignature(t *testing.T) {
 	}
 }
 
+func TestAuthMiddleware_FallbackSecretTokenRejected(t *testing.T) {
+	store, cleanup := setupMockAdminStore(t)
+	defer cleanup()
+
+	s := New(0)
+	s.adminStore = store
+
+	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-agent")
+	claims := AdminClaims{
+		SessionID: session.ID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, _ := token.SignedString([]byte("netsgo-dev-fallback-secret"))
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenString)
+	w := httptest.NewRecorder()
+
+	handler := s.RequireAuth(func(w http.ResponseWriter, r *http.Request) {})
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("使用旧 fallback secret 签发的 token 应返回 401，得到 %d", w.Code)
+	}
+}
+
 func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	store, cleanup := setupMockAdminStore(t)
 	defer cleanup()
@@ -114,7 +151,11 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, _ := token.SignedString(store.GetJWTSecret())
+	secret, err := store.GetJWTSecret()
+	if err != nil {
+		t.Fatalf("获取 JWT Secret 失败: %v", err)
+	}
+	tokenString, _ := token.SignedString(secret)
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenString)
@@ -125,6 +166,41 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("过期的 token 应返回 401，得到 %d", w.Code)
+	}
+}
+
+func TestGenerateAdminToken_MissingJWTSecret(t *testing.T) {
+	store, cleanup := setupMockAdminStore(t)
+	defer cleanup()
+
+	s := New(0)
+	s.adminStore = store
+	clearJWTSecretForTest(store)
+
+	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-agent")
+	_, err := s.GenerateAdminToken(session)
+	if !errors.Is(err, errJWTSecretMissing) {
+		t.Fatalf("缺少 JWT Secret 时 GenerateAdminToken 应返回 errJWTSecretMissing，得到 %v", err)
+	}
+}
+
+func TestAuthMiddleware_MissingJWTSecret(t *testing.T) {
+	store, cleanup := setupMockAdminStore(t)
+	defer cleanup()
+
+	s := New(0)
+	s.adminStore = store
+	clearJWTSecretForTest(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+
+	handler := s.RequireAuth(func(w http.ResponseWriter, r *http.Request) {})
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("缺少 JWT Secret 时应返回 500，得到 %d", w.Code)
 	}
 }
 
@@ -216,10 +292,10 @@ func TestGetSessionFromContext_Nil(t *testing.T) {
 func TestAuthMiddleware_StoreNotInitialized(t *testing.T) {
 	s := New(0)
 	// adminStore 为 nil
-	
+
 	// 造一个假但格式合法的 token，它的签名如果用 nil secret 会使用默认 []byte{} (或直接由于我们代码里使用 secret 而 panic/报错)
 	// 为了确保走到 store 未初始化判断，我们需要给它一个 store，但为了避免麻烦，其实 requireAuth 里有检测 store nil 的逻辑
-	
+
 	// Create a token signed with empty secret so it passes signature verification
 	claims := AdminClaims{
 		SessionID: "fake",
@@ -229,7 +305,7 @@ func TestAuthMiddleware_StoreNotInitialized(t *testing.T) {
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, _ := token.SignedString([]byte{})
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenString)
 	w := httptest.NewRecorder()

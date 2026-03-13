@@ -2,6 +2,9 @@ package main
 
 import (
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"netsgo/internal/client"
 
@@ -44,6 +47,17 @@ var clientCmd = &cobra.Command{
 		log.Printf("🔗 NetsGo Client 连接到 %s ...", serverAddr)
 
 		c := client.New(serverAddr, key)
+
+		// P15: 监听系统信号，优雅关闭
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+		go func() {
+			sig := <-sigCh
+			log.Printf("📩 收到信号 %v，开始优雅关闭...", sig)
+			c.Shutdown()
+			os.Exit(0)
+		}()
 
 		if err := c.Start(); err != nil {
 			log.Fatalf("❌ 客户端启动失败: %v", err)

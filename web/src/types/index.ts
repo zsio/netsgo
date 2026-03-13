@@ -120,6 +120,7 @@ export interface ServerStatus {
   mem_used: number;
   mem_total: number;
   app_mem_used: number;
+  app_mem_sys: number;
   disk_used: number;
   disk_total: number;
   disk_partitions: DiskPartition[];

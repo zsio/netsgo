@@ -155,6 +155,14 @@ func TestAPI_SetupInit_Success(t *testing.T) {
 		t.Errorf("期望返回合法的 token")
 	}
 
+	secret, err := s.adminStore.GetJWTSecret()
+	if err != nil {
+		t.Fatalf("setup 完成后应已生成 JWT Secret: %v", err)
+	}
+	if len(secret) == 0 {
+		t.Fatal("setup 完成后 JWT Secret 不应为空")
+	}
+
 	// 验证确实已经初始化
 	if !s.adminStore.IsInitialized() {
 		t.Errorf("API 成功后，Store 状态应为已初始化")

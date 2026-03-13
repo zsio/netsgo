@@ -38,11 +38,27 @@ func (eb *EventBus) Subscribe() chan SSEEvent {
 }
 
 // Unsubscribe 移除订阅者并关闭通道
+// 如果通道已被 Close() 关闭并移除，则为 no-op
 func (eb *EventBus) Unsubscribe(ch chan SSEEvent) {
 	eb.mu.Lock()
-	delete(eb.subscribers, ch)
+	_, exists := eb.subscribers[ch]
+	if exists {
+		delete(eb.subscribers, ch)
+	}
 	eb.mu.Unlock()
-	close(ch)
+	if exists {
+		close(ch)
+	}
+}
+
+// Close 关闭事件总线，断开所有订阅者 (P15)
+func (eb *EventBus) Close() {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+	for ch := range eb.subscribers {
+		close(ch)
+		delete(eb.subscribers, ch)
+	}
 }
 
 // Publish 向所有订阅者广播事件（非阻塞，满则丢弃）

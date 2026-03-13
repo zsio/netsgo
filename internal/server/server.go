@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -45,6 +46,9 @@ type Server struct {
 	agentLimiter   *RateLimiter       // Agent 认证速率限制
 	setupLimiter   *RateLimiter       // 初始化接口速率限制
 	authTimeout    time.Duration      // WebSocket 认证阶段读超时（0 使用默认 30s）
+	httpServer     *http.Server       // P15: 保存引用以便 Shutdown
+	listener       net.Listener       // P15: 保存引用以便关闭
+	done           chan struct{}       // P15: 通知后台 goroutine 退出
 }
 
 // AgentConn 代表一个已连接的 Agent
@@ -204,6 +208,7 @@ func (a *AgentConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool)
 // 通过 peek 首字节区分：HTTP 请求 vs 数据通道魔数 (0x4E)。
 func (s *Server) Start() error {
 	s.startTime = time.Now()
+	s.done = make(chan struct{}) // P15: 初始化 done channel
 
 	// 初始化嵌入的前端资源
 	webFS, err := web.DistFS()
@@ -245,6 +250,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("监听端口 %d 失败: %w", s.Port, err)
 	}
+	s.listener = ln // P15: 保存引用
 
 	addr := ln.Addr().(*net.TCPAddr)
 	s.Port = addr.Port // 更新为实际端口（当 Port=0 时有用）
@@ -259,7 +265,7 @@ func (s *Server) Start() error {
 	// HTTP 服务器（处理 WebSocket + API + Web 面板）
 	// 注意：不设置 ReadTimeout / WriteTimeout，因为 WebSocket 和 SSE 是长连接
 	// ReadHeaderTimeout 足以防御 Slowloris 攻击（限制请求头读取时间）
-	httpServer := &http.Server{
+	s.httpServer = &http.Server{
 		Handler:           securityHeaders(s.newHTTPMux()), // P10: 统一注入安全响应头
 		ReadHeaderTimeout: 10 * time.Second,                // P14: 防御 Slowloris 慢速请求头攻击
 		IdleTimeout:       120 * time.Second,                // P14: 空闲 keep-alive 连接超时
@@ -271,7 +277,70 @@ func (s *Server) Start() error {
 		server:   s,
 	}
 
-	return httpServer.Serve(peekLn)
+	return s.httpServer.Serve(peekLn)
+}
+
+// Shutdown 优雅关闭服务端 (P15)
+// 1. 停止接受新连接
+// 2. 关闭所有 Agent 连接
+// 3. 通知后台 goroutine 退出
+// 4. 关闭事件总线
+func (s *Server) Shutdown(ctx context.Context) error {
+	log.Printf("🛑 开始优雅关闭...")
+
+	// 1. 通知所有后台 goroutine 退出
+	close(s.done)
+
+	// 2. 关闭 HTTP 服务器（停止接受新连接，等待活跃请求结束）
+	var shutdownErr error
+	if s.httpServer != nil {
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			log.Printf("⚠️ HTTP 服务器关闭出错: %v", err)
+			shutdownErr = err
+		}
+	}
+
+	// 3. 断开所有 Agent 连接
+	agentCount := 0
+	s.agents.Range(func(key, value any) bool {
+		agent := value.(*AgentConn)
+		agentCount++
+
+		// 关闭 WebSocket 连接
+		agent.mu.Lock()
+		if agent.conn != nil {
+			agent.conn.WriteMessage(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
+			)
+			agent.conn.Close()
+		}
+		agent.mu.Unlock()
+
+		// 关闭数据通道 yamux session
+		agent.dataMu.Lock()
+		if agent.dataSession != nil && !agent.dataSession.IsClosed() {
+			agent.dataSession.Close()
+		}
+		agent.dataMu.Unlock()
+
+		// 停止所有代理隧道
+		s.PauseAllProxies(agent)
+
+		s.agents.Delete(key)
+		return true
+	})
+	if agentCount > 0 {
+		log.Printf("🔌 已断开 %d 个 Agent 连接", agentCount)
+	}
+
+	// 4. 关闭事件总线
+	if s.events != nil {
+		s.events.Close()
+	}
+
+	log.Printf("✅ 优雅关闭完成")
+	return shutdownErr
 }
 
 // StartHTTPOnly 仅启动 HTTP 模式（用于测试，不做 peek 分发）
@@ -382,11 +451,9 @@ func (pl *PeekListener) dispatchLoop() {
 
 // --- WebSocket 升级器 ---
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // 开发阶段允许所有来源
-	},
-}
+// P9: 使用 gorilla/websocket 默认 Origin 校验
+// 无 Origin 头（Go 客户端）→ 放行；有 Origin 头 → 检查 host 是否匹配
+var upgrader = websocket.Upgrader{}
 
 // securityHeaders 统一注入安全响应头（P10）
 // 注：不添加 HSTS，因为用户不一定有 TLS 证书
@@ -749,9 +816,14 @@ func (s *Server) tokenCleanupLoop() {
 	ticker := time.NewTicker(6 * time.Hour)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if s.adminStore != nil {
-			s.adminStore.CleanExpiredTokens()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			if s.adminStore != nil {
+				s.adminStore.CleanExpiredTokens()
+			}
 		}
 	}
 }
@@ -912,11 +984,16 @@ func (s *Server) serverStatusLoop() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		status := s.collectServerStatus()
-		s.cachedStatusMu.Lock()
-		s.cachedStatus = &status
-		s.cachedStatusMu.Unlock()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			status := s.collectServerStatus()
+			s.cachedStatusMu.Lock()
+			s.cachedStatus = &status
+			s.cachedStatusMu.Unlock()
+		}
 	}
 }
 

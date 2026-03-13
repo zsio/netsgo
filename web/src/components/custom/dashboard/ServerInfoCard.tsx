@@ -1,4 +1,4 @@
-import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Database } from 'lucide-react';
+import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp } from 'lucide-react';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatUptime, formatBytes } from '@/lib/format';
@@ -87,7 +87,27 @@ export function ServerInfoCard() {
           <div className="flex items-center gap-2 text-foreground font-medium text-sm">
             <Database className="w-4 h-4 text-emerald-500" />
             内存占用
-            <span className="ml-auto text-xs text-muted-foreground font-normal" title="NetsGo App Memory">NetsGo: {status?.app_mem_used ? formatBytes(status.app_mem_used) : '-'}</span>
+            <HoverCard>
+              <HoverCardTrigger asChild>
+                <span className="ml-auto text-xs text-muted-foreground font-normal cursor-help inline-flex items-center gap-1">
+                  NetsGo: {status?.app_mem_used ? formatBytes(status.app_mem_used) : '-'}
+                  <CircleHelp className="w-3.5 h-3.5 text-muted-foreground/60" />
+                </span>
+              </HoverCardTrigger>
+              <HoverCardContent className="w-[220px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="end">
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">堆内存</span>
+                    <span className="font-medium text-foreground">{status?.app_mem_used ? formatBytes(status.app_mem_used) : '-'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">进程占用</span>
+                    <span className="font-medium text-foreground">{status?.app_mem_sys ? formatBytes(status.app_mem_sys) : '-'}</span>
+                  </div>
+                  <p className="text-muted-foreground/70 text-[11px] pt-1 border-t border-border/40">进程占用包含运行时、嵌入资源等开销。</p>
+                </div>
+              </HoverCardContent>
+            </HoverCard>
           </div>
           <ProgressBar
             value={memPercent}

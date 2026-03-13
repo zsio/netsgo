@@ -32,6 +32,7 @@ type Client struct {
 	conn        *websocket.Conn
 	mu          sync.Mutex
 	done        chan struct{}
+	doneMu      sync.Mutex     // 保护 done channel 的关闭操作
 	dataSession *yamux.Session // 数据通道 yamux Session
 	dataMu      sync.RWMutex
 	proxies     sync.Map // proxy_name -> ProxyNewRequest
@@ -122,15 +123,45 @@ func isFatalError(err error) bool {
 	return false
 }
 
-// cleanup 清理旧连接资源，为重连做准备
-func (c *Client) cleanup() {
-	// 先关闭 done channel（如果还没关闭），通知所有 goroutine 退出
+// Shutdown 优雅关闭客户端连接
+// 发送 WebSocket 正常关闭帧，让服务端知道是主动断开而非异常
+func (c *Client) Shutdown() {
+	log.Printf("🛑 客户端开始优雅关闭...")
+
+	// 发送 WebSocket 正常关闭帧
+	c.mu.Lock()
+	if c.conn != nil {
+		c.conn.WriteMessage(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "client shutting down"),
+		)
+	}
+	c.mu.Unlock()
+
+	// 等待服务端处理关闭帧
+	time.Sleep(100 * time.Millisecond)
+
+	c.cleanup()
+
+	log.Printf("✅ 客户端优雅关闭完成")
+}
+
+// closeDone 安全关闭 done channel（用 mutex 保证原子性，防止并发 double-close panic）
+func (c *Client) closeDone() {
+	c.doneMu.Lock()
+	defer c.doneMu.Unlock()
 	select {
 	case <-c.done:
 		// 已经关闭
 	default:
 		close(c.done)
 	}
+}
+
+// cleanup 清理旧连接资源，为重连做准备
+func (c *Client) cleanup() {
+	// 先关闭 done channel，通知所有 goroutine 退出
+	c.closeDone()
 
 	// 等待 goroutine 退出（它们通过 done channel 感知退出信号）
 	time.Sleep(100 * time.Millisecond)
@@ -566,7 +597,8 @@ func (c *Client) controlLoop() {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				log.Printf("⚠️ 控制通道连接异常: %v", err)
 			}
-			close(c.done)
+			// 安全关闭 done channel（可能已被 Shutdown/cleanup 关闭）
+			c.closeDone()
 			return
 		}
 

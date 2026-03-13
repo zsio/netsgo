@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -501,6 +502,50 @@ func TestSSE_NoCORSHeader(t *testing.T) {
 
 	if cors := resp.Header.Get("Access-Control-Allow-Origin"); cors != "" {
 		t.Errorf("SSE 端点不应设置 Access-Control-Allow-Origin，得到 %q", cors)
+	}
+}
+
+// ============================================================
+// P9: WebSocket Origin 校验 (2)
+// ============================================================
+
+// TestWebSocket_DefaultOriginCheck_NoOrigin 无 Origin 头（Go 客户端）应能正常连接
+func TestWebSocket_DefaultOriginCheck_NoOrigin(t *testing.T) {
+	_, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	// Go 默认 Dialer 不发送 Origin 头
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("无 Origin 头时连接应成功，但失败: %v", err)
+	}
+	defer conn.Close()
+
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Errorf("期望 101 Switching Protocols，得到 %d", resp.StatusCode)
+	}
+}
+
+// TestWebSocket_DefaultOriginCheck_CrossOrigin 跨域 Origin 应被拒绝
+func TestWebSocket_DefaultOriginCheck_CrossOrigin(t *testing.T) {
+	_, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	header := http.Header{}
+	header.Set("Origin", "http://evil.example.com")
+
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if conn != nil {
+		conn.Close()
+	}
+
+	if err == nil {
+		t.Fatal("跨域 Origin 连接应被拒绝，但成功了")
+	}
+	if resp != nil && resp.StatusCode != http.StatusForbidden {
+		t.Errorf("期望 403 Forbidden，得到 %d", resp.StatusCode)
 	}
 }
 
@@ -1813,3 +1858,101 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 	}
 }
 
+// ============================================================
+// P15: 优雅关闭 (1)
+// ============================================================
+
+// TestServer_GracefulShutdown 验证 P15：调用 Shutdown 后 Agent 连接被正常关闭
+func TestServer_GracefulShutdown(t *testing.T) {
+	// 使用真实的 Start() 启动服务器
+	tmpDir := t.TempDir()
+	s := New(0)
+	s.StorePath = filepath.Join(tmpDir, "tunnels.json")
+
+	// 预创建 AdminStore
+	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "admin.json"))
+	if err != nil {
+		t.Fatalf("创建 AdminStore 失败: %v", err)
+	}
+	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
+		t.Fatalf("初始化 AdminStore 失败: %v", err)
+	}
+	if _, err := adminStore.AddAPIKey("default", "test-key", []string{"connect"}, nil); err != nil {
+		t.Fatalf("创建测试 API Key 失败: %v", err)
+	}
+	s.adminStore = adminStore
+
+	// 在 goroutine 中启动 Server
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- s.Start()
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	if s.Port == 0 {
+		t.Fatal("Server 未成功启动（Port 仍为 0）")
+	}
+
+	// 连接一个 Agent
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws/control", s.Port)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 完成认证
+	authReq := protocol.AuthRequest{
+		Key:       "test-key",
+		InstallID: "install-shutdown-test",
+		Agent: protocol.AgentInfo{
+			Hostname: "shutdown-host",
+			OS:       "linux",
+			Arch:     "amd64",
+			Version:  "0.1.0",
+		},
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
+	conn.WriteJSON(msg)
+	var authMsg protocol.Message
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	conn.ReadJSON(&authMsg)
+
+	// 确认 Agent 已注册
+	agentCount := 0
+	s.agents.Range(func(_, _ any) bool {
+		agentCount++
+		return true
+	})
+	if agentCount == 0 {
+		t.Fatal("Agent 应已注册")
+	}
+
+	// 调用优雅关闭
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown 失败: %v", err)
+	}
+
+	// 验证 agents 已清空
+	agentCount = 0
+	s.agents.Range(func(_, _ any) bool {
+		agentCount++
+		return true
+	})
+	if agentCount != 0 {
+		t.Errorf("Shutdown 后 agents 应为空，得到 %d", agentCount)
+	}
+
+	// 验证 Server 已停止（Serve 返回）
+	select {
+	case err := <-serverErr:
+		if err != nil && err.Error() != "http: Server closed" {
+			t.Errorf("Server 返回了非预期错误: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("Server 应在 Shutdown 后返回")
+	}
+}

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { rootRoute } from './__root';
 import { Button } from '@/components/ui/button';
@@ -6,8 +6,10 @@ import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 import type { SetupResponse, PortRange } from '@/types';
-import { Server, Globe, Shield, Check, Copy, Plus, X, Sparkles, ArrowRight, ArrowLeft, AlertTriangle } from 'lucide-react';
+import { Globe, Shield, Check, Copy, Plus, X, Sparkles, ArrowRight, ArrowLeft, AlertTriangle, User, Lock, Loader2, ShieldCheck, Server } from 'lucide-react';
 import { requireSetupPage } from '@/lib/auth';
+import { useParticleCanvas } from '@/hooks/use-particle-canvas';
+import { motion, AnimatePresence } from 'motion/react';
 
 export const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -27,6 +29,9 @@ function SetupPage() {
   const [step, setStep] = useState(0);
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useParticleCanvas(canvasRef);
 
   // Step 1: Admin
   const [username, setUsername] = useState('admin');
@@ -36,7 +41,6 @@ function SetupPage() {
 
   // Step 2: Server address
   const [serverAddr, setServerAddr] = useState(() => {
-    // 默认填入当前访问地址
     return window.location.origin;
   });
   const [addrError, setAddrError] = useState('');
@@ -65,20 +69,31 @@ function SetupPage() {
 
   const validateStep2 = useCallback(() => {
     if (!serverAddr.trim()) { setAddrError('请填写服务地址'); return false; }
+    try {
+      const url = new URL(serverAddr);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        setAddrError('仅支持 http 或 https 协议');
+        return false;
+      }
+    } catch {
+      setAddrError('请输入有效的完整 URL（需包含 http:// 或 https://）');
+      return false;
+    }
     setAddrError('');
     return true;
   }, [serverAddr]);
 
-  const addPort = useCallback(() => {
+  const addPort = useCallback((e?: React.FormEvent) => {
+    e?.preventDefault();
     const s = parseInt(portStart);
-    const e = portEnd ? parseInt(portEnd) : s;
+    const e_port = portEnd ? parseInt(portEnd) : s;
     if (isNaN(s) || s < 1 || s > 65535) { setPortError('起始端口无效'); return; }
-    if (isNaN(e) || e < s || e > 65535) { setPortError('结束端口无效'); return; }
+    if (isNaN(e_port) || e_port < s || e_port > 65535) { setPortError('结束端口无效'); return; }
     // 检查重复
     for (const p of ports) {
-      if (s <= p.end && e >= p.start) { setPortError('端口范围与已有规则重叠'); return; }
+      if (s <= p.end && e_port >= p.start) { setPortError('端口范围与已有规则重叠'); return; }
     }
-    setPorts([...ports, { start: s, end: e }]);
+    setPorts([...ports, { start: s, end: e_port }]);
     setPortStart('');
     setPortEnd('');
     setPortError('');
@@ -98,19 +113,7 @@ function SetupPage() {
 
   const totalPorts = ports.reduce((sum, p) => sum + (p.end - p.start + 1), 0);
 
-  // 检测当前访问是否为不安全的方式 (HTTP / IP / 非标准端口)
   const currentOrigin = window.location.origin;
-  const isInsecureAccess = (() => {
-    try {
-      const url = new URL(currentOrigin);
-      const isHTTP = url.protocol === 'http:';
-      const isIP = /^\d{1,3}(\.\d{1,3}){3}$/.test(url.hostname) || url.hostname === 'localhost' || url.hostname === '[::]' || url.hostname.startsWith('[');
-      const hasPort = !!url.port;
-      return isHTTP || isIP || hasPort;
-    } catch {
-      return false;
-    }
-  })();
 
   // Submit
   const handleSubmit = async () => {
@@ -141,341 +144,503 @@ function SetupPage() {
     }
   };
 
-  const steps = [
-    { icon: Server, label: '管理员账号' },
-    { icon: Globe, label: '服务地址' },
-    { icon: Shield, label: '端口白名单' },
-  ];
+  const stepVariants = {
+    initial: { opacity: 0, y: 10, filter: 'blur(4px)' },
+    animate: { opacity: 1, y: 0, filter: 'blur(0px)', transition: { duration: 0.4, ease: 'easeOut' as const } },
+    exit: { opacity: 0, y: -10, filter: 'blur(4px)', transition: { duration: 0.2, ease: 'easeIn' as const } },
+  };
 
   return (
-    <div className="flex h-screen w-full items-center justify-center bg-background absolute inset-0 z-50">
-      {/* Background decorations */}
-      <div className="absolute top-0 left-0 w-[400px] h-[400px] bg-primary/5 rounded-full blur-3xl pointer-events-none -translate-x-1/2 -translate-y-1/2" />
-      <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-chart-2/5 rounded-full blur-3xl pointer-events-none translate-x-1/3 translate-y-1/3" />
+    <>
+      <style>{`
+        @keyframes pulse-glow {
+          0%, 100% { opacity: 0.6; }
+          50% { opacity: 1; }
+        }
+        .pulse-glow { animation: pulse-glow 3s ease-in-out infinite; }
+      `}</style>
 
-      <div className="w-full max-w-lg mx-4">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-primary/10 rounded-full text-sm text-primary font-medium mb-4">
-            <Sparkles className="w-4 h-4" /> 首次运行初始化
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight">NetsGo 初始化向导</h1>
-          <p className="text-muted-foreground mt-2">请完成以下配置以启用服务</p>
-        </div>
+      <div className="flex h-screen w-full items-center justify-center absolute inset-0 z-50 overflow-hidden bg-background">
+        {/* Canvas background */}
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full pointer-events-none"
+        />
 
-        {/* Step indicators */}
-        {step < 3 && (
-          <div className="flex items-center justify-center gap-2 mb-8">
-            {steps.map((s, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                  i === step
-                    ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25'
-                    : i < step
-                      ? 'bg-primary/20 text-primary'
-                      : 'bg-muted text-muted-foreground'
-                }`}>
-                  {i < step ? <Check className="w-3 h-3" /> : <s.icon className="w-3 h-3" />}
-                  <span className="hidden sm:inline">{s.label}</span>
-                </div>
-                {i < steps.length - 1 && (
-                  <div className={`w-8 h-px ${i < step ? 'bg-primary/40' : 'bg-border'}`} />
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Global gradients */}
+        <div className="absolute top-[-15%] left-[-10%] w-[500px] h-[500px] bg-primary/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-[-15%] right-[-10%] w-[600px] h-[600px] bg-chart-1/10 rounded-full blur-3xl pointer-events-none" />
 
-        {/* Card */}
-        <div className="rounded-2xl border border-border/50 bg-card shadow-xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-[250px] h-[250px] bg-primary/5 rounded-full blur-3xl pointer-events-none -translate-y-1/2 translate-x-1/2" />
+        <div className="w-full max-w-[420px] sm:max-w-[520px] relative z-10 px-6">
+          
+          {/* Header */}
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }} 
+            animate={{ opacity: 1, y: 0 }} 
+            transition={{ duration: 0.6, ease: "easeOut" }}
+            className="flex flex-col items-center mb-8"
+          >
+            <img src="/logo.svg" alt="NetsGo" className="w-12 h-12 mb-4" />
+            <h1 className="text-3xl font-bold tracking-tight mb-1">初次运行向导</h1>
+            <p className="text-sm text-muted-foreground">五分钟完成 NetsGo 的基础设置</p>
+          </motion.div>
 
-          <div className="relative z-10 p-8">
-
-            {/* Step 1: Admin */}
-            {step === 0 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="p-2 bg-primary/10 rounded-lg">
-                    <Server className="w-5 h-5 text-primary" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-semibold">设置管理员账号</h2>
-                    <p className="text-sm text-muted-foreground">此账号用于登录管理后台</p>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">用户名</label>
-                    <Input
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      placeholder="admin"
-                      autoComplete="username"
+          {/* Minimal Step Indicator */}
+          {step < 3 && (
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              transition={{ delay: 0.2, duration: 0.4 }}
+              className="flex items-center justify-between gap-2 mb-8"
+            >
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="flex-1 h-1.5 rounded-full bg-muted/50 overflow-hidden relative">
+                  {i <= step && (
+                    <motion.div 
+                      layoutId={`indicator-${i}`}
+                      initial={{ width: 0 }}
+                      animate={{ width: "100%" }}
+                      transition={{ duration: 0.4, ease: "easeInOut" }}
+                      className={`absolute inset-0 ${i === step ? 'bg-primary pulse-glow' : 'bg-primary/50'}`}
                     />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">密码</label>
-                    <Input
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="至少 8 位，包含字母和数字"
-                      autoComplete="new-password"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">确认密码</label>
-                    <Input
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="再次输入密码"
-                      autoComplete="new-password"
-                    />
-                  </div>
+                  )}
                 </div>
+              ))}
+            </motion.div>
+          )}
 
-                {adminError && (
-                  <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">
-                    <AlertTriangle className="w-4 h-4 shrink-0" />
-                    {adminError}
+          {/* Form Container */}
+          <div className="relative">
+            <AnimatePresence mode="wait">
+              {/* Step 1: Admin */}
+              {step === 0 && (
+                <motion.div
+                  key="step0"
+                  variants={stepVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className="space-y-5"
+                >
+                  <div className="flex flex-col gap-1 mb-6">
+                    <h2 className="text-xl font-semibold flex items-center gap-2">
+                       管理员账号
+                    </h2>
+                    <p className="text-sm text-muted-foreground">此账号将作为超级管理员登录控制台</p>
                   </div>
-                )}
 
-                <div className="flex justify-end pt-2">
-                  <Button onClick={() => { if (validateStep1()) setStep(1); }} className="gap-2">
-                    下一步 <ArrowRight className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* Step 2: Server Address */}
-            {step === 1 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="p-2 bg-primary/10 rounded-lg">
-                    <Globe className="w-5 h-5 text-primary" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-semibold">服务管理端地址</h2>
-                    <p className="text-sm text-muted-foreground">Agent 和用户访问此地址连接服务</p>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">服务地址</label>
-                    <Input
-                      value={serverAddr}
-                      onChange={(e) => setServerAddr(e.target.value)}
-                      placeholder="https://tunnel.example.com"
-                    />
-                  </div>
-                </div>
-
-                <div className="rounded-lg bg-chart-1/5 border border-chart-1/20 p-4 text-sm space-y-2">
-                  <div className="flex items-start gap-2">
-                    <span className="text-chart-1 mt-0.5">💡</span>
-                    <div className="text-muted-foreground">
-                      <p className="font-medium text-foreground mb-1">建议使用 HTTPS + 域名</p>
-                      <p>这样可以确保控制通道的传输安全，防止 Agent Key 被中间人窃取。</p>
-                      <p className="mt-1">如果暂时没有域名和证书，也可以使用如 <code className="px-1 py-0.5 bg-muted rounded text-xs">http://1.2.3.4:8080</code> 的形式。</p>
-                    </div>
-                  </div>
-                </div>
-
-                {isInsecureAccess && serverAddr === currentOrigin && (
-                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-4 text-sm space-y-2">
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
-                      <div className="text-muted-foreground">
-                        <p className="font-medium text-amber-600 dark:text-amber-400 mb-1">检测到当前使用不安全方式访问</p>
-                        <p>
-                          当前地址为 <code className="px-1 py-0.5 bg-muted rounded text-xs">{currentOrigin}</code>，
-                          {currentOrigin.startsWith('http:') && '使用了未加密的 HTTP 协议'}
-                          {/\d{1,3}(\.\d{1,3}){3}/.test(currentOrigin) && '，且通过 IP 直接访问'}
-                          。
-                        </p>
-                        <p className="mt-1">
-                          生产环境中强烈建议配置域名并启用 HTTPS（如 <code className="px-1 py-0.5 bg-muted rounded text-xs">https://tunnel.example.com</code>），
-                          以保证 Agent Key 等敏感信息的传输安全。
-                        </p>
+                  <form onSubmit={(e) => { e.preventDefault(); if (validateStep1()) setStep(1); }} className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-foreground">用户名</label>
+                      <div className="relative">
+                        <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                        <Input
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          placeholder="admin"
+                          autoComplete="username"
+                          className="pl-9 bg-background/50 backdrop-blur-sm"
+                        />
                       </div>
                     </div>
-                  </div>
-                )}
 
-                {addrError && (
-                  <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">
-                    <AlertTriangle className="w-4 h-4 shrink-0" />
-                    {addrError}
-                  </div>
-                )}
-
-                <div className="flex justify-between pt-2">
-                  <Button variant="outline" onClick={() => setStep(0)} className="gap-2">
-                    <ArrowLeft className="w-4 h-4" /> 上一步
-                  </Button>
-                  <Button onClick={() => { if (validateStep2()) setStep(2); }} className="gap-2">
-                    下一步 <ArrowRight className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* Step 3: Ports */}
-            {step === 2 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="p-2 bg-primary/10 rounded-lg">
-                    <Shield className="w-5 h-5 text-primary" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-semibold">允许穿透的端口</h2>
-                    <p className="text-sm text-muted-foreground">只有白名单内的端口才能被隧道穿透</p>
-                  </div>
-                </div>
-
-                {/* Quick presets */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">快速预设</label>
-                  <div className="flex flex-wrap gap-2">
-                    {PORT_PRESETS.map((preset) => (
-                      <button
-                        key={preset.label}
-                        onClick={() => addPreset(preset.range)}
-                        className="px-3 py-1.5 text-xs font-medium bg-muted hover:bg-muted/80 rounded-full transition-colors border border-border/50 hover:border-primary/30"
-                      >
-                        {preset.label} ({preset.range.start}-{preset.range.end})
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Port list */}
-                {ports.length > 0 && (
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-muted-foreground">已添加的端口规则</label>
-                    <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                      {ports.map((p, i) => (
-                        <div key={i} className="flex items-center justify-between px-3 py-2 bg-muted/50 rounded-lg border border-border/30 group">
-                          <div className="flex items-center gap-3 text-sm">
-                            <span className="font-mono font-medium">
-                              {p.start === p.end ? p.start : `${p.start} - ${p.end}`}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {p.start === p.end ? '单端口' : `${p.end - p.start + 1} 个端口`}
-                            </span>
-                          </div>
-                          <button onClick={() => removePort(i)} className="text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100">
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-foreground">密码</label>
+                      <div className="relative">
+                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                        <Input
+                          type="password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="至少 8 位，包含字母和数字"
+                          autoComplete="new-password"
+                          className="pl-9 bg-background/50 backdrop-blur-sm"
+                        />
+                      </div>
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      📊 当前共允许 <span className="font-medium text-foreground">{totalPorts.toLocaleString()}</span> 个端口
-                    </div>
-                  </div>
-                )}
 
-                {/* Add port */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">添加端口规则</label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number"
-                      placeholder="起始端口"
-                      value={portStart}
-                      onChange={(e) => setPortStart(e.target.value)}
-                      min={1}
-                      max={65535}
-                      className="flex-1"
-                    />
-                    <span className="text-muted-foreground text-sm">-</span>
-                    <Input
-                      type="number"
-                      placeholder="结束端口 (可选)"
-                      value={portEnd}
-                      onChange={(e) => setPortEnd(e.target.value)}
-                      min={1}
-                      max={65535}
-                      className="flex-1"
-                    />
-                    <Button variant="outline" size="icon" onClick={addPort}>
-                      <Plus className="w-4 h-4" />
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-foreground">确认密码</label>
+                      <div className="relative">
+                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                        <Input
+                          type="password"
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="再次输入密码"
+                          autoComplete="new-password"
+                          className="pl-9 bg-background/50 backdrop-blur-sm"
+                        />
+                      </div>
+                    </div>
+
+                    {adminError && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2.5 rounded-lg border border-destructive/20 mt-4">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        {adminError}
+                      </motion.div>
+                    )}
+
+                    <Button type="submit" className="w-full mt-6 gap-2">
+                      下一步 <ArrowRight className="w-4 h-4" />
                     </Button>
+                  </form>
+                </motion.div>
+              )}
+
+              {/* Step 2: Server Address */}
+              {step === 1 && (
+                <motion.div
+                  key="step1"
+                  variants={stepVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className="space-y-5"
+                >
+                  <div className="flex flex-col gap-1 mb-6">
+                    <h2 className="text-xl font-semibold flex items-center gap-2">
+                      <Server className="w-5 h-5 text-primary" />
+                      Agent 接入地址
+                    </h2>
+                    <p className="text-sm text-muted-foreground">用于 Agent 节点建立与服务端的通信隧道</p>
                   </div>
-                </div>
 
-                {portError && (
-                  <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">
-                    <AlertTriangle className="w-4 h-4 shrink-0" />
-                    {portError}
-                  </div>
-                )}
-
-                {submitError && (
-                  <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">
-                    <AlertTriangle className="w-4 h-4 shrink-0" />
-                    {submitError}
-                  </div>
-                )}
-
-                <div className="flex justify-between pt-2">
-                  <Button variant="outline" onClick={() => setStep(1)} className="gap-2">
-                    <ArrowLeft className="w-4 h-4" /> 上一步
-                  </Button>
-                  <Button onClick={handleSubmit} disabled={loading} className="gap-2">
-                    {loading ? '初始化中...' : <>🚀 完成初始化</>}
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* Success */}
-            {step === 3 && result && (
-              <div className="space-y-6 text-center">
-                <div className="flex flex-col items-center gap-3">
-                  <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center">
-                    <Check className="w-8 h-8 text-green-500" />
-                  </div>
-                  <h2 className="text-2xl font-bold">🎉 初始化成功！</h2>
-                  <p className="text-sm text-muted-foreground">NetsGo 服务已准备就绪</p>
-                </div>
-
-                {result.agent_key && (
-                  <div className="rounded-xl border border-chart-1/30 bg-chart-1/5 p-5 text-left space-y-3">
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <Shield className="w-4 h-4 text-chart-1" />
-                      您的首个 Agent Key（仅显示一次！）
+                  <form onSubmit={(e) => { e.preventDefault(); if (validateStep2()) setStep(2); }} className="space-y-4">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-foreground">公网访问 URL</label>
+                        {serverAddr !== currentOrigin && (
+                          <button type="button" onClick={() => { setServerAddr(currentOrigin); setAddrError(''); }} className="text-[11px] text-primary hover:underline flex items-center gap-1">
+                             使用当前地址
+                          </button>
+                        )}
+                      </div>
+                      <div className="relative group">
+                        <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
+                        <Input
+                          value={serverAddr}
+                          onChange={(e) => { setServerAddr(e.target.value); setAddrError(''); }}
+                          placeholder="例如: https://tunnel.yourdomain.com"
+                          className="pl-9 bg-background/50 backdrop-blur-sm font-mono text-sm focus-visible:ring-primary/50"
+                        />
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 px-3 py-2 bg-background rounded-lg text-sm font-mono break-all border border-border/50">
-                        {result.agent_key.raw_key}
-                      </code>
-                      <Button variant="outline" size="icon" onClick={handleCopy} className="shrink-0">
-                        {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+
+                    {/* Security Status Feedback — based on protocol × host type */}
+                    {(() => {
+                      if (!serverAddr) return null;
+                      // 不以 http:// 或 https:// 开头的输入，不显示任何安全反馈
+                      if (!/^https?:\/\//.test(serverAddr)) return null;
+
+                      let isHttps = false;
+                      let hostname = '';
+                      try {
+                        const url = new URL(serverAddr);
+                        isHttps = url.protocol === 'https:';
+                        hostname = url.hostname;
+                      } catch {
+                        // URL 解析失败（如端口超出范围），提示格式错误
+                        return (
+                          <motion.div key="invalid" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-destructive/20 bg-destructive/5 p-3.5">
+                            <div className="flex items-start gap-2.5">
+                              <AlertTriangle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
+                              <div className="space-y-0.5">
+                                <p className="font-medium text-destructive text-sm">地址格式有误</p>
+                                <p className="text-xs text-muted-foreground leading-relaxed">
+                                  请检查 URL 是否完整且合法，例如端口号需在 0–65535 范围内。
+                                </p>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      }
+
+                      // 主机类型分类：IP / 合法域名 / 本地主机名
+                      const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith('[');
+                      const isLocalhost = hostname === 'localhost';
+                      // 合法域名：至少包含一个点，且 TLD 至少 2 个字符（如 example.com）
+                      const isDomain = !isIp && !isLocalhost && /\.[a-zA-Z]{2,}$/.test(hostname);
+                      // 其余情况为单标签本地主机名（如 xx, myserver）
+
+                      // Case 1: HTTPS + 合法域名 — 最佳实践 ✅
+                      if (isHttps && isDomain) {
+                        return (
+                          <motion.div key="secure" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-green-500/20 bg-green-500/5 p-3.5">
+                            <div className="flex items-start gap-2.5">
+                              <ShieldCheck className="w-4 h-4 text-green-600 dark:text-green-400 mt-0.5 shrink-0" />
+                              <div className="space-y-0.5">
+                                <p className="font-medium text-green-700 dark:text-green-400 text-sm">安全连接</p>
+                                <p className="text-xs text-muted-foreground leading-relaxed">
+                                  HTTPS + 域名是生产环境的推荐实践，可有效防止 Agent 凭证被窃听。
+                                </p>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      }
+
+                      // Case 2: HTTPS + IP / localhost / 本地主机名 — 加密正常，建议配域名
+                      if (isHttps) {
+                        return (
+                          <motion.div key="https-local" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3.5">
+                            <div className="flex items-start gap-2.5">
+                              <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+                              <div className="space-y-0.5">
+                                <p className="font-medium text-blue-700 dark:text-blue-400 text-sm">连接已加密</p>
+                                <p className="text-xs text-muted-foreground leading-relaxed">
+                                  通信已通过 TLS 加密。建议配置公网域名，便于证书管理和外部 Agent 接入。
+                                </p>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      }
+
+                      // Case 3: HTTP — 明确警告未加密
+                      return (
+                        <motion.div key="insecure" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5">
+                          <div className="flex items-start gap-2.5">
+                            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
+                            <div className="space-y-0.5">
+                              <p className="font-medium text-amber-700 dark:text-amber-500 text-sm">连接未加密</p>
+                              <p className="text-xs text-muted-foreground leading-relaxed">
+                                当前使用 HTTP 明文传输{!isDomain ? '且未使用公网域名' : ''}，Agent Key 等敏感信息存在被窃听的风险。
+                                建议通过反向代理配置域名并启用 HTTPS。
+                                <span className="text-muted-foreground/70">（内网或测试环境可忽略）</span>
+                              </p>
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    })()}
+
+                    {addrError && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2.5 rounded-lg border border-destructive/20 mt-2">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        {addrError}
+                      </motion.div>
+                    )}
+
+                    <div className="grid grid-cols-[1fr_2fr] gap-3 mt-8 pt-2">
+                      <Button type="button" variant="outline" onClick={() => setStep(0)} className="gap-2 bg-background/50 backdrop-blur-sm">
+                        <ArrowLeft className="w-4 h-4" /> 返回
+                      </Button>
+                      <Button type="submit" className="gap-2">
+                        下一步 <ArrowRight className="w-4 h-4" />
                       </Button>
                     </div>
-                    <div className="flex items-start gap-2 text-xs text-muted-foreground">
-                      <AlertTriangle className="w-3.5 h-3.5 text-chart-1 mt-0.5 shrink-0" />
-                      <span>请立即复制并妥善保管此 Key，关闭此页面后无法再次查看！</span>
+                  </form>
+                </motion.div>
+              )}
+
+              {/* Step 3: Ports */}
+              {step === 2 && (
+                <motion.div
+                  key="step2"
+                  variants={stepVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className="space-y-5"
+                >
+                  <div className="flex flex-col gap-1 mb-6">
+                    <h2 className="text-xl font-semibold flex items-center gap-2">
+                       白名单端口
+                    </h2>
+                    <p className="text-sm text-muted-foreground">限定可以被隧道穿透或映射的公共端口范围</p>
+                  </div>
+
+                  <div className="space-y-5">
+                    {/* Add port form */}
+                    <form onSubmit={addPort} className="space-y-1.5">
+                      <label className="text-sm font-medium text-foreground">添加端口规则</label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          placeholder="起始"
+                          value={portStart}
+                          onChange={(e) => setPortStart(e.target.value)}
+                          min={1}
+                          max={65535}
+                          className="flex-1 bg-background/50 backdrop-blur-sm"
+                        />
+                        <span className="text-muted-foreground font-mono">-</span>
+                        <Input
+                          type="number"
+                          placeholder="结束(选填)"
+                          value={portEnd}
+                          onChange={(e) => setPortEnd(e.target.value)}
+                          min={1}
+                          max={65535}
+                          className="flex-1 bg-background/50 backdrop-blur-sm"
+                        />
+                        <Button type="submit" variant="secondary" size="icon" className="shrink-0 group">
+                          <Plus className="w-4 h-4 transition-transform group-hover:rotate-90" />
+                        </Button>
+                      </div>
+                    </form>
+
+                    {/* Quick presets */}
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {PORT_PRESETS.map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => addPreset(preset.range)}
+                            className="px-3 py-1.5 text-xs font-medium bg-secondary hover:bg-secondary/80 text-secondary-foreground rounded-full transition-colors border border-border/50 backdrop-blur-sm"
+                          >
+                            + {preset.label} ({preset.range.start}-{preset.range.end})
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Port Error */}
+                    {portError && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2.5 rounded-lg border border-destructive/20 mt-4">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        {portError}
+                      </motion.div>
+                    )}
+
+                    {/* Port list */}
+                    {ports.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-sm font-medium text-foreground">已启用规则</label>
+                          <span className="text-[11px] text-muted-foreground px-2 py-0.5 bg-muted rounded-full font-mono">
+                            总计 {totalPorts.toLocaleString()} 端口
+                          </span>
+                        </div>
+                        <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
+                          <AnimatePresence initial={false}>
+                            {ports.map((p, i) => (
+                              <motion.div
+                                key={`${p.start}-${p.end}`}
+                                initial={{ opacity: 0, height: 0, scale: 0.95 }}
+                                animate={{ opacity: 1, height: 'auto', scale: 1 }}
+                                exit={{ opacity: 0, height: 0, scale: 0.95 }}
+                                className="flex items-center justify-between px-3 py-2 bg-background/50 backdrop-blur-sm rounded-lg border border-border/50 group"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <Shield className="w-3.5 h-3.5 text-primary/70" />
+                                  <span className="font-mono text-sm font-medium">
+                                    {p.start === p.end ? p.start : `${p.start} - ${p.end}`}
+                                  </span>
+                                </div>
+                                <button type="button" onClick={() => removePort(i)} className="text-muted-foreground hover:text-destructive transition-colors p-1 rounded-md hover:bg-destructive/10">
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </motion.div>
+                            ))}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Submit Error */}
+                    {submitError && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2.5 rounded-lg border border-destructive/20 mt-4">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        {submitError}
+                      </motion.div>
+                    )}
+
+                    {/* Actions */}
+                    <div className="grid grid-cols-[1fr_2fr] gap-3 mt-6 pt-2">
+                      <Button type="button" variant="outline" onClick={() => setStep(1)} className="gap-2 bg-background/50 backdrop-blur-sm">
+                        <ArrowLeft className="w-4 h-4" /> 返回
+                      </Button>
+                      <Button onClick={handleSubmit} disabled={loading || ports.length === 0} className="gap-2">
+                        {loading ? (
+                          <><Loader2 className="w-4 h-4 animate-spin" /> 正在应用...</>
+                        ) : (
+                          <><Sparkles className="w-4 h-4" /> 开启体验之旅</>
+                        )}
+                      </Button>
                     </div>
                   </div>
-                )}
+                </motion.div>
+              )}
 
-                <Button onClick={() => navigate({ to: '/dashboard' })} className="w-full gap-2" size="lg">
-                  进入管理面板 <ArrowRight className="w-4 h-4" />
-                </Button>
-              </div>
-            )}
+              {/* Step 4: Success */}
+              {step === 3 && result && (
+                <motion.div
+                  key="step3"
+                  variants={stepVariants}
+                  initial="initial"
+                  animate="animate"
+                  className="space-y-6 text-center"
+                >
+                  <div className="flex flex-col items-center gap-4">
+                    <motion.div 
+                      initial={{ scale: 0 }} 
+                      animate={{ scale: 1, rotate: [0, -10, 10, 0] }} 
+                      transition={{ type: "spring", delay: 0.1 }}
+                      className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center mb-2"
+                    >
+                      <Check className="w-8 h-8 text-green-500" />
+                    </motion.div>
+                    <h2 className="text-2xl font-bold">一切准备就绪！</h2>
+                    <p className="text-sm text-muted-foreground -mt-2">超级管理节点已启动，基础配置完成</p>
+                  </div>
+
+                  {result.agent_key && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10 }} 
+                      animate={{ opacity: 1, y: 0 }} 
+                      transition={{ delay: 0.3 }}
+                      className="rounded-xl border border-chart-1/30 bg-chart-1/5 p-5 text-left space-y-3 backdrop-blur-sm relative overflow-hidden"
+                    >
+                      {/* Subtly glowing background element */}
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-chart-1/10 blur-2xl rounded-full" />
+                      
+                      <div className="relative z-10">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
+                          <Shield className="w-4 h-4 text-chart-1" />
+                          首个 Agent Token（仅显示此一次）
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 px-3 py-2.5 bg-background/80 backdrop-blur-md rounded-lg text-sm font-mono break-all border border-border/50 shadow-inner">
+                            {result.agent_key.raw_key}
+                          </div>
+                          <Button variant={copied ? "default" : "secondary"} size="icon" onClick={handleCopy} className={`shrink-0 h-auto self-stretch w-10 transition-colors ${copied ? 'bg-green-500 hover:bg-green-600 text-white' : ''}`}>
+                            <AnimatePresence mode="wait" initial={false}>
+                              {copied ? (
+                                <motion.div key="check" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }}>
+                                  <Check className="w-4 h-4" />
+                                </motion.div>
+                              ) : (
+                                <motion.div key="copy" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }}>
+                                  <Copy className="w-4 h-4" />
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </Button>
+                        </div>
+                        <div className="flex items-start gap-2 text-xs text-muted-foreground mt-3 pt-3 border-t border-border/40">
+                          <AlertTriangle className="w-3.5 h-3.5 text-chart-1 mt-0.5 shrink-0" />
+                          <span>请立即复制并将其配置到您的内网 Agent 中，离开此页面后您只能创建新的 Token。</span>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}>
+                    <Button onClick={() => navigate({ to: '/dashboard' })} className="w-full gap-2 mt-4" size="lg">
+                      进入管理面板 <ArrowRight className="w-4 h-4" />
+                    </Button>
+                  </motion.div>
+                </motion.div>
+              )}
+
+            </AnimatePresence>
           </div>
+          
         </div>
       </div>
-    </div>
+    </>
   );
 }

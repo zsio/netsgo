@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"netsgo/internal/server"
 
@@ -31,7 +36,32 @@ var serverCmd = &cobra.Command{
 		log.Printf("🚀 NetsGo Server 启动中 (端口: %d)...", port)
 
 		s := server.New(port)
+
+		// P15: 监听系统信号，优雅关闭
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+		go func() {
+			sig := <-sigCh
+			log.Printf("📩 收到信号 %v，开始优雅关闭...", sig)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			if err := s.Shutdown(ctx); err != nil {
+				log.Printf("⚠️ 优雅关闭出错: %v", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}()
+
 		if err := s.Start(); err != nil {
+			// http.Server.Shutdown 会导致 Serve 返回 http.ErrServerClosed，这是正常行为
+			// 此时信号处理 goroutine 的 Shutdown() 可能仍在执行（断开 Agent、关闭 EventBus），
+			// 需要阻塞等待信号处理 goroutine 调用 os.Exit(0) 完成退出
+			if err.Error() == "http: Server closed" {
+				select {} // 等待信号处理 goroutine 完成 Shutdown 并 os.Exit
+			}
 			log.Fatalf("❌ 服务端启动失败: %v", err)
 		}
 	},
