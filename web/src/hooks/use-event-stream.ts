@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouterState } from '@tanstack/react-router';
-import { persistAgentsQueryCache, readAgentsCache } from '@/lib/agents-cache';
 import { useConnectionStore } from '@/stores/connection-store';
 import { useAuthStore } from '@/stores/auth-store';
 import type { Agent, ServerStatus } from '@/types';
@@ -16,7 +15,6 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
         };
         if (Array.isArray(parsed.agents)) {
           queryClient.setQueryData<Agent[]>(['agents'], parsed.agents);
-          persistAgentsQueryCache(queryClient);
         }
         if (parsed.server_status) {
           queryClient.setQueryData<ServerStatus>(['server-status'], parsed.server_status);
@@ -29,13 +27,11 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
     case 'stats_update': {
       try {
         const parsed = JSON.parse(data) as { agent_id: string; stats: Agent['stats'] };
-        queryClient.setQueryData<Agent[]>(['agents'], (old) => {
-          const base = old ?? readAgentsCache()?.agents;
-          return base?.map((agent) =>
+        queryClient.setQueryData<Agent[]>(['agents'], (old) =>
+          old?.map((agent) =>
             agent.id === parsed.agent_id ? { ...agent, stats: parsed.stats } : agent,
-          );
-        });
-        persistAgentsQueryCache(queryClient);
+          ),
+        );
       } catch {
         // ignore malformed events
       }
@@ -45,7 +41,7 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
       try {
         const parsed = JSON.parse(data) as { agent_id: string; info: Agent['info'] };
         queryClient.setQueryData<Agent[]>(['agents'], (old) => {
-          const base = old ?? readAgentsCache()?.agents ?? [];
+          const base = old ?? [];
           const exists = base.some((agent) => agent.id === parsed.agent_id);
           if (!exists) {
             return [
@@ -63,7 +59,6 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
             agent.id === parsed.agent_id ? { ...agent, info: parsed.info, online: true } : agent,
           );
         });
-        persistAgentsQueryCache(queryClient);
       } catch {
         queryClient.invalidateQueries({ queryKey: ['agents'] });
       }
@@ -71,13 +66,11 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
     case 'agent_offline':
       try {
         const parsed = JSON.parse(data) as { agent_id: string };
-        queryClient.setQueryData<Agent[]>(['agents'], (old) => {
-          const base = old ?? readAgentsCache()?.agents;
-          return base?.map((agent) =>
+        queryClient.setQueryData<Agent[]>(['agents'], (old) =>
+          old?.map((agent) =>
             agent.id === parsed.agent_id ? { ...agent, online: false } : agent,
-          );
-        });
-        persistAgentsQueryCache(queryClient);
+          ),
+        );
       } catch {
         queryClient.invalidateQueries({ queryKey: ['agents'] });
       }
@@ -89,9 +82,8 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
           action?: string;
           tunnel: NonNullable<Agent['proxies']>[number];
         };
-        queryClient.setQueryData<Agent[]>(['agents'], (old) => {
-          const base = old ?? readAgentsCache()?.agents;
-          return base?.map((agent) => {
+        queryClient.setQueryData<Agent[]>(['agents'], (old) =>
+          old?.map((agent) => {
             if (agent.id !== parsed.agent_id) {
               return agent;
             }
@@ -118,9 +110,8 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
               ...agent,
               proxies: nextProxies,
             };
-          });
-        });
-        persistAgentsQueryCache(queryClient);
+          }),
+        );
       } catch {
         queryClient.invalidateQueries({ queryKey: ['agents'] });
       }

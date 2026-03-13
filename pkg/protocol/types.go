@@ -28,6 +28,8 @@ type SystemStats struct {
 	DiskPartitions []DiskPartition `json:"disk_partitions"` // 各分区明细
 	NetSent        uint64          `json:"net_sent"`        // 网络发送字节数（累计）
 	NetRecv        uint64          `json:"net_recv"`        // 网络接收字节数（累计）
+	NetSentSpeed   float64         `json:"net_sent_speed"`  // 发送速率 (bytes/s)，服务端计算
+	NetRecvSpeed   float64         `json:"net_recv_speed"`  // 接收速率 (bytes/s)，服务端计算
 	Uptime         uint64          `json:"uptime"`          // 系统运行时间 (秒)
 	NumCPU         int             `json:"num_cpu"`         // CPU 核心数
 }

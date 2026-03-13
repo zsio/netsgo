@@ -38,7 +38,7 @@ function AdminLayout() {
     <div className="flex-1 w-full bg-background overflow-y-auto">
       <div className="max-w-6xl mx-auto w-full flex p-8 gap-8 items-start">
         {/* 左侧导航栏 */}
-        <div className="w-56 shrink-0 flex flex-col gap-2 relative">
+        <div className="w-56 shrink-0 flex flex-col gap-2 sticky top-8 self-start">
           <div className="mb-4">
             <h2 className="text-xl font-bold tracking-tight px-1">系统设置</h2>
             <p className="text-xs text-muted-foreground px-1 mt-1">NetsGo 控制台</p>

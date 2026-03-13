@@ -14,3 +14,13 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+// 清理历史遗留的 localStorage 缓存键
+try {
+  localStorage.removeItem("netsgo:query-cache");
+  localStorage.removeItem("netsgo:net-speed");
+  localStorage.removeItem("netsgo:net-speed-baseline");
+  localStorage.removeItem("netsgo:agents-cache:v1");
+} catch {
+  /* ignore */
+}

@@ -3,7 +3,6 @@ import {
   ArrowDownCircle, ArrowUpCircle,
 } from 'lucide-react';
 import { formatBytes, formatPercent, formatNetSpeed } from '@/lib/format';
-import { useNetSpeed } from '@/hooks/use-net-speed';
 import {
   HoverCard,
   HoverCardContent,
@@ -17,7 +16,6 @@ interface AgentStatsGridProps {
 
 export function AgentStatsGrid({ agent }: AgentStatsGridProps) {
   const stats = agent.stats;
-  const netSpeed = useNetSpeed(agent);
 
   if (!stats) {
     return (
@@ -148,12 +146,12 @@ export function AgentStatsGrid({ agent }: AgentStatsGridProps) {
           <div className="flex items-center text-sm">
             <ArrowDownCircle className="h-4 w-4 text-emerald-500 mr-2" />
             <span className="text-muted-foreground w-12">下行</span>
-            <span className="font-mono font-medium">{formatNetSpeed(netSpeed.download)}</span>
+            <span className="font-mono font-medium">{formatNetSpeed(stats.net_recv_speed)}</span>
           </div>
           <div className="flex items-center text-sm">
             <ArrowUpCircle className="h-4 w-4 text-blue-500 mr-2" />
             <span className="text-muted-foreground w-12">上行</span>
-            <span className="font-mono font-medium">{formatNetSpeed(netSpeed.upload)}</span>
+            <span className="font-mono font-medium">{formatNetSpeed(stats.net_sent_speed)}</span>
           </div>
           <div className="text-[10px] text-muted-foreground/60 mt-1">
             累计: ↓{formatBytes(stats.net_recv)} / ↑{formatBytes(stats.net_sent)}

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import {
   Search, Play, Pause, Trash2, ShieldCheck, HelpCircle, ArrowRightLeft,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+
 import {
   Tooltip,
   TooltipContent,
@@ -67,7 +67,7 @@ export function TunnelListTable({
     );
   }, [tunnels, searchQuery]);
 
-  const colCount = 4 + (showAgent ? 1 : 0) + (showActions || renderRowAction ? 1 : 0);
+
 
   const args = (agentId: string, name: string) => ({ agentId, tunnelName: name });
 

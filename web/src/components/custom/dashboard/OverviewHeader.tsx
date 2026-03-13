@@ -4,8 +4,7 @@ export function OverviewHeader() {
   return (
     <div className="flex flex-col gap-2">
       <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
-
-        全局系统监控
+        Dashboard
       </h1>
       <p className="text-muted-foreground text-sm flex items-center gap-2">
         实时查看服务端运行状态、Agent 连接分布以及所有网络隧道的健康状况。

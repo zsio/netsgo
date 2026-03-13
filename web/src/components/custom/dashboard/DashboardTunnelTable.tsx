@@ -25,7 +25,7 @@ export function DashboardTunnelTable() {
   return (
     <TunnelListTable
       tunnels={allTunnels}
-      title="全网隧道列表"
+      title="全部隧道列表"
       icon={<ArrowRightLeft className="h-5 w-5 text-primary" />}
       showAgent
       showActions={false}

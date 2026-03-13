@@ -30,15 +30,17 @@ import (
 
 // Server 是服务端的核心结构体
 type Server struct {
-	Port       int
-	StorePath  string       // 隧道配置文件路径（空则使用默认）
-	agents     sync.Map     // stable agentID -> *AgentConn
-	events     *EventBus    // SSE 事件总线
-	store      *TunnelStore // 隧道持久化存储
-	startTime  time.Time    // 服务器启动时间
-	adminStore *AdminStore  // 系统管理后台数据存储
-	webFS      fs.FS        // 嵌入的前端静态资源 (nil 表示开发模式)
-	webHandler http.Handler // 缓存的 FileServer (nil 表示开发模式)
+	Port           int
+	StorePath      string             // 隧道配置文件路径（空则使用默认）
+	agents         sync.Map           // stable agentID -> *AgentConn
+	events         *EventBus          // SSE 事件总线
+	store          *TunnelStore       // 隧道持久化存储
+	startTime      time.Time          // 服务器启动时间
+	adminStore     *AdminStore        // 系统管理后台数据存储
+	webFS          fs.FS              // 嵌入的前端静态资源 (nil 表示开发模式)
+	webHandler     http.Handler       // 缓存的 FileServer (nil 表示开发模式)
+	cachedStatus   *serverStatusView  // 后台采集的最新服务端状态
+	cachedStatusMu sync.RWMutex       // 保护 cachedStatus
 }
 
 // AgentConn 代表一个已连接的 Agent
@@ -48,7 +50,9 @@ type AgentConn struct {
 	Info        protocol.AgentInfo
 	RemoteAddr  string
 	stats       *protocol.SystemStats
-	statsMu     sync.RWMutex // 保护 stats
+	prevStats   *protocol.SystemStats // 上一次探针快照（用于计算速率）
+	prevStatsAt time.Time             // 上一次快照时间
+	statsMu     sync.RWMutex          // 保护 stats / prevStats
 	conn        *websocket.Conn
 	mu          sync.Mutex
 	dataSession *yamux.Session          // 数据通道 yamux Session
@@ -111,6 +115,26 @@ func (a *AgentConn) GetStats() *protocol.SystemStats {
 	a.statsMu.RLock()
 	defer a.statsMu.RUnlock()
 	return a.stats
+}
+
+// enrichStats 用上次快照计算派生指标（网络速率等），就地修改 stats
+func (a *AgentConn) enrichStats(stats *protocol.SystemStats) {
+	a.statsMu.RLock()
+	prev := a.prevStats
+	prevAt := a.prevStatsAt
+	a.statsMu.RUnlock()
+
+	if prev != nil {
+		elapsed := time.Since(prevAt).Seconds()
+		if elapsed > 0.5 {
+			if stats.NetSent >= prev.NetSent {
+				stats.NetSentSpeed = float64(stats.NetSent-prev.NetSent) / elapsed
+			}
+			if stats.NetRecv >= prev.NetRecv {
+				stats.NetRecvSpeed = float64(stats.NetRecv-prev.NetRecv) / elapsed
+			}
+		}
+	}
 }
 
 // New 创建一个新的 Server 实例
@@ -194,6 +218,9 @@ func (s *Server) Start() error {
 
 	// 启动持久化事件循环
 	go s.persistEventsLoop()
+
+	// 启动服务端状态后台采集
+	go s.serverStatusLoop()
 
 	// 初始化隧道持久化存储
 	if err := s.initStore(); err != nil {
@@ -560,7 +587,14 @@ func (s *Server) controlLoop(agent *AgentConn) {
 				log.Printf("⚠️ 解析探针数据失败 [%s]: %v", agent.ID, err)
 				continue
 			}
+			// 计算派生指标（网络速率等）
+			agent.enrichStats(&stats)
 			agent.SetStats(&stats)
+			// 更新基准快照
+			agent.statsMu.Lock()
+			agent.prevStats = cloneSystemStats(&stats)
+			agent.prevStatsAt = time.Now()
+			agent.statsMu.Unlock()
 			if s.adminStore != nil {
 				if err := s.adminStore.UpdateAgentStats(agent.ID, agent.Info, stats, agent.RemoteAddr); err != nil {
 					log.Printf("⚠️ 持久化 Agent 最新状态失败 [%s]: %v", agent.ID, err)
@@ -718,13 +752,13 @@ func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.collectServerStatus())
+	json.NewEncoder(w).Encode(s.getCachedServerStatus())
 }
 
 func (s *Server) collectSnapshot() consoleSnapshot {
 	return consoleSnapshot{
 		Agents:       s.collectAgentViews(),
-		ServerStatus: s.collectServerStatus(),
+		ServerStatus: s.getCachedServerStatus(),
 	}
 }
 
@@ -803,6 +837,36 @@ func (s *Server) collectAgentViews() []agentView {
 	sort.Slice(agents, func(i, j int) bool { return agents[i].Info.Hostname < agents[j].Info.Hostname })
 
 	return agents
+}
+
+// serverStatusLoop 后台定时采集服务端状态并缓存
+func (s *Server) serverStatusLoop() {
+	// 首次立即采集
+	status := s.collectServerStatus()
+	s.cachedStatusMu.Lock()
+	s.cachedStatus = &status
+	s.cachedStatusMu.Unlock()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		status := s.collectServerStatus()
+		s.cachedStatusMu.Lock()
+		s.cachedStatus = &status
+		s.cachedStatusMu.Unlock()
+	}
+}
+
+// getCachedServerStatus 返回后台采集的服务端状态缓存
+func (s *Server) getCachedServerStatus() serverStatusView {
+	s.cachedStatusMu.RLock()
+	defer s.cachedStatusMu.RUnlock()
+	if s.cachedStatus != nil {
+		return *s.cachedStatus
+	}
+	// fallback: 如果还没来得及采集，现场采集一次
+	return s.collectServerStatus()
 }
 
 func (s *Server) collectServerStatus() serverStatusView {

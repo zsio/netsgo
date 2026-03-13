@@ -24,6 +24,8 @@ export interface SystemStats {
   disk_partitions: DiskPartition[];
   net_sent: number;       // bytes (cumulative)
   net_recv: number;       // bytes (cumulative)
+  net_sent_speed: number; // bytes/s (server-computed)
+  net_recv_speed: number; // bytes/s (server-computed)
   uptime: number;         // seconds
   num_cpu: number;
 }
