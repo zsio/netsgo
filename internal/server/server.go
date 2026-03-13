@@ -57,6 +57,48 @@ type AgentConn struct {
 	proxyMu     sync.RWMutex            // 保护 proxies
 }
 
+type agentView struct {
+	ID       string                 `json:"id"`
+	Info     protocol.AgentInfo     `json:"info"`
+	Stats    *protocol.SystemStats  `json:"stats,omitempty"`
+	Proxies  []protocol.ProxyConfig `json:"proxies"`
+	Online   bool                   `json:"online"`
+	LastSeen *time.Time             `json:"last_seen,omitempty"`
+	LastIP   string                 `json:"last_ip,omitempty"`
+}
+
+type serverStatusView struct {
+	Status         string                   `json:"status"`
+	AgentCount     int                      `json:"agent_count"`
+	Version        string                   `json:"version"`
+	ListenPort     int                      `json:"listen_port"`
+	Uptime         int64                    `json:"uptime"`
+	StorePath      string                   `json:"store_path"`
+	TunnelActive   int                      `json:"tunnel_active"`
+	TunnelPaused   int                      `json:"tunnel_paused"`
+	TunnelStopped  int                      `json:"tunnel_stopped"`
+	ServerAddr     string                   `json:"server_addr"`
+	AllowedPorts   []PortRange              `json:"allowed_ports"`
+	OSArch         string                   `json:"os_arch"`
+	GoVersion      string                   `json:"go_version"`
+	Hostname       string                   `json:"hostname"`
+	IPAddress      string                   `json:"ip_address"`
+	CPUUsage       float64                  `json:"cpu_usage"`
+	CPUCores       int                      `json:"cpu_cores"`
+	MemUsed        uint64                   `json:"mem_used"`
+	MemTotal       uint64                   `json:"mem_total"`
+	AppMemUsed     uint64                   `json:"app_mem_used"`
+	DiskUsed       uint64                   `json:"disk_used"`
+	DiskTotal      uint64                   `json:"disk_total"`
+	DiskPartitions []protocol.DiskPartition `json:"disk_partitions"`
+	GoroutineCount int                      `json:"goroutine_count"`
+}
+
+type consoleSnapshot struct {
+	Agents       []agentView      `json:"agents"`
+	ServerStatus serverStatusView `json:"server_status"`
+}
+
 // SetStats 安全地更新探针数据
 func (a *AgentConn) SetStats(s *protocol.SystemStats) {
 	a.statsMu.Lock()
@@ -156,6 +198,12 @@ func (s *Server) Start() error {
 	// 初始化隧道持久化存储
 	if err := s.initStore(); err != nil {
 		return fmt.Errorf("初始化隧道存储失败: %w", err)
+	}
+
+	// 启动时清理过期 Token
+	if s.adminStore != nil {
+		s.adminStore.CleanExpiredTokens()
+		go s.tokenCleanupLoop()
 	}
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Port))
@@ -368,6 +416,7 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAuth 处理 Agent 的认证流程
+// 认证优先级: Token > Key 兑换 Token
 func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn, *AgentConn, error) {
 	// 读取认证消息
 	var msg protocol.Message
@@ -386,15 +435,63 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn
 		return nil, nil, fmt.Errorf("认证失败: install_id 不能为空")
 	}
 
-	// 验证 Key
+	var newToken string // 如果通过 Key 兑换，需要下发给客户端
+
 	if s.adminStore != nil {
-		valid, err := s.adminStore.ValidateAgentKey(authReq.Key)
-		if !valid {
-			log.Printf("❌ Agent Key 验证失败 [%s]: %v", conn.RemoteAddr().String(), err)
-			return nil, nil, fmt.Errorf("认证失败: %w", err)
+		// 阶段 1: 尝试 Token 认证（不消耗 Key）
+		if authReq.Token != "" {
+			agentToken, err := s.adminStore.ValidateAgentToken(authReq.Token, authReq.InstallID)
+			if err == nil {
+				// Token 有效 — 检查是否已有同 AgentID 的在线连接
+				if current, loaded := s.agents.Load(agentToken.AgentID); loaded {
+					oldAgent := current.(*AgentConn)
+					oldAgent.mu.Lock()
+					connAlive := oldAgent.conn != nil
+					oldAgent.mu.Unlock()
+					if connAlive {
+						// 已有活跃连接 → 拒绝新连接（不暴露原因）
+						log.Printf("⚠️ Token 并发连接被拒: agent_id=%s, install_id=%s, remote=%s",
+							agentToken.AgentID, authReq.InstallID, remoteAddr)
+						return nil, nil, fmt.Errorf("认证失败")
+					}
+				}
+				// Token 认证通过，直接进入后续流程
+				log.Printf("🔑 Agent Token 认证通过 [install_id=%s]", authReq.InstallID)
+				goto authPassed
+			}
+			// Token 无效，继续尝试 Key
+			log.Printf("⚠️ Agent Token 验证失败 [%s]: %v, 将尝试 Key 认证", remoteAddr, err)
 		}
+
+		// 阶段 2: 尝试 Key 兑换 Token
+		if authReq.Key != "" {
+			// 先获取或创建 Agent 记录以得到稳定 agentID
+			record, err := s.adminStore.GetOrCreateAgent(authReq.InstallID, authReq.Agent, remoteAddr)
+			if err != nil {
+				return nil, nil, fmt.Errorf("登记 Agent 失败: %w", err)
+			}
+
+			tokenStr, _, err := s.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, record.ID, remoteAddr)
+			if err != nil {
+				log.Printf("❌ Agent Key 兑换 Token 失败 [%s]: %v", remoteAddr, err)
+				return nil, nil, fmt.Errorf("认证失败")
+			}
+			newToken = tokenStr
+			log.Printf("🔑 Agent Key 兑换 Token 成功 [install_id=%s]", authReq.InstallID)
+			goto authPassed
+		}
+
+		// 阶段 3: 两者都没有
+		// 检查是否属于开放模式（无 Key 配置）
+		valid, err := s.adminStore.ValidateAgentKey("")
+		if !valid {
+			log.Printf("❌ Agent 认证失败 [%s]: 未提供 Token 或 Key, %v", remoteAddr, err)
+			return nil, nil, fmt.Errorf("认证失败")
+		}
+		// 开放模式，允许连接
 	}
 
+authPassed:
 	agentID := "unmanaged-" + authReq.InstallID
 	if s.adminStore != nil {
 		record, err := s.adminStore.GetOrCreateAgent(authReq.InstallID, authReq.Agent, remoteAddr)
@@ -420,11 +517,13 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn
 	s.agents.Store(agentID, agent)
 
 	// 发送认证响应
-	resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
+	authResp := protocol.AuthResponse{
 		Success: true,
 		Message: "认证成功",
 		AgentID: agentID,
-	})
+		Token:   newToken, // 仅 Key 兑换时非空
+	}
+	resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, authResp)
 	if err := conn.WriteJSON(resp); err != nil {
 		if current, ok := s.agents.Load(agentID); ok && current == agent {
 			s.agents.Delete(agentID)
@@ -463,8 +562,8 @@ func (s *Server) controlLoop(agent *AgentConn) {
 			}
 			agent.SetStats(&stats)
 			if s.adminStore != nil {
-				if err := s.adminStore.TouchAgent(agent.ID, agent.Info, agent.RemoteAddr); err != nil {
-					log.Printf("⚠️ 更新 Agent 最近活跃时间失败 [%s]: %v", agent.ID, err)
+				if err := s.adminStore.UpdateAgentStats(agent.ID, agent.Info, stats, agent.RemoteAddr); err != nil {
+					log.Printf("⚠️ 持久化 Agent 最新状态失败 [%s]: %v", agent.ID, err)
 				}
 			}
 			log.Printf("📊 [%s] CPU: %.1f%% | 内存: %.1f%% | 磁盘: %.1f%%",
@@ -549,6 +648,18 @@ func (s *Server) persistEventsLoop() {
 	}
 }
 
+// tokenCleanupLoop 定期清理过期 Token（每 6 小时执行一次）
+func (s *Server) tokenCleanupLoop() {
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if s.adminStore != nil {
+			s.adminStore.CleanExpiredTokens()
+		}
+	}
+}
+
 // --- Web 面板 ---
 
 func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
@@ -606,6 +717,95 @@ func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
 // --- API ---
 
 func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.collectServerStatus())
+}
+
+func (s *Server) collectSnapshot() consoleSnapshot {
+	return consoleSnapshot{
+		Agents:       s.collectAgentViews(),
+		ServerStatus: s.collectServerStatus(),
+	}
+}
+
+func (s *Server) collectAgentViews() []agentView {
+	views := make(map[string]agentView)
+
+	if s.adminStore != nil {
+		for _, registered := range s.adminStore.GetRegisteredAgents() {
+			lastSeen := registered.LastSeen
+			view := agentView{
+				ID:       registered.ID,
+				Info:     registered.Info,
+				Stats:    registered.Stats,
+				Proxies:  []protocol.ProxyConfig{},
+				Online:   false,
+				LastSeen: &lastSeen,
+				LastIP:   registered.LastIP,
+			}
+			if s.store != nil {
+				stored := s.store.GetTunnelsByAgentID(registered.ID)
+				view.Proxies = make([]protocol.ProxyConfig, 0, len(stored))
+				for _, tunnel := range stored {
+					view.Proxies = append(view.Proxies, protocol.ProxyConfig{
+						Name:       tunnel.Name,
+						Type:       tunnel.Type,
+						LocalIP:    tunnel.LocalIP,
+						LocalPort:  tunnel.LocalPort,
+						RemotePort: tunnel.RemotePort,
+						Domain:     tunnel.Domain,
+						AgentID:    registered.ID,
+						Status:     tunnel.Status,
+					})
+				}
+			}
+			views[registered.ID] = view
+		}
+	}
+
+	s.agents.Range(func(_, value any) bool {
+		agent := value.(*AgentConn)
+		proxies := make([]protocol.ProxyConfig, 0)
+		agent.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
+			proxies = append(proxies, tunnel.Config)
+			return true
+		})
+		sort.Slice(proxies, func(i, j int) bool { return proxies[i].Name < proxies[j].Name })
+
+		view, ok := views[agent.ID]
+		if !ok {
+			view = agentView{
+				ID:      agent.ID,
+				Info:    agent.Info,
+				Proxies: []protocol.ProxyConfig{},
+			}
+		}
+		now := time.Now()
+		view.Info = agent.Info
+		if liveStats := agent.GetStats(); liveStats != nil {
+			view.Stats = liveStats
+		}
+		view.Proxies = proxies
+		view.Online = true
+		view.LastSeen = &now
+		view.LastIP = remoteIP(agent.RemoteAddr)
+		views[agent.ID] = view
+		return true
+	})
+
+	agents := make([]agentView, 0, len(views))
+	for _, agent := range views {
+		if agent.Proxies == nil {
+			agent.Proxies = []protocol.ProxyConfig{}
+		}
+		agents = append(agents, agent)
+	}
+	sort.Slice(agents, func(i, j int) bool { return agents[i].Info.Hostname < agents[j].Info.Hostname })
+
+	return agents
+}
+
+func (s *Server) collectServerStatus() serverStatusView {
 	agentCount := 0
 	tunnelActive := 0
 	tunnelPaused := 0
@@ -661,12 +861,7 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		memTotal = v.Total
 	}
 
-	type diskPartition struct {
-		Path  string `json:"path"`
-		Used  uint64 `json:"used"`
-		Total uint64 `json:"total"`
-	}
-	var diskPartitions []diskPartition
+	var diskPartitions []protocol.DiskPartition
 	diskUsed := uint64(0)
 	diskTotal := uint64(0)
 
@@ -701,7 +896,7 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 			d, err := disk.Usage(p.Mountpoint)
 			if err == nil && d.Total > 0 {
 				seenDevices[dedupKey] = true
-				diskPartitions = append(diskPartitions, diskPartition{
+				diskPartitions = append(diskPartitions, protocol.DiskPartition{
 					Path:  p.Mountpoint,
 					Used:  d.Used,
 					Total: d.Total,
@@ -721,7 +916,7 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		if d != nil {
 			diskUsed = d.Used
 			diskTotal = d.Total
-			diskPartitions = append(diskPartitions, diskPartition{
+			diskPartitions = append(diskPartitions, protocol.DiskPartition{
 				Path:  d.Path,
 				Used:  d.Used,
 				Total: d.Total,
@@ -733,33 +928,32 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	runtime.ReadMemStats(&m)
 	appMemUsed := m.Alloc
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":          "running",
-		"agent_count":     agentCount,
-		"version":         buildversion.Current,
-		"listen_port":     s.Port,
-		"uptime":          int64(time.Since(s.startTime).Seconds()),
-		"store_path":      s.getStorePath(),
-		"tunnel_active":   tunnelActive,
-		"tunnel_paused":   tunnelPaused,
-		"tunnel_stopped":  tunnelStopped,
-		"server_addr":     serverAddr,
-		"allowed_ports":   allowedPorts,
-		"os_arch":         osArch,
-		"go_version":      goVersion,
-		"hostname":        hostname,
-		"ip_address":      ipAddr,
-		"cpu_usage":       cpuUsage,
-		"cpu_cores":       cpuCores,
-		"mem_used":        memUsed,
-		"mem_total":       memTotal,
-		"app_mem_used":    appMemUsed,
-		"disk_used":       diskUsed,
-		"disk_total":      diskTotal,
-		"disk_partitions": diskPartitions,
-		"goroutine_count": goroutines,
-	})
+	return serverStatusView{
+		Status:         "running",
+		AgentCount:     agentCount,
+		Version:        buildversion.Current,
+		ListenPort:     s.Port,
+		Uptime:         int64(time.Since(s.startTime).Seconds()),
+		StorePath:      s.getStorePath(),
+		TunnelActive:   tunnelActive,
+		TunnelPaused:   tunnelPaused,
+		TunnelStopped:  tunnelStopped,
+		ServerAddr:     serverAddr,
+		AllowedPorts:   allowedPorts,
+		OSArch:         osArch,
+		GoVersion:      goVersion,
+		Hostname:       hostname,
+		IPAddress:      ipAddr,
+		CPUUsage:       cpuUsage,
+		CPUCores:       cpuCores,
+		MemUsed:        memUsed,
+		MemTotal:       memTotal,
+		AppMemUsed:     appMemUsed,
+		DiskUsed:       diskUsed,
+		DiskTotal:      diskTotal,
+		DiskPartitions: diskPartitions,
+		GoroutineCount: goroutines,
+	}
 }
 
 // getOutboundIP 尝试获取当前机器的有效内网/公网 IP
@@ -797,88 +991,8 @@ func (s *Server) getStorePath() string {
 }
 
 func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
-	type agentView struct {
-		ID       string                 `json:"id"`
-		Info     protocol.AgentInfo     `json:"info"`
-		Stats    *protocol.SystemStats  `json:"stats,omitempty"`
-		Proxies  []protocol.ProxyConfig `json:"proxies"`
-		Online   bool                   `json:"online"`
-		LastSeen *time.Time             `json:"last_seen,omitempty"`
-		LastIP   string                 `json:"last_ip,omitempty"`
-	}
-
-	views := make(map[string]agentView)
-
-	if s.adminStore != nil {
-		for _, registered := range s.adminStore.GetRegisteredAgents() {
-			lastSeen := registered.LastSeen
-			view := agentView{
-				ID:       registered.ID,
-				Info:     registered.Info,
-				Proxies:  []protocol.ProxyConfig{},
-				Online:   false,
-				LastSeen: &lastSeen,
-				LastIP:   registered.LastIP,
-			}
-			if s.store != nil {
-				stored := s.store.GetTunnelsByAgentID(registered.ID)
-				view.Proxies = make([]protocol.ProxyConfig, 0, len(stored))
-				for _, tunnel := range stored {
-					view.Proxies = append(view.Proxies, protocol.ProxyConfig{
-						Name:       tunnel.Name,
-						Type:       tunnel.Type,
-						LocalIP:    tunnel.LocalIP,
-						LocalPort:  tunnel.LocalPort,
-						RemotePort: tunnel.RemotePort,
-						Domain:     tunnel.Domain,
-						AgentID:    registered.ID,
-						Status:     tunnel.Status,
-					})
-				}
-			}
-			views[registered.ID] = view
-		}
-	}
-
-	s.agents.Range(func(_, value any) bool {
-		agent := value.(*AgentConn)
-		proxies := make([]protocol.ProxyConfig, 0)
-		agent.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
-			proxies = append(proxies, tunnel.Config)
-			return true
-		})
-		sort.Slice(proxies, func(i, j int) bool { return proxies[i].Name < proxies[j].Name })
-
-		view, ok := views[agent.ID]
-		if !ok {
-			view = agentView{
-				ID:      agent.ID,
-				Info:    agent.Info,
-				Proxies: []protocol.ProxyConfig{},
-			}
-		}
-		now := time.Now()
-		view.Info = agent.Info
-		view.Stats = agent.GetStats()
-		view.Proxies = proxies
-		view.Online = true
-		view.LastSeen = &now
-		view.LastIP = remoteIP(agent.RemoteAddr)
-		views[agent.ID] = view
-		return true
-	})
-
-	agents := make([]agentView, 0, len(views))
-	for _, agent := range views {
-		if agent.Proxies == nil {
-			agent.Proxies = []protocol.ProxyConfig{}
-		}
-		agents = append(agents, agent)
-	}
-	sort.Slice(agents, func(i, j int) bool { return agents[i].Info.Hostname < agents[j].Info.Hostname })
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agents)
+	json.NewEncoder(w).Encode(s.collectAgentViews())
 }
 
 // --- 隧道 CRUD API ---

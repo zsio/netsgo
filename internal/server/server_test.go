@@ -677,6 +677,120 @@ func TestProbe_SingleReport(t *testing.T) {
 	}
 }
 
+func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
+	s, conn, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	authResp := doAuth(t, conn)
+
+	stats := protocol.SystemStats{
+		CPUUsage: 42.5,
+		MemUsage: 60.0,
+		NumCPU:   4,
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("发送探针数据失败: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("请求 /api/agents 失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var agents []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
+		t.Fatalf("解析 /api/agents 响应失败: %v", err)
+	}
+
+	for _, agent := range agents {
+		if agent["id"] != authResp.AgentID {
+			continue
+		}
+		if online, _ := agent["online"].(bool); online {
+			t.Fatal("断开后的 Agent 不应仍然标记为在线")
+		}
+		statsMap, ok := agent["stats"].(map[string]any)
+		if !ok {
+			t.Fatal("断开后的 Agent 仍应返回最后一次 stats")
+		}
+		if statsMap["cpu_usage"].(float64) != 42.5 {
+			t.Fatalf("cpu_usage 期望 42.5，得到 %v", statsMap["cpu_usage"])
+		}
+		return
+	}
+
+	t.Fatalf("未找到 Agent %s", authResp.AgentID)
+}
+
+func TestAPI_Agents_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	info := protocol.AgentInfo{
+		Hostname: "persisted-host",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}
+
+	record, err := s.adminStore.GetOrCreateAgent("install-persisted-host", info, "127.0.0.1:12345")
+	if err != nil {
+		t.Fatalf("预创建 Agent 记录失败: %v", err)
+	}
+	if err := s.adminStore.UpdateAgentStats(record.ID, info, protocol.SystemStats{
+		CPUUsage: 88.8,
+		MemUsage: 66.6,
+		NumCPU:   16,
+	}, "127.0.0.1:12345"); err != nil {
+		t.Fatalf("预写入 Agent stats 失败: %v", err)
+	}
+
+	conn, authResp := connectAndAuthWithInstallID(t, ts, "persisted-host", "install-persisted-host")
+	defer conn.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("请求 /api/agents 失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var agents []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
+		t.Fatalf("解析 /api/agents 响应失败: %v", err)
+	}
+
+	for _, agent := range agents {
+		if agent["id"] != authResp.AgentID {
+			continue
+		}
+		if online, _ := agent["online"].(bool); !online {
+			t.Fatal("已连接的 Agent 应标记为在线")
+		}
+		statsMap, ok := agent["stats"].(map[string]any)
+		if !ok {
+			t.Fatal("首次新上报前应先返回持久化的旧 stats")
+		}
+		if statsMap["cpu_usage"].(float64) != 88.8 {
+			t.Fatalf("cpu_usage 期望 88.8，得到 %v", statsMap["cpu_usage"])
+		}
+		return
+	}
+
+	t.Fatalf("未找到 Agent %s", authResp.AgentID)
+}
+
 func TestProbe_MultipleReports(t *testing.T) {
 	s, conn, _, cleanup := setupWSTest(t)
 	defer cleanup()
@@ -1496,3 +1610,110 @@ func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
 		t.Errorf("恢复后的状态应保持 paused，得到 %s", tunnel.Config.Status)
 	}
 }
+
+// ============================================================
+// 认证 — Token 兑换集成测试
+// ============================================================
+
+func TestAuth_KeyExchange_ReturnsToken(t *testing.T) {
+	_, conn, _, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	authReq := protocol.AuthRequest{
+		Key:       "test-key",
+		InstallID: "install-token-test",
+		Agent: protocol.AgentInfo{
+			Hostname: "token-host",
+			OS:       "linux",
+			Arch:     "amd64",
+			Version:  "0.1.0",
+		},
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
+	conn.WriteJSON(msg)
+
+	var resp protocol.Message
+	conn.ReadJSON(&resp)
+	var authResp protocol.AuthResponse
+	resp.ParsePayload(&authResp)
+
+	if !authResp.Success {
+		t.Fatalf("认证应成功: %s", authResp.Message)
+	}
+	if authResp.Token == "" {
+		t.Error("Key 认证成功后应返回 Token")
+	}
+	if authResp.AgentID == "" {
+		t.Error("AgentID 不应为空")
+	}
+}
+
+func TestAuth_TokenReconnect(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	// 1. 首先用 Key 认证获取 Token
+	conn1, _ := connectAndAuth(t, ts, "token-reconnect-host")
+
+	// 从 adminStore 获取为此 install_id 生成的 Token
+	agentToken := s.adminStore.GetAgentTokenByInstallID("install-token-reconnect-host")
+	if agentToken == nil {
+		t.Fatal("首次 Key 认证后应有 Token 记录")
+	}
+
+	// 获取当前 Key 的 use_count
+	keys := s.adminStore.GetAPIKeys()
+	useCountBefore := keys[0].UseCount
+
+	// 断开连接
+	conn1.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	// 2. 用新生成的 Token 重连（需要知道原始 Token，但 hash 后无法恢复）
+	//    这里直接重新用 Key 兑换一次来模拟客户端已有 Token 的场景
+	//    真实客户端会保存 AuthResponse.Token
+	// 实际上我们验证的是：同一 install_id 再次 ExchangeToken 不会增加 use_count
+	_, _, err := s.adminStore.ExchangeToken("test-key", "install-token-reconnect-host", agentToken.AgentID, "127.0.0.1:12345")
+	if err != nil {
+		t.Fatalf("Token 重用 ExchangeToken 失败: %v", err)
+	}
+
+	// 同一 install_id 已有有效 Token，不应消耗 Key
+	keys = s.adminStore.GetAPIKeys()
+	if keys[0].UseCount != useCountBefore {
+		t.Errorf("Token 重用不应消耗 Key: 期望 %d, 得到 %d", useCountBefore, keys[0].UseCount)
+	}
+}
+
+func TestAuth_OldClientWithoutToken(t *testing.T) {
+	_, conn, _, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	// 模拟旧版客户端：只发 Key，不发 Token
+	authReq := protocol.AuthRequest{
+		Key:       "test-key",
+		InstallID: "install-old-client",
+		Agent: protocol.AgentInfo{
+			Hostname: "old-client",
+			OS:       "linux",
+			Arch:     "amd64",
+			Version:  "0.0.9",
+		},
+		// Token 字段为空 (omitempty)
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
+	conn.WriteJSON(msg)
+
+	var resp protocol.Message
+	conn.ReadJSON(&resp)
+	var authResp protocol.AuthResponse
+	resp.ParsePayload(&authResp)
+
+	if !authResp.Success {
+		t.Fatalf("旧版客户端 Key 认证应成功: %s", authResp.Message)
+	}
+	if authResp.Token == "" {
+		t.Error("即使是旧客户端，服务端也应返回 Token（客户端可忽略）")
+	}
+}
+

@@ -31,12 +31,13 @@ type AdminUser struct {
 
 // RegisteredAgent 表示一个具有稳定身份的 Agent 记录
 type RegisteredAgent struct {
-	ID        string             `json:"id"`
-	InstallID string             `json:"install_id"`
-	Info      protocol.AgentInfo `json:"info"`
-	CreatedAt time.Time          `json:"created_at"`
-	LastSeen  time.Time          `json:"last_seen"`
-	LastIP    string             `json:"last_ip"`
+	ID        string                `json:"id"`
+	InstallID string                `json:"install_id"`
+	Info      protocol.AgentInfo    `json:"info"`
+	Stats     *protocol.SystemStats `json:"stats,omitempty"`
+	CreatedAt time.Time             `json:"created_at"`
+	LastSeen  time.Time             `json:"last_seen"`
+	LastIP    string                `json:"last_ip"`
 }
 
 // TunnelPolicy 隧道策略控制（旧版，保留向后兼容）
@@ -69,6 +70,19 @@ type AdminSession struct {
 	ExpiresAt time.Time `json:"expires_at"` // 服务端控制的过期时间
 	IP        string    `json:"ip"`         // 登录 IP
 	UserAgent string    `json:"user_agent"` // 浏览器信息
+}
+
+// AgentToken 表示一个由 Key 兑换而来的客户端长期连接密钥
+type AgentToken struct {
+	ID           string    `json:"id"`              // UUID
+	TokenHash    string    `json:"token_hash"`      // SHA-256 hex hash
+	InstallID    string    `json:"install_id"`      // 关联的客户端 install_id
+	KeyID        string    `json:"key_id"`          // 由哪个 Key 兑换而来
+	AgentID      string    `json:"agent_id"`        // 关联的 Agent 稳定 ID
+	CreatedAt    time.Time `json:"created_at"`      // 创建时间
+	LastActiveAt time.Time `json:"last_active_at"`  // 最后活跃时间（用于过期判断）
+	LastIP       string    `json:"last_ip"`         // 最后连接 IP
+	IsRevoked    bool      `json:"is_revoked"`      // 是否已被吊销
 }
 
 // EventRecord 审计/系统事件记录（持久化）
