@@ -1,6 +1,8 @@
 package server
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -152,21 +154,49 @@ func TestAdminStore_ValidateAdminPassword_NoUser(t *testing.T) {
 
 func TestAdminStore_GetJWTSecret_BeforeInit(t *testing.T) {
 	store := newTestAdminStore(t)
-	secret := store.GetJWTSecret()
-	if len(secret) == 0 {
-		t.Error("未初始化时也应返回 fallback secret")
+	secret, err := store.GetJWTSecret()
+	if !errors.Is(err, errJWTSecretUnavailable) {
+		t.Fatalf("未初始化时应返回 errJWTSecretUnavailable，得到 %v", err)
+	}
+	if len(secret) != 0 {
+		t.Errorf("未初始化时不应返回 secret，得到 %q", string(secret))
 	}
 }
 
 func TestAdminStore_GetJWTSecret_AfterInit(t *testing.T) {
 	store := newInitializedAdminStore(t)
-	secret := store.GetJWTSecret()
+	secret, err := store.GetJWTSecret()
+	if err != nil {
+		t.Fatalf("初始化后获取 secret 不应报错: %v", err)
+	}
 	if len(secret) == 0 {
 		t.Error("初始化后应返回非空 secret")
 	}
-	// 应该不是 fallback
 	if string(secret) == "netsgo-dev-fallback-secret" {
 		t.Error("初始化后不应返回 fallback secret")
+	}
+}
+
+func TestAdminStore_NewInitializedWithoutJWTSecret_Fails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "admin.json")
+	data := []byte(`{
+  "initialized": true,
+  "jwt_secret": "",
+  "api_keys": [],
+  "admin_users": [],
+  "agents": [],
+  "agent_tokens": [],
+  "events": [],
+  "sessions": []
+}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("写入测试 admin.json 失败: %v", err)
+	}
+
+	_, err := NewAdminStore(path)
+	if !errors.Is(err, errJWTSecretMissing) {
+		t.Fatalf("缺少 jwt_secret 的已初始化实例应返回 errJWTSecretMissing，得到 %v", err)
 	}
 }
 
@@ -790,4 +820,3 @@ func TestAdminStore_Token_CleanExpired(t *testing.T) {
 		t.Errorf("清理后应无 Token，实际 %d", count)
 	}
 }
-

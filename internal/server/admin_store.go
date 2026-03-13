@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -52,6 +53,11 @@ const maxEvents = 500
 const tokenExpiryDuration = 7 * 24 * time.Hour // Token 不活跃过期时间
 const sessionDefaultTTL = 24 * time.Hour
 
+var (
+	errJWTSecretUnavailable = errors.New("jwt secret unavailable before setup")
+	errJWTSecretMissing     = errors.New("initialized admin store missing jwt secret")
+)
+
 // NewAdminStore 创建一个新的管理存储
 func NewAdminStore(path string) (*AdminStore, error) {
 	store := &AdminStore{
@@ -82,6 +88,10 @@ func NewAdminStore(path string) (*AdminStore, error) {
 		}
 	}
 
+	if err := store.validateLoadedState(); err != nil {
+		return nil, err
+	}
+
 	// 启动后清理过期 session
 	store.CleanExpiredSessions()
 
@@ -106,6 +116,16 @@ func (s *AdminStore) save() error {
 		return err
 	}
 	return os.WriteFile(s.path, data, 0600)
+}
+
+func (s *AdminStore) validateLoadedState() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.data.Initialized && s.data.JWTSecret == "" {
+		return fmt.Errorf("admin store invalid: %w", errJWTSecretMissing)
+	}
+	return nil
 }
 
 // ========== 初始化 ==========
@@ -187,14 +207,17 @@ func validatePassword(password string) error {
 // ========== JWT Secret ==========
 
 // GetJWTSecret 获取 JWT 签名密钥
-func (s *AdminStore) GetJWTSecret() []byte {
+func (s *AdminStore) GetJWTSecret() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	if s.data.JWTSecret == "" {
-		// 未初始化时返回 fallback（仅用于不需要安全性的开发场景）
-		return []byte("netsgo-dev-fallback-secret")
+		if !s.data.Initialized {
+			return nil, errJWTSecretUnavailable
+		}
+		return nil, errJWTSecretMissing
 	}
-	return []byte(s.data.JWTSecret)
+	return []byte(s.data.JWTSecret), nil
 }
 
 // ========== Server Config ==========

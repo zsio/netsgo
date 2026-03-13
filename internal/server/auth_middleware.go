@@ -26,7 +26,10 @@ type SessionInfo struct {
 
 // GenerateAdminToken 生成一个新的 JWT Token（绑定 session）
 func (s *Server) GenerateAdminToken(session *AdminSession) (string, error) {
-	secret := s.adminStore.GetJWTSecret()
+	secret, err := s.adminStore.GetJWTSecret()
+	if err != nil {
+		return "", fmt.Errorf("get jwt secret: %w", err)
+	}
 
 	claims := AdminClaims{
 		SessionID: session.ID,
@@ -66,7 +69,11 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		tokenString := parts[1]
 		claims := &AdminClaims{}
-		secret := s.adminStore.GetJWTSecret()
+		secret, err := s.adminStore.GetJWTSecret()
+		if err != nil {
+			http.Error(w, `{"error":"jwt secret unavailable"}`, http.StatusInternalServerError)
+			return
+		}
 
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
