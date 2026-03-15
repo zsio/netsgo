@@ -151,8 +151,12 @@ func TestAPI_SetupInit_Success(t *testing.T) {
 	if resp["success"] != true {
 		t.Errorf("期望 success 为 true，得到 %v", resp["success"])
 	}
-	if resp["token"] == nil || resp["token"] == "" {
-		t.Errorf("期望返回合法的 token")
+	if resp["message"] == nil || resp["message"] == "" {
+		t.Errorf("期望返回 message")
+	}
+	// 初始化后不再自动创建 session，用户需要单独登录
+	if resp["token"] != nil {
+		t.Errorf("初始化后不应返回 token，用户应通过登录页登录")
 	}
 
 	secret, err := s.adminStore.GetJWTSecret()
@@ -461,5 +465,86 @@ func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 
 	if w4.Code != http.StatusBadRequest {
 		t.Fatalf("无效端口范围应返回 400，得到 %d", w4.Code)
+	}
+}
+
+// ========== P5: Cookie 设置/清除测试 ==========
+
+func TestAPI_Login_SetsCookie(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+
+	body := []byte(`{"username":"admin","password":"password123"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAPILogin(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望登录成功 200，得到 %d", w.Code)
+	}
+
+	// 检查 Set-Cookie 头
+	cookies := w.Result().Cookies()
+	var sessionCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == sessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("登录响应中缺少 netsgo_session cookie")
+	}
+	if !sessionCookie.HttpOnly {
+		t.Error("session cookie 应设置 HttpOnly")
+	}
+	if sessionCookie.SameSite != http.SameSiteStrictMode {
+		t.Errorf("session cookie SameSite 应为 Strict，得到 %v", sessionCookie.SameSite)
+	}
+	if sessionCookie.Path != "/api" {
+		t.Errorf("session cookie Path 应为 /api，得到 %s", sessionCookie.Path)
+	}
+	if sessionCookie.Value == "" {
+		t.Error("session cookie 值不应为空")
+	}
+}
+
+func TestAPI_Logout_ClearsCookie(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+
+	// 先登录获取 session
+	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "")
+	tokenString, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 token 失败: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenString)
+	w := httptest.NewRecorder()
+
+	s.RequireAuth(s.handleAPILogout).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望登出成功 200，得到 %d", w.Code)
+	}
+
+	// 检查 Set-Cookie 头是否清除了 cookie
+	cookies := w.Result().Cookies()
+	var sessionCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == sessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("登出响应中缺少清除 netsgo_session cookie 的 Set-Cookie 头")
+	}
+	if sessionCookie.MaxAge != -1 {
+		t.Errorf("清除 cookie 的 MaxAge 应为 -1，得到 %d", sessionCookie.MaxAge)
 	}
 }

@@ -3,11 +3,11 @@ import { createRoute, useNavigate } from '@tanstack/react-router';
 import { rootRoute } from './__root';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useAuthStore } from '@/stores/auth-store';
+
 import { api } from '@/lib/api';
 import { fetchSetupStatus } from '@/lib/auth';
-import type { SetupResponse, PortRange } from '@/types';
-import { Globe, Shield, Check, Copy, Plus, X, Sparkles, ArrowRight, ArrowLeft, AlertTriangle, User, Lock, Loader2, ShieldCheck, Server, KeyRound } from 'lucide-react';
+import type { PortRange } from '@/types';
+import { Globe, Shield, Check, Plus, X, Sparkles, ArrowRight, ArrowLeft, AlertTriangle, User, Lock, Loader2, ShieldCheck, Server, KeyRound } from 'lucide-react';
 import { requireSetupPage } from '@/lib/auth';
 import { useParticleCanvas } from '@/hooks/use-particle-canvas';
 import { motion, AnimatePresence } from 'motion/react';
@@ -29,7 +29,7 @@ const PORT_PRESETS = [
 function SetupPage() {
   const [step, setStep] = useState(0);
   const navigate = useNavigate();
-  const setAuth = useAuthStore((s) => s.setAuth);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useParticleCanvas(canvasRef);
@@ -55,8 +55,7 @@ function SetupPage() {
   // Success
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const [result, setResult] = useState<SetupResponse | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // P8: Setup Token
   const [setupToken, setSetupToken] = useState(() => {
@@ -138,14 +137,13 @@ function SetupPage() {
     setLoading(true);
     setSubmitError('');
     try {
-      const resp = await api.post<SetupResponse>('/api/setup/init', {
+      const resp = await api.post<{ success: boolean; message: string }>('/api/setup/init', {
         admin: { username, password },
         server_addr: serverAddr,
         allowed_ports: ports,
         setup_token: setupToken || undefined, // P8: 携带 Setup Token
       });
       setResult(resp);
-      setAuth(resp.token, resp.user);
       setStep(3); // Success page
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : '初始化失败');
@@ -154,13 +152,7 @@ function SetupPage() {
     }
   };
 
-  const handleCopy = async () => {
-    if (result?.client_key?.raw_key) {
-      await navigator.clipboard.writeText(result.client_key.raw_key);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
+
 
   const stepVariants = {
     initial: { opacity: 0, y: 10, filter: 'blur(4px)' },
@@ -620,53 +612,12 @@ function SetupPage() {
                       <Check className="w-8 h-8 text-green-500" />
                     </motion.div>
                     <h2 className="text-2xl font-bold">一切准备就绪！</h2>
-                    <p className="text-sm text-muted-foreground -mt-2">超级管理节点已启动，基础配置完成</p>
+                    <p className="text-sm text-muted-foreground -mt-2">基础配置完成，请使用刚创建的管理员账号登录</p>
                   </div>
 
-                  {result.client_key && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 10 }} 
-                      animate={{ opacity: 1, y: 0 }} 
-                      transition={{ delay: 0.3 }}
-                      className="rounded-xl border border-chart-1/30 bg-chart-1/5 p-5 text-left space-y-3 backdrop-blur-sm relative overflow-hidden"
-                    >
-                      {/* Subtly glowing background element */}
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-chart-1/10 blur-2xl rounded-full" />
-                      
-                      <div className="relative z-10">
-                        <div className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
-                          <Shield className="w-4 h-4 text-chart-1" />
-                          首个 Client Token（仅显示此一次）
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 px-3 py-2.5 bg-background/80 backdrop-blur-md rounded-lg text-sm font-mono break-all border border-border/50 shadow-inner">
-                            {result.client_key.raw_key}
-                          </div>
-                          <Button variant={copied ? "default" : "secondary"} size="icon" onClick={handleCopy} className={`shrink-0 h-auto self-stretch w-10 transition-colors ${copied ? 'bg-green-500 hover:bg-green-600 text-white' : ''}`}>
-                            <AnimatePresence mode="wait" initial={false}>
-                              {copied ? (
-                                <motion.div key="check" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }}>
-                                  <Check className="w-4 h-4" />
-                                </motion.div>
-                              ) : (
-                                <motion.div key="copy" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }}>
-                                  <Copy className="w-4 h-4" />
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </Button>
-                        </div>
-                        <div className="flex items-start gap-2 text-xs text-muted-foreground mt-3 pt-3 border-t border-border/40">
-                          <AlertTriangle className="w-3.5 h-3.5 text-chart-1 mt-0.5 shrink-0" />
-                          <span>请立即复制并将其配置到您的内网 Client 中，离开此页面后您只能创建新的 Token。</span>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}>
-                    <Button onClick={() => navigate({ to: '/dashboard' })} className="w-full gap-2 mt-4" size="lg">
-                      进入管理面板 <ArrowRight className="w-4 h-4" />
+                    <Button onClick={() => navigate({ to: '/login' })} className="w-full gap-2 mt-4" size="lg">
+                      前往登录 <ArrowRight className="w-4 h-4" />
                     </Button>
                   </motion.div>
                 </motion.div>

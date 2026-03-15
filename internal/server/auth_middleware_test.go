@@ -318,3 +318,111 @@ func TestAuthMiddleware_StoreNotInitialized(t *testing.T) {
 		t.Errorf("Store 未初始化应返回 500 (或 401 视秘钥验证结果)，得到 %d", w.Code)
 	}
 }
+
+// ========== P5: Cookie 认证测试 ==========
+
+func TestAuthMiddleware_CookieAuth_Success(t *testing.T) {
+	store, cleanup := setupMockAdminStore(t)
+	defer cleanup()
+
+	s := New(0)
+	s.adminStore = store
+
+	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
+	tokenString, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 token 失败: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tokenString})
+	req.Header.Set("User-Agent", "test-client") // P6: 必须与 CreateSession 的 UA 一致
+	w := httptest.NewRecorder()
+
+	handlerCalled := false
+	handler := s.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalled = true
+		info := GetSessionFromContext(r.Context())
+		if info == nil {
+			t.Errorf("上下文中未找到 SessionInfo")
+		} else if info.SessionID != session.ID {
+			t.Errorf("上下文中 SessionID 期望 %s，得到 %s", session.ID, info.SessionID)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Cookie 中的合法 token 应返回 200，得到 %d", w.Code)
+	}
+	if !handlerCalled {
+		t.Errorf("Handler 未被调用")
+	}
+}
+
+func TestAuthMiddleware_CookieAuth_InvalidToken(t *testing.T) {
+	store, cleanup := setupMockAdminStore(t)
+	defer cleanup()
+
+	s := New(0)
+	s.adminStore = store
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "invalid-token"})
+	w := httptest.NewRecorder()
+
+	handler := s.RequireAuth(func(w http.ResponseWriter, r *http.Request) {})
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Cookie 中的非法 token 应返回 401，得到 %d", w.Code)
+	}
+}
+
+func TestAuthMiddleware_HeaderPriority(t *testing.T) {
+	store, cleanup := setupMockAdminStore(t)
+	defer cleanup()
+
+	s := New(0)
+	s.adminStore = store
+
+	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
+	validToken, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 token 失败: %v", err)
+	}
+
+	// Header 中放合法 token，Cookie 中放非法 token
+	// 应使用 Header 中的 token 认证成功
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+validToken)
+	req.Header.Set("User-Agent", "test-client")
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "invalid-cookie-token"})
+	w := httptest.NewRecorder()
+
+	handler := s.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Header 优先级高于 Cookie，应返回 200，得到 %d", w.Code)
+	}
+}
+
+func TestAuthMiddleware_NoCredentials(t *testing.T) {
+	s := New(0)
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	w := httptest.NewRecorder()
+
+	handler := s.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("无 header 无 cookie 应返回 401，得到 %d", w.Code)
+	}
+}

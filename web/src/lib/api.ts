@@ -1,9 +1,12 @@
 /**
  * 统一 API 请求器
  * 所有业务代码通过此模块发起 HTTP 请求，不直接使用 fetch
+ *
+ * P5: 认证凭证通过 httpOnly cookie 自动传递（credentials: 'same-origin'），
+ * 不再需要手动管理 Authorization header。API 编程调用者仍可通过 header 传递 token。
  */
 
-import { clearStoredAuth, getStoredAuthState, useAuthStore } from '@/stores/auth-store';
+import { useAuthStore } from '@/stores/auth-store';
 
 class ApiError extends Error {
   status: number;
@@ -25,26 +28,20 @@ async function request<T>(
   url: string,
   options?: RequestInit,
 ): Promise<T> {
-  const { token } = getStoredAuthState();
-
   const headers = new Headers({
     "Content-Type": "application/json",
     ...options?.headers,
   });
 
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-
   const res = await fetch(url, {
     ...options,
     headers,
+    credentials: 'same-origin', // P5: 浏览器自动携带 httpOnly cookie
   });
 
   if (!res.ok) {
     if (res.status === 401) {
       useAuthStore.getState().logout();
-      clearStoredAuth();
       if (typeof window !== 'undefined' && !window.location.hash.startsWith('#/login')) {
         window.location.hash = '#/login';
       }

@@ -16,12 +16,12 @@ export async function requireConsoleAuth() {
     throw redirect({ to: '/setup' });
   }
 
-  const { token } = getStoredAuthState();
-  if (!token) {
+  const { isAuthenticated } = getStoredAuthState();
+  if (!isAuthenticated) {
     throw redirect({ to: '/login' });
   }
 
-  return { token };
+  return { isAuthenticated };
 }
 
 export async function redirectFromIndex() {
@@ -30,8 +30,8 @@ export async function redirectFromIndex() {
     throw redirect({ to: '/setup' });
   }
 
-  const { token } = getStoredAuthState();
-  throw redirect({ to: token ? '/dashboard' : '/login' });
+  const { isAuthenticated } = getStoredAuthState();
+  throw redirect({ to: isAuthenticated ? '/dashboard' : '/login' });
 }
 
 export async function requireLoginPage() {
@@ -40,8 +40,8 @@ export async function requireLoginPage() {
     throw redirect({ to: '/setup' });
   }
 
-  const { token } = getStoredAuthState();
-  if (token) {
+  const { isAuthenticated } = getStoredAuthState();
+  if (isAuthenticated) {
     throw redirect({ to: '/dashboard' });
   }
 }
@@ -52,6 +52,6 @@ export async function requireSetupPage() {
     return;
   }
 
-  const { token } = getStoredAuthState();
-  throw redirect({ to: token ? '/dashboard' : '/login' });
+  const { isAuthenticated } = getStoredAuthState();
+  throw redirect({ to: isAuthenticated ? '/dashboard' : '/login' });
 }

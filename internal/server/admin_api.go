@@ -130,52 +130,15 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 验证新建的管理员并创建 session
-	user, err := s.adminStore.ValidateAdminPassword(req.Admin.Username, req.Admin.Password)
-	if err != nil {
-		http.Error(w, `{"error":"internal error: cannot validate newly created admin"}`, http.StatusInternalServerError)
-		return
-	}
-
-	session := s.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
-	token, err := s.GenerateAdminToken(session)
-	if err != nil {
-		http.Error(w, `{"error":"failed to generate token"}`, http.StatusInternalServerError)
-		return
-	}
-
-	// 自动生成首个 Client Key
-	rawKey := "sk-" + generateUUID()
-	clientKey, err := s.adminStore.AddAPIKey("default", rawKey, []string{"connect"}, nil)
-	if err != nil {
-		// Key 创建失败不阻塞初始化
-		rawKey = ""
-		clientKey = nil
-	}
-
 	s.adminStore.AddSystemLog("INFO", "服务初始化完成，管理员: "+req.Admin.Username, "setup")
 	s.setupToken = "" // P8: 初始化成功，清空一次性 Token
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-
-	resp := map[string]any{
+	json.NewEncoder(w).Encode(map[string]any{
 		"success": true,
-		"token":   token,
-		"message": "初始化成功",
-		"user": map[string]any{
-			"id":       user.ID,
-			"username": user.Username,
-			"role":     user.Role,
-		},
-	}
-	if clientKey != nil {
-		resp["client_key"] = map[string]any{
-			"name":    clientKey.Name,
-			"raw_key": rawKey,
-		}
-	}
-	json.NewEncoder(w).Encode(resp)
+		"message": "初始化成功，请使用刚创建的管理员账号登录",
+	})
 }
 
 // ========= Auth API =========
@@ -237,6 +200,9 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		s.loginLimiter.ResetFailures(ip)
 	}
 
+	// P5: 设置 httpOnly session cookie（浏览器场景）
+	s.setSessionCookie(w, token, int(sessionDefaultTTL.Seconds()))
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
@@ -262,6 +228,9 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 
 	s.adminStore.DeleteSession(info.SessionID)
 	s.adminStore.AddSystemLog("INFO", "Admin user logged out: "+info.Username, "auth")
+
+	// P5: 清除 session cookie
+	s.clearSessionCookie(w)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"success": true})

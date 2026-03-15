@@ -37,7 +37,7 @@ function LoginPage() {
 
     try {
       const resp = await api.post<LoginResponse>('/api/auth/login', { username, password });
-      setAuth(resp.token, resp.user);
+      setAuth(resp.user);
       navigate({ to: '/dashboard' });
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败，请检查用户名和密码');

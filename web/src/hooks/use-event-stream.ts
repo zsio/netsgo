@@ -156,12 +156,12 @@ function parseSSE(buffer: string, onEvent: (eventType: string, data: string) => 
 export function useEventStream() {
   const queryClient = useQueryClient();
   const setStatus = useConnectionStore((state) => state.setStatus);
-  const token = useAuthStore((state) => state.token);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const shouldConnect = Boolean(token) && pathname !== '/setup' && pathname !== '/login';
+  const shouldConnect = isAuthenticated && pathname !== '/setup' && pathname !== '/login';
 
   useEffect(() => {
-    if (!shouldConnect || !token) {
+    if (!shouldConnect) {
       setStatus('disconnected');
       return;
     }
@@ -177,12 +177,13 @@ export function useEventStream() {
         try {
           setStatus(hasConnected ? 'reconnecting' : 'connecting');
 
+          // P5: cookie 自动携带，无需手动 Authorization header
           const response = await fetch('/api/events', {
             method: 'GET',
             headers: {
               Accept: 'text/event-stream',
-              Authorization: `Bearer ${token}`,
             },
+            credentials: 'same-origin',
             signal: activeController.signal,
           });
 
@@ -234,5 +235,5 @@ export function useEventStream() {
       activeController?.abort();
       setStatus('disconnected');
     };
-  }, [queryClient, setStatus, shouldConnect, token]);
+  }, [queryClient, setStatus, shouldConnect]);
 }

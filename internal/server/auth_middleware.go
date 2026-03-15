@@ -10,6 +10,25 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+const sessionCookieName = "netsgo_session"
+
+// extractToken 从请求中提取 JWT token
+// 优先级: Authorization header > Cookie
+func extractToken(r *http.Request) string {
+	// 1. Authorization: Bearer <token>
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		parts := strings.SplitN(auth, " ", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
+			return parts[1]
+		}
+	}
+	// 2. Cookie fallback (浏览器场景)
+	if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+		return cookie.Value
+	}
+	return ""
+}
+
 // AdminClaims JWT 载荷 — 仅存 sessionID，业务信息从 session 中查找
 type AdminClaims struct {
 	SessionID string `json:"sid"`
@@ -43,21 +62,18 @@ func (s *Server) GenerateAdminToken(session *AdminSession) (string, error) {
 	return token.SignedString(secret)
 }
 
-// RequireAuth 验证请求头中的 JWT 令牌 + 服务端 session 是否有效
+// RequireAuth 验证 JWT 令牌 + 服务端 session 是否有效
+// 支持两种认证方式（优先级从高到低）:
+//   1. Authorization: Bearer <token> — API 编程调用
+//   2. Cookie netsgo_session — 浏览器 Web 面板
 // JWT 只作为 session 载体，真正的权限判定来自 session 状态
 func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
-			return
-		}
-
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			http.Error(w, `{"error":"invalid authorization format"}`, http.StatusUnauthorized)
+		tokenString := extractToken(r)
+		if tokenString == "" {
+			http.Error(w, `{"error":"missing credentials"}`, http.StatusUnauthorized)
 			return
 		}
 
@@ -66,8 +82,6 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
 			return
 		}
-
-		tokenString := parts[1]
 		claims := &AdminClaims{}
 		secret, err := s.adminStore.GetJWTSecret()
 		if err != nil {
@@ -146,4 +160,31 @@ func (s *Server) RequireAuthIfInitialized(next http.HandlerFunc) http.HandlerFun
 		}
 		s.RequireAuth(next).ServeHTTP(w, r)
 	}
+}
+
+// setSessionCookie 设置 httpOnly session cookie
+// P5: 浏览器场景下 JWT 通过 cookie 传递，JavaScript 无法读取
+func (s *Server) setSessionCookie(w http.ResponseWriter, token string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/api",
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   s.tlsEnabled,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+// clearSessionCookie 清除 session cookie
+func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/api",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   s.tlsEnabled,
+		SameSite: http.SameSiteStrictMode,
+	})
 }

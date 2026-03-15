@@ -208,15 +208,5 @@ export interface SetupRequest {
 
 export interface SetupResponse {
   success: boolean;
-  token: string;
-  user: {
-    id: string;
-    username: string;
-    role: string;
-  };
-  client_key?: {
-    name: string;
-    raw_key: string;
-  };
   message: string;
 }
