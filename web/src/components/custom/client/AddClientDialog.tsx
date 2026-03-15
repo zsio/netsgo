@@ -100,7 +100,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Key className="h-5 w-5 text-primary" />
-            添加 Agent
+            添加 Client
           </DialogTitle>
           <DialogDescription>
             生成临时连接密钥，供新 Client 快速接入
@@ -283,8 +283,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
         <div className="mt-2 rounded-lg bg-muted/50 border border-border/50 p-3 space-y-2">
           <p className="text-xs font-medium text-foreground">使用说明</p>
           <ol className="text-[11px] text-muted-foreground space-y-1.5 list-decimal list-inside">
-            <li>在目标机器上下载并安装 NetsGo Agent</li>
-            <li>使用上方的<strong>连接命令</strong>或<strong>快速链接</strong>启动 Agent</li>
+            <li>在目标机器上下载并安装 NetsGo Client</li>
+            <li>使用上方的<strong>连接命令</strong>或<strong>快速链接</strong>启动 Client</li>
             <li>Client 将自动连接到此服务端并出现在面板中</li>
           </ol>
         </div>

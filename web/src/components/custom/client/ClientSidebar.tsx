@@ -14,11 +14,11 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const [searchQuery, setSearchQuery] = useState('');
 
   // 从路由匹配获取当前选中的 clientId
-  const agentMatch = useMatch({ from: '/dashboard/clients/$clientId', shouldThrow: false });
-  const currentAgentId = agentMatch?.params?.clientId;
+  const clientMatch = useMatch({ from: '/dashboard/clients/$clientId', shouldThrow: false });
+  const currentClientId = clientMatch?.params?.clientId;
 
   // 判断当前是否在概览页（无 clientId）
-  const isOverview = !currentAgentId;
+  const isOverview = !currentClientId;
 
   const filteredClients = useMemo(() => {
     if (!searchQuery.trim()) return clients;
@@ -79,7 +79,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
         ) : clients.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-muted-foreground py-12 px-4 text-center">
             <Activity className="h-10 w-10 mb-3 opacity-20" />
-            <p className="text-sm">暂无 Agent</p>
+            <p className="text-sm">暂无 Client</p>
             <p className="text-xs opacity-60 mt-1">启动 Client 后将自动显示</p>
           </div>
         ) : filteredClients.length === 0 ? (
@@ -91,7 +91,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
           <div className="space-y-0.5">
             {sortedClients.map((client) => {
               const isOnline = client.online;
-              const isSelected = currentAgentId === client.id;
+              const isSelected = currentClientId === client.id;
 
               return (
                 <Link
