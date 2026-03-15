@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -89,7 +90,7 @@ func (s *Server) handleDataConn(conn net.Conn) {
 	client := val.(*ClientConn)
 
 	// 6. P3: 校验 DataToken
-	if client.dataToken == "" || client.dataToken != dataToken {
+	if client.dataToken == "" || subtle.ConstantTimeCompare([]byte(client.dataToken), []byte(dataToken)) != 1 {
 		log.Printf("❌ 数据通道: DataToken 校验失败 [%s]", clientID)
 		conn.Write([]byte{protocol.DataHandshakeAuthFail})
 		conn.Close()

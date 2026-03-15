@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -259,6 +260,13 @@ func (s *AdminStore) IsPortAllowed(port int) bool {
 
 // ========== AdminUsers ==========
 
+// dummyBcryptHash 用于用户名不存在时执行等价的 bcrypt 运算，
+// 消除计时侧信道，防止攻击者通过响应时间差异枚举有效用户名。
+var dummyBcryptHash = func() []byte {
+	h, _ := bcrypt.GenerateFromPassword([]byte("timing-safe-dummy"), bcrypt.DefaultCost)
+	return h
+}()
+
 func (s *AdminStore) ValidateAdminPassword(username, password string) (*AdminUser, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -266,13 +274,15 @@ func (s *AdminStore) ValidateAdminPassword(username, password string) (*AdminUse
 	for i, u := range s.data.AdminUsers {
 		if u.Username == username {
 			if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
-				return nil, fmt.Errorf("密码错误")
+				return nil, fmt.Errorf("用户名或密码错误")
 			}
 			userCopy := s.data.AdminUsers[i]
 			return &userCopy, nil
 		}
 	}
-	return nil, fmt.Errorf("用户不存在")
+	// 用户不存在时也执行 bcrypt 比较，保持一致的时间开销，防计时侧信道
+	_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
+	return nil, fmt.Errorf("用户名或密码错误")
 }
 
 func (s *AdminStore) UpdateAdminLoginTime(id string) {
@@ -674,7 +684,7 @@ func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken,
 	tokenHash := hashToken(token)
 
 	for i, t := range s.data.ClientTokens {
-		if t.TokenHash == tokenHash {
+		if subtle.ConstantTimeCompare([]byte(t.TokenHash), []byte(tokenHash)) == 1 {
 			// Token hash 匹配
 			if t.IsRevoked {
 				return nil, fmt.Errorf("Token 已被吊销")

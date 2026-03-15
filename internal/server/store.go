@@ -106,7 +106,7 @@ func (s *TunnelStore) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o644)
+	return os.WriteFile(s.path, data, 0o600)
 }
 
 // AddTunnel 添加一条隧道配置并持久化

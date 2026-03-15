@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -518,8 +519,24 @@ func (pl *PeekListener) dispatchLoop() {
 
 // --- WebSocket 升级器 ---
 
-// 无 Origin 头（Go 客户端）→ 放行；有 Origin 头 → 检查 host 是否匹配
-var upgrader = websocket.Upgrader{}
+// wsMaxMessageSize WebSocket 单条消息最大字节数（1 MiB），
+// 防止恶意 Client 发送超大 JSON 消息导致服务端 OOM。
+const wsMaxMessageSize = 1 << 20 // 1 MiB
+
+// 无 Origin 头（Go 客户端）→ 放行；有 Origin 头 → 严格校验 host 是否匹配
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // Go 客户端不发 Origin → 放行
+		}
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		return u.Host == r.Host
+	},
+}
 
 // securityHeadersHandler 统一注入安全响应头（P10）
 
@@ -528,6 +545,10 @@ func (s *Server) securityHeadersHandler(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; connect-src 'self'; font-src 'self' data:; "+
+				"frame-ancestors 'none'; form-action 'self'")
 		if s.tlsEnabled {
 			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}
@@ -544,6 +565,9 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+
+	// 限制单条 WebSocket 消息大小，防止恶意客户端发送超大消息导致 OOM
+	conn.SetReadLimit(wsMaxMessageSize)
 
 	log.Printf("📡 新的控制通道连接: %s", r.RemoteAddr)
 
