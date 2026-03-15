@@ -12,17 +12,17 @@ import (
 )
 
 const (
-	TunnelBindingClientID        = "client_id"
+	TunnelBindingClientID       = "client_id"
 	TunnelBindingLegacyHostname = "legacy_hostname"
 )
 
 // StoredTunnel 持久化存储的隧道配置
 type StoredTunnel struct {
 	protocol.ProxyNewRequest
-	Status   string `json:"status"`             // active, paused, stopped
+	Status   string `json:"status"`              // active, paused, stopped
 	ClientID string `json:"client_id,omitempty"` // 所属稳定 Client ID
-	Hostname string `json:"hostname,omitempty"` // 当前主机名（展示用）
-	Binding  string `json:"binding,omitempty"`  // client_id | legacy_hostname
+	Hostname string `json:"hostname,omitempty"`  // 当前主机名（展示用）
+	Binding  string `json:"binding,omitempty"`   // client_id | legacy_hostname
 }
 
 func (t *StoredTunnel) normalize() {

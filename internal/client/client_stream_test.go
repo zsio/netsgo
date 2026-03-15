@@ -1,25 +1,25 @@
 package client
 
 import (
-"bytes"
-"encoding/binary"
-"fmt"
-"io"
-"net"
-"net/http"
-"net/http/httptest"
-"sync"
-"testing"
-"time"
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
 
-"netsgo/pkg/mux"
-"netsgo/pkg/protocol"
+	"netsgo/pkg/mux"
+	"netsgo/pkg/protocol"
 )
 
 func TestClient_HandleStream_Success(t *testing.T) {
 	// 1. 启动本地 Mock 业务服务 (Backend)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-w.Header().Set("X-Backend", "ok")
+		w.Header().Set("X-Backend", "ok")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("backend data"))
 	}))
@@ -33,10 +33,10 @@ w.Header().Set("X-Backend", "ok")
 	c := New("ws://localhost:8080", "key")
 	proxyName := "test-backend"
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
-Name:      proxyName,
-LocalIP:   "127.0.0.1",
-LocalPort: localPort,
-})
+		Name:      proxyName,
+		LocalIP:   "127.0.0.1",
+		LocalPort: localPort,
+	})
 
 	// 3. 构建一对互相连接的管道，模拟 Server -> Client 的数据通道 (Yamux)
 	clientConn, serverConn := net.Pipe()
@@ -135,7 +135,7 @@ func TestClient_HandleStream_InvalidHeader(t *testing.T) {
 	}()
 
 	stream, _ := clientSession.AcceptStream()
-	
+
 	// 如果不崩溃且结束，说明做了防御性校验
 	c.handleStream(stream)
 
@@ -148,10 +148,10 @@ func TestClient_HandleStream_DialFail(t *testing.T) {
 	proxyName := "fail-proxy"
 	// 设置一个一定连不上的端口
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
-Name:      proxyName,
-LocalIP:   "127.0.0.1",
-LocalPort: 99999, // 非法端口/不监听端口
-})
+		Name:      proxyName,
+		LocalIP:   "127.0.0.1",
+		LocalPort: 99999, // 非法端口/不监听端口
+	})
 
 	clientConn, serverConn := net.Pipe()
 	clientSession, _ := mux.NewClientSession(clientConn, mux.DefaultConfig())
@@ -169,7 +169,7 @@ LocalPort: 99999, // 非法端口/不监听端口
 		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
 		stream.Write(lenBuf[:])
 		stream.Write(nameBytes)
-		
+
 		// 读取应该会 EOF，因为那边 dial 失败会直接 close stream
 		buf := make([]byte, 10)
 		_, err := stream.Read(buf)

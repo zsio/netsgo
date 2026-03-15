@@ -64,7 +64,7 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 			Name: "t1", Type: "tcp", LocalIP: "127.0.0.1", LocalPort: 80, RemotePort: 8080,
 		},
 		Status:   protocol.ProxyStatusActive,
-		ClientID:  "client-1",
+		ClientID: "client-1",
 		Hostname: "host-1",
 	})
 
@@ -106,7 +106,7 @@ func TestTunnelStore_AddTunnel_Success(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "web", RemotePort: 8080},
-		ClientID:         "client-1",
+		ClientID:        "client-1",
 		Hostname:        "myhost",
 		Status:          protocol.ProxyStatusActive,
 	})
@@ -128,7 +128,7 @@ func TestTunnelStore_AddTunnel_DuplicateRejected(t *testing.T) {
 
 	tunnel := StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "dup"},
-		ClientID:         "client-1",
+		ClientID:        "client-1",
 		Hostname:        "host-1",
 		Binding:         TunnelBindingClientID,
 	}
@@ -144,12 +144,12 @@ func TestTunnelStore_AddTunnel_DiffClientSameNameAllowed(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "web"},
-		ClientID:         "client-A",
+		ClientID:        "client-A",
 		Hostname:        "host-A",
 	})
 	if err := store.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "web"},
-		ClientID:         "client-B",
+		ClientID:        "client-B",
 		Hostname:        "host-B",
 		Binding:         TunnelBindingClientID,
 	}); err != nil {
@@ -165,7 +165,7 @@ func TestTunnelStore_RemoveTunnel_Success(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "rm-me"},
-		ClientID:         "client-1",
+		ClientID:        "client-1",
 		Hostname:        "host",
 	})
 
@@ -189,7 +189,7 @@ func TestTunnelStore_UpdateStatus(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t1"},
-		ClientID:         "client-1",
+		ClientID:        "client-1",
 		Hostname:        "host",
 		Status:          protocol.ProxyStatusActive,
 	})
@@ -265,7 +265,7 @@ func TestTunnelStore_GetTunnel(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "find-me", RemotePort: 9090},
-		ClientID:         "client-1",
+		ClientID:        "client-1",
 		Hostname:        "host",
 	})
 
@@ -287,17 +287,17 @@ func TestTunnelStore_GetTunnelsByHostname(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t1"},
-		ClientID:         "client-1",
+		ClientID:        "client-1",
 		Hostname:        "host-A",
 	})
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t2"},
-		ClientID:         "client-2",
+		ClientID:        "client-2",
 		Hostname:        "host-A",
 	})
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t3"},
-		ClientID:         "client-3",
+		ClientID:        "client-3",
 		Hostname:        "host-B",
 	})
 
@@ -317,7 +317,7 @@ func TestTunnelStore_GetAllTunnels_ReturnsCopy(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "original"},
-		ClientID:         "client-1",
+		ClientID:        "client-1",
 		Hostname:        "host",
 	})
 
@@ -343,7 +343,7 @@ func TestTunnelStore_ConcurrentAccess(t *testing.T) {
 			clientID := fmt.Sprintf("client-%d", idx)
 			_ = store.AddTunnel(StoredTunnel{
 				ProxyNewRequest: protocol.ProxyNewRequest{Name: name},
-				ClientID:         clientID,
+				ClientID:        clientID,
 				Hostname:        hostname,
 				Binding:         TunnelBindingClientID,
 			})

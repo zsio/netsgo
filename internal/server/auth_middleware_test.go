@@ -248,7 +248,7 @@ func TestAuthMiddleware_ValidTokenSuccess(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenString)
-	req.Header.Set("User-Agent", "test-client") // P6: 必须与 CreateSession 的 UA 一致
+	req.Header.Set("User-Agent", "test-client")
 	w := httptest.NewRecorder()
 
 	// 验证请求是否成功到达了 handler
@@ -336,7 +336,7 @@ func TestAuthMiddleware_CookieAuth_Success(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tokenString})
-	req.Header.Set("User-Agent", "test-client") // P6: 必须与 CreateSession 的 UA 一致
+	req.Header.Set("User-Agent", "test-client")
 	w := httptest.NewRecorder()
 
 	handlerCalled := false

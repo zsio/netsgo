@@ -28,7 +28,7 @@ const dashboardRouteTree = dashboardRoute.addChildren([
 ]);
 
 const routeTree = rootRoute.addChildren([
-  indexRoute, 
+  indexRoute,
   dashboardRouteTree,
   loginRoute,
   setupRoute,

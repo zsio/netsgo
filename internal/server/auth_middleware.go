@@ -64,8 +64,9 @@ func (s *Server) GenerateAdminToken(session *AdminSession) (string, error) {
 
 // RequireAuth 验证 JWT 令牌 + 服务端 session 是否有效
 // 支持两种认证方式（优先级从高到低）:
-//   1. Authorization: Bearer <token> — API 编程调用
-//   2. Cookie netsgo_session — 浏览器 Web 面板
+//  1. Authorization: Bearer <token> — API 编程调用
+//  2. Cookie netsgo_session — 浏览器 Web 面板
+//
 // JWT 只作为 session 载体，真正的权限判定来自 session 状态
 func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +109,6 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// P6: Session Binding — 校验 User-Agent 是否与登录时一致
 		// 同一浏览器 session 内 UA 不会改变，变化说明 token 可能被盗用
 		if r.UserAgent() != session.UserAgent {
 			s.adminStore.AddSystemLog("WARN",
@@ -163,7 +163,7 @@ func (s *Server) RequireAuthIfInitialized(next http.HandlerFunc) http.HandlerFun
 }
 
 // setSessionCookie 设置 httpOnly session cookie
-// P5: 浏览器场景下 JWT 通过 cookie 传递，JavaScript 无法读取
+
 func (s *Server) setSessionCookie(w http.ResponseWriter, token string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,

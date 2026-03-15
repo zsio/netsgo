@@ -376,4 +376,3 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 	s.StopAllProxies(client1)
 	s.StopAllProxies(client2)
 }
-

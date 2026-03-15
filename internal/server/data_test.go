@@ -23,7 +23,7 @@ func TestDataChannel_HandshakeSuccess(t *testing.T) {
 	cc := &ClientConn{
 		ID:        clientID,
 		proxies:   make(map[string]*ProxyTunnel),
-		dataToken: testDataToken, // P3: 设置 DataToken
+		dataToken: testDataToken,
 	}
 	s.clients.Store(clientID, cc)
 

@@ -46,7 +46,6 @@ TLS 模式:
 
 		s := server.New(port)
 
-		// P1: 构建 TLS 配置
 		tlsMode := viper.GetString("tls-mode")
 		if tlsMode != "" {
 			tlsCfg := &server.TLSConfig{
@@ -72,7 +71,6 @@ TLS 模式:
 			s.TLS = tlsCfg
 		}
 
-		// P15: 监听系统信号，优雅关闭
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
@@ -104,7 +102,6 @@ func init() {
 	// 定义 flags
 	serverCmd.Flags().IntP("port", "p", 8080, "服务端监听端口")
 
-	// P1: TLS 相关 flags
 	serverCmd.Flags().String("tls-mode", "", "TLS 模式: custom / auto / off")
 	serverCmd.Flags().String("tls-cert", "", "TLS 证书文件路径 (custom 模式)")
 	serverCmd.Flags().String("tls-key", "", "TLS 私钥文件路径 (custom 模式)")

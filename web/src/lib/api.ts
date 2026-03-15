@@ -36,7 +36,7 @@ async function request<T>(
   const res = await fetch(url, {
     ...options,
     headers,
-    credentials: 'same-origin', // P5: 浏览器自动携带 httpOnly cookie
+    credentials: 'same-origin',
   });
 
   if (!res.ok) {

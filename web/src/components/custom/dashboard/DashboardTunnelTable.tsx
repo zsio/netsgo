@@ -14,7 +14,7 @@ export function DashboardTunnelTable() {
   }
 
   // 聚合所有隧道的列表
-  const allTunnels: TunnelEntry[] = clients?.flatMap(client => 
+  const allTunnels: TunnelEntry[] = clients?.flatMap(client =>
     (client.proxies || []).map((proxy) => ({
       ...proxy,
       clientId: client.id,

@@ -83,7 +83,7 @@ function AdminEventsPage() {
                 <div key={evt.id} className="relative pl-6">
                   {/* Timeline dot */}
                   <div className="absolute top-1.5 -left-1.5 w-3 h-3 bg-card border-2 border-primary rounded-full z-10" />
-                  
+
                   <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-foreground">{evt.type}</span>

@@ -53,7 +53,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"initialized":          initialized,
-		"setup_token_required": !initialized && s.setupToken != "", // P8: 告知前端是否需要 Setup Token
+		"setup_token_required": !initialized && s.setupToken != "",
 	})
 }
 
@@ -82,7 +82,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		} `json:"admin"`
 		ServerAddr   string      `json:"server_addr"`
 		AllowedPorts []PortRange `json:"allowed_ports"`
-		SetupToken   string      `json:"setup_token"` // P8: 一次性初始化令牌
+		SetupToken   string      `json:"setup_token"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -96,7 +96,6 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// P8: 校验 Setup Token
 	if s.setupToken != "" {
 		if req.SetupToken != s.setupToken {
 			if s.setupLimiter != nil {
@@ -131,7 +130,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.adminStore.AddSystemLog("INFO", "服务初始化完成，管理员: "+req.Admin.Username, "setup")
-	s.setupToken = "" // P8: 初始化成功，清空一次性 Token
+	s.setupToken = ""
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -200,7 +199,6 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		s.loginLimiter.ResetFailures(ip)
 	}
 
-	// P5: 设置 httpOnly session cookie（浏览器场景）
 	s.setSessionCookie(w, token, int(sessionDefaultTTL.Seconds()))
 
 	w.Header().Set("Content-Type", "application/json")
@@ -229,7 +227,6 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 	s.adminStore.DeleteSession(info.SessionID)
 	s.adminStore.AddSystemLog("INFO", "Admin user logged out: "+info.Username, "auth")
 
-	// P5: 清除 session cookie
 	s.clearSessionCookie(w)
 
 	w.Header().Set("Content-Type", "application/json")

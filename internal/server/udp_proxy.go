@@ -16,7 +16,7 @@ type UDPProxyState struct {
 	packetConn   net.PacketConn // 公网 UDP 监听
 	sessions     sync.Map       // srcAddr(string) → *UDPSession
 	sessionCount atomic.Int64   // 当前活跃会话数（O(1) 计数）
-	done         chan struct{}   // 关闭信号
+	done         chan struct{}  // 关闭信号
 	closeOnce    sync.Once
 }
 
@@ -40,8 +40,8 @@ func (s *UDPProxyState) Close() {
 
 // UDPSession 一个 UDP 虚拟会话（由外部 srcAddr 标识）
 type UDPSession struct {
-	srcAddr    net.Addr   // 外部来源地址
-	stream     net.Conn   // yamux stream（帧化传输）
+	srcAddr    net.Addr     // 外部来源地址
+	stream     net.Conn     // yamux stream（帧化传输）
 	lastActive atomic.Int64 // 最后活跃时间戳（UnixNano）
 	done       chan struct{}
 	closeOnce  sync.Once
@@ -70,9 +70,9 @@ func (s *UDPSession) IdleDuration() time.Duration {
 
 // UDP 会话管理常量
 const (
-	UDPSessionTimeout = 60 * time.Second  // 会话超时时间
-	UDPReaperInterval = 10 * time.Second  // 清理器扫描间隔
-	MaxUDPSessions    = 1024              // 每个 UDP 代理最大并发会话数
+	UDPSessionTimeout = 60 * time.Second // 会话超时时间
+	UDPReaperInterval = 10 * time.Second // 清理器扫描间隔
+	MaxUDPSessions    = 1024             // 每个 UDP 代理最大并发会话数
 )
 
 // startUDPProxy 启动一条 UDP 代理隧道。

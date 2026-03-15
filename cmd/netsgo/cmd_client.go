@@ -54,13 +54,11 @@ var clientCmd = &cobra.Command{
 
 		c := client.New(serverAddr, key)
 
-		// P1: TLS 配置
 		c.TLSSkipVerify = viper.GetBool("tls-skip-verify")
 		if fp := viper.GetString("tls-fingerprint"); fp != "" {
 			c.TLSFingerprint = fp
 		}
 
-		// P15: 监听系统信号，优雅关闭
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
@@ -82,7 +80,6 @@ func init() {
 	clientCmd.Flags().StringP("server", "s", "ws://localhost:8080", "服务端地址 (支持 ws/wss/http/https)")
 	clientCmd.Flags().StringP("key", "k", "", "认证密钥")
 
-	// P1: TLS 相关 flags
 	clientCmd.Flags().Bool("tls-skip-verify", false, "跳过 TLS 证书校验（仅开发/测试用）")
 	clientCmd.Flags().String("tls-fingerprint", "", "指定服务器证书 SHA-256 指纹 (AA:BB:CC:... 格式)")
 
@@ -95,4 +92,3 @@ func init() {
 	// 注册到根命令
 	rootCmd.AddCommand(clientCmd)
 }
-

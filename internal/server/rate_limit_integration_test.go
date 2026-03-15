@@ -37,14 +37,14 @@ func setupRateLimitedServer(t *testing.T, loginCfg, setupCfg RateLimiterConfig) 
 
 func TestLogin_RateLimitBlocksAfterMaxRequests(t *testing.T) {
 	s, cleanup := setupRateLimitedServer(t, RateLimiterConfig{
-		WindowSize:  time.Minute,
-		MaxRequests: 3, // 窗口内最多 3 次
-		MaxFailures: 100,
+		WindowSize:    time.Minute,
+		MaxRequests:   3, // 窗口内最多 3 次
+		MaxFailures:   100,
 		LockoutPeriod: time.Hour,
 	}, RateLimiterConfig{
-		WindowSize:  time.Minute,
-		MaxRequests: 100,
-		MaxFailures: 100,
+		WindowSize:    time.Minute,
+		MaxRequests:   100,
+		MaxFailures:   100,
 		LockoutPeriod: time.Hour,
 	})
 	defer cleanup()
@@ -82,13 +82,13 @@ func TestLogin_RateLimitBlocksAfterMaxRequests(t *testing.T) {
 func TestLogin_RateLimitLockoutAfterFailures(t *testing.T) {
 	s, cleanup := setupRateLimitedServer(t, RateLimiterConfig{
 		WindowSize:    time.Minute,
-		MaxRequests:   100,           // 不受请求总数限制
-		MaxFailures:   3,             // 3 次失败触发锁定
+		MaxRequests:   100,                    // 不受请求总数限制
+		MaxFailures:   3,                      // 3 次失败触发锁定
 		LockoutPeriod: 200 * time.Millisecond, // 短锁定方便测试
 	}, RateLimiterConfig{
-		WindowSize:  time.Minute,
-		MaxRequests: 100,
-		MaxFailures: 100,
+		WindowSize:    time.Minute,
+		MaxRequests:   100,
+		MaxFailures:   100,
 		LockoutPeriod: time.Hour,
 	})
 	defer cleanup()
@@ -152,9 +152,9 @@ func TestLogin_RateLimitResetOnSuccess(t *testing.T) {
 		MaxFailures:   3,
 		LockoutPeriod: time.Hour,
 	}, RateLimiterConfig{
-		WindowSize:  time.Minute,
-		MaxRequests: 100,
-		MaxFailures: 100,
+		WindowSize:    time.Minute,
+		MaxRequests:   100,
+		MaxFailures:   100,
 		LockoutPeriod: time.Hour,
 	})
 	defer cleanup()
@@ -263,7 +263,7 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	s.clientLimiter = NewRateLimiter(RateLimiterConfig{
 		WindowSize:    time.Minute,
 		MaxRequests:   100,
-		MaxFailures:   3,             // 3 次失败触发锁定
+		MaxFailures:   3, // 3 次失败触发锁定
 		LockoutPeriod: 200 * time.Millisecond,
 	})
 	defer s.clientLimiter.Stop()
@@ -367,9 +367,9 @@ func TestLogin_RateLimitXForwardedFor(t *testing.T) {
 		MaxFailures:   100,
 		LockoutPeriod: time.Hour,
 	}, RateLimiterConfig{
-		WindowSize:  time.Minute,
-		MaxRequests: 100,
-		MaxFailures: 100,
+		WindowSize:    time.Minute,
+		MaxRequests:   100,
+		MaxFailures:   100,
 		LockoutPeriod: time.Hour,
 	})
 	defer cleanup()

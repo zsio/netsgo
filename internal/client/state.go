@@ -11,8 +11,8 @@ import (
 
 type persistedState struct {
 	InstallID      string `json:"install_id"`
-	Token          string `json:"token,omitempty"`          // 由 Key 兑换的连接密钥
-	TLSFingerprint string `json:"tls_fingerprint,omitempty"` // P1: TOFU 证书指纹
+	Token          string `json:"token,omitempty"` // 由 Key 兑换的连接密钥
+	TLSFingerprint string `json:"tls_fingerprint,omitempty"`
 }
 
 func defaultStatePath() (string, error) {
@@ -46,7 +46,7 @@ func (c *Client) ensureInstallID() error {
 			if state.Token != "" && c.Token == "" {
 				c.Token = state.Token
 			}
-			// P1: 加载 TLS 指纹（如果有）
+
 			if state.TLSFingerprint != "" && c.TLSFingerprint == "" {
 				c.TLSFingerprint = state.TLSFingerprint
 			}

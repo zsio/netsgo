@@ -57,7 +57,7 @@ function SetupPage() {
   const [submitError, setSubmitError] = useState('');
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  // P8: Setup Token
+
   const [setupToken, setSetupToken] = useState(() => {
     // 支持 URL 参数 ?token=xxx 自动填入
     const params = new URLSearchParams(window.location.search);
@@ -141,7 +141,7 @@ function SetupPage() {
         admin: { username, password },
         server_addr: serverAddr,
         allowed_ports: ports,
-        setup_token: setupToken || undefined, // P8: 携带 Setup Token
+        setup_token: setupToken || undefined,
       });
       setResult(resp);
       setStep(3); // Success page
@@ -182,11 +182,11 @@ function SetupPage() {
         <div className="absolute bottom-[-15%] right-[-10%] w-[600px] h-[600px] bg-chart-1/10 rounded-full blur-3xl pointer-events-none" />
 
         <div className="w-full max-w-[420px] sm:max-w-[520px] relative z-10 px-6">
-          
+
           {/* Header */}
-          <motion.div 
-            initial={{ opacity: 0, y: -20 }} 
-            animate={{ opacity: 1, y: 0 }} 
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, ease: "easeOut" }}
             className="flex flex-col items-center mb-8"
           >
@@ -197,16 +197,16 @@ function SetupPage() {
 
           {/* Minimal Step Indicator */}
           {step < 3 && (
-            <motion.div 
-              initial={{ opacity: 0 }} 
-              animate={{ opacity: 1 }} 
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
               transition={{ delay: 0.2, duration: 0.4 }}
               className="flex items-center justify-between gap-2 mb-8"
             >
               {[0, 1, 2].map((i) => (
                 <div key={i} className="flex-1 h-1.5 rounded-full bg-muted/50 overflow-hidden relative">
                   {i <= step && (
-                    <motion.div 
+                    <motion.div
                       layoutId={`indicator-${i}`}
                       initial={{ width: 0 }}
                       animate={{ width: "100%" }}
@@ -603,9 +603,9 @@ function SetupPage() {
                   className="space-y-6 text-center"
                 >
                   <div className="flex flex-col items-center gap-4">
-                    <motion.div 
-                      initial={{ scale: 0 }} 
-                      animate={{ scale: 1, rotate: [0, -10, 10, 0] }} 
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1, rotate: [0, -10, 10, 0] }}
                       transition={{ type: "spring", delay: 0.1 }}
                       className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center mb-2"
                     >
@@ -625,7 +625,7 @@ function SetupPage() {
 
             </AnimatePresence>
           </div>
-          
+
         </div>
       </div>
     </>

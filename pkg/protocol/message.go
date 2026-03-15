@@ -43,10 +43,10 @@ func (m *Message) ParsePayload(target any) error {
 
 // AuthRequest Client 连接时发送的认证请求
 type AuthRequest struct {
-	Key       string     `json:"key"`                 // 认证密钥（用于兑换 Token）
-	Token     string     `json:"token,omitempty"`      // 客户端连接密钥（优先使用）
-	InstallID string     `json:"install_id"`           // Client 稳定安装 ID
-	Client    ClientInfo `json:"client"`               // Client 基本信息
+	Key       string     `json:"key"`             // 认证密钥（用于兑换 Token）
+	Token     string     `json:"token,omitempty"` // 客户端连接密钥（优先使用）
+	InstallID string     `json:"install_id"`      // Client 稳定安装 ID
+	Client    ClientInfo `json:"client"`          // Client 基本信息
 }
 
 // AuthResponse Server 返回的认证结果
@@ -54,8 +54,8 @@ type AuthResponse struct {
 	Success   bool   `json:"success"`
 	Message   string `json:"message,omitempty"`
 	ClientID  string `json:"client_id,omitempty"` // Server 分配的唯一 ID
-	Token     string `json:"token,omitempty"`    // 服务端下发的新 Token（仅兑换时）
-	DataToken string `json:"data_token,omitempty"` // P3: 数据通道握手凭证
+	Token     string `json:"token,omitempty"`     // 服务端下发的新 Token（仅兑换时）
+	DataToken string `json:"data_token,omitempty"`
 }
 
 // ProxyNewRequest 请求创建一条新的代理隧道

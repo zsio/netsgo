@@ -178,8 +178,9 @@ func (rl *RateLimiter) cleanup() {
 
 // clientIP 从 HTTP 请求中提取客户端 IP 地址。
 // 信任代理头（X-Forwarded-For / X-Real-IP）的条件：
-//   1. 来源是本地回环地址（127.0.0.1 / ::1）— 同机 nginx/Caddy，默认信任
-//   2. TLS 模式为 off 且来源 IP 在 TrustedProxies 列表中 — 用户显式配置
+//  1. 来源是本地回环地址（127.0.0.1 / ::1）— 同机 nginx/Caddy，默认信任
+//  2. TLS 模式为 off 且来源 IP 在 TrustedProxies 列表中 — 用户显式配置
+//
 // 其他情况一律使用 RemoteAddr，防止攻击者伪造代理头绕过速率限制。
 func (s *Server) clientIP(r *http.Request) string {
 	// 先提取直连 IP

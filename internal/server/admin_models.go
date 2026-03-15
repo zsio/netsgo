@@ -33,7 +33,7 @@ type AdminUser struct {
 type RegisteredClient struct {
 	ID        string                `json:"id"`
 	InstallID string                `json:"install_id"`
-	Info      protocol.ClientInfo    `json:"info"`
+	Info      protocol.ClientInfo   `json:"info"`
 	Stats     *protocol.SystemStats `json:"stats,omitempty"`
 	CreatedAt time.Time             `json:"created_at"`
 	LastSeen  time.Time             `json:"last_seen"`
@@ -42,9 +42,9 @@ type RegisteredClient struct {
 
 // TunnelPolicy 隧道策略控制（旧版，保留向后兼容）
 type TunnelPolicy struct {
-	MinPort        int      `json:"min_port"`
-	MaxPort        int      `json:"max_port"`
-	BlockedPorts   []int    `json:"blocked_ports"`
+	MinPort         int      `json:"min_port"`
+	MaxPort         int      `json:"max_port"`
+	BlockedPorts    []int    `json:"blocked_ports"`
 	ClientWhitelist []string `json:"client_whitelist"` // 允许的 client hostname 列表
 }
 
@@ -74,15 +74,15 @@ type AdminSession struct {
 
 // ClientToken 表示一个由 Key 兑换而来的客户端长期连接密钥
 type ClientToken struct {
-	ID           string    `json:"id"`              // UUID
-	TokenHash    string    `json:"token_hash"`      // SHA-256 hex hash
-	InstallID    string    `json:"install_id"`      // 关联的客户端 install_id
-	KeyID        string    `json:"key_id"`          // 由哪个 Key 兑换而来
-	ClientID     string    `json:"client_id"`       // 关联的 Client 稳定 ID
-	CreatedAt    time.Time `json:"created_at"`      // 创建时间
-	LastActiveAt time.Time `json:"last_active_at"`  // 最后活跃时间（用于过期判断）
-	LastIP       string    `json:"last_ip"`         // 最后连接 IP
-	IsRevoked    bool      `json:"is_revoked"`      // 是否已被吊销
+	ID           string    `json:"id"`             // UUID
+	TokenHash    string    `json:"token_hash"`     // SHA-256 hex hash
+	InstallID    string    `json:"install_id"`     // 关联的客户端 install_id
+	KeyID        string    `json:"key_id"`         // 由哪个 Key 兑换而来
+	ClientID     string    `json:"client_id"`      // 关联的 Client 稳定 ID
+	CreatedAt    time.Time `json:"created_at"`     // 创建时间
+	LastActiveAt time.Time `json:"last_active_at"` // 最后活跃时间（用于过期判断）
+	LastIP       string    `json:"last_ip"`        // 最后连接 IP
+	IsRevoked    bool      `json:"is_revoked"`     // 是否已被吊销
 }
 
 // EventRecord 审计/系统事件记录（持久化）

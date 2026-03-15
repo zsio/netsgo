@@ -22,16 +22,16 @@ import (
 
 // AdminData 包含所有持久化的管理数据
 type AdminData struct {
-	APIKeys      []APIKey          `json:"api_keys"`
-	AdminUsers   []AdminUser       `json:"admin_users"`
+	APIKeys      []APIKey           `json:"api_keys"`
+	AdminUsers   []AdminUser        `json:"admin_users"`
 	Clients      []RegisteredClient `json:"clients"`
-	ClientTokens  []ClientToken      `json:"client_tokens"` // 客户端连接密钥
-	TunnelPolicy TunnelPolicy      `json:"tunnel_policy"` // 旧版策略，保留向后兼容
-	Events       []EventRecord     `json:"events"`
-	ServerConfig ServerConfig      `json:"server_config"` // 服务配置（初始化时设置）
-	Initialized  bool              `json:"initialized"`   // 是否已完成初始化
-	JWTSecret    string            `json:"jwt_secret"`    // 随机生成的 JWT 签名密钥
-	Sessions     []AdminSession    `json:"sessions"`      // 服务端 session 列表
+	ClientTokens []ClientToken      `json:"client_tokens"` // 客户端连接密钥
+	TunnelPolicy TunnelPolicy       `json:"tunnel_policy"` // 旧版策略，保留向后兼容
+	Events       []EventRecord      `json:"events"`
+	ServerConfig ServerConfig       `json:"server_config"` // 服务配置（初始化时设置）
+	Initialized  bool               `json:"initialized"`   // 是否已完成初始化
+	JWTSecret    string             `json:"jwt_secret"`    // 随机生成的 JWT 签名密钥
+	Sessions     []AdminSession     `json:"sessions"`      // 服务端 session 列表
 }
 
 // AdminStore 负责管理员账号、API Key、策略和 Session 的持久化
@@ -63,12 +63,12 @@ func NewAdminStore(path string) (*AdminStore, error) {
 	store := &AdminStore{
 		path: path,
 		data: AdminData{
-			APIKeys:     []APIKey{},
-			AdminUsers:  []AdminUser{},
+			APIKeys:      []APIKey{},
+			AdminUsers:   []AdminUser{},
 			Clients:      []RegisteredClient{},
 			ClientTokens: []ClientToken{},
-			Events:      []EventRecord{},
-			Sessions:    []AdminSession{},
+			Events:       []EventRecord{},
+			Sessions:     []AdminSession{},
 		},
 		logs: make([]SystemLogEntry, maxLogs),
 	}
@@ -641,7 +641,7 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 		TokenHash:    hashToken(newToken),
 		InstallID:    installID,
 		KeyID:        keyID,
-		ClientID:      clientID,
+		ClientID:     clientID,
 		CreatedAt:    time.Now(),
 		LastActiveAt: time.Now(),
 		LastIP:       ip,

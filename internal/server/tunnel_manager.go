@@ -188,10 +188,10 @@ func (s *Server) deleteManagedTunnel(client *ClientConn, name string) error {
 	}
 
 	s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
-		Name:    tunnel.Config.Name,
-		Type:    tunnel.Config.Type,
+		Name:     tunnel.Config.Name,
+		Type:     tunnel.Config.Type,
 		ClientID: client.ID,
-		Status:  protocol.ProxyStatusStopped,
+		Status:   protocol.ProxyStatusStopped,
 	}, "deleted")
 	return nil
 }
@@ -224,7 +224,7 @@ func storedTunnelFromRuntime(client *ClientConn, tunnel *ProxyTunnel) StoredTunn
 	return StoredTunnel{
 		ProxyNewRequest: tunnel.Config.ToProxyNewRequest(),
 		Status:          tunnel.Config.Status,
-		ClientID:         client.ID,
+		ClientID:        client.ID,
 		Hostname:        client.Info.Hostname,
 		Binding:         TunnelBindingClientID,
 	}
@@ -265,8 +265,8 @@ func (s *Server) writeControlMessage(client *ClientConn, message *protocol.Messa
 func (s *Server) emitTunnelChanged(clientID string, tunnel protocol.ProxyConfig, action string) {
 	payload := map[string]any{
 		"client_id": clientID,
-		"action":   action,
-		"tunnel":   tunnel,
+		"action":    action,
+		"tunnel":    tunnel,
 	}
 	s.events.PublishJSON("tunnel_changed", payload)
 }

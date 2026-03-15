@@ -76,7 +76,6 @@ func initTestAdminStore(t *testing.T, s *Server) {
 func issueAdminToken(t *testing.T, s *Server) string {
 	t.Helper()
 
-	// P6: UA 必须与 http.DefaultClient 发送的 User-Agent 一致，否则 session binding 校验会拒绝
 	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "Go-http-client/1.1")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
@@ -450,7 +449,7 @@ func TestWeb_DevMode_FallbackToDevPage(t *testing.T) {
 }
 
 // ============================================================
-// P10: 安全响应头 (1)
+
 // ============================================================
 
 func TestSecurityHeaders_Present(t *testing.T) {
@@ -502,7 +501,7 @@ func TestSecurityHeaders_HSTS_WithTLS(t *testing.T) {
 }
 
 // ============================================================
-// P13: SSE 端点不应设置 CORS (1)
+
 // ============================================================
 
 func TestSSE_NoCORSHeader(t *testing.T) {
@@ -524,7 +523,7 @@ func TestSSE_NoCORSHeader(t *testing.T) {
 }
 
 // ============================================================
-// P9: WebSocket Origin 校验 (2)
+
 // ============================================================
 
 // TestWebSocket_DefaultOriginCheck_NoOrigin 无 Origin 头（Go 客户端）应能正常连接
@@ -1515,7 +1514,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		req, _ := http.NewRequest(method, ts.URL+path, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("User-Agent", "test") // P6: 必须与 CreateSession 的 UA 一致
+		req.Header.Set("User-Agent", "test")
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -1639,7 +1638,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	// 5. 删除隧道 (/api/clients/{id}/tunnels/{name})
 	req, _ := http.NewRequest(http.MethodDelete, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel", clientID), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "test") // P6: 必须与 CreateSession 的 UA 一致
+	req.Header.Set("User-Agent", "test")
 	respDel, _ := http.DefaultClient.Do(req)
 	if respDel.StatusCode != http.StatusNoContent {
 		t.Errorf("删除隧道期望 204 No Content，得到 %d", respDel.StatusCode)
@@ -1666,14 +1665,14 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel1", Type: "tcp", RemotePort: 1234},
 		Status:          protocol.ProxyStatusActive,
-		ClientID:         "client-1",
+		ClientID:        "client-1",
 		Hostname:        "restore-host",
 		Binding:         TunnelBindingClientID,
 	})
 	tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel2", Type: "tcp", RemotePort: 5678},
 		Status:          protocol.ProxyStatusPaused,
-		ClientID:         "client-1",
+		ClientID:        "client-1",
 		Hostname:        "restore-host",
 		Binding:         TunnelBindingClientID,
 	})
@@ -1745,7 +1744,7 @@ func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "paused-only", Type: "tcp", RemotePort: 19090},
 		Status:          protocol.ProxyStatusPaused,
-		ClientID:         "client-restore",
+		ClientID:        "client-restore",
 		Hostname:        "restore-host",
 	})
 
@@ -1880,7 +1879,7 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 }
 
 // ============================================================
-// P15: 优雅关闭 (1)
+
 // ============================================================
 
 // TestServer_GracefulShutdown 验证 P15：调用 Shutdown 后 Client 连接被正常关闭

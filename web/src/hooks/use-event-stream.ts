@@ -177,7 +177,7 @@ export function useEventStream() {
         try {
           setStatus(hasConnected ? 'reconnecting' : 'connecting');
 
-          // P5: cookie 自动携带，无需手动 Authorization header
+
           const response = await fetch('/api/events', {
             method: 'GET',
             headers: {

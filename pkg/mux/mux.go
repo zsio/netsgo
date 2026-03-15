@@ -85,4 +85,3 @@ func Relay(a, b io.ReadWriteCloser) (atob, btoa int64) {
 	wg.Wait()
 	return atob, btoa
 }
-

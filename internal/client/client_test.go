@@ -21,11 +21,11 @@ import (
 
 // mockServer 模拟 Server 端行为，用于测试 Client
 type mockServer struct {
-	mu            sync.Mutex
-	receivedMsgs  []protocol.Message
-	authSuccess   bool
-	conns         []*websocket.Conn
-	onMessage     func(msg protocol.Message) *protocol.Message // 收到消息后的回调
+	mu           sync.Mutex
+	receivedMsgs []protocol.Message
+	authSuccess  bool
+	conns        []*websocket.Conn
+	onMessage    func(msg protocol.Message) *protocol.Message // 收到消息后的回调
 }
 
 func newMockServer(authSuccess bool) *mockServer {
@@ -62,8 +62,8 @@ func (ms *mockServer) handler(w http.ResponseWriter, r *http.Request) {
 			resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
 				Success:   ms.authSuccess,
 				Message:   "mock response",
-				ClientID:   "mock_client_1",
-				DataToken: "mock-data-token", // P3
+				ClientID:  "mock_client_1",
+				DataToken: "mock-data-token",
 			})
 			conn.WriteJSON(resp)
 
@@ -318,8 +318,8 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 				resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
 					Success:   true,
 					Message:   "ok",
-					ClientID:   "reconnect-client",
-					DataToken: "reconnect-data-token", // P3
+					ClientID:  "reconnect-client",
+					DataToken: "reconnect-data-token",
 				})
 				conn.WriteJSON(resp)
 			case protocol.MsgTypePing:
@@ -590,7 +590,6 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 		idBuf := make([]byte, idLen)
 		conn.Read(idBuf)
 
-		// P3: 读取 DataToken
 		tokenLenBuf := make([]byte, 2)
 		conn.Read(tokenLenBuf)
 		tokenLen := int(tokenLenBuf[0])<<8 | int(tokenLenBuf[1])
@@ -606,7 +605,7 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 
 	c := New("ws://"+ln.Addr().String(), "key")
 	c.ClientID = "test-client-dc"
-	c.dataToken = "test-dc-token" // P3
+	c.dataToken = "test-dc-token"
 
 	err = c.connectDataChannel()
 	if err != nil {
@@ -646,7 +645,7 @@ func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
 
 	c := New("ws://"+ln.Addr().String(), "key")
 	c.ClientID = "rejected-client"
-	c.dataToken = "some-token" // P3
+	c.dataToken = "some-token"
 
 	err = c.connectDataChannel()
 	if err == nil {
@@ -661,7 +660,7 @@ func TestClient_ConnectDataChannel_NoPort(t *testing.T) {
 	// ServerAddr 没有端口的情况
 	c := New("ws://some-host-without-port-1234567.invalid", "key")
 	c.ClientID = "no-port-client"
-	c.dataToken = "some-token" // P3
+	c.dataToken = "some-token"
 	err := c.connectDataChannel()
 	if err == nil {
 		t.Error("无法连接时应返回错误")
@@ -669,7 +668,6 @@ func TestClient_ConnectDataChannel_NoPort(t *testing.T) {
 }
 
 // ============================================================
-// P1: 地址模型推导测试
 // ============================================================
 
 func TestNormalizeServerAddr(t *testing.T) {

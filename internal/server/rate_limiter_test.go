@@ -9,9 +9,9 @@ import (
 
 func TestRateLimiter_AllowWithinWindow(t *testing.T) {
 	rl := NewRateLimiter(RateLimiterConfig{
-		WindowSize:  time.Minute,
-		MaxRequests: 5,
-		MaxFailures: 3,
+		WindowSize:    time.Minute,
+		MaxRequests:   5,
+		MaxFailures:   3,
 		LockoutPeriod: 15 * time.Minute,
 	})
 	defer rl.Stop()
@@ -26,9 +26,9 @@ func TestRateLimiter_AllowWithinWindow(t *testing.T) {
 
 func TestRateLimiter_BlockAfterWindowExceeded(t *testing.T) {
 	rl := NewRateLimiter(RateLimiterConfig{
-		WindowSize:  time.Minute,
-		MaxRequests: 3,
-		MaxFailures: 10,
+		WindowSize:    time.Minute,
+		MaxRequests:   3,
+		MaxFailures:   10,
 		LockoutPeriod: 15 * time.Minute,
 	})
 	defer rl.Stop()

@@ -32,9 +32,9 @@ type Client struct {
 	InstallID      string // 稳定安装 ID
 	StatePath      string // 安装 ID 持久化路径
 	ClientID       string // Server 分配的稳定 Client ID
-	TLSSkipVerify  bool   // P1: 跳过 TLS 证书校验（仅开发/测试）
-	TLSFingerprint string // P1: TOFU 证书指纹 pin（空则首次记录）
-	dataToken      string // P3: 从 auth_resp 获取的数据通道凭证
+	TLSSkipVerify  bool
+	TLSFingerprint string
+	dataToken      string
 	conn           *websocket.Conn
 	mu             sync.Mutex
 	done           chan struct{}
@@ -42,7 +42,7 @@ type Client struct {
 	dataSession    *yamux.Session // 数据通道 yamux Session
 	dataMu         sync.RWMutex
 	proxies        sync.Map // proxy_name -> ProxyNewRequest
-	useTLS         bool     // P1: 内部标记，地址规范化后是否为 HTTPS
+	useTLS         bool
 	// ProxyConfigs 由服务端下发，Benchmark 测试也可手动设置
 	ProxyConfigs []protocol.ProxyNewRequest
 	// DisableReconnect 禁用自动重连（用于测试等场景）
@@ -249,7 +249,7 @@ func (c *Client) cleanup() {
 
 	// 重置 ClientID
 	c.ClientID = ""
-	c.dataToken = "" // P3
+	c.dataToken = ""
 }
 
 // connectAndRun 执行完整的连接流程并阻塞直到断连。
@@ -260,14 +260,12 @@ func (c *Client) connectAndRun() error {
 		return fmt.Errorf("初始化客户端身份失败: %w", err)
 	}
 
-	// P1: 规范化地址（ws/wss/http/https 统一处理）
 	c.normalizeServerAddr()
 
 	// 1. 连接控制通道
 	controlURL := c.deriveControlURL()
 	log.Printf("🔌 正在连接 Server: %s", controlURL)
 
-	// P1: 如果是 TLS，配置 WebSocket Dialer
 	dialer := websocket.DefaultDialer
 	if c.useTLS {
 		u, _ := url.Parse(c.ServerAddr)
@@ -281,7 +279,6 @@ func (c *Client) connectAndRun() error {
 		return fmt.Errorf("连接 Server 失败: %w", err)
 	}
 
-	// P1: TLS 连接时检查证书指纹 (TOFU)
 	if c.useTLS && !c.TLSSkipVerify {
 		if err := c.checkTLSFingerprint(conn); err != nil {
 			conn.Close()
@@ -369,7 +366,7 @@ func (c *Client) authenticate() error {
 			}
 			if authResp.Success {
 				c.ClientID = authResp.ClientID
-				c.dataToken = authResp.DataToken // P3
+				c.dataToken = authResp.DataToken
 				log.Printf("✅ Token 认证成功")
 				return nil
 			}
@@ -418,7 +415,7 @@ func (c *Client) authenticate() error {
 	}
 
 	c.ClientID = authResp.ClientID
-	c.dataToken = authResp.DataToken // P3
+	c.dataToken = authResp.DataToken
 
 	// 如果服务端返回了新 Token，保存它
 	if authResp.Token != "" {
@@ -452,7 +449,6 @@ func (c *Client) connectDataChannel() error {
 		}
 	}
 
-	// P1: 根据 TLS 状态选择拨号方式
 	var dataConn net.Conn
 	if c.useTLS {
 		log.Printf("🔒 数据通道使用 TLS 连接: %s", host)

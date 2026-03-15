@@ -34,27 +34,27 @@ import (
 // Server 是服务端的核心结构体
 type Server struct {
 	Port           int
-	StorePath      string             // 隧道配置文件路径（空则使用默认）
-	TLS            *TLSConfig         // P1: TLS 配置（nil 表示无 TLS，等价于 mode=off 且无 trusted proxy）
-	TLSFingerprint string             // P1: 当前证书指纹（启用 TLS 时有值）
-	clients        sync.Map           // stable clientID -> *ClientConn
-	events         *EventBus          // SSE 事件总线
-	store          *TunnelStore       // 隧道持久化存储
-	startTime      time.Time          // 服务器启动时间
-	adminStore     *AdminStore        // 系统管理后台数据存储
-	webFS          fs.FS              // 嵌入的前端静态资源 (nil 表示开发模式)
-	webHandler     http.Handler       // 缓存的 FileServer (nil 表示开发模式)
-	cachedStatus   *serverStatusView  // 后台采集的最新服务端状态
-	cachedStatusMu sync.RWMutex       // 保护 cachedStatus
-	loginLimiter   *RateLimiter       // 管理员登录速率限制
-	clientLimiter   *RateLimiter       // Client 认证速率限制
-	setupLimiter   *RateLimiter       // 初始化接口速率限制
-	authTimeout    time.Duration      // WebSocket 认证阶段读超时（0 使用默认 30s）
-	httpServer     *http.Server       // P15: 保存引用以便 Shutdown
-	listener       net.Listener       // P15: 保存引用以便关闭
-	done           chan struct{}       // P15: 通知后台 goroutine 退出
-	setupToken     string             // P8: 启动时生成的一次性 Setup Token，初始化完成后清空
-	tlsEnabled     bool               // P1: 当前是否启用了 TLS（用于内部判断）
+	StorePath      string // 隧道配置文件路径（空则使用默认）
+	TLS            *TLSConfig
+	TLSFingerprint string
+	clients        sync.Map          // stable clientID -> *ClientConn
+	events         *EventBus         // SSE 事件总线
+	store          *TunnelStore      // 隧道持久化存储
+	startTime      time.Time         // 服务器启动时间
+	adminStore     *AdminStore       // 系统管理后台数据存储
+	webFS          fs.FS             // 嵌入的前端静态资源 (nil 表示开发模式)
+	webHandler     http.Handler      // 缓存的 FileServer (nil 表示开发模式)
+	cachedStatus   *serverStatusView // 后台采集的最新服务端状态
+	cachedStatusMu sync.RWMutex      // 保护 cachedStatus
+	loginLimiter   *RateLimiter      // 管理员登录速率限制
+	clientLimiter  *RateLimiter      // Client 认证速率限制
+	setupLimiter   *RateLimiter      // 初始化接口速率限制
+	authTimeout    time.Duration     // WebSocket 认证阶段读超时（0 使用默认 30s）
+	httpServer     *http.Server
+	listener       net.Listener
+	done           chan struct{}
+	setupToken     string
+	tlsEnabled     bool
 }
 
 // ClientConn 代表一个已连接的 Client
@@ -69,9 +69,9 @@ type ClientConn struct {
 	statsMu     sync.RWMutex          // 保护 stats / prevStats
 	conn        *websocket.Conn
 	mu          sync.Mutex
-	dataSession *yamux.Session          // 数据通道 yamux Session
-	dataMu      sync.RWMutex            // 保护 dataSession
-	dataToken   string                  // P3: 数据通道认证 token，认证时生成
+	dataSession *yamux.Session // 数据通道 yamux Session
+	dataMu      sync.RWMutex   // 保护 dataSession
+	dataToken   string
 	proxies     map[string]*ProxyTunnel // 代理隧道 name -> tunnel
 	proxyMu     sync.RWMutex            // 保护 proxies
 }
@@ -85,7 +85,7 @@ func generateDataToken() string {
 
 type clientView struct {
 	ID       string                 `json:"id"`
-	Info     protocol.ClientInfo     `json:"info"`
+	Info     protocol.ClientInfo    `json:"info"`
 	Stats    *protocol.SystemStats  `json:"stats,omitempty"`
 	Proxies  []protocol.ProxyConfig `json:"proxies"`
 	Online   bool                   `json:"online"`
@@ -95,7 +95,7 @@ type clientView struct {
 
 type serverStatusView struct {
 	Status         string                   `json:"status"`
-	ClientCount     int                      `json:"client_count"`
+	ClientCount    int                      `json:"client_count"`
 	Version        string                   `json:"version"`
 	ListenPort     int                      `json:"listen_port"`
 	Uptime         int64                    `json:"uptime"`
@@ -122,7 +122,7 @@ type serverStatusView struct {
 }
 
 type consoleSnapshot struct {
-	Clients      []clientView      `json:"clients"`
+	Clients      []clientView     `json:"clients"`
 	ServerStatus serverStatusView `json:"server_status"`
 }
 
@@ -231,7 +231,7 @@ func (a *ClientConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool
 // 通过 peek 首字节区分：HTTP 请求 vs 数据通道魔数 (0x4E)。
 func (s *Server) Start() error {
 	s.startTime = time.Now()
-	s.done = make(chan struct{}) // P15: 初始化 done channel
+	s.done = make(chan struct{})
 
 	// 初始化嵌入的前端资源
 	webFS, err := web.DistFS()
@@ -266,7 +266,6 @@ func (s *Server) Start() error {
 		go s.tokenCleanupLoop()
 	}
 
-	// P8: 如果服务尚未初始化，生成一次性 Setup Token 并打印到控制台
 	if s.adminStore != nil && !s.adminStore.IsInitialized() {
 		buf := make([]byte, 32)
 		if _, err := rand.Read(buf); err != nil {
@@ -289,12 +288,11 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("监听端口 %d 失败: %w", s.Port, err)
 	}
-	s.listener = ln // P15: 保存引用
+	s.listener = ln
 
 	addr := ln.Addr().(*net.TCPAddr)
 	s.Port = addr.Port // 更新为实际端口（当 Port=0 时有用）
 
-	// P1: 如果配置了 TLS 且模式为 custom/auto，包装 TLS Listener
 	var serveLn net.Listener = ln
 	if s.TLS != nil && s.TLS.IsEnabled() {
 		dataDir := s.getDataDir()
@@ -335,9 +333,9 @@ func (s *Server) Start() error {
 	// 注意：不设置 ReadTimeout / WriteTimeout，因为 WebSocket 和 SSE 是长连接
 	// ReadHeaderTimeout 足以防御 Slowloris 攻击（限制请求头读取时间）
 	s.httpServer = &http.Server{
-		Handler:           s.securityHeadersHandler(s.newHTTPMux()), // P10: 统一注入安全响应头
-		ReadHeaderTimeout: 10 * time.Second,                        // P14: 防御 Slowloris 慢速请求头攻击
-		IdleTimeout:       120 * time.Second,                        // P14: 空闲 keep-alive 连接超时
+		Handler:           s.securityHeadersHandler(s.newHTTPMux()),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// 包装 listener：peek 分发
@@ -520,12 +518,11 @@ func (pl *PeekListener) dispatchLoop() {
 
 // --- WebSocket 升级器 ---
 
-// P9: 使用 gorilla/websocket 默认 Origin 校验
 // 无 Origin 头（Go 客户端）→ 放行；有 Origin 头 → 检查 host 是否匹配
 var upgrader = websocket.Upgrader{}
 
 // securityHeadersHandler 统一注入安全响应头（P10）
-// P1: TLS 启用时自动添加 HSTS
+
 func (s *Server) securityHeadersHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -577,7 +574,7 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	// 发布 Client 上线事件
 	s.events.PublishJSON("client_online", map[string]any{
 		"client_id": client.ID,
-		"info":     client.Info,
+		"info":      client.Info,
 	})
 
 	// 启动隧道恢复（等数据通道建立后执行）
@@ -621,7 +618,6 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 		}
 	}
 
-	// P16: 设置认证阶段读超时，防止恶意客户端连接后不发认证消息占资源
 	authTimeout := s.authTimeout
 	if authTimeout == 0 {
 		authTimeout = 30 * time.Second
@@ -736,7 +732,7 @@ authPassed:
 		RemoteAddr: remoteAddr,
 		conn:       conn,
 		proxies:    make(map[string]*ProxyTunnel),
-		dataToken:  generateDataToken(), // P3: 数据通道认证凭证
+		dataToken:  generateDataToken(),
 	}
 
 	var replaced *ClientConn
@@ -751,7 +747,7 @@ authPassed:
 		Message:   "认证成功",
 		ClientID:  clientID,
 		Token:     newToken, // 仅 Key 兑换时非空
-		DataToken: client.dataToken, // P3: 数据通道握手凭证
+		DataToken: client.dataToken,
 	}
 	resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, authResp)
 	if err := conn.WriteJSON(resp); err != nil {
@@ -809,7 +805,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 			// 发布探针数据更新事件
 			s.events.PublishJSON("stats_update", map[string]any{
 				"client_id": client.ID,
-				"stats":    stats,
+				"stats":     stats,
 			})
 
 		case protocol.MsgTypeProxyNew:
@@ -858,9 +854,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 				log.Printf("⚠️ 关闭代理失败 [%s]: %v", client.ID, err)
 			} else {
 				s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
-					Name:    req.Name,
+					Name:     req.Name,
 					ClientID: client.ID,
-					Status:  protocol.ProxyStatusStopped,
+					Status:   protocol.ProxyStatusStopped,
 				}, "closed_by_client")
 			}
 
@@ -965,7 +961,7 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) collectSnapshot() consoleSnapshot {
 	return consoleSnapshot{
-		Clients:       s.collectClientViews(),
+		Clients:      s.collectClientViews(),
 		ServerStatus: s.getCachedServerStatus(),
 	}
 }
@@ -996,7 +992,7 @@ func (s *Server) collectClientViews() []clientView {
 						LocalPort:  tunnel.LocalPort,
 						RemotePort: tunnel.RemotePort,
 						Domain:     tunnel.Domain,
-						ClientID:    registered.ID,
+						ClientID:   registered.ID,
 						Status:     tunnel.Status,
 					})
 				}
@@ -1208,7 +1204,7 @@ func (s *Server) collectServerStatus() serverStatusView {
 
 	return serverStatusView{
 		Status:         "running",
-		ClientCount:     clientCount,
+		ClientCount:    clientCount,
 		Version:        buildversion.Current,
 		ListenPort:     s.Port,
 		Uptime:         int64(time.Since(s.startTime).Seconds()),
@@ -1475,7 +1471,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 					LocalIP:    st.LocalIP,
 					LocalPort:  st.LocalPort,
 					RemotePort: st.RemotePort,
-					ClientID:    client.ID,
+					ClientID:   client.ID,
 					Status:     protocol.ProxyStatusError,
 					Error:      errMsg,
 				},
@@ -1489,7 +1485,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 				Name:       st.Name,
 				Type:       st.Type,
 				RemotePort: st.RemotePort,
-				ClientID:    client.ID,
+				ClientID:   client.ID,
 				Status:     protocol.ProxyStatusError,
 				Error:      errMsg,
 			}, "port_not_allowed")
@@ -1515,7 +1511,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 					LocalIP:    st.LocalIP,
 					LocalPort:  st.LocalPort,
 					RemotePort: st.RemotePort,
-					ClientID:    client.ID,
+					ClientID:   client.ID,
 					Status:     st.Status,
 				},
 				done: make(chan struct{}),
@@ -1529,8 +1525,8 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 	if restoredCount > 0 {
 		s.events.PublishJSON("tunnel_changed", map[string]any{
 			"client_id": client.ID,
-			"action":   "restored_batch",
-			"count":    restoredCount,
+			"action":    "restored_batch",
+			"count":     restoredCount,
 		})
 	}
 }
