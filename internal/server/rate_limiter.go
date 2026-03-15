@@ -249,7 +249,7 @@ func (s *Server) initRateLimiters() {
 		CleanupInterval: 10 * time.Minute,
 	})
 
-	s.agentLimiter = NewRateLimiter(RateLimiterConfig{
+	s.clientLimiter = NewRateLimiter(RateLimiterConfig{
 		WindowSize:      time.Minute,
 		MaxRequests:     20,
 		MaxFailures:     10,

@@ -155,8 +155,8 @@ function SetupPage() {
   };
 
   const handleCopy = async () => {
-    if (result?.agent_key?.raw_key) {
-      await navigator.clipboard.writeText(result.agent_key.raw_key);
+    if (result?.client_key?.raw_key) {
+      await navigator.clipboard.writeText(result.client_key.raw_key);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -337,9 +337,9 @@ function SetupPage() {
                   <div className="flex flex-col gap-1 mb-6">
                     <h2 className="text-xl font-semibold flex items-center gap-2">
                       <Server className="w-5 h-5 text-primary" />
-                      Agent 接入地址
+                      Client 接入地址
                     </h2>
-                    <p className="text-sm text-muted-foreground">用于 Agent 节点建立与服务端的通信隧道</p>
+                    <p className="text-sm text-muted-foreground">用于 Client 节点建立与服务端的通信隧道</p>
                   </div>
 
                   <form onSubmit={(e) => { e.preventDefault(); if (validateStep2()) setStep(2); }} className="space-y-4">
@@ -408,7 +408,7 @@ function SetupPage() {
                               <div className="space-y-0.5">
                                 <p className="font-medium text-green-700 dark:text-green-400 text-sm">安全连接</p>
                                 <p className="text-xs text-muted-foreground leading-relaxed">
-                                  HTTPS + 域名是生产环境的推荐实践，可有效防止 Agent 凭证被窃听。
+                                  HTTPS + 域名是生产环境的推荐实践，可有效防止 Client 凭证被窃听。
                                 </p>
                               </div>
                             </div>
@@ -425,7 +425,7 @@ function SetupPage() {
                               <div className="space-y-0.5">
                                 <p className="font-medium text-blue-700 dark:text-blue-400 text-sm">连接已加密</p>
                                 <p className="text-xs text-muted-foreground leading-relaxed">
-                                  通信已通过 TLS 加密。建议配置公网域名，便于证书管理和外部 Agent 接入。
+                                  通信已通过 TLS 加密。建议配置公网域名，便于证书管理和外部 Client 接入。
                                 </p>
                               </div>
                             </div>
@@ -441,7 +441,7 @@ function SetupPage() {
                             <div className="space-y-0.5">
                               <p className="font-medium text-amber-700 dark:text-amber-500 text-sm">连接未加密</p>
                               <p className="text-xs text-muted-foreground leading-relaxed">
-                                当前使用 HTTP 明文传输{!isDomain ? '且未使用公网域名' : ''}，Agent Key 等敏感信息存在被窃听的风险。
+                                当前使用 HTTP 明文传输{!isDomain ? '且未使用公网域名' : ''}，Client Key 等敏感信息存在被窃听的风险。
                                 建议通过反向代理配置域名并启用 HTTPS。
                                 <span className="text-muted-foreground/70">（内网或测试环境可忽略）</span>
                               </p>
@@ -623,7 +623,7 @@ function SetupPage() {
                     <p className="text-sm text-muted-foreground -mt-2">超级管理节点已启动，基础配置完成</p>
                   </div>
 
-                  {result.agent_key && (
+                  {result.client_key && (
                     <motion.div 
                       initial={{ opacity: 0, y: 10 }} 
                       animate={{ opacity: 1, y: 0 }} 
@@ -636,11 +636,11 @@ function SetupPage() {
                       <div className="relative z-10">
                         <div className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
                           <Shield className="w-4 h-4 text-chart-1" />
-                          首个 Agent Token（仅显示此一次）
+                          首个 Client Token（仅显示此一次）
                         </div>
                         <div className="flex items-center gap-2">
                           <div className="flex-1 px-3 py-2.5 bg-background/80 backdrop-blur-md rounded-lg text-sm font-mono break-all border border-border/50 shadow-inner">
-                            {result.agent_key.raw_key}
+                            {result.client_key.raw_key}
                           </div>
                           <Button variant={copied ? "default" : "secondary"} size="icon" onClick={handleCopy} className={`shrink-0 h-auto self-stretch w-10 transition-colors ${copied ? 'bg-green-500 hover:bg-green-600 text-white' : ''}`}>
                             <AnimatePresence mode="wait" initial={false}>
@@ -658,7 +658,7 @@ function SetupPage() {
                         </div>
                         <div className="flex items-start gap-2 text-xs text-muted-foreground mt-3 pt-3 border-t border-border/40">
                           <AlertTriangle className="w-3.5 h-3.5 text-chart-1 mt-0.5 shrink-0" />
-                          <span>请立即复制并将其配置到您的内网 Agent 中，离开此页面后您只能创建新的 Token。</span>
+                          <span>请立即复制并将其配置到您的内网 Client 中，离开此页面后您只能创建新的 Token。</span>
                         </div>
                       </div>
                     </motion.div>

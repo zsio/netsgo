@@ -23,12 +23,12 @@ const EXPIRY_OPTIONS = [
   { label: '不限制', value: '0' },
 ] as const;
 
-interface AddAgentDialogProps {
+interface AddClientDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function AddAgentDialog({ open, onOpenChange }: AddAgentDialogProps) {
+export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   const [step, setStep] = useState<'config' | 'result'>('config');
   const [maxUses, setMaxUses] = useState(0);
   const [expiresIn, setExpiresIn] = useState('0');
@@ -103,7 +103,7 @@ export function AddAgentDialog({ open, onOpenChange }: AddAgentDialogProps) {
             添加 Agent
           </DialogTitle>
           <DialogDescription>
-            生成临时连接密钥，供新 Agent 快速接入
+            生成临时连接密钥，供新 Client 快速接入
           </DialogDescription>
         </DialogHeader>
 
@@ -285,7 +285,7 @@ export function AddAgentDialog({ open, onOpenChange }: AddAgentDialogProps) {
           <ol className="text-[11px] text-muted-foreground space-y-1.5 list-decimal list-inside">
             <li>在目标机器上下载并安装 NetsGo Agent</li>
             <li>使用上方的<strong>连接命令</strong>或<strong>快速链接</strong>启动 Agent</li>
-            <li>Agent 将自动连接到此服务端并出现在面板中</li>
+            <li>Client 将自动连接到此服务端并出现在面板中</li>
           </ol>
         </div>
       </DialogContent>

@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	TunnelBindingAgentID        = "agent_id"
+	TunnelBindingClientID        = "client_id"
 	TunnelBindingLegacyHostname = "legacy_hostname"
 )
 
@@ -20,35 +20,35 @@ const (
 type StoredTunnel struct {
 	protocol.ProxyNewRequest
 	Status   string `json:"status"`             // active, paused, stopped
-	AgentID  string `json:"agent_id,omitempty"` // 所属稳定 Agent ID
+	ClientID string `json:"client_id,omitempty"` // 所属稳定 Client ID
 	Hostname string `json:"hostname,omitempty"` // 当前主机名（展示用）
-	Binding  string `json:"binding,omitempty"`  // agent_id | legacy_hostname
+	Binding  string `json:"binding,omitempty"`  // client_id | legacy_hostname
 }
 
 func (t *StoredTunnel) normalize() {
 	switch t.Binding {
-	case TunnelBindingAgentID:
-		if t.AgentID == "" {
+	case TunnelBindingClientID:
+		if t.ClientID == "" {
 			t.Binding = TunnelBindingLegacyHostname
 		}
 	case TunnelBindingLegacyHostname:
 	default:
-		// 旧版数据默认都按 hostname 绑定处理，避免误信任历史上的临时 agent_id
+		// 旧版数据默认都按 hostname 绑定处理，避免误信任历史上的临时 client_id
 		t.Binding = TunnelBindingLegacyHostname
-		t.AgentID = ""
+		t.ClientID = ""
 	}
 }
 
-func (t StoredTunnel) matchesAgent(agentID, name string) bool {
-	return t.Binding == TunnelBindingAgentID && t.AgentID == agentID && t.Name == name
+func (t StoredTunnel) matchesClient(clientID, name string) bool {
+	return t.Binding == TunnelBindingClientID && t.ClientID == clientID && t.Name == name
 }
 
 func (t StoredTunnel) matchesIdentifier(identifier, name string) bool {
 	if t.Name != name {
 		return false
 	}
-	if t.Binding == TunnelBindingAgentID {
-		return t.AgentID == identifier
+	if t.Binding == TunnelBindingClientID {
+		return t.ClientID == identifier
 	}
 	return t.Hostname == identifier
 }
@@ -112,16 +112,16 @@ func (s *TunnelStore) save() error {
 // AddTunnel 添加一条隧道配置并持久化
 func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
 	tunnel.normalize()
-	if tunnel.AgentID == "" || tunnel.Binding != TunnelBindingAgentID {
-		return fmt.Errorf("新隧道必须使用稳定 agent_id 绑定")
+	if tunnel.ClientID == "" || tunnel.Binding != TunnelBindingClientID {
+		return fmt.Errorf("新隧道必须使用稳定 client_id 绑定")
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, existing := range s.tunnels {
-		if existing.matchesAgent(tunnel.AgentID, tunnel.Name) {
-			return fmt.Errorf("隧道 %q 已存在 (agent_id: %s)", tunnel.Name, tunnel.AgentID)
+		if existing.matchesClient(tunnel.ClientID, tunnel.Name) {
+			return fmt.Errorf("隧道 %q 已存在 (client_id: %s)", tunnel.Name, tunnel.ClientID)
 		}
 	}
 
@@ -130,19 +130,19 @@ func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
 }
 
 // RemoveTunnel 删除一条隧道配置并持久化
-func (s *TunnelStore) RemoveTunnel(agentID, name string) error {
+func (s *TunnelStore) RemoveTunnel(clientID, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	idx := -1
 	for i, tunnel := range s.tunnels {
-		if tunnel.matchesIdentifier(agentID, name) {
+		if tunnel.matchesIdentifier(clientID, name) {
 			idx = i
 			break
 		}
 	}
 	if idx == -1 {
-		return fmt.Errorf("隧道 %q 不存在 (agent_id: %s)", name, agentID)
+		return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
 	}
 
 	s.tunnels = append(s.tunnels[:idx], s.tunnels[idx+1:]...)
@@ -150,27 +150,27 @@ func (s *TunnelStore) RemoveTunnel(agentID, name string) error {
 }
 
 // UpdateStatus 更新隧道状态并持久化
-func (s *TunnelStore) UpdateStatus(agentID, name, status string) error {
+func (s *TunnelStore) UpdateStatus(clientID, name, status string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for i, tunnel := range s.tunnels {
-		if tunnel.matchesIdentifier(agentID, name) {
+		if tunnel.matchesIdentifier(clientID, name) {
 			s.tunnels[i].Status = status
 			return s.save()
 		}
 	}
-	return fmt.Errorf("隧道 %q 不存在 (agent_id: %s)", name, agentID)
+	return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
 }
 
-// UpdateHostname 更新某个 Agent 的展示主机名
-func (s *TunnelStore) UpdateHostname(agentID, hostname string) error {
+// UpdateHostname 更新某个 Client 的展示主机名
+func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	changed := false
 	for i, tunnel := range s.tunnels {
-		if tunnel.Binding == TunnelBindingAgentID && tunnel.AgentID == agentID && tunnel.Hostname != hostname {
+		if tunnel.Binding == TunnelBindingClientID && tunnel.ClientID == clientID && tunnel.Hostname != hostname {
 			s.tunnels[i].Hostname = hostname
 			changed = true
 		}
@@ -181,16 +181,16 @@ func (s *TunnelStore) UpdateHostname(agentID, hostname string) error {
 	return s.save()
 }
 
-// MigrateLegacyTunnels 以 hostname 为条件，将旧版记录迁移到稳定 agent_id
-func (s *TunnelStore) MigrateLegacyTunnels(hostname, agentID string) (int, error) {
+// MigrateLegacyTunnels 以 hostname 为条件，将旧版记录迁移到稳定 client_id
+func (s *TunnelStore) MigrateLegacyTunnels(hostname, clientID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	changed := 0
 	for i, tunnel := range s.tunnels {
 		if tunnel.matchesLegacyHostname(hostname) {
-			s.tunnels[i].AgentID = agentID
-			s.tunnels[i].Binding = TunnelBindingAgentID
+			s.tunnels[i].ClientID = clientID
+			s.tunnels[i].Binding = TunnelBindingClientID
 			changed++
 		}
 	}
@@ -200,19 +200,19 @@ func (s *TunnelStore) MigrateLegacyTunnels(hostname, agentID string) (int, error
 	return changed, s.save()
 }
 
-// UpdateAgentID 向后兼容旧接口：将 hostname 绑定的旧隧道迁移到稳定 agent_id
-func (s *TunnelStore) UpdateAgentID(hostname, oldID, newID string) {
+// UpdateClientID 向后兼容旧接口：将 hostname 绑定的旧隧道迁移到稳定 client_id
+func (s *TunnelStore) UpdateClientID(hostname, oldID, newID string) {
 	_, _ = s.MigrateLegacyTunnels(hostname, newID)
 }
 
-// GetTunnelsByAgentID 按稳定 agent_id 查找所有隧道配置
-func (s *TunnelStore) GetTunnelsByAgentID(agentID string) []StoredTunnel {
+// GetTunnelsByClientID 按稳定 client_id 查找所有隧道配置
+func (s *TunnelStore) GetTunnelsByClientID(clientID string) []StoredTunnel {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	result := make([]StoredTunnel, 0)
 	for _, tunnel := range s.tunnels {
-		if tunnel.Binding == TunnelBindingAgentID && tunnel.AgentID == agentID {
+		if tunnel.Binding == TunnelBindingClientID && tunnel.ClientID == clientID {
 			result = append(result, tunnel)
 		}
 	}
@@ -247,13 +247,13 @@ func (s *TunnelStore) GetTunnelsByHostname(hostname string) []StoredTunnel {
 	return result
 }
 
-// GetTunnel 按稳定 agent_id 和 name 查找单条隧道
-func (s *TunnelStore) GetTunnel(agentID, name string) (StoredTunnel, bool) {
+// GetTunnel 按稳定 client_id 和 name 查找单条隧道
+func (s *TunnelStore) GetTunnel(clientID, name string) (StoredTunnel, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, tunnel := range s.tunnels {
-		if tunnel.matchesIdentifier(agentID, name) {
+		if tunnel.matchesIdentifier(clientID, name) {
 			return tunnel, true
 		}
 	}

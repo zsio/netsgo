@@ -1,6 +1,6 @@
 import { Activity } from 'lucide-react';
 
-export function AgentEmptyState() {
+export function ClientEmptyState() {
   return (
     <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
       <Activity className="h-16 w-16 mb-4 opacity-20" />

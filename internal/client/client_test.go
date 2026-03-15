@@ -62,7 +62,7 @@ func (ms *mockServer) handler(w http.ResponseWriter, r *http.Request) {
 			resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
 				Success:   ms.authSuccess,
 				Message:   "mock response",
-				AgentID:   "mock_agent_1",
+				ClientID:   "mock_client_1",
 				DataToken: "mock-data-token", // P3
 			})
 			conn.WriteJSON(resp)
@@ -126,9 +126,9 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 	// 等 Client 完成认证
 	time.Sleep(500 * time.Millisecond)
 
-	// 验证 AgentID 被设置
-	if c.AgentID != "mock_agent_1" {
-		t.Errorf("AgentID 期望 'mock_agent_1'，得到 %q", c.AgentID)
+	// 验证 ClientID 被设置
+	if c.ClientID != "mock_client_1" {
+		t.Errorf("ClientID 期望 'mock_client_1'，得到 %q", c.ClientID)
 	}
 
 	// 验证 Server 收到了认证消息
@@ -238,7 +238,7 @@ func TestClient_ServerDisconnect_WithReconnect(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// 验证连接正常
-	if c.AgentID == "" {
+	if c.ClientID == "" {
 		t.Fatal("Client 应已完成认证")
 	}
 
@@ -318,7 +318,7 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 				resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
 					Success:   true,
 					Message:   "ok",
-					AgentID:   "reconnect-agent",
+					ClientID:   "reconnect-client",
 					DataToken: "reconnect-data-token", // P3
 				})
 				conn.WriteJSON(resp)
@@ -380,7 +380,7 @@ func TestClient_RetryInterval(t *testing.T) {
 
 func TestClient_Cleanup(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
-	c.AgentID = "cleanup-test"
+	c.ClientID = "cleanup-test"
 	c.proxies.Store("proxy1", protocol.ProxyNewRequest{Name: "proxy1"})
 
 	// 模拟创建一个 dataSession
@@ -392,8 +392,8 @@ func TestClient_Cleanup(t *testing.T) {
 	c.cleanup()
 
 	// 验证清理结果
-	if c.AgentID != "" {
-		t.Error("cleanup 后 AgentID 应为空")
+	if c.ClientID != "" {
+		t.Error("cleanup 后 ClientID 应为空")
 	}
 
 	_, ok := c.proxies.Load("proxy1")
@@ -580,7 +580,7 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 		}
 		defer conn.Close()
 
-		// 读取握手: [1B 魔数] [2B len] [NB agentID] [2B tokenLen] [NB dataToken]
+		// 读取握手: [1B 魔数] [2B len] [NB clientID] [2B tokenLen] [NB dataToken]
 		magic := make([]byte, 1)
 		conn.Read(magic)
 
@@ -605,7 +605,7 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 	}()
 
 	c := New("ws://"+ln.Addr().String(), "key")
-	c.AgentID = "test-agent-dc"
+	c.ClientID = "test-client-dc"
 	c.dataToken = "test-dc-token" // P3
 
 	err = c.connectDataChannel()
@@ -645,7 +645,7 @@ func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
 	}()
 
 	c := New("ws://"+ln.Addr().String(), "key")
-	c.AgentID = "rejected-agent"
+	c.ClientID = "rejected-client"
 	c.dataToken = "some-token" // P3
 
 	err = c.connectDataChannel()
@@ -660,7 +660,7 @@ func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
 func TestClient_ConnectDataChannel_NoPort(t *testing.T) {
 	// ServerAddr 没有端口的情况
 	c := New("ws://some-host-without-port-1234567.invalid", "key")
-	c.AgentID = "no-port-agent"
+	c.ClientID = "no-port-client"
 	c.dataToken = "some-token" // P3
 	err := c.connectDataChannel()
 	if err == nil {

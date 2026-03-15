@@ -12,8 +12,8 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-// handleDataConn 处理 Agent 的数据通道连接。
-// 此时魔数字节 (0x4E) 已被 peek 消费，连接的下一个字节是 AgentID 长度。
+// handleDataConn 处理 Client 的数据通道连接。
+// 此时魔数字节 (0x4E) 已被 peek 消费，连接的下一个字节是 ClientID 长度。
 func (s *Server) handleDataConn(conn net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -26,43 +26,43 @@ func (s *Server) handleDataConn(conn net.Conn) {
 	// 防止恶意客户端连接后不发送握手数据占用 goroutine
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
-	// 1. 读取 AgentID 长度 (2 bytes, big-endian uint16)
+	// 1. 读取 ClientID 长度 (2 bytes, big-endian uint16)
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
-		log.Printf("❌ 数据通道: 读取 AgentID 长度失败: %v", err)
+		log.Printf("❌ 数据通道: 读取 ClientID 长度失败: %v", err)
 		conn.Write([]byte{protocol.DataHandshakeFail})
 		conn.Close()
 		return
 	}
 	idLen := binary.BigEndian.Uint16(lenBuf[:])
 	if idLen == 0 || idLen > 1024 {
-		log.Printf("❌ 数据通道: AgentID 长度异常: %d", idLen)
+		log.Printf("❌ 数据通道: ClientID 长度异常: %d", idLen)
 		conn.Write([]byte{protocol.DataHandshakeFail})
 		conn.Close()
 		return
 	}
 
-	// 2. 读取 AgentID
+	// 2. 读取 ClientID
 	idBuf := make([]byte, idLen)
 	if _, err := io.ReadFull(conn, idBuf); err != nil {
-		log.Printf("❌ 数据通道: 读取 AgentID 失败: %v", err)
+		log.Printf("❌ 数据通道: 读取 ClientID 失败: %v", err)
 		conn.Write([]byte{protocol.DataHandshakeFail})
 		conn.Close()
 		return
 	}
-	agentID := string(idBuf)
+	clientID := string(idBuf)
 
 	// 3. P3: 读取 DataToken 长度 (2 bytes, big-endian uint16)
 	var tokenLenBuf [2]byte
 	if _, err := io.ReadFull(conn, tokenLenBuf[:]); err != nil {
-		log.Printf("❌ 数据通道: 读取 DataToken 长度失败 [%s]: %v", agentID, err)
+		log.Printf("❌ 数据通道: 读取 DataToken 长度失败 [%s]: %v", clientID, err)
 		conn.Write([]byte{protocol.DataHandshakeFail})
 		conn.Close()
 		return
 	}
 	tokenLen := binary.BigEndian.Uint16(tokenLenBuf[:])
 	if tokenLen == 0 || tokenLen > 256 {
-		log.Printf("❌ 数据通道: DataToken 长度异常 [%s]: %d", agentID, tokenLen)
+		log.Printf("❌ 数据通道: DataToken 长度异常 [%s]: %d", clientID, tokenLen)
 		conn.Write([]byte{protocol.DataHandshakeFail})
 		conn.Close()
 		return
@@ -71,26 +71,26 @@ func (s *Server) handleDataConn(conn net.Conn) {
 	// 4. P3: 读取 DataToken
 	tokenBuf := make([]byte, tokenLen)
 	if _, err := io.ReadFull(conn, tokenBuf); err != nil {
-		log.Printf("❌ 数据通道: 读取 DataToken 失败 [%s]: %v", agentID, err)
+		log.Printf("❌ 数据通道: 读取 DataToken 失败 [%s]: %v", clientID, err)
 		conn.Write([]byte{protocol.DataHandshakeFail})
 		conn.Close()
 		return
 	}
 	dataToken := string(tokenBuf)
 
-	// 5. 查找对应的 AgentConn
-	val, ok := s.agents.Load(agentID)
+	// 5. 查找对应的 ClientConn
+	val, ok := s.clients.Load(clientID)
 	if !ok {
-		log.Printf("❌ 数据通道: Agent [%s] 未注册", agentID)
+		log.Printf("❌ 数据通道: Client [%s] 未注册", clientID)
 		conn.Write([]byte{protocol.DataHandshakeFail})
 		conn.Close()
 		return
 	}
-	agent := val.(*AgentConn)
+	client := val.(*ClientConn)
 
 	// 6. P3: 校验 DataToken
-	if agent.dataToken == "" || agent.dataToken != dataToken {
-		log.Printf("❌ 数据通道: DataToken 校验失败 [%s]", agentID)
+	if client.dataToken == "" || client.dataToken != dataToken {
+		log.Printf("❌ 数据通道: DataToken 校验失败 [%s]", clientID)
 		conn.Write([]byte{protocol.DataHandshakeAuthFail})
 		conn.Close()
 		return
@@ -99,16 +99,16 @@ func (s *Server) handleDataConn(conn net.Conn) {
 	// 握手校验完成，清除 deadline（yamux 自行管理超时）
 	conn.SetDeadline(time.Time{})
 
-	// 7. 如果 Agent 已经有数据通道，关闭旧的
-	agent.dataMu.Lock()
-	if agent.dataSession != nil && !agent.dataSession.IsClosed() {
-		agent.dataSession.Close()
+	// 7. 如果 Client 已经有数据通道，关闭旧的
+	client.dataMu.Lock()
+	if client.dataSession != nil && !client.dataSession.IsClosed() {
+		client.dataSession.Close()
 	}
 
 	// 8. 回复握手成功
 	if _, err := conn.Write([]byte{protocol.DataHandshakeOK}); err != nil {
-		log.Printf("❌ 数据通道: 回复握手失败 [%s]: %v", agentID, err)
-		agent.dataMu.Unlock()
+		log.Printf("❌ 数据通道: 回复握手失败 [%s]: %v", clientID, err)
+		client.dataMu.Unlock()
 		conn.Close()
 		return
 	}
@@ -116,25 +116,25 @@ func (s *Server) handleDataConn(conn net.Conn) {
 	// 9. 在该 TCP 连接上建立 yamux Server Session
 	session, err := mux.NewServerSession(conn, mux.DefaultConfig())
 	if err != nil {
-		log.Printf("❌ 数据通道: 创建 yamux Session 失败 [%s]: %v", agentID, err)
-		agent.dataMu.Unlock()
+		log.Printf("❌ 数据通道: 创建 yamux Session 失败 [%s]: %v", clientID, err)
+		client.dataMu.Unlock()
 		conn.Close()
 		return
 	}
-	agent.dataSession = session
-	agent.dataMu.Unlock()
+	client.dataSession = session
+	client.dataMu.Unlock()
 
-	log.Printf("🔗 数据通道已建立: Agent [%s]", agentID)
+	log.Printf("🔗 数据通道已建立: Client [%s]", clientID)
 
 	// 10. 阻塞等待 session 关闭（保持连接存活）
 	<-session.CloseChan()
-	log.Printf("🔌 数据通道已断开: Agent [%s]", agentID)
+	log.Printf("🔌 数据通道已断开: Client [%s]", clientID)
 }
 
-// DataHandshakeBytes 构造 Agent 侧数据通道握手包
-// 格式: [1B 魔数] [2B AgentID长度 big-endian] [NB AgentID] [2B DataToken长度] [NB DataToken]
-func DataHandshakeBytes(agentID, dataToken string) []byte {
-	idBytes := []byte(agentID)
+// DataHandshakeBytes 构造 Client 侧数据通道握手包
+// 格式: [1B 魔数] [2B ClientID长度 big-endian] [NB ClientID] [2B DataToken长度] [NB DataToken]
+func DataHandshakeBytes(clientID, dataToken string) []byte {
+	idBytes := []byte(clientID)
 	tokenBytes := []byte(dataToken)
 	buf := make([]byte, 1+2+len(idBytes)+2+len(tokenBytes))
 	buf[0] = protocol.DataChannelMagic
@@ -146,15 +146,15 @@ func DataHandshakeBytes(agentID, dataToken string) []byte {
 	return buf
 }
 
-// openStreamToAgent 在 Agent 的 yamux Session 上打开一个新 Stream，
-// 并写入 StreamHeader 告知 Agent 这个 stream 属于哪条代理。
-func (s *Server) openStreamToAgent(agent *AgentConn, proxyName string) (net.Conn, error) {
-	agent.dataMu.RLock()
-	session := agent.dataSession
-	agent.dataMu.RUnlock()
+// openStreamToClient 在 Client 的 yamux Session 上打开一个新 Stream，
+// 并写入 StreamHeader 告知 Client 这个 stream 属于哪条代理。
+func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.Conn, error) {
+	client.dataMu.RLock()
+	session := client.dataSession
+	client.dataMu.RUnlock()
 
 	if session == nil || session.IsClosed() {
-		return nil, fmt.Errorf("Agent [%s] 数据通道未建立", agent.ID)
+		return nil, fmt.Errorf("Client [%s] 数据通道未建立", client.ID)
 	}
 
 	stream, err := session.Open()

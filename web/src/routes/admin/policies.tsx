@@ -42,7 +42,7 @@ function AdminPoliciesForm({ initialPolicy }: { initialPolicy: TunnelPolicy }) {
   const updatePolicy = useUpdateAdminPolicies();
   const [formState, setFormState] = useState<TunnelPolicy>(initialPolicy);
   const [blockedPortsStr, setBlockedPortsStr] = useState(initialPolicy.blocked_ports.join(', '));
-  const [whitelistStr, setWhitelistStr] = useState(initialPolicy.agent_whitelist.join(', '));
+  const [whitelistStr, setWhitelistStr] = useState(initialPolicy.client_whitelist.join(', '));
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,7 +59,7 @@ function AdminPoliciesForm({ initialPolicy }: { initialPolicy: TunnelPolicy }) {
     const payload: TunnelPolicy = {
       ...formState,
       blocked_ports: ports,
-      agent_whitelist: hosts,
+      client_whitelist: hosts,
     };
 
     try {
@@ -99,17 +99,17 @@ function AdminPoliciesForm({ initialPolicy }: { initialPolicy: TunnelPolicy }) {
           onChange={(e) => setBlockedPortsStr(e.target.value)}
           placeholder="例如: 22, 80, 443"
         />
-        <p className="text-xs text-muted-foreground">黑名单中的端口禁止 Agent 创建映射隧道。</p>
+        <p className="text-xs text-muted-foreground">黑名单中的端口禁止 Client 创建映射隧道。</p>
       </div>
 
       <div className="flex flex-col gap-2">
-        <label className="text-sm font-medium">Agent 节点白名单 (Hostname, 逗号分隔)</label>
+        <label className="text-sm font-medium">Client 节点白名单 (Hostname, 逗号分隔)</label>
         <Input
           value={whitelistStr}
           onChange={(e) => setWhitelistStr(e.target.value)}
           placeholder="例如: staging-server, prod-worker-1"
         />
-        <p className="text-xs text-muted-foreground">如果留空，则所有认证成功的 Agent 都可建立代理隧道。</p>
+        <p className="text-xs text-muted-foreground">如果留空，则所有认证成功的 Client 都可建立代理隧道。</p>
       </div>
 
       <div className="border-t border-border/40 pt-4 mt-2 flex justify-end">

@@ -253,8 +253,8 @@ func runBenchmark(concurrency, dataSize int) {
 
 func benchFindProxyPort(srv *server.Server) int {
 	var port int
-	srv.RangeAgents(func(id string, agent *server.AgentConn) bool {
-		agent.RangeProxies(func(name string, tunnel *server.ProxyTunnel) bool {
+	srv.RangeClients(func(id string, client *server.ClientConn) bool {
+		client.RangeProxies(func(name string, tunnel *server.ProxyTunnel) bool {
 			port = tunnel.Config.RemotePort
 			return false
 		})

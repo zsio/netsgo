@@ -3,42 +3,42 @@ import {
   Search, Server as ServerIcon, Activity, LayoutDashboard,
 } from 'lucide-react';
 import { Link, useMatch } from '@tanstack/react-router';
-import type { Agent } from '@/types';
+import type { Client } from '@/types';
 
-interface AgentSidebarProps {
-  agents: Agent[];
+interface ClientSidebarProps {
+  clients: Client[];
   isLoading: boolean;
 }
 
-export function AgentSidebar({ agents, isLoading }: AgentSidebarProps) {
+export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const [searchQuery, setSearchQuery] = useState('');
 
-  // 从路由匹配获取当前选中的 agentId
-  const agentMatch = useMatch({ from: '/dashboard/agents/$agentId', shouldThrow: false });
-  const currentAgentId = agentMatch?.params?.agentId;
+  // 从路由匹配获取当前选中的 clientId
+  const agentMatch = useMatch({ from: '/dashboard/clients/$clientId', shouldThrow: false });
+  const currentAgentId = agentMatch?.params?.clientId;
 
-  // 判断当前是否在概览页（无 agentId）
+  // 判断当前是否在概览页（无 clientId）
   const isOverview = !currentAgentId;
 
-  const filteredAgents = useMemo(() => {
-    if (!searchQuery.trim()) return agents;
+  const filteredClients = useMemo(() => {
+    if (!searchQuery.trim()) return clients;
     const q = searchQuery.toLowerCase();
-    return agents.filter(
+    return clients.filter(
       (a) =>
         a.info.hostname.toLowerCase().includes(q) ||
         a.id.toLowerCase().includes(q) ||
         (a.last_ip || a.info.ip || '').toLowerCase().includes(q),
     );
-  }, [agents, searchQuery]);
+  }, [clients, searchQuery]);
 
   // 在线排前面，离线排后面
-  const sortedAgents = useMemo(() => {
-    return [...filteredAgents].sort((a, b) => {
+  const sortedClients = useMemo(() => {
+    return [...filteredClients].sort((a, b) => {
       const aOnline = a.online ? 0 : 1;
       const bOnline = b.online ? 0 : 1;
       return aOnline - bOnline;
     });
-  }, [filteredAgents]);
+  }, [filteredClients]);
 
   return (
     <aside className="w-64 flex flex-col border-r border-border/40 bg-muted/10">
@@ -76,28 +76,28 @@ export function AgentSidebar({ agents, isLoading }: AgentSidebarProps) {
               <div key={i} className="h-8 w-full rounded-md bg-muted/50 animate-pulse" />
             ))}
           </div>
-        ) : agents.length === 0 ? (
+        ) : clients.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-muted-foreground py-12 px-4 text-center">
             <Activity className="h-10 w-10 mb-3 opacity-20" />
             <p className="text-sm">暂无 Agent</p>
-            <p className="text-xs opacity-60 mt-1">启动 Agent 后将自动显示</p>
+            <p className="text-xs opacity-60 mt-1">启动 Client 后将自动显示</p>
           </div>
-        ) : filteredAgents.length === 0 ? (
+        ) : filteredClients.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-muted-foreground py-12 px-4 text-center">
             <Search className="h-10 w-10 mb-3 opacity-20" />
             <p className="text-sm">未找到匹配的节点</p>
           </div>
         ) : (
           <div className="space-y-0.5">
-            {sortedAgents.map((agent) => {
-              const isOnline = agent.online;
-              const isSelected = currentAgentId === agent.id;
+            {sortedClients.map((client) => {
+              const isOnline = client.online;
+              const isSelected = currentAgentId === client.id;
 
               return (
                 <Link
-                  key={agent.id}
-                  to="/dashboard/agents/$agentId"
-                  params={{ agentId: agent.id }}
+                  key={client.id}
+                  to="/dashboard/clients/$clientId"
+                  params={{ clientId: client.id }}
                   className={`flex items-center py-1.5 px-3 rounded-md cursor-pointer text-sm transition-colors ${
                     isSelected
                       ? 'bg-primary/10 text-primary font-medium'
@@ -117,11 +117,11 @@ export function AgentSidebar({ agents, isLoading }: AgentSidebarProps) {
                   )}
 
                   <ServerIcon className="h-4 w-4 mr-2 opacity-70 shrink-0" />
-                  <span className="truncate flex-1">{agent.info.hostname}</span>
+                  <span className="truncate flex-1">{client.info.hostname}</span>
 
-                  {(agent.proxies?.length ?? 0) > 0 && (
+                  {(client.proxies?.length ?? 0) > 0 && (
                     <span className="text-[10px] bg-background border border-border/50 px-1.5 rounded text-muted-foreground ml-1">
-                      {agent.proxies!.length}
+                      {client.proxies!.length}
                     </span>
                   )}
                 </Link>

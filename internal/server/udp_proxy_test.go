@@ -19,17 +19,17 @@ import (
 
 func TestStartProxy_UDP_Success(t *testing.T) {
 	s := New(0)
-	agentID := "udp-proxy-agent"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "udp-proxy-client"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	// 构建 yamux session
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-	agent.dataSession = sSession
+	client.dataSession = sSession
 
 	req := protocol.ProxyNewRequest{
 		Name:       "udp-test-tunnel",
@@ -39,14 +39,14 @@ func TestStartProxy_UDP_Success(t *testing.T) {
 		RemotePort: 0, // 系统随机分配
 	}
 
-	if err := s.StartProxy(agent, req); err != nil {
+	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("StartProxy UDP 失败: %v", err)
 	}
 
 	// 检查内部状态
-	agent.proxyMu.RLock()
-	tunnel, exists := agent.proxies[req.Name]
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	tunnel, exists := client.proxies[req.Name]
+	client.proxyMu.RUnlock()
 
 	if !exists {
 		t.Fatal("StartProxy 成功但没有将隧道加入 map")
@@ -74,38 +74,38 @@ func TestStartProxy_UDP_Success(t *testing.T) {
 	}
 
 	// 清理
-	s.StopAllProxies(agent)
+	s.StopAllProxies(client)
 	cConn.Close()
 	sConn.Close()
 }
 
 func TestStopProxy_UDP(t *testing.T) {
 	s := New(0)
-	agentID := "udp-stop-agent"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "udp-stop-client"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-	agent.dataSession = sSession
+	client.dataSession = sSession
 
 	req := protocol.ProxyNewRequest{
 		Name:       "udp-to-stop",
 		Type:       protocol.ProxyTypeUDP,
 		RemotePort: 0,
 	}
-	s.StartProxy(agent, req)
+	s.StartProxy(client, req)
 
-	agent.proxyMu.RLock()
-	tunnel := agent.proxies[req.Name]
+	client.proxyMu.RLock()
+	tunnel := client.proxies[req.Name]
 	port := tunnel.Config.RemotePort
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RUnlock()
 
 	// 停止
-	if err := s.StopProxy(agent, req.Name); err != nil {
+	if err := s.StopProxy(client, req.Name); err != nil {
 		t.Fatalf("StopProxy UDP 出错: %v", err)
 	}
 
@@ -126,36 +126,36 @@ func TestStopProxy_UDP(t *testing.T) {
 
 func TestPauseResumeProxy_UDP(t *testing.T) {
 	s := New(0)
-	agentID := "udp-pause-agent"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "udp-pause-client"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-	agent.dataSession = sSession
+	client.dataSession = sSession
 
 	req := protocol.ProxyNewRequest{
 		Name:       "udp-pause-test",
 		Type:       protocol.ProxyTypeUDP,
 		RemotePort: 0,
 	}
-	s.StartProxy(agent, req)
+	s.StartProxy(client, req)
 
-	agent.proxyMu.RLock()
-	port := agent.proxies[req.Name].Config.RemotePort
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	port := client.proxies[req.Name].Config.RemotePort
+	client.proxyMu.RUnlock()
 
 	// 暂停
-	if err := s.PauseProxy(agent, req.Name); err != nil {
+	if err := s.PauseProxy(client, req.Name); err != nil {
 		t.Fatalf("PauseProxy UDP 出错: %v", err)
 	}
 
-	agent.proxyMu.RLock()
-	status := agent.proxies[req.Name].Config.Status
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	status := client.proxies[req.Name].Config.Status
+	client.proxyMu.RUnlock()
 	if status != protocol.ProxyStatusPaused {
 		t.Errorf("暂停后状态期望 paused，得到 %s", status)
 	}
@@ -164,14 +164,14 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// 恢复
-	if err := s.ResumeProxy(agent, req.Name); err != nil {
+	if err := s.ResumeProxy(client, req.Name); err != nil {
 		t.Fatalf("ResumeProxy UDP 出错: %v", err)
 	}
 
-	agent.proxyMu.RLock()
-	status = agent.proxies[req.Name].Config.Status
-	newPort := agent.proxies[req.Name].Config.RemotePort
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	status = client.proxies[req.Name].Config.Status
+	newPort := client.proxies[req.Name].Config.RemotePort
+	client.proxyMu.RUnlock()
 
 	if status != protocol.ProxyStatusActive {
 		t.Errorf("恢复后状态期望 active，得到 %s", status)
@@ -180,7 +180,7 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 		t.Errorf("恢复后端口期望 %d，得到 %d", port, newPort)
 	}
 
-	s.StopAllProxies(agent)
+	s.StopAllProxies(client)
 	cConn.Close()
 	sConn.Close()
 }
@@ -191,12 +191,12 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 
 func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	s := New(0)
-	agentID := "udp-e2e-agent"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "udp-e2e-client"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	// 1. 启动本地 UDP echo 服务（模拟内网服务）
 	echoConn, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -217,7 +217,7 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 		}
 	}()
 
-	// 2. 构建 yamux session（模拟 Server ↔ Agent 数据通道）
+	// 2. 构建 yamux session（模拟 Server ↔ Client 数据通道）
 	pipeC, pipeS := net.Pipe()
 	defer pipeC.Close()
 	defer pipeS.Close()
@@ -232,11 +232,11 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	clientSession, _ := mux.NewClientSession(pipeC, mux.DefaultConfig())
 	wg.Wait()
 
-	agent.dataSession = serverSession
+	client.dataSession = serverSession
 	defer serverSession.Close()
 	defer clientSession.Close()
 
-	// 3. 启动 Agent 侧 stream 接收循环（模拟 Client 的 acceptStreamLoop）
+	// 3. 启动 Client 侧 stream 接收循环（模拟 Client 的 acceptStreamLoop）
 	go func() {
 		for {
 			stream, err := clientSession.AcceptStream()
@@ -274,14 +274,14 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 		LocalPort:  echoPort,
 		RemotePort: 0,
 	}
-	if err := s.StartProxy(agent, req); err != nil {
+	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("启动 UDP 代理失败: %v", err)
 	}
-	defer s.StopProxy(agent, tunnelName)
+	defer s.StopProxy(client, tunnelName)
 
-	agent.proxyMu.RLock()
-	remotePort := agent.proxies[tunnelName].Config.RemotePort
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	remotePort := client.proxies[tunnelName].Config.RemotePort
+	client.proxyMu.RUnlock()
 
 	// 5. 模拟外部 UDP 客户端：发消息并等待 echo 回复
 	extConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", remotePort))
@@ -310,12 +310,12 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 
 func TestUDPProxy_MultipleSessions(t *testing.T) {
 	s := New(0)
-	agentID := "udp-multi-sess"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "udp-multi-sess"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	// 启动 UDP echo 服务
 	echoConn, _ := net.ListenPacket("udp", "127.0.0.1:0")
@@ -348,11 +348,11 @@ func TestUDPProxy_MultipleSessions(t *testing.T) {
 	clientSession, _ := mux.NewClientSession(pipeC, mux.DefaultConfig())
 	wg.Wait()
 
-	agent.dataSession = serverSession
+	client.dataSession = serverSession
 	defer serverSession.Close()
 	defer clientSession.Close()
 
-	// Agent 侧 stream 接收
+	// Client 侧 stream 接收
 	go func() {
 		for {
 			stream, err := clientSession.AcceptStream()
@@ -379,12 +379,12 @@ func TestUDPProxy_MultipleSessions(t *testing.T) {
 		Type:       protocol.ProxyTypeUDP,
 		RemotePort: 0,
 	}
-	s.StartProxy(agent, req)
-	defer s.StopProxy(agent, req.Name)
+	s.StartProxy(client, req)
+	defer s.StopProxy(client, req.Name)
 
-	agent.proxyMu.RLock()
-	remotePort := agent.proxies[req.Name].Config.RemotePort
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	remotePort := client.proxies[req.Name].Config.RemotePort
+	client.proxyMu.RUnlock()
 
 	// 使用多个本地端口模拟多个外部客户端（不同 srcAddr）
 	const numClients = 3

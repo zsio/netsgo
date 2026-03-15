@@ -104,7 +104,7 @@ func generateInstallID() (string, error) {
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", fmt.Errorf("生成 install id 失败: %w", err)
 	}
-	return "agent-" + hex.EncodeToString(buf[:]), nil
+	return "client-" + hex.EncodeToString(buf[:]), nil
 }
 
 // saveTLSFingerprint 将 TLS 指纹持久化到客户端状态文件 (P1 TOFU)

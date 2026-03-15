@@ -1,12 +1,12 @@
 import { createRoute, Outlet } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { AgentSidebar } from '@/components/custom/agent/AgentSidebar';
+import { ClientSidebar } from '@/components/custom/client/ClientSidebar';
 import { ErrorFallback } from '@/components/custom/layout/ErrorFallback';
-import { useAgents } from '@/hooks/use-agents';
+import { useClients } from '@/hooks/use-clients';
 import { requireConsoleAuth } from '@/lib/auth';
 
 function DashboardLayout() {
-  const { data: agents, isLoading, isError, error, refetch } = useAgents();
+  const { data: clients, isLoading, isError, error, refetch } = useClients();
 
   if (isError) {
     return (
@@ -18,7 +18,7 @@ function DashboardLayout() {
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      <AgentSidebar agents={agents ?? []} isLoading={isLoading} />
+      <ClientSidebar clients={clients ?? []} isLoading={isLoading} />
 
       <main className="flex-1 flex flex-col overflow-y-auto bg-background/50 relative">
         {/* Subtle background glow */}

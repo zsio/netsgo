@@ -231,7 +231,7 @@ func TestAPI_ProtectedRoutes_LoginLogoutAndSingleSession(t *testing.T) {
 
 	protected := []string{
 		"/api/status",
-		"/api/agents",
+		"/api/clients",
 		"/api/events",
 		"/api/admin/keys",
 	}
@@ -266,7 +266,7 @@ func TestAPI_ProtectedRoutes_LoginLogoutAndSingleSession(t *testing.T) {
 	}
 	oldSessionResp.Body.Close()
 
-	currentSessionResp := doAuthorizedRequest(t, http.DefaultClient, http.MethodGet, ts.URL+"/api/agents", token2, nil)
+	currentSessionResp := doAuthorizedRequest(t, http.DefaultClient, http.MethodGet, ts.URL+"/api/clients", token2, nil)
 	if currentSessionResp.StatusCode != http.StatusOK {
 		t.Fatalf("新 token 应可访问受保护路由，得到 %d", currentSessionResp.StatusCode)
 	}
@@ -376,7 +376,7 @@ func TestAPI_AdminLogs_And_Events(t *testing.T) {
 	// 产生一些日志和事件
 	s.adminStore.AddSystemLog("INFO", "system started", "test")
 	s.adminStore.AddSystemLog("ERROR", "test error", "test")
-	s.adminStore.AddEvent("user-test", "agent connected")
+	s.adminStore.AddEvent("user-test", "client connected")
 
 	// 测试获取日志
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/logs?limit=10", nil)

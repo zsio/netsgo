@@ -1,26 +1,26 @@
 import { createRoute, useParams, useNavigate } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { dashboardRoute } from '@/routes/dashboard';
-import { AgentHeader } from '@/components/custom/agent/AgentHeader';
-import { AgentStatsGrid } from '@/components/custom/agent/AgentStatsGrid';
+import { ClientHeader } from '@/components/custom/client/ClientHeader';
+import { ClientStatsGrid } from '@/components/custom/client/ClientStatsGrid';
 import { TunnelTable } from '@/components/custom/tunnel/TunnelTable';
 import { TrafficChart } from '@/components/custom/chart/TrafficChart';
-import { useAgents } from '@/hooks/use-agents';
+import { useClients } from '@/hooks/use-clients';
 import { Skeleton } from '@/components/ui/skeleton';
 
-function AgentDetailPage() {
-  const { agentId } = useParams({ from: '/dashboard/agents/$agentId' });
+function ClientDetailPage() {
+  const { clientId } = useParams({ from: '/dashboard/clients/$clientId' });
   const navigate = useNavigate();
-  const { data: agents, isLoading, isFetching } = useAgents();
+  const { data: clients, isLoading, isFetching } = useClients();
 
-  const agent = agents?.find((a) => a.id === agentId);
+  const client = clients?.find((a) => a.id === clientId);
 
-  // 如果加载完成但 agent 不存在，回到 dashboard 概览
+  // 如果加载完成但 client 不存在，回到 dashboard 概览
   useEffect(() => {
-    if (!isLoading && !isFetching && agents && !agent) {
+    if (!isLoading && !isFetching && clients && !client) {
       navigate({ to: '/dashboard' });
     }
-  }, [isLoading, isFetching, agents, agent, navigate]);
+  }, [isLoading, isFetching, clients, client, navigate]);
 
   if (isLoading) {
     return (
@@ -36,22 +36,22 @@ function AgentDetailPage() {
     );
   }
 
-  if (!agent) {
+  if (!client) {
     return null; // will redirect via useEffect
   }
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full flex flex-col gap-8 z-10">
-      <AgentHeader agent={agent} />
-      <AgentStatsGrid agent={agent} />
-      <TunnelTable agent={agent} />
+      <ClientHeader client={client} />
+      <ClientStatsGrid client={client} />
+      <TunnelTable client={client} />
       <TrafficChart />
     </div>
   );
 }
 
-export const dashboardAgentRoute = createRoute({
+export const dashboardClientRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: '/agents/$agentId',
-  component: AgentDetailPage,
+  path: '/clients/$clientId',
+  component: ClientDetailPage,
 });

@@ -253,20 +253,20 @@ func TestSetup_RateLimitBlocksAfterMaxRequests(t *testing.T) {
 }
 
 // ============================================================
-// Agent 认证速率限制集成测试
+// Client 认证速率限制集成测试
 // ============================================================
 
-func TestAgent_RateLimitBlocksAfterFailures(t *testing.T) {
+func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)
 
-	s.agentLimiter = NewRateLimiter(RateLimiterConfig{
+	s.clientLimiter = NewRateLimiter(RateLimiterConfig{
 		WindowSize:    time.Minute,
 		MaxRequests:   100,
 		MaxFailures:   3,             // 3 次失败触发锁定
 		LockoutPeriod: 200 * time.Millisecond,
 	})
-	defer s.agentLimiter.Stop()
+	defer s.clientLimiter.Stop()
 
 	ts := httptest.NewServer(s.newHTTPMux())
 	defer ts.Close()
@@ -283,7 +283,7 @@ func TestAgent_RateLimitBlocksAfterFailures(t *testing.T) {
 		authReq := protocol.AuthRequest{
 			Key:       "wrong-key",
 			InstallID: "install-rate-test",
-			Agent: protocol.AgentInfo{
+			Client: protocol.ClientInfo{
 				Hostname: "rate-test-host",
 				OS:       "linux",
 				Arch:     "amd64",
@@ -312,7 +312,7 @@ func TestAgent_RateLimitBlocksAfterFailures(t *testing.T) {
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
 		InstallID: "install-rate-test",
-		Agent: protocol.AgentInfo{
+		Client: protocol.ClientInfo{
 			Hostname: "rate-test-host",
 			OS:       "linux",
 			Arch:     "amd64",
@@ -340,7 +340,7 @@ func TestAgent_RateLimitBlocksAfterFailures(t *testing.T) {
 	authReq2 := protocol.AuthRequest{
 		Key:       "test-key",
 		InstallID: "install-rate-test-recovery",
-		Agent: protocol.AgentInfo{
+		Client: protocol.ClientInfo{
 			Hostname: "rate-test-host-2",
 			OS:       "linux",
 			Arch:     "amd64",

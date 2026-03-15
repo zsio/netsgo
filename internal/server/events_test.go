@@ -116,7 +116,7 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 	}
 
 	if !strings.Contains(w.Body.String(), "event: snapshot\n") ||
-		!strings.Contains(w.Body.String(), `"agents":`) ||
+		!strings.Contains(w.Body.String(), `"clients":`) ||
 		!strings.Contains(w.Body.String(), `"server_status":`) {
 		t.Fatalf("期望 SSE 连接建立后立即发送完整快照，实际 body: %q", w.Body.String())
 	}

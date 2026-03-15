@@ -1,7 +1,7 @@
 import { OverviewHeader } from './OverviewHeader';
 import { OverviewStatsGrid } from './OverviewStatsGrid';
 import { ServerInfoCard } from './ServerInfoCard';
-import { DashboardAgentTable } from './DashboardAgentTable';
+import { DashboardClientTable } from './DashboardClientTable';
 import { DashboardTunnelTable } from './DashboardTunnelTable';
 
 export function OverviewPage() {
@@ -10,7 +10,7 @@ export function OverviewPage() {
       <OverviewHeader />
       <OverviewStatsGrid />
       <ServerInfoCard />
-      <DashboardAgentTable />
+      <DashboardClientTable />
       <DashboardTunnelTable />
     </div>
   );

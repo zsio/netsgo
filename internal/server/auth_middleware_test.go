@@ -114,7 +114,7 @@ func TestAuthMiddleware_FallbackSecretTokenRejected(t *testing.T) {
 	s := New(0)
 	s.adminStore = store
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-agent")
+	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
 	claims := AdminClaims{
 		SessionID: session.ID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -177,7 +177,7 @@ func TestGenerateAdminToken_MissingJWTSecret(t *testing.T) {
 	s.adminStore = store
 	clearJWTSecretForTest(store)
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-agent")
+	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
 	_, err := s.GenerateAdminToken(session)
 	if !errors.Is(err, errJWTSecretMissing) {
 		t.Fatalf("缺少 JWT Secret 时 GenerateAdminToken 应返回 errJWTSecretMissing，得到 %v", err)
@@ -212,7 +212,7 @@ func TestAuthMiddleware_ValidTokenButSessionRevoked(t *testing.T) {
 	s.adminStore = store
 
 	// 创建一个合法的 session 并生成 token
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-agent")
+	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
@@ -240,7 +240,7 @@ func TestAuthMiddleware_ValidTokenSuccess(t *testing.T) {
 	s := New(0)
 	s.adminStore = store
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-agent")
+	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
@@ -248,7 +248,7 @@ func TestAuthMiddleware_ValidTokenSuccess(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenString)
-	req.Header.Set("User-Agent", "test-agent") // P6: 必须与 CreateSession 的 UA 一致
+	req.Header.Set("User-Agent", "test-client") // P6: 必须与 CreateSession 的 UA 一致
 	w := httptest.NewRecorder()
 
 	// 验证请求是否成功到达了 handler

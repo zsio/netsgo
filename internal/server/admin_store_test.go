@@ -185,8 +185,8 @@ func TestAdminStore_NewInitializedWithoutJWTSecret_Fails(t *testing.T) {
   "jwt_secret": "",
   "api_keys": [],
   "admin_users": [],
-  "agents": [],
-  "agent_tokens": [],
+  "clients": [],
+  "client_tokens": [],
   "events": [],
   "sessions": []
 }`)
@@ -238,21 +238,21 @@ func TestAdminStore_IsPortAllowed_OutOfRange(t *testing.T) {
 	}
 }
 
-// --- Agent Key ---
+// --- Client Key ---
 
-func TestAdminStore_ValidateAgentKey_NoKeys(t *testing.T) {
+func TestAdminStore_ValidateClientKey_NoKeys(t *testing.T) {
 	store := newTestAdminStore(t)
 	// 无 key 时开放
-	valid, err := store.ValidateAgentKey("")
+	valid, err := store.ValidateClientKey("")
 	if !valid || err != nil {
 		t.Error("无 Key 配置时应开放所有连接")
 	}
 }
 
-func TestAdminStore_ValidateAgentKey_NoKeysAfterInit(t *testing.T) {
+func TestAdminStore_ValidateClientKey_NoKeysAfterInit(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
-	valid, err := store.ValidateAgentKey("")
+	valid, err := store.ValidateClientKey("")
 	if valid {
 		t.Error("初始化后未配置 Key 不应开放连接")
 	}
@@ -261,22 +261,22 @@ func TestAdminStore_ValidateAgentKey_NoKeysAfterInit(t *testing.T) {
 	}
 }
 
-func TestAdminStore_ValidateAgentKey_Valid(t *testing.T) {
+func TestAdminStore_ValidateClientKey_Valid(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-test-key-123"
 	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
 
-	valid, err := store.ValidateAgentKey(rawKey)
+	valid, err := store.ValidateClientKey(rawKey)
 	if !valid || err != nil {
 		t.Errorf("有效 Key 应通过: valid=%v, err=%v", valid, err)
 	}
 }
 
-func TestAdminStore_ValidateAgentKey_Invalid(t *testing.T) {
+func TestAdminStore_ValidateClientKey_Invalid(t *testing.T) {
 	store := newTestAdminStore(t)
 	store.AddAPIKey("test", "sk-real-key", []string{"connect"}, nil)
 
-	valid, err := store.ValidateAgentKey("sk-wrong-key")
+	valid, err := store.ValidateClientKey("sk-wrong-key")
 	if valid {
 		t.Error("无效 Key 应被拒绝")
 	}
@@ -285,11 +285,11 @@ func TestAdminStore_ValidateAgentKey_Invalid(t *testing.T) {
 	}
 }
 
-func TestAdminStore_ValidateAgentKey_EmptyWhenKeysExist(t *testing.T) {
+func TestAdminStore_ValidateClientKey_EmptyWhenKeysExist(t *testing.T) {
 	store := newTestAdminStore(t)
 	store.AddAPIKey("test", "sk-real-key", []string{"connect"}, nil)
 
-	valid, err := store.ValidateAgentKey("")
+	valid, err := store.ValidateClientKey("")
 	if valid {
 		t.Error("已有 Key 时空 Key 应被拒绝")
 	}
@@ -298,12 +298,12 @@ func TestAdminStore_ValidateAgentKey_EmptyWhenKeysExist(t *testing.T) {
 	}
 }
 
-func TestAdminStore_ValidateAgentKey_Expired(t *testing.T) {
+func TestAdminStore_ValidateClientKey_Expired(t *testing.T) {
 	store := newTestAdminStore(t)
 	past := time.Now().Add(-1 * time.Hour)
 	store.AddAPIKey("expired", "sk-expired-key", []string{"connect"}, &past)
 
-	valid, err := store.ValidateAgentKey("sk-expired-key")
+	valid, err := store.ValidateClientKey("sk-expired-key")
 	if valid {
 		t.Error("过期 Key 应被拒绝")
 	}
@@ -342,28 +342,28 @@ func TestAdminStore_APIKey_DisableEnableDeleteLifecycle(t *testing.T) {
 		t.Fatalf("AddAPIKey 失败: %v", err)
 	}
 
-	if valid, err := store.ValidateAgentKey(rawKey); !valid || err != nil {
+	if valid, err := store.ValidateClientKey(rawKey); !valid || err != nil {
 		t.Fatalf("新建 Key 应可用: valid=%v err=%v", valid, err)
 	}
 
 	if err := store.SetAPIKeyActive(key.ID, false); err != nil {
 		t.Fatalf("禁用 Key 失败: %v", err)
 	}
-	if valid, err := store.ValidateAgentKey(rawKey); valid || err == nil {
+	if valid, err := store.ValidateClientKey(rawKey); valid || err == nil {
 		t.Fatalf("禁用后应拒绝 Key: valid=%v err=%v", valid, err)
 	}
 
 	if err := store.SetAPIKeyActive(key.ID, true); err != nil {
 		t.Fatalf("启用 Key 失败: %v", err)
 	}
-	if valid, err := store.ValidateAgentKey(rawKey); !valid || err != nil {
+	if valid, err := store.ValidateClientKey(rawKey); !valid || err != nil {
 		t.Fatalf("重新启用后应允许 Key: valid=%v err=%v", valid, err)
 	}
 
 	if err := store.DeleteAPIKey(key.ID); err != nil {
 		t.Fatalf("删除 Key 失败: %v", err)
 	}
-	if valid, err := store.ValidateAgentKey(rawKey); valid || err == nil {
+	if valid, err := store.ValidateClientKey(rawKey); valid || err == nil {
 		t.Fatalf("删除后应拒绝 Key: valid=%v err=%v", valid, err)
 	}
 }
@@ -391,7 +391,7 @@ func TestAdminStore_PersistedSecretsSurviveReload(t *testing.T) {
 	if _, err := reloaded.ValidateAdminPassword("admin", "Admin1234"); err != nil {
 		t.Fatalf("重载后管理员密码应仍可验证: %v", err)
 	}
-	if valid, err := reloaded.ValidateAgentKey("sk-persisted"); !valid || err != nil {
+	if valid, err := reloaded.ValidateClientKey("sk-persisted"); !valid || err != nil {
 		t.Fatalf("重载后 API Key 应仍可验证: valid=%v err=%v", valid, err)
 	}
 }
@@ -401,7 +401,7 @@ func TestAdminStore_PersistedSecretsSurviveReload(t *testing.T) {
 func TestAdminStore_Session_CreateAndGet(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-agent")
+	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
 	if session == nil {
 		t.Fatal("CreateSession 不应返回 nil")
 	}
@@ -561,7 +561,7 @@ func TestAdminStore_SystemLogs_RingBuffer(t *testing.T) {
 func TestAdminStore_Events(t *testing.T) {
 	store := newTestAdminStore(t)
 
-	store.AddEvent("agent_online", `{"agent_id":"a1"}`)
+	store.AddEvent("client_online", `{"client_id":"a1"}`)
 	store.AddEvent("tunnel_changed", `{"tunnel":"t1"}`)
 	// AddEvent 内部有异步 goroutine save，等一下
 	time.Sleep(50 * time.Millisecond)
@@ -650,7 +650,7 @@ func TestAdminStore_GetServerConfig(t *testing.T) {
 }
 
 // ============================================================
-// Agent Token 测试
+// Client Token 测试
 // ============================================================
 
 func TestAdminStore_Token_ExchangeAndValidate(t *testing.T) {
@@ -659,27 +659,27 @@ func TestAdminStore_Token_ExchangeAndValidate(t *testing.T) {
 	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
 
 	// 兑换 Token
-	tokenStr, agentToken, err := store.ExchangeToken(rawKey, "install-1", "agent-1", "1.2.3.4:5678")
+	tokenStr, clientToken, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
 	if err != nil {
 		t.Fatalf("ExchangeToken 失败: %v", err)
 	}
 	if tokenStr == "" {
 		t.Fatal("Token 不应为空")
 	}
-	if agentToken == nil {
-		t.Fatal("AgentToken 不应为 nil")
+	if clientToken == nil {
+		t.Fatal("ClientToken 不应为 nil")
 	}
-	if agentToken.InstallID != "install-1" {
-		t.Errorf("InstallID 期望 install-1, 得到 %s", agentToken.InstallID)
+	if clientToken.InstallID != "install-1" {
+		t.Errorf("InstallID 期望 install-1, 得到 %s", clientToken.InstallID)
 	}
 
 	// 验证 Token
-	result, err := store.ValidateAgentToken(tokenStr, "install-1")
+	result, err := store.ValidateClientToken(tokenStr, "install-1")
 	if err != nil {
-		t.Fatalf("ValidateAgentToken 失败: %v", err)
+		t.Fatalf("ValidateClientToken 失败: %v", err)
 	}
-	if result.ID != agentToken.ID {
-		t.Errorf("Token ID 不匹配: %s != %s", result.ID, agentToken.ID)
+	if result.ID != clientToken.ID {
+		t.Errorf("Token ID 不匹配: %s != %s", result.ID, clientToken.ID)
 	}
 }
 
@@ -689,7 +689,7 @@ func TestAdminStore_Token_ExchangeConsumesKeyUseCount(t *testing.T) {
 	store.AddAPIKey("counted", rawKey, []string{"connect"}, nil)
 
 	// 兑换 Token — 应消耗 Key use_count
-	_, _, err := store.ExchangeToken(rawKey, "install-1", "agent-1", "1.2.3.4:5678")
+	_, _, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
 	if err != nil {
 		t.Fatalf("ExchangeToken 失败: %v", err)
 	}
@@ -703,14 +703,14 @@ func TestAdminStore_Token_ExchangeConsumesKeyUseCount(t *testing.T) {
 	}
 
 	// 再次验证 Key（不应增加 use_count）
-	valid, _ := store.ValidateAgentKey(rawKey)
+	valid, _ := store.ValidateClientKey(rawKey)
 	if !valid {
 		t.Fatal("Key 仍应有效")
 	}
 
 	keys = store.GetAPIKeys()
 	if keys[0].UseCount != 1 {
-		t.Errorf("ValidateAgentKey 不应增加 UseCount, 期望 1, 得到 %d", keys[0].UseCount)
+		t.Errorf("ValidateClientKey 不应增加 UseCount, 期望 1, 得到 %d", keys[0].UseCount)
 	}
 }
 
@@ -719,21 +719,21 @@ func TestAdminStore_Token_ValidateExpired(t *testing.T) {
 	rawKey := "sk-expiry-key"
 	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
 
-	tokenStr, _, err := store.ExchangeToken(rawKey, "install-1", "agent-1", "1.2.3.4:5678")
+	tokenStr, _, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
 	if err != nil {
 		t.Fatalf("ExchangeToken 失败: %v", err)
 	}
 
 	// 手动设置 Token 为过期（超过 7 天不活跃）
 	store.mu.Lock()
-	for i := range store.data.AgentTokens {
-		if store.data.AgentTokens[i].InstallID == "install-1" {
-			store.data.AgentTokens[i].LastActiveAt = time.Now().Add(-8 * 24 * time.Hour)
+	for i := range store.data.ClientTokens {
+		if store.data.ClientTokens[i].InstallID == "install-1" {
+			store.data.ClientTokens[i].LastActiveAt = time.Now().Add(-8 * 24 * time.Hour)
 		}
 	}
 	store.mu.Unlock()
 
-	_, err = store.ValidateAgentToken(tokenStr, "install-1")
+	_, err = store.ValidateClientToken(tokenStr, "install-1")
 	if err == nil {
 		t.Error("过期 Token 应验证失败")
 	}
@@ -744,17 +744,17 @@ func TestAdminStore_Token_ValidateRevoked(t *testing.T) {
 	rawKey := "sk-revoke-key"
 	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
 
-	tokenStr, agentToken, err := store.ExchangeToken(rawKey, "install-1", "agent-1", "1.2.3.4:5678")
+	tokenStr, clientToken, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
 	if err != nil {
 		t.Fatalf("ExchangeToken 失败: %v", err)
 	}
 
 	// 吊销 Token
-	if err := store.RevokeToken(agentToken.ID); err != nil {
+	if err := store.RevokeToken(clientToken.ID); err != nil {
 		t.Fatalf("RevokeToken 失败: %v", err)
 	}
 
-	_, err = store.ValidateAgentToken(tokenStr, "install-1")
+	_, err = store.ValidateClientToken(tokenStr, "install-1")
 	if err == nil {
 		t.Error("已吊销 Token 应验证失败")
 	}
@@ -766,7 +766,7 @@ func TestAdminStore_Token_ReuseExistingToken(t *testing.T) {
 	store.AddAPIKey("reuse", rawKey, []string{"connect"}, nil)
 
 	// 首次兑换
-	_, _, err := store.ExchangeToken(rawKey, "install-1", "agent-1", "1.2.3.4:5678")
+	_, _, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
 	if err != nil {
 		t.Fatalf("首次 ExchangeToken 失败: %v", err)
 	}
@@ -775,7 +775,7 @@ func TestAdminStore_Token_ReuseExistingToken(t *testing.T) {
 	useCountAfterFirst := keys[0].UseCount
 
 	// 再次调用 ExchangeToken（同一 install_id，已有有效 Token）
-	newTokenStr, _, err := store.ExchangeToken(rawKey, "install-1", "agent-1", "1.2.3.4:5678")
+	newTokenStr, _, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
 	if err != nil {
 		t.Fatalf("二次 ExchangeToken 失败: %v", err)
 	}
@@ -790,7 +790,7 @@ func TestAdminStore_Token_ReuseExistingToken(t *testing.T) {
 	}
 
 	// 新 Token 应能验证通过
-	_, err = store.ValidateAgentToken(newTokenStr, "install-1")
+	_, err = store.ValidateClientToken(newTokenStr, "install-1")
 	if err != nil {
 		t.Fatalf("新 Token 应有效: %v", err)
 	}
@@ -801,19 +801,19 @@ func TestAdminStore_Token_CleanExpired(t *testing.T) {
 	rawKey := "sk-clean-key"
 	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
 
-	store.ExchangeToken(rawKey, "install-1", "agent-1", "1.2.3.4:5678")
+	store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
 
 	// 手动设置为过期
 	store.mu.Lock()
-	for i := range store.data.AgentTokens {
-		store.data.AgentTokens[i].LastActiveAt = time.Now().Add(-8 * 24 * time.Hour)
+	for i := range store.data.ClientTokens {
+		store.data.ClientTokens[i].LastActiveAt = time.Now().Add(-8 * 24 * time.Hour)
 	}
 	store.mu.Unlock()
 
 	store.CleanExpiredTokens()
 
 	store.mu.RLock()
-	count := len(store.data.AgentTokens)
+	count := len(store.data.ClientTokens)
 	store.mu.RUnlock()
 
 	if count != 0 {

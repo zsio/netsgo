@@ -3,18 +3,18 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useRouterState } from '@tanstack/react-router';
 import { useConnectionStore } from '@/stores/connection-store';
 import { useAuthStore } from '@/stores/auth-store';
-import type { Agent, ServerStatus } from '@/types';
+import type { Client, ServerStatus } from '@/types';
 
 function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: string, data: string) {
   switch (eventType) {
     case 'snapshot': {
       try {
         const parsed = JSON.parse(data) as {
-          agents?: Agent[];
+          clients?: Client[];
           server_status?: ServerStatus;
         };
-        if (Array.isArray(parsed.agents)) {
-          queryClient.setQueryData<Agent[]>(['agents'], parsed.agents);
+        if (Array.isArray(parsed.clients)) {
+          queryClient.setQueryData<Client[]>(['clients'], parsed.clients);
         }
         if (parsed.server_status) {
           queryClient.setQueryData<ServerStatus>(['server-status'], parsed.server_status);
@@ -26,10 +26,10 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
     }
     case 'stats_update': {
       try {
-        const parsed = JSON.parse(data) as { agent_id: string; stats: Agent['stats'] };
-        queryClient.setQueryData<Agent[]>(['agents'], (old) =>
-          old?.map((agent) =>
-            agent.id === parsed.agent_id ? { ...agent, stats: parsed.stats } : agent,
+        const parsed = JSON.parse(data) as { client_id: string; stats: Client['stats'] };
+        queryClient.setQueryData<Client[]>(['clients'], (old) =>
+          old?.map((client) =>
+            client.id === parsed.client_id ? { ...client, stats: parsed.stats } : client,
           ),
         );
       } catch {
@@ -37,17 +37,17 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
       }
       return;
     }
-    case 'agent_online':
+    case 'client_online':
       try {
-        const parsed = JSON.parse(data) as { agent_id: string; info: Agent['info'] };
-        queryClient.setQueryData<Agent[]>(['agents'], (old) => {
+        const parsed = JSON.parse(data) as { client_id: string; info: Client['info'] };
+        queryClient.setQueryData<Client[]>(['clients'], (old) => {
           const base = old ?? [];
-          const exists = base.some((agent) => agent.id === parsed.agent_id);
+          const exists = base.some((client) => client.id === parsed.client_id);
           if (!exists) {
             return [
               ...base,
               {
-                id: parsed.agent_id,
+                id: parsed.client_id,
                 info: parsed.info,
                 stats: null,
                 proxies: [],
@@ -55,43 +55,43 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
               },
             ];
           }
-          return base.map((agent) =>
-            agent.id === parsed.agent_id ? { ...agent, info: parsed.info, online: true } : agent,
+          return base.map((client) =>
+            client.id === parsed.client_id ? { ...client, info: parsed.info, online: true } : client,
           );
         });
       } catch {
-        queryClient.invalidateQueries({ queryKey: ['agents'] });
+        queryClient.invalidateQueries({ queryKey: ['clients'] });
       }
       return;
-    case 'agent_offline':
+    case 'client_offline':
       try {
-        const parsed = JSON.parse(data) as { agent_id: string };
-        queryClient.setQueryData<Agent[]>(['agents'], (old) =>
-          old?.map((agent) =>
-            agent.id === parsed.agent_id ? { ...agent, online: false } : agent,
+        const parsed = JSON.parse(data) as { client_id: string };
+        queryClient.setQueryData<Client[]>(['clients'], (old) =>
+          old?.map((client) =>
+            client.id === parsed.client_id ? { ...client, online: false } : client,
           ),
         );
       } catch {
-        queryClient.invalidateQueries({ queryKey: ['agents'] });
+        queryClient.invalidateQueries({ queryKey: ['clients'] });
       }
       return;
     case 'tunnel_changed':
       try {
         const parsed = JSON.parse(data) as {
-          agent_id: string;
+          client_id: string;
           action?: string;
-          tunnel: NonNullable<Agent['proxies']>[number];
+          tunnel: NonNullable<Client['proxies']>[number];
         };
-        queryClient.setQueryData<Agent[]>(['agents'], (old) =>
-          old?.map((agent) => {
-            if (agent.id !== parsed.agent_id) {
-              return agent;
+        queryClient.setQueryData<Client[]>(['clients'], (old) =>
+          old?.map((client) => {
+            if (client.id !== parsed.client_id) {
+              return client;
             }
 
-            const proxies = agent.proxies ?? [];
+            const proxies = client.proxies ?? [];
             if (parsed.action === 'deleted') {
               return {
-                ...agent,
+                ...client,
                 proxies: proxies.filter((proxy) => proxy.name !== parsed.tunnel.name),
               };
             }
@@ -99,7 +99,7 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
             const existingIndex = proxies.findIndex((proxy) => proxy.name === parsed.tunnel.name);
             if (existingIndex === -1) {
               return {
-                ...agent,
+                ...client,
                 proxies: [...proxies, parsed.tunnel],
               };
             }
@@ -107,13 +107,13 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
             const nextProxies = [...proxies];
             nextProxies[existingIndex] = parsed.tunnel;
             return {
-              ...agent,
+              ...client,
               proxies: nextProxies,
             };
           }),
         );
       } catch {
-        queryClient.invalidateQueries({ queryKey: ['agents'] });
+        queryClient.invalidateQueries({ queryKey: ['clients'] });
       }
       return;
     default:

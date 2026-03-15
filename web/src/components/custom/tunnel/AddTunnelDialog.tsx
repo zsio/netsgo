@@ -11,7 +11,7 @@ import { useServerStatus } from '@/hooks/use-server-status';
 import type { ProxyType } from '@/types';
 
 interface AddTunnelDialogProps {
-  agentId: string;
+  clientId: string;
 }
 
 const typeOptions: { value: ProxyType; label: string }[] = [
@@ -20,7 +20,7 @@ const typeOptions: { value: ProxyType; label: string }[] = [
   { value: 'http', label: 'HTTP' },
 ];
 
-export function AddTunnelDialog({ agentId }: AddTunnelDialogProps) {
+export function AddTunnelDialog({ clientId }: AddTunnelDialogProps) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [type, setType] = useState<ProxyType>('tcp');
@@ -47,7 +47,7 @@ export function AddTunnelDialog({ agentId }: AddTunnelDialogProps) {
     e.preventDefault();
     createTunnel.mutate(
       {
-        agentId,
+        clientId,
         name,
         type,
         local_ip: localIp,
@@ -77,7 +77,7 @@ export function AddTunnelDialog({ agentId }: AddTunnelDialogProps) {
         <DialogHeader>
           <DialogTitle>创建代理隧道</DialogTitle>
           <DialogDescription>
-            配置内网穿透隧道，将 Agent 侧的本地服务暴露到公网端口。
+            配置内网穿透隧道，将 Client 侧的本地服务暴露到公网端口。
           </DialogDescription>
         </DialogHeader>
 

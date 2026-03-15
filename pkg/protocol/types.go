@@ -1,12 +1,12 @@
 package protocol
 
-// AgentInfo 描述一个 Agent 的基本信息，在认证时发送给 Server
-type AgentInfo struct {
+// ClientInfo 描述一个 Client 的基本信息，在认证时发送给 Server
+type ClientInfo struct {
 	Hostname string `json:"hostname"` // 主机名
 	OS       string `json:"os"`       // 操作系统 (windows/linux/darwin)
 	Arch     string `json:"arch"`     // CPU 架构 (amd64/arm64)
-	IP       string `json:"ip"`       // Agent 本地 IP 地址
-	Version  string `json:"version"`  // Agent 版本号
+	IP       string `json:"ip"`       // Client 本地 IP 地址
+	Version  string `json:"version"`  // Client 版本号
 }
 
 // DiskPartition 描述单个磁盘分区的使用情况
@@ -16,7 +16,7 @@ type DiskPartition struct {
 	Total uint64 `json:"total"`
 }
 
-// SystemStats 描述一台机器的实时系统状态，由 Agent 探针定时采集并上报
+// SystemStats 描述一台机器的实时系统状态，由 Client 探针定时采集并上报
 type SystemStats struct {
 	CPUUsage       float64         `json:"cpu_usage"`       // CPU 使用率 (0-100)
 	MemTotal       uint64          `json:"mem_total"`       // 总内存 (bytes)
@@ -42,12 +42,12 @@ type ProxyConfig struct {
 	LocalPort  int    `json:"local_port"`      // 内网目标服务端口
 	RemotePort int    `json:"remote_port"`     // 公网暴露端口
 	Domain     string `json:"domain"`          // HTTP 类型时的域名
-	AgentID    string `json:"agent_id"`        // 所属 Agent ID
+	ClientID   string `json:"client_id"`       // 所属 Client ID
 	Status     string `json:"status"`          // 状态: active, paused, stopped, error
 	Error      string `json:"error,omitempty"` // 错误状态时的具体原因
 }
 
-// ToProxyNewRequest 将 ProxyConfig 转换为 ProxyNewRequest（用于发送给 Agent）
+// ToProxyNewRequest 将 ProxyConfig 转换为 ProxyNewRequest（用于发送给 Client）
 func (c ProxyConfig) ToProxyNewRequest() ProxyNewRequest {
 	return ProxyNewRequest{
 		Name:       c.Name,
@@ -74,7 +74,7 @@ const (
 	ProxyStatusError   = "error"
 )
 
-// 数据通道握手魔数 — Agent 连接 Server 数据通道时，首字节发送此值以区分 HTTP 流量
+// 数据通道握手魔数 — Client 连接 Server 数据通道时，首字节发送此值以区分 HTTP 流量
 const DataChannelMagic byte = 0x4E // 'N' for NetsGo
 
 // 数据通道握手状态码
@@ -85,7 +85,7 @@ const (
 )
 
 // StreamHeader 每个 yamux stream 开头发送的头部
-// Server 打开 stream 后写入此头部，告诉 Agent 这个 stream 属于哪条代理隧道
+// Server 打开 stream 后写入此头部，告诉 Client 这个 stream 属于哪条代理隧道
 type StreamHeader struct {
 	ProxyName string `json:"proxy_name"`
 }

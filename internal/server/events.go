@@ -11,7 +11,7 @@ import (
 
 // SSEEvent 代表一个 SSE 事件
 type SSEEvent struct {
-	Type string // "ready" | "snapshot" | "stats_update" | "agent_online" | "agent_offline" | "tunnel_changed"
+	Type string // "ready" | "snapshot" | "stats_update" | "client_online" | "client_offline" | "tunnel_changed"
 	Data string // JSON 字符串
 }
 

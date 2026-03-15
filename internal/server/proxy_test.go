@@ -21,17 +21,17 @@ import (
 
 func TestStartProxy_Success(t *testing.T) {
 	s := New(0)
-	agentID := "proxy-agent"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "proxy-client"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	// 欺骗其拥有活跃的 DataSession (使用 net.Pipe 作为占位)
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-	agent.dataSession = sSession
+	client.dataSession = sSession
 
 	// 尝试启动一个对公网代理（分配随机端口）
 	req := protocol.ProxyNewRequest{
@@ -42,14 +42,14 @@ func TestStartProxy_Success(t *testing.T) {
 		RemotePort: 0, // 0表示系统随机分配
 	}
 
-	if err := s.StartProxy(agent, req); err != nil {
+	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("StartProxy 失败: %v", err)
 	}
 
 	// 检查内部状态
-	agent.proxyMu.RLock()
-	tunnel, exists := agent.proxies[req.Name]
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	tunnel, exists := client.proxies[req.Name]
+	client.proxyMu.RUnlock()
 
 	if !exists {
 		t.Fatal("StartProxy 成功但没有将隧道加入 map")
@@ -68,80 +68,80 @@ func TestStartProxy_Success(t *testing.T) {
 	}
 
 	// 清理
-	s.StopAllProxies(agent)
+	s.StopAllProxies(client)
 	cConn.Close()
 	sConn.Close()
 }
 
 func TestStartProxy_NoDataChannel(t *testing.T) {
 	s := New(0)
-	agentID := "proxy-no-data"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "proxy-no-data"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	req := protocol.ProxyNewRequest{
 		Name: "fail-tunnel",
 	}
 
-	if err := s.StartProxy(agent, req); err == nil {
+	if err := s.StartProxy(client, req); err == nil {
 		t.Error("缺少 Data 通道时应启动失败")
 	}
 }
 
 func TestStartProxy_DuplicateName(t *testing.T) {
 	s := New(0)
-	agentID := "proxy-dup"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "proxy-dup"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-	agent.dataSession = sSession
+	client.dataSession = sSession
 
 	req := protocol.ProxyNewRequest{
 		Name:       "dup-tunnel",
 		RemotePort: 0,
 	}
 
-	if err := s.StartProxy(agent, req); err != nil {
+	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("首次启动应成功: %v", err)
 	}
 
-	if err := s.StartProxy(agent, req); err == nil {
+	if err := s.StartProxy(client, req); err == nil {
 		t.Error("同名隧道第二次启动应当报错冲突")
 	}
 
-	s.StopAllProxies(agent)
+	s.StopAllProxies(client)
 	cConn.Close()
 	sConn.Close()
 }
 
 func TestStopProxy(t *testing.T) {
 	s := New(0)
-	agentID := "proxy-stop"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "proxy-stop"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-	agent.dataSession = sSession
+	client.dataSession = sSession
 
 	req := protocol.ProxyNewRequest{Name: "to-be-stopped", RemotePort: 0}
-	s.StartProxy(agent, req)
+	s.StartProxy(client, req)
 
-	agent.proxyMu.RLock()
-	port := agent.proxies[req.Name].Config.RemotePort
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	port := client.proxies[req.Name].Config.RemotePort
+	client.proxyMu.RUnlock()
 
 	// 执行 Stop
-	if err := s.StopProxy(agent, "to-be-stopped"); err != nil {
+	if err := s.StopProxy(client, "to-be-stopped"); err != nil {
 		t.Fatalf("StopProxy 出错: %v", err)
 	}
 
@@ -160,32 +160,32 @@ func TestStopProxy(t *testing.T) {
 
 func TestStopAllProxies(t *testing.T) {
 	s := New(0)
-	agentID := "proxy-stop-all"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "proxy-stop-all"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-	agent.dataSession = sSession
+	client.dataSession = sSession
 
-	s.StartProxy(agent, protocol.ProxyNewRequest{Name: "t1", RemotePort: 0})
-	s.StartProxy(agent, protocol.ProxyNewRequest{Name: "t2", RemotePort: 0})
+	s.StartProxy(client, protocol.ProxyNewRequest{Name: "t1", RemotePort: 0})
+	s.StartProxy(client, protocol.ProxyNewRequest{Name: "t2", RemotePort: 0})
 
-	agent.proxyMu.RLock()
-	count := len(agent.proxies)
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	count := len(client.proxies)
+	client.proxyMu.RUnlock()
 
 	if count != 2 {
 		t.Fatalf("期望有 2 个隧道，得到 %d", count)
 	}
 
-	s.StopAllProxies(agent)
+	s.StopAllProxies(client)
 
-	agent.proxyMu.RLock()
-	countAf := len(agent.proxies)
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	countAf := len(client.proxies)
+	client.proxyMu.RUnlock()
 
 	if countAf != 0 {
 		t.Errorf("StopAllProxies 后代理映射表应该清空，得到长度 %d", countAf)
@@ -200,12 +200,12 @@ func TestStopAllProxies(t *testing.T) {
 
 func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	s := New(0)
-	agentID := "forward-agent"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "forward-client"
+	cc := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, cc)
 
 	// 1. 模拟网络通道 (用于 Yamux multiplexing)
 	pipeC, pipeS := net.Pipe()
@@ -223,7 +223,7 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	clientSession, _ := mux.NewClientSession(pipeC, mux.DefaultConfig())
 	wg.Wait()
 
-	agent.dataSession = serverSession
+	cc.dataSession = serverSession
 	defer serverSession.Close()
 	defer clientSession.Close()
 
@@ -235,17 +235,17 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 		RemotePort: 0,
 	}
 
-	err := s.StartProxy(agent, req)
+	err := s.StartProxy(cc, req)
 	if err != nil {
 		t.Fatalf("启动代理失败: %v", err)
 	}
-	defer s.StopProxy(agent, tunnelName)
+	defer s.StopProxy(cc, tunnelName)
 
-	agent.proxyMu.RLock()
-	remotePort := agent.proxies[tunnelName].Config.RemotePort
-	agent.proxyMu.RUnlock()
+	cc.proxyMu.RLock()
+	remotePort := cc.proxies[tunnelName].Config.RemotePort
+	cc.proxyMu.RUnlock()
 
-	// 3. 在客户端一侧（Agent侧）起一个 goroutine 处理 Yamux 连接
+	// 3. 在客户端一侧（Client侧）起一个 goroutine 处理 Yamux 连接
 	// 期望将接收到的流量转发给本地的 HTTP Test Server
 	localBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Proxy-Target", "hit")
@@ -262,7 +262,7 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 			}
 			go func(stream net.Conn) {
 				defer stream.Close()
-				// 丢弃前面代理传入的 2Bytes length + Name 作为 header (mock Agent parsing)
+				// 丢弃前面代理传入的 2Bytes length + Name 作为 header (mock Client parsing)
 				var ln [2]byte
 				stream.Read(ln[:])
 				nameLen := int(ln[0])<<8 | int(ln[1])
@@ -309,28 +309,28 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 		t.Fatalf("预分配端口失败: %v", err)
 	}
 	contestedPort := ln.Addr().(*net.TCPAddr).Port
-	ln.Close() // 释放端口让两个 Agent 去抢
+	ln.Close() // 释放端口让两个 Client 去抢
 
-	// 创建两个 Agent，各自有自己的 data session
-	makeAgent := func(id string) *AgentConn {
-		agent := &AgentConn{
+	// 创建两个 Client，各自有自己的 data session
+	makeClient := func(id string) *ClientConn {
+		client := &ClientConn{
 			ID:      id,
 			proxies: make(map[string]*ProxyTunnel),
 		}
-		s.agents.Store(id, agent)
+		s.clients.Store(id, client)
 		cConn, sConn := net.Pipe()
 		session, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-		agent.dataSession = session
+		client.dataSession = session
 		t.Cleanup(func() {
 			cConn.Close()
 			sConn.Close()
 			session.Close()
 		})
-		return agent
+		return client
 	}
 
-	agent1 := makeAgent("race-agent-1")
-	agent2 := makeAgent("race-agent-2")
+	client1 := makeClient("race-client-1")
+	client2 := makeClient("race-client-2")
 
 	// 并发启动代理抢同一端口
 	var wg sync.WaitGroup
@@ -339,14 +339,14 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		results <- s.StartProxy(agent1, protocol.ProxyNewRequest{
+		results <- s.StartProxy(client1, protocol.ProxyNewRequest{
 			Name:       "race-tunnel",
 			RemotePort: contestedPort,
 		})
 	}()
 	go func() {
 		defer wg.Done()
-		results <- s.StartProxy(agent2, protocol.ProxyNewRequest{
+		results <- s.StartProxy(client2, protocol.ProxyNewRequest{
 			Name:       "race-tunnel",
 			RemotePort: contestedPort,
 		})
@@ -373,7 +373,7 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 	}
 
 	// 清理
-	s.StopAllProxies(agent1)
-	s.StopAllProxies(agent2)
+	s.StopAllProxies(client1)
+	s.StopAllProxies(client2)
 }
 

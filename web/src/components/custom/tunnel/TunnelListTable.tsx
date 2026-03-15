@@ -17,8 +17,8 @@ import type { ProxyConfig } from '@/types';
 
 // 扩展的隧道条目，可以附带归属节点信息
 export interface TunnelEntry extends ProxyConfig {
-  agentId: string;
-  agentName?: string;
+  clientId: string;
+  clientName?: string;
 }
 
 interface TunnelListTableProps {
@@ -29,7 +29,7 @@ interface TunnelListTableProps {
   /** 标题图标 */
   icon?: React.ReactNode;
   /** 是否显示归属节点列（全网视图用） */
-  showAgent?: boolean;
+  showClient?: boolean;
   /** 是否显示操作按钮（暂停/恢复/删除） */
   showActions?: boolean;
   /** 是否显示搜索框 */
@@ -44,7 +44,7 @@ export function TunnelListTable({
   tunnels,
   title,
   icon,
-  showAgent = false,
+  showClient = false,
   showActions = true,
   showSearch = true,
   emptyAction,
@@ -54,7 +54,7 @@ export function TunnelListTable({
   const resumeTunnel = useResumeTunnel();
   const deleteTunnel = useDeleteTunnel();
   const [searchQuery, setSearchQuery] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<{ name: string; agentId: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ name: string; clientId: string } | null>(null);
 
   const filteredTunnels = useMemo(() => {
     if (!searchQuery.trim()) return tunnels;
@@ -63,13 +63,13 @@ export function TunnelListTable({
       (t) =>
         t.name.toLowerCase().includes(q) ||
         t.type.toLowerCase().includes(q) ||
-        (t.agentName && t.agentName.toLowerCase().includes(q)),
+        (t.clientName && t.clientName.toLowerCase().includes(q)),
     );
   }, [tunnels, searchQuery]);
 
 
 
-  const args = (agentId: string, name: string) => ({ agentId, tunnelName: name });
+  const args = (clientId: string, name: string) => ({ clientId, tunnelName: name });
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -108,7 +108,7 @@ export function TunnelListTable({
                     <th className="px-6 py-3 font-medium">应用 / 类型</th>
                     <th className="px-6 py-3 font-medium">映射关系</th>
                     <th className="px-6 py-3 font-medium">状态</th>
-                    {showAgent && <th className="px-6 py-3 font-medium">归属节点</th>}
+                    {showClient && <th className="px-6 py-3 font-medium">归属节点</th>}
                     {(showActions || renderRowAction) && (
                       <th className="px-6 py-3 font-medium text-right">操作</th>
                     )}
@@ -117,7 +117,7 @@ export function TunnelListTable({
                 <tbody className="divide-y divide-border/40">
                   {filteredTunnels.map((tunnel) => (
                     <tr
-                      key={`${tunnel.agentId}-${tunnel.name}`}
+                      key={`${tunnel.clientId}-${tunnel.name}`}
                       className="hover:bg-muted/30 transition-colors group"
                     >
                       {/* 隧道名称 */}
@@ -145,8 +145,8 @@ export function TunnelListTable({
                       </td>
 
                       {/* 归属节点 */}
-                      {showAgent && (
-                        <td className="px-6 py-3 text-muted-foreground">{tunnel.agentName}</td>
+                      {showClient && (
+                        <td className="px-6 py-3 text-muted-foreground">{tunnel.clientName}</td>
                       )}
 
                       {/* 操作 */}
@@ -160,7 +160,7 @@ export function TunnelListTable({
                                 <button
                                   className="p-1.5 hover:bg-amber-500/10 rounded text-amber-500"
                                   title="暂停"
-                                  onClick={() => pauseTunnel.mutate(args(tunnel.agentId, tunnel.name))}
+                                  onClick={() => pauseTunnel.mutate(args(tunnel.clientId, tunnel.name))}
                                 >
                                   <Pause className="h-4 w-4" />
                                 </button>
@@ -170,14 +170,14 @@ export function TunnelListTable({
                                   <button
                                     className="p-1.5 hover:bg-primary/10 rounded text-primary"
                                     title="启动"
-                                    onClick={() => resumeTunnel.mutate(args(tunnel.agentId, tunnel.name))}
+                                    onClick={() => resumeTunnel.mutate(args(tunnel.clientId, tunnel.name))}
                                   >
                                     <Play className="h-4 w-4" />
                                   </button>
                                   <button
                                     className="p-1.5 hover:bg-destructive/10 rounded text-destructive"
                                     title="删除"
-                                    onClick={() => setDeleteTarget({ name: tunnel.name, agentId: tunnel.agentId })}
+                                    onClick={() => setDeleteTarget({ name: tunnel.name, clientId: tunnel.clientId })}
                                   >
                                     <Trash2 className="h-4 w-4" />
                                   </button>
@@ -216,7 +216,7 @@ export function TunnelListTable({
           variant="destructive"
           onConfirm={() => {
             if (deleteTarget) {
-              deleteTunnel.mutate(args(deleteTarget.agentId, deleteTarget.name));
+              deleteTunnel.mutate(args(deleteTarget.clientId, deleteTarget.name));
               setDeleteTarget(null);
             }
           }}

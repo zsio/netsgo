@@ -1,10 +1,10 @@
 // NetsGo TypeScript Types
 // Aligned with pkg/protocol/types.go
 
-// --- Agent ---
+// --- Client ---
 
-/** 对齐 protocol.AgentInfo */
-export interface AgentInfo {
+/** 对齐 protocol.ClientInfo */
+export interface ClientInfo {
   hostname: string;
   os: "windows" | "linux" | "darwin";
   arch: "amd64" | "arm64";
@@ -30,10 +30,10 @@ export interface SystemStats {
   num_cpu: number;
 }
 
-/** 对齐 /api/agents 响应中的 agentView (server.go handleAPIAgents) */
-export interface Agent {
+/** 对齐 /api/clients 响应中的 clientView (server.go handleAPIClients) */
+export interface Client {
   id: string;
-  info: AgentInfo;
+  info: ClientInfo;
   stats: SystemStats | null;
   proxies?: ProxyConfig[];
   online: boolean;
@@ -54,14 +54,14 @@ export interface ProxyConfig {
   local_port: number;
   remote_port: number;
   domain: string;
-  agent_id: string;
+  client_id: string;
   status: ProxyStatus;
   error?: string;
 }
 
 /** 创建隧道请求体 */
 export interface CreateTunnelInput {
-  agentId: string;
+  clientId: string;
   name: string;
   type: ProxyType;
   local_ip: string;
@@ -73,21 +73,21 @@ export interface CreateTunnelInput {
 // --- SSE Events ---
 
 export interface StatsUpdateEvent {
-  agent_id: string;
+  client_id: string;
   stats: SystemStats;
 }
 
-export interface AgentOnlineEvent {
-  agent_id: string;
-  info: AgentInfo;
+export interface ClientOnlineEvent {
+  client_id: string;
+  info: ClientInfo;
 }
 
-export interface AgentOfflineEvent {
-  agent_id: string;
+export interface ClientOfflineEvent {
+  client_id: string;
 }
 
 export interface TunnelChangedEvent {
-  agent_id: string;
+  client_id: string;
   tunnel: ProxyConfig;
 }
 
@@ -101,7 +101,7 @@ export interface DiskPartition {
 
 export interface ServerStatus {
   status: string;
-  agent_count: number;
+  client_count: number;
   version: string;
   listen_port: number;
   uptime: number;         // seconds
@@ -152,7 +152,7 @@ export interface TunnelPolicy {
   min_port: number;
   max_port: number;
   blocked_ports: number[];
-  agent_whitelist: string[];
+  client_whitelist: string[];
 }
 
 export interface SystemLogEntry {
@@ -214,7 +214,7 @@ export interface SetupResponse {
     username: string;
     role: string;
   };
-  agent_key?: {
+  client_key?: {
     name: string;
     raw_key: string;
   };

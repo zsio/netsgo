@@ -8,14 +8,14 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
-import type { Agent } from '@/types';
+import type { Client } from '@/types';
 
-interface AgentStatsGridProps {
-  agent: Agent;
+interface ClientStatsGridProps {
+  client: Client;
 }
 
-export function AgentStatsGrid({ agent }: AgentStatsGridProps) {
-  const stats = agent.stats;
+export function ClientStatsGrid({ client }: ClientStatsGridProps) {
+  const stats = client.stats;
 
   if (!stats) {
     return (

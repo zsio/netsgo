@@ -20,7 +20,7 @@ try {
   localStorage.removeItem("netsgo:query-cache");
   localStorage.removeItem("netsgo:net-speed");
   localStorage.removeItem("netsgo:net-speed-baseline");
-  localStorage.removeItem("netsgo:agents-cache:v1");
+  localStorage.removeItem("netsgo:clients-cache:v1");
 } catch {
   /* ignore */
 }

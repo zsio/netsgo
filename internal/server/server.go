@@ -37,7 +37,7 @@ type Server struct {
 	StorePath      string             // 隧道配置文件路径（空则使用默认）
 	TLS            *TLSConfig         // P1: TLS 配置（nil 表示无 TLS，等价于 mode=off 且无 trusted proxy）
 	TLSFingerprint string             // P1: 当前证书指纹（启用 TLS 时有值）
-	agents         sync.Map           // stable agentID -> *AgentConn
+	clients        sync.Map           // stable clientID -> *ClientConn
 	events         *EventBus          // SSE 事件总线
 	store          *TunnelStore       // 隧道持久化存储
 	startTime      time.Time          // 服务器启动时间
@@ -47,7 +47,7 @@ type Server struct {
 	cachedStatus   *serverStatusView  // 后台采集的最新服务端状态
 	cachedStatusMu sync.RWMutex       // 保护 cachedStatus
 	loginLimiter   *RateLimiter       // 管理员登录速率限制
-	agentLimiter   *RateLimiter       // Agent 认证速率限制
+	clientLimiter   *RateLimiter       // Client 认证速率限制
 	setupLimiter   *RateLimiter       // 初始化接口速率限制
 	authTimeout    time.Duration      // WebSocket 认证阶段读超时（0 使用默认 30s）
 	httpServer     *http.Server       // P15: 保存引用以便 Shutdown
@@ -57,11 +57,11 @@ type Server struct {
 	tlsEnabled     bool               // P1: 当前是否启用了 TLS（用于内部判断）
 }
 
-// AgentConn 代表一个已连接的 Agent
-type AgentConn struct {
+// ClientConn 代表一个已连接的 Client
+type ClientConn struct {
 	ID          string
 	InstallID   string
-	Info        protocol.AgentInfo
+	Info        protocol.ClientInfo
 	RemoteAddr  string
 	stats       *protocol.SystemStats
 	prevStats   *protocol.SystemStats // 上一次探针快照（用于计算速率）
@@ -83,9 +83,9 @@ func generateDataToken() string {
 	return hex.EncodeToString(buf)
 }
 
-type agentView struct {
+type clientView struct {
 	ID       string                 `json:"id"`
-	Info     protocol.AgentInfo     `json:"info"`
+	Info     protocol.ClientInfo     `json:"info"`
 	Stats    *protocol.SystemStats  `json:"stats,omitempty"`
 	Proxies  []protocol.ProxyConfig `json:"proxies"`
 	Online   bool                   `json:"online"`
@@ -95,7 +95,7 @@ type agentView struct {
 
 type serverStatusView struct {
 	Status         string                   `json:"status"`
-	AgentCount     int                      `json:"agent_count"`
+	ClientCount     int                      `json:"client_count"`
 	Version        string                   `json:"version"`
 	ListenPort     int                      `json:"listen_port"`
 	Uptime         int64                    `json:"uptime"`
@@ -122,26 +122,26 @@ type serverStatusView struct {
 }
 
 type consoleSnapshot struct {
-	Agents       []agentView      `json:"agents"`
+	Clients      []clientView      `json:"clients"`
 	ServerStatus serverStatusView `json:"server_status"`
 }
 
 // SetStats 安全地更新探针数据
-func (a *AgentConn) SetStats(s *protocol.SystemStats) {
+func (a *ClientConn) SetStats(s *protocol.SystemStats) {
 	a.statsMu.Lock()
 	a.stats = s
 	a.statsMu.Unlock()
 }
 
 // GetStats 安全地读取探针数据
-func (a *AgentConn) GetStats() *protocol.SystemStats {
+func (a *ClientConn) GetStats() *protocol.SystemStats {
 	a.statsMu.RLock()
 	defer a.statsMu.RUnlock()
 	return a.stats
 }
 
 // enrichStats 用上次快照计算派生指标（网络速率等），就地修改 stats
-func (a *AgentConn) enrichStats(stats *protocol.SystemStats) {
+func (a *ClientConn) enrichStats(stats *protocol.SystemStats) {
 	a.statsMu.RLock()
 	prev := a.prevStats
 	prevAt := a.prevStatsAt
@@ -209,15 +209,15 @@ func (s *Server) getDataDir() string {
 	return filepath.Join(home, ".netsgo")
 }
 
-// RangeAgents 遍历所有已连接的 Agent
-func (s *Server) RangeAgents(fn func(id string, agent *AgentConn) bool) {
-	s.agents.Range(func(key, value any) bool {
-		return fn(key.(string), value.(*AgentConn))
+// RangeClients 遍历所有已连接的 Client
+func (s *Server) RangeClients(fn func(id string, client *ClientConn) bool) {
+	s.clients.Range(func(key, value any) bool {
+		return fn(key.(string), value.(*ClientConn))
 	})
 }
 
-// RangeProxies 遍历 Agent 的所有代理隧道
-func (a *AgentConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool) {
+// RangeProxies 遍历 Client 的所有代理隧道
+func (a *ClientConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool) {
 	a.proxyMu.RLock()
 	defer a.proxyMu.RUnlock()
 	for name, tunnel := range a.proxies {
@@ -351,7 +351,7 @@ func (s *Server) Start() error {
 
 // Shutdown 优雅关闭服务端 (P15)
 // 1. 停止接受新连接
-// 2. 关闭所有 Agent 连接
+// 2. 关闭所有 Client 连接
 // 3. 通知后台 goroutine 退出
 // 4. 关闭事件总线
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -369,38 +369,38 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// 3. 断开所有 Agent 连接
-	agentCount := 0
-	s.agents.Range(func(key, value any) bool {
-		agent := value.(*AgentConn)
-		agentCount++
+	// 3. 断开所有 Client 连接
+	clientCount := 0
+	s.clients.Range(func(key, value any) bool {
+		client := value.(*ClientConn)
+		clientCount++
 
 		// 关闭 WebSocket 连接
-		agent.mu.Lock()
-		if agent.conn != nil {
-			agent.conn.WriteMessage(
+		client.mu.Lock()
+		if client.conn != nil {
+			client.conn.WriteMessage(
 				websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
 			)
-			agent.conn.Close()
+			client.conn.Close()
 		}
-		agent.mu.Unlock()
+		client.mu.Unlock()
 
 		// 关闭数据通道 yamux session
-		agent.dataMu.Lock()
-		if agent.dataSession != nil && !agent.dataSession.IsClosed() {
-			agent.dataSession.Close()
+		client.dataMu.Lock()
+		if client.dataSession != nil && !client.dataSession.IsClosed() {
+			client.dataSession.Close()
 		}
-		agent.dataMu.Unlock()
+		client.dataMu.Unlock()
 
 		// 停止所有代理隧道
-		s.PauseAllProxies(agent)
+		s.PauseAllProxies(client)
 
-		s.agents.Delete(key)
+		s.clients.Delete(key)
 		return true
 	})
-	if agentCount > 0 {
-		log.Printf("🔌 已断开 %d 个 Agent 连接", agentCount)
+	if clientCount > 0 {
+		log.Printf("🔌 已断开 %d 个 Client 连接", clientCount)
 	}
 
 	// 4. 关闭事件总线
@@ -430,12 +430,12 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 
 	// API
 	mux.HandleFunc("GET /api/status", s.RequireAuth(s.handleAPIStatus))
-	mux.HandleFunc("GET /api/agents", s.RequireAuth(s.handleAPIAgents))
-	mux.HandleFunc("POST /api/agents/{id}/tunnels", s.RequireAuth(s.handleCreateTunnel))
-	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/pause", s.RequireAuth(s.handlePauseTunnel))
-	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/resume", s.RequireAuth(s.handleResumeTunnel))
-	mux.HandleFunc("PUT /api/agents/{id}/tunnels/{name}/stop", s.RequireAuth(s.handleStopTunnel))
-	mux.HandleFunc("DELETE /api/agents/{id}/tunnels/{name}", s.RequireAuth(s.handleDeleteTunnel))
+	mux.HandleFunc("GET /api/clients", s.RequireAuth(s.handleAPIClients))
+	mux.HandleFunc("POST /api/clients/{id}/tunnels", s.RequireAuth(s.handleCreateTunnel))
+	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/pause", s.RequireAuth(s.handlePauseTunnel))
+	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/resume", s.RequireAuth(s.handleResumeTunnel))
+	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/stop", s.RequireAuth(s.handleStopTunnel))
+	mux.HandleFunc("DELETE /api/clients/{id}/tunnels/{name}", s.RequireAuth(s.handleDeleteTunnel))
 
 	// Admin API (JWT + Session Binding 鉴权)
 	mux.HandleFunc("POST /api/auth/login", s.handleAPILogin)
@@ -550,72 +550,72 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📡 新的控制通道连接: %s", r.RemoteAddr)
 
-	// 等待 Agent 发送认证消息
-	agent, replaced, err := s.handleAuth(conn, r.RemoteAddr)
+	// 等待 Client 发送认证消息
+	client, replaced, err := s.handleAuth(conn, r.RemoteAddr)
 	if err != nil {
-		log.Printf("❌ Agent 认证失败 [%s]: %v", r.RemoteAddr, err)
+		log.Printf("❌ Client 认证失败 [%s]: %v", r.RemoteAddr, err)
 		return
 	}
 
 	if replaced != nil {
-		s.forceDisconnectAgent(replaced)
+		s.forceDisconnectClient(replaced)
 	}
 
-	log.Printf("✅ Agent 已连接: %s (%s/%s) [ID: %s]", agent.Info.Hostname, agent.Info.OS, agent.Info.Arch, agent.ID)
+	log.Printf("✅ Client 已连接: %s (%s/%s) [ID: %s]", client.Info.Hostname, client.Info.OS, client.Info.Arch, client.ID)
 
 	if s.store != nil {
-		if err := s.store.UpdateHostname(agent.ID, agent.Info.Hostname); err != nil {
-			log.Printf("⚠️ 更新隧道展示主机名失败 [%s]: %v", agent.ID, err)
+		if err := s.store.UpdateHostname(client.ID, client.Info.Hostname); err != nil {
+			log.Printf("⚠️ 更新隧道展示主机名失败 [%s]: %v", client.ID, err)
 		}
 	}
-	if migrated, err := s.migrateLegacyTunnels(agent); err != nil {
-		log.Printf("⚠️ 迁移旧版隧道失败 [%s]: %v", agent.ID, err)
+	if migrated, err := s.migrateLegacyTunnels(client); err != nil {
+		log.Printf("⚠️ 迁移旧版隧道失败 [%s]: %v", client.ID, err)
 	} else if migrated > 0 {
-		log.Printf("🔄 已迁移 %d 条旧版 hostname 绑定隧道 [%s]", migrated, agent.ID)
+		log.Printf("🔄 已迁移 %d 条旧版 hostname 绑定隧道 [%s]", migrated, client.ID)
 	}
 
-	// 发布 Agent 上线事件
-	s.events.PublishJSON("agent_online", map[string]any{
-		"agent_id": agent.ID,
-		"info":     agent.Info,
+	// 发布 Client 上线事件
+	s.events.PublishJSON("client_online", map[string]any{
+		"client_id": client.ID,
+		"info":     client.Info,
 	})
 
 	// 启动隧道恢复（等数据通道建立后执行）
-	go s.restoreTunnels(agent)
+	go s.restoreTunnels(client)
 
 	defer func() {
-		current, ok := s.agents.Load(agent.ID)
-		isCurrent := ok && current == agent
+		current, ok := s.clients.Load(client.ID)
+		isCurrent := ok && current == client
 
-		s.PauseAllProxies(agent)
-		agent.dataMu.Lock()
-		if agent.dataSession != nil && !agent.dataSession.IsClosed() {
-			agent.dataSession.Close()
+		s.PauseAllProxies(client)
+		client.dataMu.Lock()
+		if client.dataSession != nil && !client.dataSession.IsClosed() {
+			client.dataSession.Close()
 		}
-		agent.dataMu.Unlock()
+		client.dataMu.Unlock()
 		if isCurrent {
-			s.agents.Delete(agent.ID)
-			log.Printf("🔌 Agent 已断开: %s [ID: %s]", agent.Info.Hostname, agent.ID)
-			s.events.PublishJSON("agent_offline", map[string]any{
-				"agent_id": agent.ID,
+			s.clients.Delete(client.ID)
+			log.Printf("🔌 Client 已断开: %s [ID: %s]", client.Info.Hostname, client.ID)
+			s.events.PublishJSON("client_offline", map[string]any{
+				"client_id": client.ID,
 			})
 		}
 	}()
 
 	// 持续读取控制消息
-	s.controlLoop(agent)
+	s.controlLoop(client)
 }
 
-// handleAuth 处理 Agent 的认证流程
+// handleAuth 处理 Client 的认证流程
 // 认证优先级: Token > Key 兑换 Token
-func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn, *AgentConn, error) {
+func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientConn, *ClientConn, error) {
 	// 速率限制检查
 	ip := remoteIP(remoteAddr)
-	if s.agentLimiter != nil {
-		if allowed, retryAfter := s.agentLimiter.Allow(ip); !allowed {
-			log.Printf("🚫 Agent 认证被限速 [%s]: 需等待 %v", remoteAddr, retryAfter)
+	if s.clientLimiter != nil {
+		if allowed, retryAfter := s.clientLimiter.Allow(ip); !allowed {
+			log.Printf("🚫 Client 认证被限速 [%s]: 需等待 %v", remoteAddr, retryAfter)
 			if s.adminStore != nil {
-				s.adminStore.AddSystemLog("WARN", "Agent 认证被限速: IP="+ip, "security")
+				s.adminStore.AddSystemLog("WARN", "Client 认证被限速: IP="+ip, "security")
 			}
 			return nil, nil, fmt.Errorf("认证失败")
 		}
@@ -653,66 +653,66 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn
 	if s.adminStore != nil {
 		// 阶段 1: 尝试 Token 认证（不消耗 Key）
 		if authReq.Token != "" {
-			agentToken, err := s.adminStore.ValidateAgentToken(authReq.Token, authReq.InstallID)
+			clientToken, err := s.adminStore.ValidateClientToken(authReq.Token, authReq.InstallID)
 			if err == nil {
-				// Token 有效 — 检查是否已有同 AgentID 的在线连接
-				if current, loaded := s.agents.Load(agentToken.AgentID); loaded {
-					oldAgent := current.(*AgentConn)
-					oldAgent.mu.Lock()
-					connAlive := oldAgent.conn != nil
-					oldAgent.mu.Unlock()
+				// Token 有效 — 检查是否已有同 ClientID 的在线连接
+				if current, loaded := s.clients.Load(clientToken.ClientID); loaded {
+					oldClient := current.(*ClientConn)
+					oldClient.mu.Lock()
+					connAlive := oldClient.conn != nil
+					oldClient.mu.Unlock()
 					if connAlive {
 						// 已有活跃连接 → 拒绝新连接（不暴露原因）
-						log.Printf("⚠️ Token 并发连接被拒: agent_id=%s, install_id=%s, remote=%s",
-							agentToken.AgentID, authReq.InstallID, remoteAddr)
+						log.Printf("⚠️ Token 并发连接被拒: client_id=%s, install_id=%s, remote=%s",
+							clientToken.ClientID, authReq.InstallID, remoteAddr)
 						return nil, nil, fmt.Errorf("认证失败")
 					}
 				}
 				// Token 认证通过，直接进入后续流程
-				log.Printf("🔑 Agent Token 认证通过 [install_id=%s]", authReq.InstallID)
-				if s.agentLimiter != nil {
-					s.agentLimiter.ResetFailures(ip)
+				log.Printf("🔑 Client Token 认证通过 [install_id=%s]", authReq.InstallID)
+				if s.clientLimiter != nil {
+					s.clientLimiter.ResetFailures(ip)
 				}
 				goto authPassed
 			}
 			// Token 无效，记录失败
-			log.Printf("⚠️ Agent Token 验证失败 [%s]: %v, 将尝试 Key 认证", remoteAddr, err)
-			if s.agentLimiter != nil {
-				s.agentLimiter.RecordFailure(ip)
+			log.Printf("⚠️ Client Token 验证失败 [%s]: %v, 将尝试 Key 认证", remoteAddr, err)
+			if s.clientLimiter != nil {
+				s.clientLimiter.RecordFailure(ip)
 			}
 		}
 
 		// 阶段 2: 尝试 Key 兑换 Token
 		if authReq.Key != "" {
-			// 先获取或创建 Agent 记录以得到稳定 agentID
-			record, err := s.adminStore.GetOrCreateAgent(authReq.InstallID, authReq.Agent, remoteAddr)
+			// 先获取或创建 Client 记录以得到稳定 clientID
+			record, err := s.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, remoteAddr)
 			if err != nil {
-				return nil, nil, fmt.Errorf("登记 Agent 失败: %w", err)
+				return nil, nil, fmt.Errorf("登记 Client 失败: %w", err)
 			}
 
 			tokenStr, _, err := s.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, record.ID, remoteAddr)
 			if err != nil {
-				log.Printf("❌ Agent Key 兑换 Token 失败 [%s]: %v", remoteAddr, err)
-				if s.agentLimiter != nil {
-					s.agentLimiter.RecordFailure(ip)
+				log.Printf("❌ Client Key 兑换 Token 失败 [%s]: %v", remoteAddr, err)
+				if s.clientLimiter != nil {
+					s.clientLimiter.RecordFailure(ip)
 				}
 				return nil, nil, fmt.Errorf("认证失败")
 			}
 			newToken = tokenStr
-			log.Printf("🔑 Agent Key 兑换 Token 成功 [install_id=%s]", authReq.InstallID)
-			if s.agentLimiter != nil {
-				s.agentLimiter.ResetFailures(ip)
+			log.Printf("🔑 Client Key 兑换 Token 成功 [install_id=%s]", authReq.InstallID)
+			if s.clientLimiter != nil {
+				s.clientLimiter.ResetFailures(ip)
 			}
 			goto authPassed
 		}
 
 		// 阶段 3: 两者都没有
 		// 检查是否属于开放模式（无 Key 配置）
-		valid, err := s.adminStore.ValidateAgentKey("")
+		valid, err := s.adminStore.ValidateClientKey("")
 		if !valid {
-			log.Printf("❌ Agent 认证失败 [%s]: 未提供 Token 或 Key, %v", remoteAddr, err)
-			if s.agentLimiter != nil {
-				s.agentLimiter.RecordFailure(ip)
+			log.Printf("❌ Client 认证失败 [%s]: 未提供 Token 或 Key, %v", remoteAddr, err)
+			if s.clientLimiter != nil {
+				s.clientLimiter.RecordFailure(ip)
 			}
 			return nil, nil, fmt.Errorf("认证失败")
 		}
@@ -720,57 +720,57 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*AgentConn
 	}
 
 authPassed:
-	agentID := "unmanaged-" + authReq.InstallID
+	clientID := "unmanaged-" + authReq.InstallID
 	if s.adminStore != nil {
-		record, err := s.adminStore.GetOrCreateAgent(authReq.InstallID, authReq.Agent, remoteAddr)
+		record, err := s.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, remoteAddr)
 		if err != nil {
-			return nil, nil, fmt.Errorf("登记 Agent 失败: %w", err)
+			return nil, nil, fmt.Errorf("登记 Client 失败: %w", err)
 		}
-		agentID = record.ID
+		clientID = record.ID
 	}
 
-	agent := &AgentConn{
-		ID:         agentID,
+	client := &ClientConn{
+		ID:         clientID,
 		InstallID:  authReq.InstallID,
-		Info:       authReq.Agent,
+		Info:       authReq.Client,
 		RemoteAddr: remoteAddr,
 		conn:       conn,
 		proxies:    make(map[string]*ProxyTunnel),
 		dataToken:  generateDataToken(), // P3: 数据通道认证凭证
 	}
 
-	var replaced *AgentConn
-	if current, loaded := s.agents.Load(agentID); loaded {
-		replaced = current.(*AgentConn)
+	var replaced *ClientConn
+	if current, loaded := s.clients.Load(clientID); loaded {
+		replaced = current.(*ClientConn)
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	// 发送认证响应
 	authResp := protocol.AuthResponse{
 		Success:   true,
 		Message:   "认证成功",
-		AgentID:   agentID,
+		ClientID:  clientID,
 		Token:     newToken, // 仅 Key 兑换时非空
-		DataToken: agent.dataToken, // P3: 数据通道握手凭证
+		DataToken: client.dataToken, // P3: 数据通道握手凭证
 	}
 	resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, authResp)
 	if err := conn.WriteJSON(resp); err != nil {
-		if current, ok := s.agents.Load(agentID); ok && current == agent {
-			s.agents.Delete(agentID)
+		if current, ok := s.clients.Load(clientID); ok && current == client {
+			s.clients.Delete(clientID)
 		}
 		return nil, nil, fmt.Errorf("发送认证响应失败: %w", err)
 	}
 
-	return agent, replaced, nil
+	return client, replaced, nil
 }
 
 // controlLoop 持续处理控制通道上的消息
-func (s *Server) controlLoop(agent *AgentConn) {
+func (s *Server) controlLoop(client *ClientConn) {
 	for {
 		var msg protocol.Message
-		if err := agent.conn.ReadJSON(&msg); err != nil {
+		if err := client.conn.ReadJSON(&msg); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("⚠️ Agent [%s] 连接异常: %v", agent.ID, err)
+				log.Printf("⚠️ Client [%s] 连接异常: %v", client.ID, err)
 			}
 			return
 		}
@@ -779,36 +779,36 @@ func (s *Server) controlLoop(agent *AgentConn) {
 		case protocol.MsgTypePing:
 			// 收到心跳，回复 Pong
 			pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
-			agent.mu.Lock()
-			agent.conn.WriteJSON(pong)
-			agent.mu.Unlock()
+			client.mu.Lock()
+			client.conn.WriteJSON(pong)
+			client.mu.Unlock()
 
 		case protocol.MsgTypeProbeReport:
 			// 收到探针数据
 			var stats protocol.SystemStats
 			if err := msg.ParsePayload(&stats); err != nil {
-				log.Printf("⚠️ 解析探针数据失败 [%s]: %v", agent.ID, err)
+				log.Printf("⚠️ 解析探针数据失败 [%s]: %v", client.ID, err)
 				continue
 			}
 			// 计算派生指标（网络速率等）
-			agent.enrichStats(&stats)
-			agent.SetStats(&stats)
+			client.enrichStats(&stats)
+			client.SetStats(&stats)
 			// 更新基准快照
-			agent.statsMu.Lock()
-			agent.prevStats = cloneSystemStats(&stats)
-			agent.prevStatsAt = time.Now()
-			agent.statsMu.Unlock()
+			client.statsMu.Lock()
+			client.prevStats = cloneSystemStats(&stats)
+			client.prevStatsAt = time.Now()
+			client.statsMu.Unlock()
 			if s.adminStore != nil {
-				if err := s.adminStore.UpdateAgentStats(agent.ID, agent.Info, stats, agent.RemoteAddr); err != nil {
-					log.Printf("⚠️ 持久化 Agent 最新状态失败 [%s]: %v", agent.ID, err)
+				if err := s.adminStore.UpdateClientStats(client.ID, client.Info, stats, client.RemoteAddr); err != nil {
+					log.Printf("⚠️ 持久化 Client 最新状态失败 [%s]: %v", client.ID, err)
 				}
 			}
 			log.Printf("📊 [%s] CPU: %.1f%% | 内存: %.1f%% | 磁盘: %.1f%%",
-				agent.Info.Hostname, stats.CPUUsage, stats.MemUsage, stats.DiskUsage)
+				client.Info.Hostname, stats.CPUUsage, stats.MemUsage, stats.DiskUsage)
 
 			// 发布探针数据更新事件
 			s.events.PublishJSON("stats_update", map[string]any{
-				"agent_id": agent.ID,
+				"client_id": client.ID,
 				"stats":    stats,
 			})
 
@@ -816,24 +816,24 @@ func (s *Server) controlLoop(agent *AgentConn) {
 			// 收到创建代理隧道请求
 			var req protocol.ProxyNewRequest
 			if err := msg.ParsePayload(&req); err != nil {
-				log.Printf("⚠️ 解析代理请求失败 [%s]: %v", agent.ID, err)
+				log.Printf("⚠️ 解析代理请求失败 [%s]: %v", client.ID, err)
 				continue
 			}
 
-			err := s.StartProxy(agent, req)
+			err := s.StartProxy(client, req)
 			var resp *protocol.Message
 			if err != nil {
-				log.Printf("❌ 创建代理失败 [%s]: %v", agent.ID, err)
+				log.Printf("❌ 创建代理失败 [%s]: %v", client.ID, err)
 				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
 					Success: false,
 					Message: err.Error(),
 				})
 			} else {
-				agent.proxyMu.RLock()
-				tunnel := agent.proxies[req.Name]
+				client.proxyMu.RLock()
+				tunnel := client.proxies[req.Name]
 				actualPort := tunnel.Config.RemotePort
 				config := tunnel.Config
-				agent.proxyMu.RUnlock()
+				client.proxyMu.RUnlock()
 
 				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
 					Success:    true,
@@ -841,31 +841,31 @@ func (s *Server) controlLoop(agent *AgentConn) {
 					RemotePort: actualPort,
 				})
 
-				s.emitTunnelChanged(agent.ID, config, "created_by_agent")
+				s.emitTunnelChanged(client.ID, config, "created_by_client")
 			}
 
-			agent.mu.Lock()
-			agent.conn.WriteJSON(resp)
-			agent.mu.Unlock()
+			client.mu.Lock()
+			client.conn.WriteJSON(resp)
+			client.mu.Unlock()
 
 		case protocol.MsgTypeProxyClose:
 			var req protocol.ProxyCloseRequest
 			if err := msg.ParsePayload(&req); err != nil {
-				log.Printf("⚠️ 解析关闭代理请求失败 [%s]: %v", agent.ID, err)
+				log.Printf("⚠️ 解析关闭代理请求失败 [%s]: %v", client.ID, err)
 				continue
 			}
-			if err := s.StopProxy(agent, req.Name); err != nil {
-				log.Printf("⚠️ 关闭代理失败 [%s]: %v", agent.ID, err)
+			if err := s.StopProxy(client, req.Name); err != nil {
+				log.Printf("⚠️ 关闭代理失败 [%s]: %v", client.ID, err)
 			} else {
-				s.emitTunnelChanged(agent.ID, protocol.ProxyConfig{
+				s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
 					Name:    req.Name,
-					AgentID: agent.ID,
+					ClientID: client.ID,
 					Status:  protocol.ProxyStatusStopped,
-				}, "closed_by_agent")
+				}, "closed_by_client")
 			}
 
 		default:
-			log.Printf("⚠️ 未知消息类型 [%s]: %s", agent.ID, msg.Type)
+			log.Printf("⚠️ 未知消息类型 [%s]: %s", client.ID, msg.Type)
 		}
 	}
 }
@@ -965,18 +965,18 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) collectSnapshot() consoleSnapshot {
 	return consoleSnapshot{
-		Agents:       s.collectAgentViews(),
+		Clients:       s.collectClientViews(),
 		ServerStatus: s.getCachedServerStatus(),
 	}
 }
 
-func (s *Server) collectAgentViews() []agentView {
-	views := make(map[string]agentView)
+func (s *Server) collectClientViews() []clientView {
+	views := make(map[string]clientView)
 
 	if s.adminStore != nil {
-		for _, registered := range s.adminStore.GetRegisteredAgents() {
+		for _, registered := range s.adminStore.GetRegisteredClients() {
 			lastSeen := registered.LastSeen
-			view := agentView{
+			view := clientView{
 				ID:       registered.ID,
 				Info:     registered.Info,
 				Stats:    registered.Stats,
@@ -986,7 +986,7 @@ func (s *Server) collectAgentViews() []agentView {
 				LastIP:   registered.LastIP,
 			}
 			if s.store != nil {
-				stored := s.store.GetTunnelsByAgentID(registered.ID)
+				stored := s.store.GetTunnelsByClientID(registered.ID)
 				view.Proxies = make([]protocol.ProxyConfig, 0, len(stored))
 				for _, tunnel := range stored {
 					view.Proxies = append(view.Proxies, protocol.ProxyConfig{
@@ -996,7 +996,7 @@ func (s *Server) collectAgentViews() []agentView {
 						LocalPort:  tunnel.LocalPort,
 						RemotePort: tunnel.RemotePort,
 						Domain:     tunnel.Domain,
-						AgentID:    registered.ID,
+						ClientID:    registered.ID,
 						Status:     tunnel.Status,
 					})
 				}
@@ -1005,46 +1005,46 @@ func (s *Server) collectAgentViews() []agentView {
 		}
 	}
 
-	s.agents.Range(func(_, value any) bool {
-		agent := value.(*AgentConn)
+	s.clients.Range(func(_, value any) bool {
+		client := value.(*ClientConn)
 		proxies := make([]protocol.ProxyConfig, 0)
-		agent.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
+		client.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
 			proxies = append(proxies, tunnel.Config)
 			return true
 		})
 		sort.Slice(proxies, func(i, j int) bool { return proxies[i].Name < proxies[j].Name })
 
-		view, ok := views[agent.ID]
+		view, ok := views[client.ID]
 		if !ok {
-			view = agentView{
-				ID:      agent.ID,
-				Info:    agent.Info,
+			view = clientView{
+				ID:      client.ID,
+				Info:    client.Info,
 				Proxies: []protocol.ProxyConfig{},
 			}
 		}
 		now := time.Now()
-		view.Info = agent.Info
-		if liveStats := agent.GetStats(); liveStats != nil {
+		view.Info = client.Info
+		if liveStats := client.GetStats(); liveStats != nil {
 			view.Stats = liveStats
 		}
 		view.Proxies = proxies
 		view.Online = true
 		view.LastSeen = &now
-		view.LastIP = remoteIP(agent.RemoteAddr)
-		views[agent.ID] = view
+		view.LastIP = remoteIP(client.RemoteAddr)
+		views[client.ID] = view
 		return true
 	})
 
-	agents := make([]agentView, 0, len(views))
-	for _, agent := range views {
-		if agent.Proxies == nil {
-			agent.Proxies = []protocol.ProxyConfig{}
+	clients := make([]clientView, 0, len(views))
+	for _, client := range views {
+		if client.Proxies == nil {
+			client.Proxies = []protocol.ProxyConfig{}
 		}
-		agents = append(agents, agent)
+		clients = append(clients, client)
 	}
-	sort.Slice(agents, func(i, j int) bool { return agents[i].Info.Hostname < agents[j].Info.Hostname })
+	sort.Slice(clients, func(i, j int) bool { return clients[i].Info.Hostname < clients[j].Info.Hostname })
 
-	return agents
+	return clients
 }
 
 // serverStatusLoop 后台定时采集服务端状态并缓存
@@ -1083,14 +1083,14 @@ func (s *Server) getCachedServerStatus() serverStatusView {
 }
 
 func (s *Server) collectServerStatus() serverStatusView {
-	agentCount := 0
+	clientCount := 0
 	tunnelActive := 0
 	tunnelPaused := 0
 	tunnelStopped := 0
 
-	s.agents.Range(func(_, value any) bool {
-		agentCount++
-		a := value.(*AgentConn)
+	s.clients.Range(func(_, value any) bool {
+		clientCount++
+		a := value.(*ClientConn)
 		a.RangeProxies(func(_ string, t *ProxyTunnel) bool {
 			switch t.Config.Status {
 			case protocol.ProxyStatusActive:
@@ -1208,7 +1208,7 @@ func (s *Server) collectServerStatus() serverStatusView {
 
 	return serverStatusView{
 		Status:         "running",
-		AgentCount:     agentCount,
+		ClientCount:     clientCount,
 		Version:        buildversion.Current,
 		ListenPort:     s.Port,
 		Uptime:         int64(time.Since(s.startTime).Seconds()),
@@ -1269,15 +1269,15 @@ func (s *Server) getStorePath() string {
 	return s.StorePath
 }
 
-func (s *Server) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.collectAgentViews())
+	json.NewEncoder(w).Encode(s.collectClientViews())
 }
 
 // --- 隧道 CRUD API ---
 
 func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
-	agent, ok := s.readAgentFromPath(w, r)
+	client, ok := s.readClientFromPath(w, r)
 	if !ok {
 		return
 	}
@@ -1288,7 +1288,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config, err := s.createManagedTunnel(agent, req, true, "created")
+	config, err := s.createManagedTunnel(client, req, true, "created")
 	if err != nil {
 		encodeJSON(w, http.StatusConflict, map[string]any{
 			"success": false,
@@ -1305,16 +1305,16 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
-	agent, ok := s.readAgentFromPath(w, r)
+	client, ok := s.readClientFromPath(w, r)
 	if !ok {
 		return
 	}
 	tunnelName := r.PathValue("name")
 
 	// 检查隧道是否存在且为 active 状态
-	agent.proxyMu.RLock()
-	tunnel, exists := agent.proxies[tunnelName]
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	tunnel, exists := client.proxies[tunnelName]
+	client.proxyMu.RUnlock()
 	if !exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -1328,7 +1328,7 @@ func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.pauseManagedTunnel(agent, tunnelName); err != nil {
+	if err := s.pauseManagedTunnel(client, tunnelName); err != nil {
 		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1337,16 +1337,16 @@ func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
-	agent, ok := s.readAgentFromPath(w, r)
+	client, ok := s.readClientFromPath(w, r)
 	if !ok {
 		return
 	}
 	tunnelName := r.PathValue("name")
 
 	// 检查隧道是否为 paused 或 stopped 状态
-	agent.proxyMu.RLock()
-	tunnel, exists := agent.proxies[tunnelName]
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	tunnel, exists := client.proxies[tunnelName]
+	client.proxyMu.RUnlock()
 	if !exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -1360,7 +1360,7 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.resumeManagedTunnel(agent, tunnelName); err != nil {
+	if err := s.resumeManagedTunnel(client, tunnelName); err != nil {
 		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1369,15 +1369,15 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
-	agent, ok := s.readAgentFromPath(w, r)
+	client, ok := s.readClientFromPath(w, r)
 	if !ok {
 		return
 	}
 	tunnelName := r.PathValue("name")
 
-	agent.proxyMu.RLock()
-	_, exists := agent.proxies[tunnelName]
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	_, exists := client.proxies[tunnelName]
+	client.proxyMu.RUnlock()
 	if !exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -1385,7 +1385,7 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.stopManagedTunnel(agent, tunnelName); err != nil {
+	if err := s.stopManagedTunnel(client, tunnelName); err != nil {
 		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1394,16 +1394,16 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
-	agent, ok := s.readAgentFromPath(w, r)
+	client, ok := s.readClientFromPath(w, r)
 	if !ok {
 		return
 	}
 	tunnelName := r.PathValue("name")
 
 	// 检查隧道是否存在
-	agent.proxyMu.RLock()
-	tunnel, exists := agent.proxies[tunnelName]
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	tunnel, exists := client.proxies[tunnelName]
+	client.proxyMu.RUnlock()
 	if !exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -1421,7 +1421,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.deleteManagedTunnel(agent, tunnelName); err != nil {
+	if err := s.deleteManagedTunnel(client, tunnelName); err != nil {
 		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1429,13 +1429,13 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// restoreTunnels 在 Agent 重连后恢复之前的隧道配置
-func (s *Server) restoreTunnels(agent *AgentConn) {
+// restoreTunnels 在 Client 重连后恢复之前的隧道配置
+func (s *Server) restoreTunnels(client *ClientConn) {
 	if s.store == nil {
 		return
 	}
 
-	tunnels := s.store.GetTunnelsByAgentID(agent.ID)
+	tunnels := s.store.GetTunnelsByClientID(client.ID)
 	if len(tunnels) == 0 {
 		return
 	}
@@ -1451,9 +1451,9 @@ func (s *Server) restoreTunnels(agent *AgentConn) {
 	if needsDataSession {
 		// 仅在需要恢复 active 隧道时等待数据通道建立。
 		for i := 0; i < 30; i++ {
-			agent.dataMu.RLock()
-			hasData := agent.dataSession != nil && !agent.dataSession.IsClosed()
-			agent.dataMu.RUnlock()
+			client.dataMu.RLock()
+			hasData := client.dataSession != nil && !client.dataSession.IsClosed()
+			client.dataMu.RUnlock()
 			if hasData {
 				break
 			}
@@ -1467,29 +1467,29 @@ func (s *Server) restoreTunnels(agent *AgentConn) {
 		if st.RemotePort != 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(st.RemotePort) {
 			log.Printf("⚠️ 隧道 %s 端口 %d 不在当前允许范围内，标记为 error", st.Name, st.RemotePort)
 			errMsg := fmt.Sprintf("端口 %d 不在允许范围内", st.RemotePort)
-			agent.proxyMu.Lock()
-			agent.proxies[st.Name] = &ProxyTunnel{
+			client.proxyMu.Lock()
+			client.proxies[st.Name] = &ProxyTunnel{
 				Config: protocol.ProxyConfig{
 					Name:       st.Name,
 					Type:       st.Type,
 					LocalIP:    st.LocalIP,
 					LocalPort:  st.LocalPort,
 					RemotePort: st.RemotePort,
-					AgentID:    agent.ID,
+					ClientID:    client.ID,
 					Status:     protocol.ProxyStatusError,
 					Error:      errMsg,
 				},
 				done: make(chan struct{}),
 			}
-			agent.proxyMu.Unlock()
+			client.proxyMu.Unlock()
 			if s.store != nil {
-				_ = s.store.UpdateStatus(agent.ID, st.Name, protocol.ProxyStatusError)
+				_ = s.store.UpdateStatus(client.ID, st.Name, protocol.ProxyStatusError)
 			}
-			s.emitTunnelChanged(agent.ID, protocol.ProxyConfig{
+			s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
 				Name:       st.Name,
 				Type:       st.Type,
 				RemotePort: st.RemotePort,
-				AgentID:    agent.ID,
+				ClientID:    client.ID,
 				Status:     protocol.ProxyStatusError,
 				Error:      errMsg,
 			}, "port_not_allowed")
@@ -1500,27 +1500,27 @@ func (s *Server) restoreTunnels(agent *AgentConn) {
 		switch st.Status {
 		case protocol.ProxyStatusActive:
 			log.Printf("🔄 恢复隧道: %s (:%d → %s:%d)", st.Name, st.RemotePort, st.LocalIP, st.LocalPort)
-			if err := s.restoreManagedTunnel(agent, st); err != nil {
+			if err := s.restoreManagedTunnel(client, st); err != nil {
 				log.Printf("⚠️ 恢复隧道失败 [%s]: %v", st.Name, err)
 				continue
 			}
 			restoredCount++
 
 		case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped, protocol.ProxyStatusError:
-			agent.proxyMu.Lock()
-			agent.proxies[st.Name] = &ProxyTunnel{
+			client.proxyMu.Lock()
+			client.proxies[st.Name] = &ProxyTunnel{
 				Config: protocol.ProxyConfig{
 					Name:       st.Name,
 					Type:       st.Type,
 					LocalIP:    st.LocalIP,
 					LocalPort:  st.LocalPort,
 					RemotePort: st.RemotePort,
-					AgentID:    agent.ID,
+					ClientID:    client.ID,
 					Status:     st.Status,
 				},
 				done: make(chan struct{}),
 			}
-			agent.proxyMu.Unlock()
+			client.proxyMu.Unlock()
 			restoredCount++
 		}
 	}
@@ -1528,7 +1528,7 @@ func (s *Server) restoreTunnels(agent *AgentConn) {
 	// 恢复完成后一次性通知前端刷新
 	if restoredCount > 0 {
 		s.events.PublishJSON("tunnel_changed", map[string]any{
-			"agent_id": agent.ID,
+			"client_id": client.ID,
 			"action":   "restored_batch",
 			"count":    restoredCount,
 		})

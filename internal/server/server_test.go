@@ -100,7 +100,7 @@ func doAuthWithInstallID(t *testing.T, conn *websocket.Conn, hostname, installID
 	authReq := protocol.AuthRequest{
 		Key:       key,
 		InstallID: installID,
-		Agent: protocol.AgentInfo{
+		Client: protocol.ClientInfo{
 			Hostname: hostname,
 			OS:       "linux",
 			Arch:     "amd64",
@@ -167,7 +167,7 @@ func getAPIJSON(t *testing.T, s *Server, ts *httptest.Server, path string) map[s
 // API 端点测试 (7)
 // ============================================================
 
-func TestAPI_Status_NoAgents(t *testing.T) {
+func TestAPI_Status_NoClients(t *testing.T) {
 	s := New(8080)
 	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
 	w := httptest.NewRecorder()
@@ -186,8 +186,8 @@ func TestAPI_Status_NoAgents(t *testing.T) {
 	if result["version"] != "0.1.0" {
 		t.Errorf("version 期望 '0.1.0'，得到 %v", result["version"])
 	}
-	if result["agent_count"] != float64(0) {
-		t.Errorf("agent_count 期望 0，得到 %v", result["agent_count"])
+	if result["client_count"] != float64(0) {
+		t.Errorf("client_count 期望 0，得到 %v", result["client_count"])
 	}
 }
 
@@ -221,14 +221,14 @@ func TestAPI_Status_TunnelCounts(t *testing.T) {
 	authResp := doAuth(t, conn)
 	time.Sleep(50 * time.Millisecond)
 
-	val, _ := s.agents.Load(authResp.AgentID)
-	agent := val.(*AgentConn)
+	val, _ := s.clients.Load(authResp.ClientID)
+	client := val.(*ClientConn)
 
-	agent.proxyMu.Lock()
-	agent.proxies["tunnel1"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusActive}, done: make(chan struct{})}
-	agent.proxies["tunnel2"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusPaused}, done: make(chan struct{})}
-	agent.proxies["tunnel3"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusStopped}, done: make(chan struct{})}
-	agent.proxyMu.Unlock()
+	client.proxyMu.Lock()
+	client.proxies["tunnel1"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusActive}, done: make(chan struct{})}
+	client.proxies["tunnel2"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusPaused}, done: make(chan struct{})}
+	client.proxies["tunnel3"] = &ProxyTunnel{Config: protocol.ProxyConfig{Status: protocol.ProxyStatusStopped}, done: make(chan struct{})}
+	client.proxyMu.Unlock()
 
 	result := getAPIJSON(t, s, ts, "/api/status")
 
@@ -260,19 +260,19 @@ func TestAPI_Status_UptimeIncreasing(t *testing.T) {
 	}
 }
 
-func TestAPI_Status_WithAgents(t *testing.T) {
+func TestAPI_Status_WithClients(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	conn2, _ := connectAndAuth(t, ts, "agent-host")
+	conn2, _ := connectAndAuth(t, ts, "client-host")
 	defer conn2.Close()
 
 	time.Sleep(50 * time.Millisecond)
 
 	result := getAPIJSON(t, s, ts, "/api/status")
-	count := result["agent_count"].(float64)
+	count := result["client_count"].(float64)
 	if count < 1 {
-		t.Errorf("agent_count 期望 ≥ 1，得到 %v", count)
+		t.Errorf("client_count 期望 ≥ 1，得到 %v", count)
 	}
 }
 
@@ -280,36 +280,36 @@ func TestAPI_Status_AfterDisconnect(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	conn2, _ := connectAndAuth(t, ts, "temp-agent")
+	conn2, _ := connectAndAuth(t, ts, "temp-client")
 	time.Sleep(50 * time.Millisecond)
 
 	result := getAPIJSON(t, s, ts, "/api/status")
-	before := result["agent_count"].(float64)
+	before := result["client_count"].(float64)
 
 	conn2.Close()
 	time.Sleep(100 * time.Millisecond)
 
 	result2 := getAPIJSON(t, s, ts, "/api/status")
-	after := result2["agent_count"].(float64)
+	after := result2["client_count"].(float64)
 
 	if after >= before {
-		t.Errorf("断开后 agent_count 应减少: before=%v, after=%v", before, after)
+		t.Errorf("断开后 client_count 应减少: before=%v, after=%v", before, after)
 	}
 }
 
-func TestAPI_Agents_Empty(t *testing.T) {
+func TestAPI_Clients_Empty(t *testing.T) {
 	s := New(8080)
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/clients", nil)
 	w := httptest.NewRecorder()
-	s.handleAPIAgents(w, req)
+	s.handleAPIClients(w, req)
 
 	body := strings.TrimSpace(w.Body.String())
 	if body != "null" && body != "[]" {
-		t.Errorf("无 Agent 时期望空结果，得到 %s", body)
+		t.Errorf("无 Client 时期望空结果，得到 %s", body)
 	}
 }
 
-func TestAPI_Agents_Multiple(t *testing.T) {
+func TestAPI_Clients_Multiple(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
@@ -322,29 +322,29 @@ func TestAPI_Agents_Multiple(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/agents", nil)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/clients", nil)
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
 	resp, _ := http.DefaultClient.Do(req)
 	defer resp.Body.Close()
 
-	var agents []map[string]any
-	json.NewDecoder(resp.Body).Decode(&agents)
+	var clients []map[string]any
+	json.NewDecoder(resp.Body).Decode(&clients)
 
-	if len(agents) < 3 {
-		t.Errorf("期望至少 3 个 Agent，得到 %d", len(agents))
+	if len(clients) < 3 {
+		t.Errorf("期望至少 3 个 Client，得到 %d", len(clients))
 	}
 
-	for i, a := range agents {
+	for i, a := range clients {
 		if a["id"] == nil {
-			t.Errorf("Agent[%d] 缺少 id", i)
+			t.Errorf("Client[%d] 缺少 id", i)
 		}
 		if a["info"] == nil {
-			t.Errorf("Agent[%d] 缺少 info", i)
+			t.Errorf("Client[%d] 缺少 info", i)
 		}
 	}
 }
 
-func TestAPI_Agents_WithStats(t *testing.T) {
+func TestAPI_Clients_WithStats(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
@@ -356,20 +356,20 @@ func TestAPI_Agents_WithStats(t *testing.T) {
 	conn1.WriteJSON(msg)
 	time.Sleep(100 * time.Millisecond)
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/agents", nil)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/clients", nil)
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
 	resp, _ := http.DefaultClient.Do(req)
 	defer resp.Body.Close()
 
-	var agents []map[string]any
-	json.NewDecoder(resp.Body).Decode(&agents)
+	var clients []map[string]any
+	json.NewDecoder(resp.Body).Decode(&clients)
 
-	if len(agents) == 0 {
-		t.Fatal("期望至少 1 个 Agent")
+	if len(clients) == 0 {
+		t.Fatal("期望至少 1 个 Client")
 	}
 
 	found := false
-	for _, a := range agents {
+	for _, a := range clients {
 		if a["stats"] != nil {
 			found = true
 			statsMap := a["stats"].(map[string]any)
@@ -379,11 +379,11 @@ func TestAPI_Agents_WithStats(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("未找到包含 stats 的 Agent")
+		t.Error("未找到包含 stats 的 Client")
 	}
 }
 
-func TestAPI_Agents_StatsUpdated(t *testing.T) {
+func TestAPI_Clients_StatsUpdated(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
@@ -400,13 +400,13 @@ func TestAPI_Agents_StatsUpdated(t *testing.T) {
 	conn1.WriteJSON(msg2)
 	time.Sleep(50 * time.Millisecond)
 
-	val, ok := s.agents.Load(authResp.AgentID)
+	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("Agent 未找到")
+		t.Fatal("Client 未找到")
 	}
-	agent := val.(*AgentConn)
-	if agent.GetStats().CPUUsage != 80.0 {
-		t.Errorf("Stats 应被更新为最新值 80.0，得到 %f", agent.GetStats().CPUUsage)
+	client := val.(*ClientConn)
+	if client.GetStats().CPUUsage != 80.0 {
+		t.Errorf("Stats 应被更新为最新值 80.0，得到 %f", client.GetStats().CPUUsage)
 	}
 }
 
@@ -580,13 +580,13 @@ func TestAuth_Success(t *testing.T) {
 	if !authResp.Success {
 		t.Errorf("认证应成功: %s", authResp.Message)
 	}
-	if authResp.AgentID == "" {
-		t.Error("AgentID 不应为空")
+	if authResp.ClientID == "" {
+		t.Error("ClientID 不应为空")
 	}
-	// AgentID 应为 UUID v4 格式: 8-4-4-4-12
+	// ClientID 应为 UUID v4 格式: 8-4-4-4-12
 	uuidPattern := `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-	if matched, _ := regexp.MatchString(uuidPattern, authResp.AgentID); !matched {
-		t.Errorf("AgentID 应为 UUID v4 格式，得到: %q", authResp.AgentID)
+	if matched, _ := regexp.MatchString(uuidPattern, authResp.ClientID); !matched {
+		t.Errorf("ClientID 应为 UUID v4 格式，得到: %q", authResp.ClientID)
 	}
 }
 
@@ -597,7 +597,7 @@ func TestAuth_EmptyKey(t *testing.T) {
 	authReq := protocol.AuthRequest{
 		Key:       "",
 		InstallID: "install-empty-key",
-		Agent: protocol.AgentInfo{
+		Client: protocol.ClientInfo{
 			Hostname: "host",
 			OS:       "linux",
 			Arch:     "amd64",
@@ -625,8 +625,8 @@ func TestAuth_EmptyHostname(t *testing.T) {
 	if !authResp.Success {
 		t.Errorf("空主机名不应导致认证失败: %s", authResp.Message)
 	}
-	if authResp.AgentID == "" {
-		t.Error("AgentID 不应为空")
+	if authResp.ClientID == "" {
+		t.Error("ClientID 不应为空")
 	}
 }
 
@@ -638,23 +638,23 @@ func TestAuth_ReconnectSameInstallIDReplacesOldConnection(t *testing.T) {
 	defer conn1.Close()
 
 	time.Sleep(50 * time.Millisecond)
-	previous, ok := s.agents.Load(auth1.AgentID)
+	previous, ok := s.clients.Load(auth1.ClientID)
 	if !ok {
-		t.Fatal("第一次认证后 Agent 应已注册")
+		t.Fatal("第一次认证后 Client 应已注册")
 	}
 
 	conn2, auth2 := connectAndAuthWithInstallID(t, ts, "stable-host", "install-stable-host")
 	defer conn2.Close()
 
-	if auth2.AgentID != auth1.AgentID {
-		t.Fatalf("相同 install_id 重连后应保持稳定 AgentID: %s != %s", auth2.AgentID, auth1.AgentID)
+	if auth2.ClientID != auth1.ClientID {
+		t.Fatalf("相同 install_id 重连后应保持稳定 ClientID: %s != %s", auth2.ClientID, auth1.ClientID)
 	}
 
 	time.Sleep(100 * time.Millisecond)
 
-	current, ok := s.agents.Load(auth1.AgentID)
+	current, ok := s.clients.Load(auth1.ClientID)
 	if !ok {
-		t.Fatal("重连后 Agent 应仍然在线")
+		t.Fatal("重连后 Client 应仍然在线")
 	}
 	if current == previous {
 		t.Error("重连后应以新连接替换旧连接")
@@ -666,7 +666,7 @@ func TestAuth_ReconnectSameInstallIDReplacesOldConnection(t *testing.T) {
 	}
 
 	count := 0
-	s.RangeAgents(func(_ string, _ *AgentConn) bool {
+	s.RangeClients(func(_ string, _ *ClientConn) bool {
 		count++
 		return true
 	})
@@ -817,22 +817,22 @@ func TestProbe_SingleReport(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	val, ok := s.agents.Load(authResp.AgentID)
+	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("Agent 未注册")
+		t.Fatal("Client 未注册")
 	}
-	agent := val.(*AgentConn)
-	if agent.GetStats() == nil {
+	client := val.(*ClientConn)
+	if client.GetStats() == nil {
 		t.Fatal("Stats 不应为 nil")
 	}
-	if agent.GetStats().CPUUsage != 42.5 {
-		t.Errorf("CPUUsage 期望 42.5，得到 %f", agent.GetStats().CPUUsage)
+	if client.GetStats().CPUUsage != 42.5 {
+		t.Errorf("CPUUsage 期望 42.5，得到 %f", client.GetStats().CPUUsage)
 	}
-	if agent.GetStats().MemUsage != 60.0 {
-		t.Errorf("MemUsage 期望 60.0，得到 %f", agent.GetStats().MemUsage)
+	if client.GetStats().MemUsage != 60.0 {
+		t.Errorf("MemUsage 期望 60.0，得到 %f", client.GetStats().MemUsage)
 	}
-	if agent.GetStats().NumCPU != 4 {
-		t.Errorf("NumCPU 期望 4，得到 %d", agent.GetStats().NumCPU)
+	if client.GetStats().NumCPU != 4 {
+		t.Errorf("NumCPU 期望 4，得到 %d", client.GetStats().NumCPU)
 	}
 }
 
@@ -856,29 +856,29 @@ func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
 	conn.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/agents", nil)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/clients", nil)
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("请求 /api/agents 失败: %v", err)
+		t.Fatalf("请求 /api/clients 失败: %v", err)
 	}
 	defer resp.Body.Close()
 
-	var agents []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
-		t.Fatalf("解析 /api/agents 响应失败: %v", err)
+	var clients []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
+		t.Fatalf("解析 /api/clients 响应失败: %v", err)
 	}
 
-	for _, agent := range agents {
-		if agent["id"] != authResp.AgentID {
+	for _, client := range clients {
+		if client["id"] != authResp.ClientID {
 			continue
 		}
-		if online, _ := agent["online"].(bool); online {
-			t.Fatal("断开后的 Agent 不应仍然标记为在线")
+		if online, _ := client["online"].(bool); online {
+			t.Fatal("断开后的 Client 不应仍然标记为在线")
 		}
-		statsMap, ok := agent["stats"].(map[string]any)
+		statsMap, ok := client["stats"].(map[string]any)
 		if !ok {
-			t.Fatal("断开后的 Agent 仍应返回最后一次 stats")
+			t.Fatal("断开后的 Client 仍应返回最后一次 stats")
 		}
 		if statsMap["cpu_usage"].(float64) != 42.5 {
 			t.Fatalf("cpu_usage 期望 42.5，得到 %v", statsMap["cpu_usage"])
@@ -886,30 +886,30 @@ func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
 		return
 	}
 
-	t.Fatalf("未找到 Agent %s", authResp.AgentID)
+	t.Fatalf("未找到 Client %s", authResp.ClientID)
 }
 
-func TestAPI_Agents_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
+func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	info := protocol.AgentInfo{
+	info := protocol.ClientInfo{
 		Hostname: "persisted-host",
 		OS:       "linux",
 		Arch:     "amd64",
 		Version:  "0.1.0",
 	}
 
-	record, err := s.adminStore.GetOrCreateAgent("install-persisted-host", info, "127.0.0.1:12345")
+	record, err := s.adminStore.GetOrCreateClient("install-persisted-host", info, "127.0.0.1:12345")
 	if err != nil {
-		t.Fatalf("预创建 Agent 记录失败: %v", err)
+		t.Fatalf("预创建 Client 记录失败: %v", err)
 	}
-	if err := s.adminStore.UpdateAgentStats(record.ID, info, protocol.SystemStats{
+	if err := s.adminStore.UpdateClientStats(record.ID, info, protocol.SystemStats{
 		CPUUsage: 88.8,
 		MemUsage: 66.6,
 		NumCPU:   16,
 	}, "127.0.0.1:12345"); err != nil {
-		t.Fatalf("预写入 Agent stats 失败: %v", err)
+		t.Fatalf("预写入 Client stats 失败: %v", err)
 	}
 
 	conn, authResp := connectAndAuthWithInstallID(t, ts, "persisted-host", "install-persisted-host")
@@ -917,27 +917,27 @@ func TestAPI_Agents_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/agents", nil)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/clients", nil)
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("请求 /api/agents 失败: %v", err)
+		t.Fatalf("请求 /api/clients 失败: %v", err)
 	}
 	defer resp.Body.Close()
 
-	var agents []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
-		t.Fatalf("解析 /api/agents 响应失败: %v", err)
+	var clients []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
+		t.Fatalf("解析 /api/clients 响应失败: %v", err)
 	}
 
-	for _, agent := range agents {
-		if agent["id"] != authResp.AgentID {
+	for _, client := range clients {
+		if client["id"] != authResp.ClientID {
 			continue
 		}
-		if online, _ := agent["online"].(bool); !online {
-			t.Fatal("已连接的 Agent 应标记为在线")
+		if online, _ := client["online"].(bool); !online {
+			t.Fatal("已连接的 Client 应标记为在线")
 		}
-		statsMap, ok := agent["stats"].(map[string]any)
+		statsMap, ok := client["stats"].(map[string]any)
 		if !ok {
 			t.Fatal("首次新上报前应先返回持久化的旧 stats")
 		}
@@ -947,7 +947,7 @@ func TestAPI_Agents_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 		return
 	}
 
-	t.Fatalf("未找到 Agent %s", authResp.AgentID)
+	t.Fatalf("未找到 Client %s", authResp.ClientID)
 }
 
 func TestProbe_MultipleReports(t *testing.T) {
@@ -966,10 +966,10 @@ func TestProbe_MultipleReports(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	val, _ := s.agents.Load(authResp.AgentID)
-	agent := val.(*AgentConn)
-	if agent.GetStats().CPUUsage != 50.0 {
-		t.Errorf("最终 CPUUsage 应为 50.0（最后一次上报），得到 %f", agent.GetStats().CPUUsage)
+	val, _ := s.clients.Load(authResp.ClientID)
+	client := val.(*ClientConn)
+	if client.GetStats().CPUUsage != 50.0 {
+		t.Errorf("最终 CPUUsage 应为 50.0（最后一次上报），得到 %f", client.GetStats().CPUUsage)
 	}
 }
 
@@ -985,9 +985,9 @@ func TestLifecycle_Full(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	_, ok := s.agents.Load(authResp.AgentID)
+	_, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("认证后 Agent 应已注册")
+		t.Fatal("认证后 Client 应已注册")
 	}
 
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
@@ -1004,21 +1004,21 @@ func TestLifecycle_Full(t *testing.T) {
 	conn.WriteJSON(msg)
 	time.Sleep(50 * time.Millisecond)
 
-	val, _ := s.agents.Load(authResp.AgentID)
-	if val.(*AgentConn).GetStats().CPUUsage != 33.3 {
+	val, _ := s.clients.Load(authResp.ClientID)
+	if val.(*ClientConn).GetStats().CPUUsage != 33.3 {
 		t.Error("探针数据未正确更新")
 	}
 
 	conn.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	_, ok = s.agents.Load(authResp.AgentID)
+	_, ok = s.clients.Load(authResp.ClientID)
 	if ok {
-		t.Error("断开后 Agent 应已从 map 中移除")
+		t.Error("断开后 Client 应已从 map 中移除")
 	}
 }
 
-func TestMultipleAgents_Concurrent(t *testing.T) {
+func TestMultipleClients_Concurrent(t *testing.T) {
 	_, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
@@ -1041,7 +1041,7 @@ func TestMultipleAgents_Concurrent(t *testing.T) {
 			authReq := protocol.AuthRequest{
 				Key:       "test-key",
 				InstallID: "install-" + hostname,
-				Agent:     protocol.AgentInfo{Hostname: hostname, OS: "linux", Arch: "amd64", Version: "0.1.0"},
+				Client:    protocol.ClientInfo{Hostname: hostname, OS: "linux", Arch: "amd64", Version: "0.1.0"},
 			}
 			msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 			conn.WriteJSON(msg)
@@ -1070,11 +1070,11 @@ func TestMultipleAgents_Concurrent(t *testing.T) {
 	close(errors)
 
 	for err := range errors {
-		t.Errorf("并发 Agent 出错: %v", err)
+		t.Errorf("并发 Client 出错: %v", err)
 	}
 }
 
-func TestAgent_DisconnectCleansUp(t *testing.T) {
+func TestClient_DisconnectCleansUp(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
@@ -1083,28 +1083,28 @@ func TestAgent_DisconnectCleansUp(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	_, ok1 := s.agents.Load(auth1.AgentID)
-	_, ok2 := s.agents.Load(auth2.AgentID)
+	_, ok1 := s.clients.Load(auth1.ClientID)
+	_, ok2 := s.clients.Load(auth2.ClientID)
 	if !ok1 || !ok2 {
-		t.Fatal("两个 Agent 都应已注册")
+		t.Fatal("两个 Client 都应已注册")
 	}
 
 	conn2.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	_, ok1 = s.agents.Load(auth1.AgentID)
-	_, ok2 = s.agents.Load(auth2.AgentID)
+	_, ok1 = s.clients.Load(auth1.ClientID)
+	_, ok2 = s.clients.Load(auth2.ClientID)
 	if !ok1 {
-		t.Error("Agent1 不应被移除")
+		t.Error("Client1 不应被移除")
 	}
 	if ok2 {
-		t.Error("Agent2 应已被移除")
+		t.Error("Client2 应已被移除")
 	}
 
 	conn1.Close()
 }
 
-func TestHandleControlWS_MigratesLegacyTunnelsToStableAgentID(t *testing.T) {
+func TestHandleControlWS_MigratesLegacyTunnelsToStableClientID(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
@@ -1126,12 +1126,12 @@ func TestHandleControlWS_MigratesLegacyTunnelsToStableAgentID(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	migrated := s.store.GetTunnelsByAgentID(authResp.AgentID)
+	migrated := s.store.GetTunnelsByClientID(authResp.ClientID)
 	if len(migrated) != 1 {
 		t.Fatalf("期望迁移出 1 条稳定绑定隧道，得到 %d", len(migrated))
 	}
-	if migrated[0].Binding != TunnelBindingAgentID {
-		t.Errorf("迁移后 Binding 应为 %s，得到 %s", TunnelBindingAgentID, migrated[0].Binding)
+	if migrated[0].Binding != TunnelBindingClientID {
+		t.Errorf("迁移后 Binding 应为 %s，得到 %s", TunnelBindingClientID, migrated[0].Binding)
 	}
 	if migrated[0].Hostname != "legacy-host" {
 		t.Errorf("迁移后 Hostname 应保留 legacy-host，得到 %s", migrated[0].Hostname)
@@ -1160,13 +1160,13 @@ func TestHandleControlWS_SkipsLegacyMigrationForAmbiguousHostname(t *testing.T) 
 		Binding:         TunnelBindingLegacyHostname,
 	})
 
-	if _, err := s.adminStore.GetOrCreateAgent("install-existing-host", protocol.AgentInfo{
+	if _, err := s.adminStore.GetOrCreateClient("install-existing-host", protocol.ClientInfo{
 		Hostname: "shared-host",
 		OS:       "linux",
 		Arch:     "amd64",
 		Version:  "0.1.0",
 	}, "127.0.0.1"); err != nil {
-		t.Fatalf("预注册旧 Agent 失败: %v", err)
+		t.Fatalf("预注册旧 Client 失败: %v", err)
 	}
 
 	conn, authResp := connectAndAuthWithInstallID(t, ts, "shared-host", "install-new-host")
@@ -1174,7 +1174,7 @@ func TestHandleControlWS_SkipsLegacyMigrationForAmbiguousHostname(t *testing.T) 
 
 	time.Sleep(100 * time.Millisecond)
 
-	if migrated := s.store.GetTunnelsByAgentID(authResp.AgentID); len(migrated) != 0 {
+	if migrated := s.store.GetTunnelsByClientID(authResp.ClientID); len(migrated) != 0 {
 		t.Fatalf("hostname 冲突时不应自动迁移 legacy 隧道，得到 %d 条", len(migrated))
 	}
 	if pending := s.store.GetLegacyTunnelsByHostname("shared-host"); len(pending) != 1 {
@@ -1189,17 +1189,17 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	conn, authResp := connectAndAuth(t, ts, "proxy-msg-host")
 	defer conn.Close()
 
-	// agents.Store 已在 handleAuth 内、认证响应发送前完成，
-	// 所以 connectAndAuth 返回时 agent 一定已在 map 中。
-	val, ok := s.agents.Load(authResp.AgentID)
+	// clients.Store 已在 handleAuth 内、认证响应发送前完成，
+	// 所以 connectAndAuth 返回时 client 一定已在 map 中。
+	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("认证成功后 Agent 应已注册到 agents map")
+		t.Fatal("认证成功后 Client 应已注册到 clients map")
 	}
-	agent := val.(*AgentConn)
+	client := val.(*ClientConn)
 	cPipe, sPipe := net.Pipe()
 	defer cPipe.Close()
 	defer sPipe.Close()
-	agent.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
+	client.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
 
 	// 测试 MsgTypeProxyNew
 	req := protocol.ProxyNewRequest{
@@ -1225,9 +1225,9 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	conn.WriteJSON(closeMsg)
 	time.Sleep(100 * time.Millisecond)
 
-	agent.proxyMu.RLock()
-	_, exists := agent.proxies["ws-tunnel-1"]
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	_, exists := client.proxies["ws-tunnel-1"]
+	client.proxyMu.RUnlock()
 
 	if exists {
 		t.Error("发送 ProxyClose 后代理隧道仍存在")
@@ -1356,13 +1356,13 @@ func TestPeekListener_HTTPDispatch(t *testing.T) {
 
 func TestPeekListener_DataChannelDispatch(t *testing.T) {
 	s := New(0)
-	agentID := "peek-dispatch-agent"
-	agent := &AgentConn{
-		ID:        agentID,
+	clientID := "peek-dispatch-client"
+	client := &ClientConn{
+		ID:        clientID,
 		proxies:   make(map[string]*ProxyTunnel),
 		dataToken: "peek-test-token",
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1384,7 +1384,7 @@ func TestPeekListener_DataChannelDispatch(t *testing.T) {
 	// 发送数据通道魔数 + 握手
 	go func() {
 		conn, _ := net.Dial("tcp", ln.Addr().String())
-		handshake := DataHandshakeBytes(agentID, "peek-test-token")
+		handshake := DataHandshakeBytes(clientID, "peek-test-token")
 		conn.Write(handshake)
 
 		// 读取响应
@@ -1463,13 +1463,13 @@ func TestControlLoop_MalformedProbeReport(t *testing.T) {
 		t.Errorf("期望 pong，得到 %s", resp.Type)
 	}
 
-	// Agent 的 stats 应该没被更新（还是 nil）
-	val, ok := s.agents.Load(authResp.AgentID)
+	// Client 的 stats 应该没被更新（还是 nil）
+	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("Agent 应该仍然已注册")
+		t.Fatal("Client 应该仍然已注册")
 	}
-	agent := val.(*AgentConn)
-	if agent.GetStats() != nil {
+	client := val.(*ClientConn)
+	if client.GetStats() != nil {
 		t.Error("畸形 probe_report 不应导致 stats 被更新")
 	}
 
@@ -1528,7 +1528,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		return resp.StatusCode, result
 	}
 
-	// 2. 模拟一个 Agent 连接
+	// 2. 模拟一个 Client 连接
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -1538,8 +1538,8 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
-		InstallID: "install-lifecycle-agent",
-		Agent:     protocol.AgentInfo{Hostname: "lifecycle-agent", OS: "linux", Version: "1.0.0"},
+		InstallID: "install-lifecycle-client",
+		Client:    protocol.ClientInfo{Hostname: "lifecycle-client", OS: "linux", Version: "1.0.0"},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 	wsConn.WriteJSON(msg)
@@ -1549,15 +1549,15 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	var authResp protocol.AuthResponse
 	authRespMsg.ParsePayload(&authResp)
 
-	agentID := authResp.AgentID
-	time.Sleep(50 * time.Millisecond) // 等待 agent 注册到 s.agents
+	clientID := authResp.ClientID
+	time.Sleep(50 * time.Millisecond) // 等待 client 注册到 s.clients
 
 	// 设置假的 DataSession，避免 StartProxy 失败
-	val, _ := s.agents.Load(agentID)
-	agentConn := val.(*AgentConn)
+	val, _ := s.clients.Load(clientID)
+	clientConn := val.(*ClientConn)
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-	agentConn.dataSession = sSession
+	clientConn.dataSession = sSession
 	defer func() {
 		cConn.Close()
 		sConn.Close()
@@ -1565,16 +1565,16 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 
 	// ========= 测试开始 =========
 
-	// 1. 创建隧道 (/api/agents/{id}/tunnels)
+	// 1. 创建隧道 (/api/clients/{id}/tunnels)
 	createReq := []byte(`{"name":"test-tunnel","type":"tcp","local_ip":"127.0.0.1","local_port":8080,"remote_port":18080}`)
-	code, resp := doRequest(http.MethodPost, fmt.Sprintf("/api/agents/%s/tunnels", agentID), createReq)
+	code, resp := doRequest(http.MethodPost, fmt.Sprintf("/api/clients/%s/tunnels", clientID), createReq)
 
 	if code != http.StatusCreated {
 		t.Errorf("创建隧道期望 201 Created，得到 %d, 响应: %v", code, resp)
 	}
 
 	// 验证隧道在 Store 中生成
-	tunnel, ok := s.store.GetTunnel(agentID, "test-tunnel")
+	tunnel, ok := s.store.GetTunnel(clientID, "test-tunnel")
 	if !ok {
 		t.Fatal("Tunnel 未写入 Store")
 	}
@@ -1592,52 +1592,52 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // 等待服务端处理状态更新
 
 	// 二次检查 Store，状态应为 active
-	tunnel, _ = s.store.GetTunnel(agentID, "test-tunnel")
+	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
 	if tunnel.Status != protocol.ProxyStatusActive {
 		t.Errorf("隧道已成功创建，状态应为 active，但仍为 %s", tunnel.Status)
 	}
 
-	// 2. 暂停隧道 (/api/agents/{id}/tunnels/{name}/pause)
+	// 2. 暂停隧道 (/api/clients/{id}/tunnels/{name}/pause)
 	pauseReq := []byte(`{}`)
-	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/agents/%s/tunnels/test-tunnel/pause", agentID), pauseReq)
+	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/pause", clientID), pauseReq)
 	if code != http.StatusOK {
 		t.Errorf("暂停隧道期望 200，得到 %d", code)
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	tunnel, _ = s.store.GetTunnel(agentID, "test-tunnel")
+	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
 	if tunnel.Status != protocol.ProxyStatusPaused {
 		t.Errorf("隧道暂停后，状态应为 paused，得到 %s", tunnel.Status)
 	}
 
-	// 3. 恢复隧道 (/api/agents/{id}/tunnels/{name}/resume)
+	// 3. 恢复隧道 (/api/clients/{id}/tunnels/{name}/resume)
 	resumeReq := []byte(`{}`)
-	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/agents/%s/tunnels/test-tunnel/resume", agentID), resumeReq)
+	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/resume", clientID), resumeReq)
 	if code != http.StatusOK {
 		t.Errorf("恢复隧道期望 200，得到 %d", code)
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	tunnel, _ = s.store.GetTunnel(agentID, "test-tunnel")
+	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
 	if tunnel.Status != protocol.ProxyStatusActive {
 		t.Errorf("隧道恢复后，状态应为 active，得到 %s", tunnel.Status)
 	}
 
-	// 4. 停止隧道 (/api/agents/{id}/tunnels/{name}/stop)
+	// 4. 停止隧道 (/api/clients/{id}/tunnels/{name}/stop)
 	stopReq := []byte(`{}`)
-	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/agents/%s/tunnels/test-tunnel/stop", agentID), stopReq)
+	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/stop", clientID), stopReq)
 	if code != http.StatusOK {
 		t.Errorf("停止隧道期望 200，得到 %d", code)
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	tunnel, _ = s.store.GetTunnel(agentID, "test-tunnel")
+	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
 	if tunnel.Status != protocol.ProxyStatusStopped {
 		t.Errorf("隧道停止后，状态应为 stopped，得到 %s", tunnel.Status)
 	}
 
-	// 5. 删除隧道 (/api/agents/{id}/tunnels/{name})
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+fmt.Sprintf("/api/agents/%s/tunnels/test-tunnel", agentID), nil)
+	// 5. 删除隧道 (/api/clients/{id}/tunnels/{name})
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel", clientID), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", "test") // P6: 必须与 CreateSession 的 UA 一致
 	respDel, _ := http.DefaultClient.Do(req)
@@ -1646,7 +1646,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	}
 	respDel.Body.Close()
 
-	if _, ok := s.store.GetTunnel(agentID, "test-tunnel"); ok {
+	if _, ok := s.store.GetTunnel(clientID, "test-tunnel"); ok {
 		t.Error("删除后，Store 中不应再有此隧道")
 	}
 }
@@ -1666,33 +1666,33 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel1", Type: "tcp", RemotePort: 1234},
 		Status:          protocol.ProxyStatusActive,
-		AgentID:         "agent-1",
+		ClientID:         "client-1",
 		Hostname:        "restore-host",
-		Binding:         TunnelBindingAgentID,
+		Binding:         TunnelBindingClientID,
 	})
 	tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel2", Type: "tcp", RemotePort: 5678},
 		Status:          protocol.ProxyStatusPaused,
-		AgentID:         "agent-1",
+		ClientID:         "client-1",
 		Hostname:        "restore-host",
-		Binding:         TunnelBindingAgentID,
+		Binding:         TunnelBindingClientID,
 	})
 
 	s := New(0)
 	s.adminStore = store
 	s.store = tStore // 会由 s.initStore(tStore) 被自动绑定在真实环境中，这里手动绑定
 
-	agent := &AgentConn{
-		ID:      "agent-1",
-		Info:    protocol.AgentInfo{Hostname: "restore-host"},
+	client := &ClientConn{
+		ID:      "client-1",
+		Info:    protocol.ClientInfo{Hostname: "restore-host"},
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store("agent-1", agent)
+	s.clients.Store("client-1", client)
 
 	// 欺骗有数据通道
 	cPipe, sPipe := net.Pipe()
 	sess, _ := mux.NewServerSession(sPipe, mux.DefaultConfig())
-	agent.dataSession = sess
+	client.dataSession = sess
 	defer func() {
 		cPipe.Close()
 		sPipe.Close()
@@ -1702,7 +1702,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err == nil {
-			agent.conn = conn
+			client.conn = conn
 		}
 	}))
 	defer wsServer.Close()
@@ -1710,24 +1710,24 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	clientConn, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
 	defer clientConn.Close()
 
-	// 等待 agent.conn 被赋值
+	// 等待 client.conn 被赋值
 	time.Sleep(50 * time.Millisecond)
 
 	// 测试恢复逻辑
-	s.restoreTunnels(agent)
+	s.restoreTunnels(client)
 
 	time.Sleep(100 * time.Millisecond)
 
-	// 因为 agent-1 的 dataSession 并没有建立，所以 Active 的 tunnel1 会触发 StartProxy失败，但 restoreTunnels 没有降级操作。
+	// 因为 client-1 的 dataSession 并没有建立，所以 Active 的 tunnel1 会触发 StartProxy失败，但 restoreTunnels 没有降级操作。
 	// 但实际上在我们的 restoreTunnels 逻辑中，如果 StartProxy 失败，状态没有通过 proxyMu 进行修改。
-	// 不过既然 s.StartProxy 失败，它不会出现在 agent.proxies 里。
+	// 不过既然 s.StartProxy 失败，它不会出现在 client.proxies 里。
 	// 为了简化断言，我们直接使用 store.GetTunnel。
-	t1, _ := s.store.GetTunnel("agent-1", "tunnel1")
+	t1, _ := s.store.GetTunnel("client-1", "tunnel1")
 	if t1.Status != protocol.ProxyStatusActive {
 		t.Logf("⚠️ tunnel1 恢复后状态为 %s (restoreTunnels 失败时不降级，符合预期)", t1.Status)
 	}
 
-	t2, _ := s.store.GetTunnel("agent-1", "tunnel2")
+	t2, _ := s.store.GetTunnel("client-1", "tunnel2")
 	if t2.Status != protocol.ProxyStatusPaused {
 		t.Errorf("Paused 隧道重启时应维持 paused，得到 %s", t2.Status)
 	}
@@ -1745,26 +1745,26 @@ func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "paused-only", Type: "tcp", RemotePort: 19090},
 		Status:          protocol.ProxyStatusPaused,
-		AgentID:         "agent-restore",
+		ClientID:         "client-restore",
 		Hostname:        "restore-host",
 	})
 
-	agent := &AgentConn{
-		ID:      "agent-restore",
-		Info:    protocol.AgentInfo{Hostname: "restore-host"},
+	client := &ClientConn{
+		ID:      "client-restore",
+		Info:    protocol.ClientInfo{Hostname: "restore-host"},
 		proxies: make(map[string]*ProxyTunnel),
 	}
 
 	start := time.Now()
-	s.restoreTunnels(agent)
+	s.restoreTunnels(client)
 	elapsed := time.Since(start)
 	if elapsed > time.Second {
 		t.Fatalf("仅恢复 paused 隧道不应等待数据通道，耗时 %v", elapsed)
 	}
 
-	agent.proxyMu.RLock()
-	tunnel, ok := agent.proxies["paused-only"]
-	agent.proxyMu.RUnlock()
+	client.proxyMu.RLock()
+	tunnel, ok := client.proxies["paused-only"]
+	client.proxyMu.RUnlock()
 	if !ok {
 		t.Fatal("paused 隧道应被恢复到内存态")
 	}
@@ -1784,7 +1784,7 @@ func TestAuth_KeyExchange_ReturnsToken(t *testing.T) {
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
 		InstallID: "install-token-test",
-		Agent: protocol.AgentInfo{
+		Client: protocol.ClientInfo{
 			Hostname: "token-host",
 			OS:       "linux",
 			Arch:     "amd64",
@@ -1805,8 +1805,8 @@ func TestAuth_KeyExchange_ReturnsToken(t *testing.T) {
 	if authResp.Token == "" {
 		t.Error("Key 认证成功后应返回 Token")
 	}
-	if authResp.AgentID == "" {
-		t.Error("AgentID 不应为空")
+	if authResp.ClientID == "" {
+		t.Error("ClientID 不应为空")
 	}
 }
 
@@ -1818,8 +1818,8 @@ func TestAuth_TokenReconnect(t *testing.T) {
 	conn1, _ := connectAndAuth(t, ts, "token-reconnect-host")
 
 	// 从 adminStore 获取为此 install_id 生成的 Token
-	agentToken := s.adminStore.GetAgentTokenByInstallID("install-token-reconnect-host")
-	if agentToken == nil {
+	clientToken := s.adminStore.GetClientTokenByInstallID("install-token-reconnect-host")
+	if clientToken == nil {
 		t.Fatal("首次 Key 认证后应有 Token 记录")
 	}
 
@@ -1835,7 +1835,7 @@ func TestAuth_TokenReconnect(t *testing.T) {
 	//    这里直接重新用 Key 兑换一次来模拟客户端已有 Token 的场景
 	//    真实客户端会保存 AuthResponse.Token
 	// 实际上我们验证的是：同一 install_id 再次 ExchangeToken 不会增加 use_count
-	_, _, err := s.adminStore.ExchangeToken("test-key", "install-token-reconnect-host", agentToken.AgentID, "127.0.0.1:12345")
+	_, _, err := s.adminStore.ExchangeToken("test-key", "install-token-reconnect-host", clientToken.ClientID, "127.0.0.1:12345")
 	if err != nil {
 		t.Fatalf("Token 重用 ExchangeToken 失败: %v", err)
 	}
@@ -1855,7 +1855,7 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
 		InstallID: "install-old-client",
-		Agent: protocol.AgentInfo{
+		Client: protocol.ClientInfo{
 			Hostname: "old-client",
 			OS:       "linux",
 			Arch:     "amd64",
@@ -1883,7 +1883,7 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 // P15: 优雅关闭 (1)
 // ============================================================
 
-// TestServer_GracefulShutdown 验证 P15：调用 Shutdown 后 Agent 连接被正常关闭
+// TestServer_GracefulShutdown 验证 P15：调用 Shutdown 后 Client 连接被正常关闭
 func TestServer_GracefulShutdown(t *testing.T) {
 	// 使用真实的 Start() 启动服务器
 	tmpDir := t.TempDir()
@@ -1914,7 +1914,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 		t.Fatal("Server 未成功启动（Port 仍为 0）")
 	}
 
-	// 连接一个 Agent
+	// 连接一个 Client
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws/control", s.Port)
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -1926,7 +1926,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
 		InstallID: "install-shutdown-test",
-		Agent: protocol.AgentInfo{
+		Client: protocol.ClientInfo{
 			Hostname: "shutdown-host",
 			OS:       "linux",
 			Arch:     "amd64",
@@ -1939,14 +1939,14 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	conn.ReadJSON(&authMsg)
 
-	// 确认 Agent 已注册
-	agentCount := 0
-	s.agents.Range(func(_, _ any) bool {
-		agentCount++
+	// 确认 Client 已注册
+	clientCount := 0
+	s.clients.Range(func(_, _ any) bool {
+		clientCount++
 		return true
 	})
-	if agentCount == 0 {
-		t.Fatal("Agent 应已注册")
+	if clientCount == 0 {
+		t.Fatal("Client 应已注册")
 	}
 
 	// 调用优雅关闭
@@ -1957,14 +1957,14 @@ func TestServer_GracefulShutdown(t *testing.T) {
 		t.Fatalf("Shutdown 失败: %v", err)
 	}
 
-	// 验证 agents 已清空
-	agentCount = 0
-	s.agents.Range(func(_, _ any) bool {
-		agentCount++
+	// 验证 clients 已清空
+	clientCount = 0
+	s.clients.Range(func(_, _ any) bool {
+		clientCount++
 		return true
 	})
-	if agentCount != 0 {
-		t.Errorf("Shutdown 后 agents 应为空，得到 %d", agentCount)
+	if clientCount != 0 {
+		t.Errorf("Shutdown 后 clients 应为空，得到 %d", clientCount)
 	}
 
 	// 验证 Server 已停止（Serve 返回）

@@ -1,17 +1,17 @@
 import { ArrowRightLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
-import type { Agent } from '@/types';
+import type { Client } from '@/types';
 
 interface TunnelTableProps {
-  agent: Agent;
+  client: Client;
 }
 
-export function TunnelTable({ agent }: TunnelTableProps) {
-  const tunnels: TunnelEntry[] = (agent.proxies ?? []).map(proxy => ({
+export function TunnelTable({ client }: TunnelTableProps) {
+  const tunnels: TunnelEntry[] = (client.proxies ?? []).map((proxy) => ({
     ...proxy,
-    agentId: agent.id,
-    agentName: agent.info.hostname,
+    clientId: client.id,
+    clientName: client.info.hostname,
   }));
 
   return (
@@ -19,7 +19,7 @@ export function TunnelTable({ agent }: TunnelTableProps) {
       tunnels={tunnels}
       title="下属隧道"
       icon={<ArrowRightLeft className="h-5 w-5 text-primary" />}
-      showAgent={false}
+      showClient={false}
       showActions
       showSearch
       emptyAction={

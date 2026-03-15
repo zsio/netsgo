@@ -14,7 +14,7 @@ import (
 func TestNewMessage_WithPayload(t *testing.T) {
 	authReq := AuthRequest{
 		Key: "test-key",
-		Agent: AgentInfo{
+		Client: ClientInfo{
 			Hostname: "test-host",
 			OS:       "linux",
 			Arch:     "amd64",
@@ -42,11 +42,11 @@ func TestNewMessage_WithPayload(t *testing.T) {
 	if parsed.Key != authReq.Key {
 		t.Errorf("Key 期望 %q，得到 %q", authReq.Key, parsed.Key)
 	}
-	if parsed.Agent.Hostname != authReq.Agent.Hostname {
-		t.Errorf("Hostname 期望 %q，得到 %q", authReq.Agent.Hostname, parsed.Agent.Hostname)
+	if parsed.Client.Hostname != authReq.Client.Hostname {
+		t.Errorf("Hostname 期望 %q，得到 %q", authReq.Client.Hostname, parsed.Client.Hostname)
 	}
-	if parsed.Agent.IP != authReq.Agent.IP {
-		t.Errorf("IP 期望 %q，得到 %q", authReq.Agent.IP, parsed.Agent.IP)
+	if parsed.Client.IP != authReq.Client.IP {
+		t.Errorf("IP 期望 %q，得到 %q", authReq.Client.IP, parsed.Client.IP)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestNewMessage_EmptyType(t *testing.T) {
 func TestParsePayload_AuthRequest(t *testing.T) {
 	original := AuthRequest{
 		Key: "my-secret-key",
-		Agent: AgentInfo{
+		Client: ClientInfo{
 			Hostname: "production-server",
 			OS:       "linux",
 			Arch:     "arm64",
@@ -106,19 +106,19 @@ func TestParsePayload_AuthRequest(t *testing.T) {
 	if parsed.Key != original.Key {
 		t.Errorf("Key 不匹配")
 	}
-	if parsed.Agent.Hostname != original.Agent.Hostname {
+	if parsed.Client.Hostname != original.Client.Hostname {
 		t.Errorf("Hostname 不匹配")
 	}
-	if parsed.Agent.OS != original.Agent.OS {
+	if parsed.Client.OS != original.Client.OS {
 		t.Errorf("OS 不匹配")
 	}
-	if parsed.Agent.Arch != original.Agent.Arch {
+	if parsed.Client.Arch != original.Client.Arch {
 		t.Errorf("Arch 不匹配")
 	}
-	if parsed.Agent.IP != original.Agent.IP {
+	if parsed.Client.IP != original.Client.IP {
 		t.Errorf("IP 不匹配")
 	}
-	if parsed.Agent.Version != original.Agent.Version {
+	if parsed.Client.Version != original.Client.Version {
 		t.Errorf("Version 不匹配")
 	}
 }
@@ -216,7 +216,7 @@ func TestRoundTrip_Message(t *testing.T) {
 func TestRoundTrip_AuthRequest(t *testing.T) {
 	original := AuthRequest{
 		Key: "round-trip-key",
-		Agent: AgentInfo{
+		Client: ClientInfo{
 			Hostname: "nested-host",
 			OS:       "darwin",
 			Arch:     "arm64",
@@ -238,8 +238,8 @@ func TestRoundTrip_AuthRequest(t *testing.T) {
 	if restored.Key != original.Key {
 		t.Errorf("Key 不匹配")
 	}
-	if restored.Agent != original.Agent {
-		t.Errorf("AgentInfo 不匹配: 期望 %+v, 得到 %+v", original.Agent, restored.Agent)
+	if restored.Client != original.Client {
+		t.Errorf("ClientInfo 不匹配: 期望 %+v, 得到 %+v", original.Client, restored.Client)
 	}
 }
 
@@ -251,7 +251,7 @@ func TestRoundTrip_ProxyConfig(t *testing.T) {
 		LocalPort:  3306,
 		RemotePort: 13306,
 		Domain:     "",
-		AgentID:    "agent_host_1",
+		ClientID:   "client_host_1",
 		Status:     ProxyStatusActive,
 	}
 
@@ -332,7 +332,7 @@ func TestRoundTrip_SystemStats(t *testing.T) {
 func TestZeroValueStructs(t *testing.T) {
 	// 所有零值结构体都应该能正常序列化/反序列化
 	structs := []any{
-		AgentInfo{},
+		ClientInfo{},
 		SystemStats{},
 		ProxyConfig{},
 		AuthRequest{},
@@ -354,7 +354,7 @@ func TestZeroValueStructs(t *testing.T) {
 }
 
 func TestUnicodeFields(t *testing.T) {
-	agent := AgentInfo{
+	clientInfo := ClientInfo{
 		Hostname: "中文主机名",
 		OS:       "linux",
 		Arch:     "amd64",
@@ -362,8 +362,8 @@ func TestUnicodeFields(t *testing.T) {
 		Version:  "1.0.0",
 	}
 	msg, _ := NewMessage(MsgTypeAuth, AuthRequest{
-		Key:   "emoji-key-🔑",
-		Agent: agent,
+		Key:    "emoji-key-🔑",
+		Client: clientInfo,
 	})
 
 	// JSON 往返
@@ -374,8 +374,8 @@ func TestUnicodeFields(t *testing.T) {
 	var parsed AuthRequest
 	restored.ParsePayload(&parsed)
 
-	if parsed.Agent.Hostname != "中文主机名" {
-		t.Errorf("中文 Hostname 丢失: 得到 %q", parsed.Agent.Hostname)
+	if parsed.Client.Hostname != "中文主机名" {
+		t.Errorf("中文 Hostname 丢失: 得到 %q", parsed.Client.Hostname)
 	}
 	if parsed.Key != "emoji-key-🔑" {
 		t.Errorf("Emoji Key 丢失: 得到 %q", parsed.Key)
@@ -383,7 +383,7 @@ func TestUnicodeFields(t *testing.T) {
 }
 
 func TestOmitemptyBehavior(t *testing.T) {
-	// AuthResponse 中 Message 和 AgentID 有 omitempty
+	// AuthResponse 中 Message 和 ClientID 有 omitempty
 	resp := AuthResponse{Success: true}
 	data, _ := json.Marshal(resp)
 	jsonStr := string(data)
@@ -392,20 +392,20 @@ func TestOmitemptyBehavior(t *testing.T) {
 	if strings.Contains(jsonStr, `"message"`) {
 		t.Errorf("空 Message 字段不应出现在 JSON 中: %s", jsonStr)
 	}
-	if strings.Contains(jsonStr, `"agent_id"`) {
-		t.Errorf("空 AgentID 字段不应出现在 JSON 中: %s", jsonStr)
+	if strings.Contains(jsonStr, `"client_id"`) {
+		t.Errorf("空 ClientID 字段不应出现在 JSON 中: %s", jsonStr)
 	}
 
 	// 有值时应出现
-	resp2 := AuthResponse{Success: true, Message: "ok", AgentID: "a1"}
+	resp2 := AuthResponse{Success: true, Message: "ok", ClientID: "a1"}
 	data2, _ := json.Marshal(resp2)
 	jsonStr2 := string(data2)
 
 	if !strings.Contains(jsonStr2, `"message"`) {
 		t.Errorf("非空 Message 应出现在 JSON 中: %s", jsonStr2)
 	}
-	if !strings.Contains(jsonStr2, `"agent_id"`) {
-		t.Errorf("非空 AgentID 应出现在 JSON 中: %s", jsonStr2)
+	if !strings.Contains(jsonStr2, `"client_id"`) {
+		t.Errorf("非空 ClientID 应出现在 JSON 中: %s", jsonStr2)
 	}
 }
 
@@ -441,8 +441,8 @@ func TestAllStructs_JSONTags(t *testing.T) {
 		expectedKeys []string
 	}{
 		{
-			"AgentInfo",
-			AgentInfo{Hostname: "h", OS: "o", Arch: "a", IP: "i", Version: "v"},
+			"ClientInfo",
+			ClientInfo{Hostname: "h", OS: "o", Arch: "a", IP: "i", Version: "v"},
 			[]string{"hostname", "os", "arch", "ip", "version"},
 		},
 		{
@@ -452,8 +452,8 @@ func TestAllStructs_JSONTags(t *testing.T) {
 		},
 		{
 			"ProxyConfig",
-			ProxyConfig{Name: "n", Type: "t", LocalIP: "l", LocalPort: 1, RemotePort: 1, Domain: "d", AgentID: "a", Status: "s"},
-			[]string{"name", "type", "local_ip", "local_port", "remote_port", "domain", "agent_id", "status"},
+			ProxyConfig{Name: "n", Type: "t", LocalIP: "l", LocalPort: 1, RemotePort: 1, Domain: "d", ClientID: "a", Status: "s"},
+			[]string{"name", "type", "local_ip", "local_port", "remote_port", "domain", "client_id", "status"},
 		},
 		{
 			"ProxyNewRequest",

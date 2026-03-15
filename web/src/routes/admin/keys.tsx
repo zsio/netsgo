@@ -120,7 +120,7 @@ function AdminKeysPage() {
                   <div className="flex flex-col gap-2">
                     <label className="text-sm font-medium">名称 / 用途</label>
                     <Input
-                      placeholder="例如: staging-agent"
+                      placeholder="例如: staging-client"
                       value={newKeyName}
                       onChange={(e) => setNewKeyName(e.target.value)}
                       required
@@ -148,7 +148,7 @@ function AdminKeysPage() {
                       onChange={(e) => setMaxUses(Number.parseInt(e.target.value, 10) || 0)}
                       placeholder="0 表示不限制"
                     />
-                    <p className="text-xs text-muted-foreground">每次 Agent 连接将消耗一次使用次数。0 表示不限制。</p>
+                    <p className="text-xs text-muted-foreground">每次 Client 连接将消耗一次使用次数。0 表示不限制。</p>
                   </div>
                   <div className="text-xs text-muted-foreground">当前阶段仅支持 `connect` 权限。</div>
                   <Button type="submit" disabled={createKey.isPending}>
@@ -176,7 +176,7 @@ function AdminKeysPage() {
               {isLoading ? (
                 <tr><td colSpan={6} className="p-4"><Skeleton className="h-10 w-full" /></td></tr>
               ) : keys.length === 0 ? (
-                <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">暂无 Agent API Key</td></tr>
+                <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">暂无 Client API Key</td></tr>
               ) : (
                 keys.map((key) => (
                   <tr key={key.id} className="hover:bg-muted/30">
@@ -224,7 +224,7 @@ function AdminKeysPage() {
       <ConfirmDialog
         open={deleteTarget !== null}
         title="删除 API Key"
-        description={`确认删除 API Key「${deleteTarget?.name ?? ''}」？删除后依赖该 Key 的 Agent 将无法继续认证。`}
+        description={`确认删除 API Key「${deleteTarget?.name ?? ''}」？删除后依赖该 Key 的 Client 将无法继续认证。`}
         confirmLabel="删除"
         variant="destructive"
         onCancel={() => setDeleteTarget(null)}

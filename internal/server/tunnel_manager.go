@@ -9,109 +9,109 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-func (s *Server) createManagedTunnel(agent *AgentConn, req protocol.ProxyNewRequest, persist bool, action string) (protocol.ProxyConfig, error) {
-	if err := s.StartProxy(agent, req); err != nil {
+func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRequest, persist bool, action string) (protocol.ProxyConfig, error) {
+	if err := s.StartProxy(client, req); err != nil {
 		return protocol.ProxyConfig{}, err
 	}
 
-	tunnel, err := s.mustGetTunnel(agent, req.Name)
+	tunnel, err := s.mustGetTunnel(client, req.Name)
 	if err != nil {
-		_ = s.StopProxy(agent, req.Name)
+		_ = s.StopProxy(client, req.Name)
 		return protocol.ProxyConfig{}, err
 	}
 
 	if persist && s.store != nil {
-		if err := s.store.AddTunnel(storedTunnelFromRuntime(agent, tunnel)); err != nil {
-			_ = s.StopProxy(agent, req.Name)
+		if err := s.store.AddTunnel(storedTunnelFromRuntime(client, tunnel)); err != nil {
+			_ = s.StopProxy(client, req.Name)
 			return protocol.ProxyConfig{}, err
 		}
 	}
 
-	if err := s.notifyAgentProxyNew(agent, tunnel.Config.ToProxyNewRequest()); err != nil {
+	if err := s.notifyClientProxyNew(client, tunnel.Config.ToProxyNewRequest()); err != nil {
 		if persist && s.store != nil {
-			_ = s.store.RemoveTunnel(agent.ID, req.Name)
+			_ = s.store.RemoveTunnel(client.ID, req.Name)
 		}
-		_ = s.StopProxy(agent, req.Name)
+		_ = s.StopProxy(client, req.Name)
 		return protocol.ProxyConfig{}, err
 	}
 
-	s.emitTunnelChanged(agent.ID, tunnel.Config, action)
+	s.emitTunnelChanged(client.ID, tunnel.Config, action)
 	return tunnel.Config, nil
 }
 
-func (s *Server) pauseManagedTunnel(agent *AgentConn, name string) error {
-	tunnel, err := s.mustGetTunnel(agent, name)
+func (s *Server) pauseManagedTunnel(client *ClientConn, name string) error {
+	tunnel, err := s.mustGetTunnel(client, name)
 	if err != nil {
 		return err
 	}
 
 	previousStatus := tunnel.Config.Status
-	if err := s.PauseProxy(agent, name); err != nil {
+	if err := s.PauseProxy(client, name); err != nil {
 		return err
 	}
 
 	if s.store != nil {
-		if err := s.store.UpdateStatus(agent.ID, name, protocol.ProxyStatusPaused); err != nil {
-			_ = s.ResumeProxy(agent, name)
+		if err := s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusPaused); err != nil {
+			_ = s.ResumeProxy(client, name)
 			return err
 		}
 	}
 
-	if err := s.notifyAgentProxyClose(agent, name, "paused"); err != nil {
+	if err := s.notifyClientProxyClose(client, name, "paused"); err != nil {
 		if s.store != nil {
-			_ = s.store.UpdateStatus(agent.ID, name, previousStatus)
+			_ = s.store.UpdateStatus(client.ID, name, previousStatus)
 		}
-		_ = s.ResumeProxy(agent, name)
+		_ = s.ResumeProxy(client, name)
 		return err
 	}
 
-	updated, err := s.mustGetTunnel(agent, name)
+	updated, err := s.mustGetTunnel(client, name)
 	if err != nil {
 		return err
 	}
-	s.emitTunnelChanged(agent.ID, updated.Config, "paused")
+	s.emitTunnelChanged(client.ID, updated.Config, "paused")
 	return nil
 }
 
-func (s *Server) resumeManagedTunnel(agent *AgentConn, name string) error {
-	tunnel, err := s.mustGetTunnel(agent, name)
+func (s *Server) resumeManagedTunnel(client *ClientConn, name string) error {
+	tunnel, err := s.mustGetTunnel(client, name)
 	if err != nil {
 		return err
 	}
 
 	previousStatus := tunnel.Config.Status
-	if err := s.ResumeProxy(agent, name); err != nil {
+	if err := s.ResumeProxy(client, name); err != nil {
 		return err
 	}
 
 	if s.store != nil {
-		if err := s.store.UpdateStatus(agent.ID, name, protocol.ProxyStatusActive); err != nil {
-			_ = s.PauseProxy(agent, name)
-			s.setTunnelStatus(agent, name, previousStatus)
+		if err := s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusActive); err != nil {
+			_ = s.PauseProxy(client, name)
+			s.setTunnelStatus(client, name, previousStatus)
 			return err
 		}
 	}
 
-	updated, err := s.mustGetTunnel(agent, name)
+	updated, err := s.mustGetTunnel(client, name)
 	if err != nil {
 		return err
 	}
 
-	if err := s.notifyAgentProxyNew(agent, updated.Config.ToProxyNewRequest()); err != nil {
+	if err := s.notifyClientProxyNew(client, updated.Config.ToProxyNewRequest()); err != nil {
 		if s.store != nil {
-			_ = s.store.UpdateStatus(agent.ID, name, previousStatus)
+			_ = s.store.UpdateStatus(client.ID, name, previousStatus)
 		}
-		_ = s.PauseProxy(agent, name)
-		s.setTunnelStatus(agent, name, previousStatus)
+		_ = s.PauseProxy(client, name)
+		s.setTunnelStatus(client, name, previousStatus)
 		return err
 	}
 
-	s.emitTunnelChanged(agent.ID, updated.Config, "resumed")
+	s.emitTunnelChanged(client.ID, updated.Config, "resumed")
 	return nil
 }
 
-func (s *Server) stopManagedTunnel(agent *AgentConn, name string) error {
-	tunnel, err := s.mustGetTunnel(agent, name)
+func (s *Server) stopManagedTunnel(client *ClientConn, name string) error {
+	tunnel, err := s.mustGetTunnel(client, name)
 	if err != nil {
 		return err
 	}
@@ -119,126 +119,126 @@ func (s *Server) stopManagedTunnel(agent *AgentConn, name string) error {
 	previousStatus := tunnel.Config.Status
 	pausedDuringStop := false
 	if tunnel.Config.Status == protocol.ProxyStatusActive {
-		if err := s.PauseProxy(agent, name); err != nil {
+		if err := s.PauseProxy(client, name); err != nil {
 			return err
 		}
 		pausedDuringStop = true
 	}
 
-	agent.proxyMu.Lock()
-	if current, ok := agent.proxies[name]; ok {
+	client.proxyMu.Lock()
+	if current, ok := client.proxies[name]; ok {
 		current.Config.Status = protocol.ProxyStatusStopped
 	}
-	agent.proxyMu.Unlock()
+	client.proxyMu.Unlock()
 
 	if s.store != nil {
-		if err := s.store.UpdateStatus(agent.ID, name, protocol.ProxyStatusStopped); err != nil {
-			agent.proxyMu.Lock()
-			if current, ok := agent.proxies[name]; ok {
+		if err := s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusStopped); err != nil {
+			client.proxyMu.Lock()
+			if current, ok := client.proxies[name]; ok {
 				current.Config.Status = previousStatus
 			}
-			agent.proxyMu.Unlock()
+			client.proxyMu.Unlock()
 			if pausedDuringStop {
-				_ = s.ResumeProxy(agent, name)
+				_ = s.ResumeProxy(client, name)
 			}
 			return err
 		}
 	}
 
 	if pausedDuringStop {
-		if err := s.notifyAgentProxyClose(agent, name, "stopped"); err != nil {
+		if err := s.notifyClientProxyClose(client, name, "stopped"); err != nil {
 			if s.store != nil {
-				_ = s.store.UpdateStatus(agent.ID, name, previousStatus)
+				_ = s.store.UpdateStatus(client.ID, name, previousStatus)
 			}
-			agent.proxyMu.Lock()
-			if current, ok := agent.proxies[name]; ok {
+			client.proxyMu.Lock()
+			if current, ok := client.proxies[name]; ok {
 				current.Config.Status = previousStatus
 			}
-			agent.proxyMu.Unlock()
-			_ = s.ResumeProxy(agent, name)
+			client.proxyMu.Unlock()
+			_ = s.ResumeProxy(client, name)
 			return err
 		}
 	}
 
-	updated, err := s.mustGetTunnel(agent, name)
+	updated, err := s.mustGetTunnel(client, name)
 	if err != nil {
 		return err
 	}
-	s.emitTunnelChanged(agent.ID, updated.Config, "stopped")
+	s.emitTunnelChanged(client.ID, updated.Config, "stopped")
 	return nil
 }
 
-func (s *Server) deleteManagedTunnel(agent *AgentConn, name string) error {
-	tunnel, err := s.mustGetTunnel(agent, name)
+func (s *Server) deleteManagedTunnel(client *ClientConn, name string) error {
+	tunnel, err := s.mustGetTunnel(client, name)
 	if err != nil {
 		return err
 	}
 
-	agent.proxyMu.Lock()
-	delete(agent.proxies, name)
-	agent.proxyMu.Unlock()
+	client.proxyMu.Lock()
+	delete(client.proxies, name)
+	client.proxyMu.Unlock()
 
 	if s.store != nil {
-		if err := s.store.RemoveTunnel(agent.ID, name); err != nil {
-			agent.proxyMu.Lock()
-			agent.proxies[name] = tunnel
-			agent.proxyMu.Unlock()
+		if err := s.store.RemoveTunnel(client.ID, name); err != nil {
+			client.proxyMu.Lock()
+			client.proxies[name] = tunnel
+			client.proxyMu.Unlock()
 			return err
 		}
 	}
 
-	s.emitTunnelChanged(agent.ID, protocol.ProxyConfig{
+	s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
 		Name:    tunnel.Config.Name,
 		Type:    tunnel.Config.Type,
-		AgentID: agent.ID,
+		ClientID: client.ID,
 		Status:  protocol.ProxyStatusStopped,
 	}, "deleted")
 	return nil
 }
 
-func (s *Server) restoreManagedTunnel(agent *AgentConn, stored StoredTunnel) error {
-	_, err := s.createManagedTunnel(agent, stored.ProxyNewRequest, false, "restored")
+func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) error {
+	_, err := s.createManagedTunnel(client, stored.ProxyNewRequest, false, "restored")
 	return err
 }
 
-func (s *Server) mustGetTunnel(agent *AgentConn, name string) (*ProxyTunnel, error) {
-	agent.proxyMu.RLock()
-	defer agent.proxyMu.RUnlock()
+func (s *Server) mustGetTunnel(client *ClientConn, name string) (*ProxyTunnel, error) {
+	client.proxyMu.RLock()
+	defer client.proxyMu.RUnlock()
 
-	tunnel, ok := agent.proxies[name]
+	tunnel, ok := client.proxies[name]
 	if !ok {
 		return nil, fmt.Errorf("隧道 %q 不存在", name)
 	}
 	return tunnel, nil
 }
 
-func (s *Server) setTunnelStatus(agent *AgentConn, name, status string) {
-	agent.proxyMu.Lock()
-	defer agent.proxyMu.Unlock()
-	if tunnel, ok := agent.proxies[name]; ok {
+func (s *Server) setTunnelStatus(client *ClientConn, name, status string) {
+	client.proxyMu.Lock()
+	defer client.proxyMu.Unlock()
+	if tunnel, ok := client.proxies[name]; ok {
 		tunnel.Config.Status = status
 	}
 }
 
-func storedTunnelFromRuntime(agent *AgentConn, tunnel *ProxyTunnel) StoredTunnel {
+func storedTunnelFromRuntime(client *ClientConn, tunnel *ProxyTunnel) StoredTunnel {
 	return StoredTunnel{
 		ProxyNewRequest: tunnel.Config.ToProxyNewRequest(),
 		Status:          tunnel.Config.Status,
-		AgentID:         agent.ID,
-		Hostname:        agent.Info.Hostname,
-		Binding:         TunnelBindingAgentID,
+		ClientID:         client.ID,
+		Hostname:        client.Info.Hostname,
+		Binding:         TunnelBindingClientID,
 	}
 }
 
-func (s *Server) notifyAgentProxyNew(agent *AgentConn, req protocol.ProxyNewRequest) error {
+func (s *Server) notifyClientProxyNew(client *ClientConn, req protocol.ProxyNewRequest) error {
 	message, err := protocol.NewMessage(protocol.MsgTypeProxyNew, req)
 	if err != nil {
 		return err
 	}
-	return s.writeControlMessage(agent, message)
+	return s.writeControlMessage(client, message)
 }
 
-func (s *Server) notifyAgentProxyClose(agent *AgentConn, name, reason string) error {
+func (s *Server) notifyClientProxyClose(client *ClientConn, name, reason string) error {
 	message, err := protocol.NewMessage(protocol.MsgTypeProxyClose, protocol.ProxyCloseRequest{
 		Name:   name,
 		Reason: reason,
@@ -246,69 +246,69 @@ func (s *Server) notifyAgentProxyClose(agent *AgentConn, name, reason string) er
 	if err != nil {
 		return err
 	}
-	return s.writeControlMessage(agent, message)
+	return s.writeControlMessage(client, message)
 }
 
-func (s *Server) writeControlMessage(agent *AgentConn, message *protocol.Message) error {
-	agent.mu.Lock()
-	defer agent.mu.Unlock()
+func (s *Server) writeControlMessage(client *ClientConn, message *protocol.Message) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
 
-	if agent.conn == nil {
-		return fmt.Errorf("agent %s 控制通道不可用", agent.ID)
+	if client.conn == nil {
+		return fmt.Errorf("client %s 控制通道不可用", client.ID)
 	}
-	if err := agent.conn.WriteJSON(message); err != nil {
+	if err := client.conn.WriteJSON(message); err != nil {
 		return fmt.Errorf("写入控制消息失败: %w", err)
 	}
 	return nil
 }
 
-func (s *Server) emitTunnelChanged(agentID string, tunnel protocol.ProxyConfig, action string) {
+func (s *Server) emitTunnelChanged(clientID string, tunnel protocol.ProxyConfig, action string) {
 	payload := map[string]any{
-		"agent_id": agentID,
+		"client_id": clientID,
 		"action":   action,
 		"tunnel":   tunnel,
 	}
 	s.events.PublishJSON("tunnel_changed", payload)
 }
 
-func (s *Server) readAgentFromPath(w http.ResponseWriter, r *http.Request) (*AgentConn, bool) {
-	agentID := r.PathValue("id")
-	value, ok := s.agents.Load(agentID)
+func (s *Server) readClientFromPath(w http.ResponseWriter, r *http.Request) (*ClientConn, bool) {
+	clientID := r.PathValue("id")
+	value, ok := s.clients.Load(clientID)
 	if !ok {
-		http.Error(w, `{"error":"agent not found"}`, http.StatusNotFound)
+		http.Error(w, `{"error":"client not found"}`, http.StatusNotFound)
 		return nil, false
 	}
-	return value.(*AgentConn), true
+	return value.(*ClientConn), true
 }
 
-func (s *Server) migrateLegacyTunnels(agent *AgentConn) (int, error) {
+func (s *Server) migrateLegacyTunnels(client *ClientConn) (int, error) {
 	if s.store == nil || s.adminStore == nil {
 		return 0, nil
 	}
-	if s.adminStore.CountAgentsByHostname(agent.Info.Hostname) != 1 {
-		pending := s.store.GetLegacyTunnelsByHostname(agent.Info.Hostname)
+	if s.adminStore.CountClientsByHostname(client.Info.Hostname) != 1 {
+		pending := s.store.GetLegacyTunnelsByHostname(client.Info.Hostname)
 		if len(pending) > 0 {
-			log.Printf("⚠️ 主机名 %s 存在 %d 个注册 Agent，跳过 legacy 隧道自动迁移", agent.Info.Hostname, len(pending))
+			log.Printf("⚠️ 主机名 %s 存在 %d 个注册 Client，跳过 legacy 隧道自动迁移", client.Info.Hostname, len(pending))
 		}
 		return 0, nil
 	}
-	return s.store.MigrateLegacyTunnels(agent.Info.Hostname, agent.ID)
+	return s.store.MigrateLegacyTunnels(client.Info.Hostname, client.ID)
 }
 
-func (s *Server) forceDisconnectAgent(agent *AgentConn) {
-	agent.mu.Lock()
-	if agent.conn != nil {
-		_ = agent.conn.Close()
+func (s *Server) forceDisconnectClient(client *ClientConn) {
+	client.mu.Lock()
+	if client.conn != nil {
+		_ = client.conn.Close()
 	}
-	agent.mu.Unlock()
+	client.mu.Unlock()
 
-	agent.dataMu.Lock()
-	if agent.dataSession != nil && !agent.dataSession.IsClosed() {
-		_ = agent.dataSession.Close()
+	client.dataMu.Lock()
+	if client.dataSession != nil && !client.dataSession.IsClosed() {
+		_ = client.dataSession.Close()
 	}
-	agent.dataMu.Unlock()
+	client.dataMu.Unlock()
 
-	s.PauseAllProxies(agent)
+	s.PauseAllProxies(client)
 }
 
 func encodeJSON(w http.ResponseWriter, status int, payload any) {

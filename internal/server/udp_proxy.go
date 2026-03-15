@@ -76,8 +76,8 @@ const (
 )
 
 // startUDPProxy 启动一条 UDP 代理隧道。
-// 在 RemotePort 上监听 UDP，每收到新 srcAddr 的报文就通过 yamux 创建新会话转发给 Agent。
-func (s *Server) startUDPProxy(agent *AgentConn, tunnel *ProxyTunnel) error {
+// 在 RemotePort 上监听 UDP，每收到新 srcAddr 的报文就通过 yamux 创建新会话转发给 Client。
+func (s *Server) startUDPProxy(client *ClientConn, tunnel *ProxyTunnel) error {
 	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
 	packetConn, err := net.ListenPacket("udp", addr)
 	if err != nil {
@@ -94,11 +94,11 @@ func (s *Server) startUDPProxy(agent *AgentConn, tunnel *ProxyTunnel) error {
 	}
 	tunnel.UDPState = state
 
-	log.Printf("🚇 UDP 代理隧道已创建: %s [:%d → %s:%d] Agent [%s]",
-		tunnel.Config.Name, actualPort, tunnel.Config.LocalIP, tunnel.Config.LocalPort, agent.ID)
+	log.Printf("🚇 UDP 代理隧道已创建: %s [:%d → %s:%d] Client [%s]",
+		tunnel.Config.Name, actualPort, tunnel.Config.LocalIP, tunnel.Config.LocalPort, client.ID)
 
 	// 启动读取入站 UDP 报文的循环
-	go s.udpReadLoop(agent, tunnel, state)
+	go s.udpReadLoop(client, tunnel, state)
 
 	// 启动定时清理过期会话
 	go s.udpReaper(state)
@@ -107,7 +107,7 @@ func (s *Server) startUDPProxy(agent *AgentConn, tunnel *ProxyTunnel) error {
 }
 
 // udpReadLoop 从 packetConn 接收外部 UDP 报文，按 srcAddr 分发到对应的 yamux stream。
-func (s *Server) udpReadLoop(agent *AgentConn, tunnel *ProxyTunnel, state *UDPProxyState) {
+func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDPProxyState) {
 	buf := make([]byte, mux.MaxUDPPayload)
 
 	for {
@@ -141,7 +141,7 @@ func (s *Server) udpReadLoop(agent *AgentConn, tunnel *ProxyTunnel, state *UDPPr
 			}
 
 			// 打开新的 yamux stream
-			stream, err := s.openStreamToAgent(agent, tunnel.Config.Name)
+			stream, err := s.openStreamToClient(client, tunnel.Config.Name)
 			if err != nil {
 				log.Printf("⚠️ UDP 代理 [%s] 打开 Stream 失败: %v", tunnel.Config.Name, err)
 				continue

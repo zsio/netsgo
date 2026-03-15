@@ -14,12 +14,12 @@ import (
 // 验证: Relay goroutine 正常退出、无泄漏、无死锁
 func TestDisconnect_DuringActiveRelay(t *testing.T) {
 	s := New(0)
-	agentID := "disconnect-agent"
-	agent := &AgentConn{
-		ID:      agentID,
+	clientID := "disconnect-client"
+	client := &ClientConn{
+		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
 	}
-	s.agents.Store(agentID, agent)
+	s.clients.Store(clientID, client)
 
 	// 建立数据通道 (Yamux Session)
 	clientPipe, serverPipe := net.Pipe()
@@ -32,9 +32,9 @@ func TestDisconnect_DuringActiveRelay(t *testing.T) {
 		if err != nil {
 			return
 		}
-		agent.dataMu.Lock()
-		agent.dataSession = session
-		agent.dataMu.Unlock()
+		client.dataMu.Lock()
+		client.dataSession = session
+		client.dataMu.Unlock()
 
 		// 阻塞直到 Session 关闭
 		<-session.CloseChan()
@@ -69,9 +69,9 @@ func TestDisconnect_DuringActiveRelay(t *testing.T) {
 	}()
 
 	// 在后台从 server 侧 Accept 并读取（模拟消费端）
-	agent.dataMu.RLock()
-	serverSession := agent.dataSession
-	agent.dataMu.RUnlock()
+	client.dataMu.RLock()
+	serverSession := client.dataSession
+	client.dataMu.RUnlock()
 
 	readerDone := make(chan struct{})
 	go func() {
@@ -112,9 +112,9 @@ func TestDisconnect_DuringActiveRelay(t *testing.T) {
 	}
 
 	// 验证 Session 已关闭
-	agent.dataMu.RLock()
-	sess := agent.dataSession
-	agent.dataMu.RUnlock()
+	client.dataMu.RLock()
+	sess := client.dataSession
+	client.dataMu.RUnlock()
 
 	if sess != nil && !sess.IsClosed() {
 		t.Error("底层连接断开后 dataSession 应该已关闭")

@@ -24,8 +24,8 @@ import (
 type AdminData struct {
 	APIKeys      []APIKey          `json:"api_keys"`
 	AdminUsers   []AdminUser       `json:"admin_users"`
-	Agents       []RegisteredAgent `json:"agents"`
-	AgentTokens  []AgentToken      `json:"agent_tokens"`  // 客户端连接密钥
+	Clients      []RegisteredClient `json:"clients"`
+	ClientTokens  []ClientToken      `json:"client_tokens"` // 客户端连接密钥
 	TunnelPolicy TunnelPolicy      `json:"tunnel_policy"` // 旧版策略，保留向后兼容
 	Events       []EventRecord     `json:"events"`
 	ServerConfig ServerConfig      `json:"server_config"` // 服务配置（初始化时设置）
@@ -65,8 +65,8 @@ func NewAdminStore(path string) (*AdminStore, error) {
 		data: AdminData{
 			APIKeys:     []APIKey{},
 			AdminUsers:  []AdminUser{},
-			Agents:      []RegisteredAgent{},
-			AgentTokens: []AgentToken{},
+			Clients:      []RegisteredClient{},
+			ClientTokens: []ClientToken{},
 			Events:      []EventRecord{},
 			Sessions:    []AdminSession{},
 		},
@@ -83,7 +83,7 @@ func NewAdminStore(path string) (*AdminStore, error) {
 		if err := store.load(); err != nil {
 			log.Printf("⚠️ 加载 admin 配置失败，将使用空配置: %v", err)
 			store.data = AdminData{
-				APIKeys: []APIKey{}, AdminUsers: []AdminUser{}, Agents: []RegisteredAgent{}, AgentTokens: []AgentToken{}, Events: []EventRecord{}, Sessions: []AdminSession{},
+				APIKeys: []APIKey{}, AdminUsers: []AdminUser{}, Clients: []RegisteredClient{}, ClientTokens: []ClientToken{}, Events: []EventRecord{}, Sessions: []AdminSession{},
 			}
 		}
 	}
@@ -288,9 +288,9 @@ func (s *AdminStore) UpdateAdminLoginTime(id string) {
 	}
 }
 
-// ========== Agents ==========
+// ========== Clients ==========
 
-func (s *AdminStore) GetOrCreateAgent(installID string, info protocol.AgentInfo, remoteAddr string) (*RegisteredAgent, error) {
+func (s *AdminStore) GetOrCreateClient(installID string, info protocol.ClientInfo, remoteAddr string) (*RegisteredClient, error) {
 	if installID == "" {
 		return nil, fmt.Errorf("install_id 不能为空")
 	}
@@ -300,20 +300,20 @@ func (s *AdminStore) GetOrCreateAgent(installID string, info protocol.AgentInfo,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i, agent := range s.data.Agents {
-		if agent.InstallID == installID {
-			s.data.Agents[i].Info = info
-			s.data.Agents[i].LastSeen = time.Now()
-			s.data.Agents[i].LastIP = lastIP
+	for i, client := range s.data.Clients {
+		if client.InstallID == installID {
+			s.data.Clients[i].Info = info
+			s.data.Clients[i].LastSeen = time.Now()
+			s.data.Clients[i].LastIP = lastIP
 			if err := s.save(); err != nil {
 				return nil, err
 			}
-			copy := s.data.Agents[i]
+			copy := s.data.Clients[i]
 			return &copy, nil
 		}
 	}
 
-	agent := RegisteredAgent{
+	client := RegisteredClient{
 		ID:        generateUUID(),
 		InstallID: installID,
 		Info:      info,
@@ -321,29 +321,29 @@ func (s *AdminStore) GetOrCreateAgent(installID string, info protocol.AgentInfo,
 		LastSeen:  time.Now(),
 		LastIP:    lastIP,
 	}
-	s.data.Agents = append(s.data.Agents, agent)
+	s.data.Clients = append(s.data.Clients, client)
 	if err := s.save(); err != nil {
 		return nil, err
 	}
-	return &agent, nil
+	return &client, nil
 }
 
-func (s *AdminStore) TouchAgent(agentID string, info protocol.AgentInfo, remoteAddr string) error {
+func (s *AdminStore) TouchClient(clientID string, info protocol.ClientInfo, remoteAddr string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i, agent := range s.data.Agents {
-		if agent.ID == agentID {
-			s.data.Agents[i].Info = info
-			s.data.Agents[i].LastSeen = time.Now()
+	for i, client := range s.data.Clients {
+		if client.ID == clientID {
+			s.data.Clients[i].Info = info
+			s.data.Clients[i].LastSeen = time.Now()
 			if ip := remoteIP(remoteAddr); ip != "" {
-				s.data.Agents[i].LastIP = ip
+				s.data.Clients[i].LastIP = ip
 			}
 			return s.save()
 		}
 	}
 
-	return fmt.Errorf("agent %q 不存在", agentID)
+	return fmt.Errorf("client %q 不存在", clientID)
 }
 
 func cloneSystemStats(stats *protocol.SystemStats) *protocol.SystemStats {
@@ -359,56 +359,56 @@ func cloneSystemStats(stats *protocol.SystemStats) *protocol.SystemStats {
 	return &copy
 }
 
-func (s *AdminStore) UpdateAgentStats(agentID string, info protocol.AgentInfo, stats protocol.SystemStats, remoteAddr string) error {
+func (s *AdminStore) UpdateClientStats(clientID string, info protocol.ClientInfo, stats protocol.SystemStats, remoteAddr string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i, agent := range s.data.Agents {
-		if agent.ID == agentID {
-			s.data.Agents[i].Info = info
-			s.data.Agents[i].LastSeen = time.Now()
-			s.data.Agents[i].Stats = cloneSystemStats(&stats)
+	for i, client := range s.data.Clients {
+		if client.ID == clientID {
+			s.data.Clients[i].Info = info
+			s.data.Clients[i].LastSeen = time.Now()
+			s.data.Clients[i].Stats = cloneSystemStats(&stats)
 			if ip := remoteIP(remoteAddr); ip != "" {
-				s.data.Agents[i].LastIP = ip
+				s.data.Clients[i].LastIP = ip
 			}
 			return s.save()
 		}
 	}
 
-	return fmt.Errorf("agent %q 不存在", agentID)
+	return fmt.Errorf("client %q 不存在", clientID)
 }
 
-func (s *AdminStore) GetRegisteredAgents() []RegisteredAgent {
+func (s *AdminStore) GetRegisteredClients() []RegisteredClient {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	agents := make([]RegisteredAgent, len(s.data.Agents))
-	copy(agents, s.data.Agents)
-	for i := range agents {
-		agents[i].Stats = cloneSystemStats(agents[i].Stats)
+	clients := make([]RegisteredClient, len(s.data.Clients))
+	copy(clients, s.data.Clients)
+	for i := range clients {
+		clients[i].Stats = cloneSystemStats(clients[i].Stats)
 	}
-	return agents
+	return clients
 }
 
-func (s *AdminStore) GetRegisteredAgent(agentID string) (RegisteredAgent, bool) {
+func (s *AdminStore) GetRegisteredClient(clientID string) (RegisteredClient, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, agent := range s.data.Agents {
-		if agent.ID == agentID {
-			agent.Stats = cloneSystemStats(agent.Stats)
-			return agent, true
+	for _, client := range s.data.Clients {
+		if client.ID == clientID {
+			client.Stats = cloneSystemStats(client.Stats)
+			return client, true
 		}
 	}
-	return RegisteredAgent{}, false
+	return RegisteredClient{}, false
 }
 
-func (s *AdminStore) CountAgentsByHostname(hostname string) int {
+func (s *AdminStore) CountClientsByHostname(hostname string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	count := 0
-	for _, agent := range s.data.Agents {
-		if agent.Info.Hostname == hostname {
+	for _, client := range s.data.Clients {
+		if client.Info.Hostname == hostname {
 			count++
 		}
 	}
@@ -517,17 +517,17 @@ func (s *AdminStore) CleanExpiredSessions() {
 
 // ========== API Keys ==========
 
-// ValidateAgentKey 检查 Key 是否存在且处于启用状态并且没有过期
+// ValidateClientKey 检查 Key 是否存在且处于启用状态并且没有过期
 // 仅做验证，不消耗使用次数（计数在 ExchangeToken 中消耗）
 // 如果没有任何 Key 存在，则开放所有连接
-func (s *AdminStore) ValidateAgentKey(key string) (bool, error) {
+func (s *AdminStore) ValidateClientKey(key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.validateAgentKeyLocked(key)
+	return s.validateClientKeyLocked(key)
 }
 
-// validateAgentKeyLocked 内部方法，调用时需要已持有 mu 锁
-func (s *AdminStore) validateAgentKeyLocked(key string) (bool, error) {
+// validateClientKeyLocked 内部方法，调用时需要已持有 mu 锁
+func (s *AdminStore) validateClientKeyLocked(key string) (bool, error) {
 	if len(s.data.APIKeys) == 0 {
 		if s.data.Initialized {
 			return false, fmt.Errorf("未配置可用 API Key")
@@ -567,7 +567,7 @@ func (s *AdminStore) findKeyIndexByRaw(key string) int {
 	return -1
 }
 
-// ========== Agent Tokens ==========
+// ========== Client Tokens ==========
 
 // hashToken 对 Token 做 SHA-256 hash
 func hashToken(token string) string {
@@ -587,14 +587,14 @@ func generateToken() (string, error) {
 // ExchangeToken 用 Key 兑换一个客户端 Token
 // 如果该 install_id 已有有效 Token，则直接返回既有 Token 的原始值（不重复消耗 Key）
 // 否则验证 Key → 消耗 use_count → 生成新 Token
-func (s *AdminStore) ExchangeToken(key, installID, agentID, remoteAddr string) (string, *AgentToken, error) {
+func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) (string, *ClientToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	ip := remoteIP(remoteAddr)
 
 	// 查找该 install_id 是否已有未过期、未吊销的 Token
-	for i, t := range s.data.AgentTokens {
+	for i, t := range s.data.ClientTokens {
 		if t.InstallID == installID && !t.IsRevoked && time.Since(t.LastActiveAt) < tokenExpiryDuration {
 			// 已有有效 Token，无需消耗 Key，但无法返回原始 Token
 			// 需要生成新 Token 并替换旧 hash
@@ -602,19 +602,19 @@ func (s *AdminStore) ExchangeToken(key, installID, agentID, remoteAddr string) (
 			if err != nil {
 				return "", nil, err
 			}
-			s.data.AgentTokens[i].TokenHash = hashToken(newToken)
-			s.data.AgentTokens[i].LastActiveAt = time.Now()
-			s.data.AgentTokens[i].LastIP = ip
-			s.data.AgentTokens[i].AgentID = agentID
+			s.data.ClientTokens[i].TokenHash = hashToken(newToken)
+			s.data.ClientTokens[i].LastActiveAt = time.Now()
+			s.data.ClientTokens[i].LastIP = ip
+			s.data.ClientTokens[i].ClientID = clientID
 			s.save()
-			copy := s.data.AgentTokens[i]
+			copy := s.data.ClientTokens[i]
 			log.Printf("🔑 Token 已刷新 [install_id=%s]: 已有有效 Token，未消耗 Key", installID)
 			return newToken, &copy, nil
 		}
 	}
 
 	// 没有有效 Token，需要验证 Key
-	valid, err := s.validateAgentKeyLocked(key)
+	valid, err := s.validateClientKeyLocked(key)
 	if !valid {
 		return "", nil, fmt.Errorf("Key 验证失败: %w", err)
 	}
@@ -636,34 +636,34 @@ func (s *AdminStore) ExchangeToken(key, installID, agentID, remoteAddr string) (
 		keyID = s.data.APIKeys[idx].ID
 	}
 
-	agentToken := AgentToken{
+	clientToken := ClientToken{
 		ID:           generateUUID(),
 		TokenHash:    hashToken(newToken),
 		InstallID:    installID,
 		KeyID:        keyID,
-		AgentID:      agentID,
+		ClientID:      clientID,
 		CreatedAt:    time.Now(),
 		LastActiveAt: time.Now(),
 		LastIP:       ip,
 	}
 
 	// 吊销该 install_id 的旧 Token（同一客户端只保留一个有效 Token）
-	for i, t := range s.data.AgentTokens {
+	for i, t := range s.data.ClientTokens {
 		if t.InstallID == installID && !t.IsRevoked {
-			s.data.AgentTokens[i].IsRevoked = true
+			s.data.ClientTokens[i].IsRevoked = true
 		}
 	}
 
-	s.data.AgentTokens = append(s.data.AgentTokens, agentToken)
+	s.data.ClientTokens = append(s.data.ClientTokens, clientToken)
 	s.save()
 
 	log.Printf("🔑 Token 已兑换 [install_id=%s, key_id=%s]", installID, keyID)
-	return newToken, &agentToken, nil
+	return newToken, &clientToken, nil
 }
 
-// ValidateAgentToken 验证客户端 Token 是否有效
-// 返回匹配的 AgentToken 记录（如果有效），否则返回 error
-func (s *AdminStore) ValidateAgentToken(token, installID string) (*AgentToken, error) {
+// ValidateClientToken 验证客户端 Token 是否有效
+// 返回匹配的 ClientToken 记录（如果有效），否则返回 error
+func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken, error) {
 	if token == "" {
 		return nil, fmt.Errorf("Token 为空")
 	}
@@ -673,7 +673,7 @@ func (s *AdminStore) ValidateAgentToken(token, installID string) (*AgentToken, e
 
 	tokenHash := hashToken(token)
 
-	for i, t := range s.data.AgentTokens {
+	for i, t := range s.data.ClientTokens {
 		if t.TokenHash == tokenHash {
 			// Token hash 匹配
 			if t.IsRevoked {
@@ -687,9 +687,9 @@ func (s *AdminStore) ValidateAgentToken(token, installID string) (*AgentToken, e
 				return nil, fmt.Errorf("Token 已过期（超过 %d 天未活跃）", int(tokenExpiryDuration.Hours()/24))
 			}
 			// 验证通过，更新最后活跃时间
-			s.data.AgentTokens[i].LastActiveAt = time.Now()
+			s.data.ClientTokens[i].LastActiveAt = time.Now()
 			s.save()
-			copy := s.data.AgentTokens[i]
+			copy := s.data.ClientTokens[i]
 			return &copy, nil
 		}
 	}
@@ -702,11 +702,11 @@ func (s *AdminStore) TouchToken(tokenID, remoteAddr string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i, t := range s.data.AgentTokens {
+	for i, t := range s.data.ClientTokens {
 		if t.ID == tokenID {
-			s.data.AgentTokens[i].LastActiveAt = time.Now()
+			s.data.ClientTokens[i].LastActiveAt = time.Now()
 			if ip := remoteIP(remoteAddr); ip != "" {
-				s.data.AgentTokens[i].LastIP = ip
+				s.data.ClientTokens[i].LastIP = ip
 			}
 			s.save()
 			return
@@ -719,9 +719,9 @@ func (s *AdminStore) RevokeToken(tokenID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i, t := range s.data.AgentTokens {
+	for i, t := range s.data.ClientTokens {
 		if t.ID == tokenID {
-			s.data.AgentTokens[i].IsRevoked = true
+			s.data.ClientTokens[i].IsRevoked = true
 			return s.save()
 		}
 	}
@@ -734,9 +734,9 @@ func (s *AdminStore) RevokeTokensByKeyID(keyID string) int {
 	defer s.mu.Unlock()
 
 	count := 0
-	for i, t := range s.data.AgentTokens {
+	for i, t := range s.data.ClientTokens {
 		if t.KeyID == keyID && !t.IsRevoked {
-			s.data.AgentTokens[i].IsRevoked = true
+			s.data.ClientTokens[i].IsRevoked = true
 			count++
 		}
 	}
@@ -752,9 +752,9 @@ func (s *AdminStore) CleanExpiredTokens() {
 	defer s.mu.Unlock()
 
 	now := time.Now()
-	filtered := make([]AgentToken, 0, len(s.data.AgentTokens))
+	filtered := make([]ClientToken, 0, len(s.data.ClientTokens))
 	cleaned := 0
-	for _, t := range s.data.AgentTokens {
+	for _, t := range s.data.ClientTokens {
 		if t.IsRevoked || now.Sub(t.LastActiveAt) >= tokenExpiryDuration {
 			cleaned++
 			continue
@@ -762,19 +762,19 @@ func (s *AdminStore) CleanExpiredTokens() {
 		filtered = append(filtered, t)
 	}
 	if cleaned > 0 {
-		s.data.AgentTokens = filtered
+		s.data.ClientTokens = filtered
 		s.save()
 		log.Printf("🧹 清理了 %d 个过期/已吊销 Token", cleaned)
 	}
 }
 
 // GetTokensByKeyID 查询某 Key 兑换的所有 Token
-func (s *AdminStore) GetTokensByKeyID(keyID string) []AgentToken {
+func (s *AdminStore) GetTokensByKeyID(keyID string) []ClientToken {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]AgentToken, 0)
-	for _, t := range s.data.AgentTokens {
+	result := make([]ClientToken, 0)
+	for _, t := range s.data.ClientTokens {
 		if t.KeyID == keyID {
 			result = append(result, t)
 		}
@@ -782,12 +782,12 @@ func (s *AdminStore) GetTokensByKeyID(keyID string) []AgentToken {
 	return result
 }
 
-// GetAgentTokenByInstallID 查找某 install_id 对应的有效 Token
-func (s *AdminStore) GetAgentTokenByInstallID(installID string) *AgentToken {
+// GetClientTokenByInstallID 查找某 install_id 对应的有效 Token
+func (s *AdminStore) GetClientTokenByInstallID(installID string) *ClientToken {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, t := range s.data.AgentTokens {
+	for _, t := range s.data.ClientTokens {
 		if t.InstallID == installID && !t.IsRevoked && time.Since(t.LastActiveAt) < tokenExpiryDuration {
 			copy := t
 			return &copy

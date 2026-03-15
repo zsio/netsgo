@@ -4,13 +4,13 @@ import "encoding/json"
 
 // 消息类型常量 — 控制通道上传输的所有消息类型
 const (
-	MsgTypeAuth         = "auth"           // Agent → Server: 认证请求
-	MsgTypeAuthResp     = "auth_resp"      // Server → Agent: 认证响应
-	MsgTypePing         = "ping"           // Agent → Server: 心跳
-	MsgTypePong         = "pong"           // Server → Agent: 心跳回复
-	MsgTypeProbeReport  = "probe_report"   // Agent → Server: 探针数据上报
-	MsgTypeProxyNew     = "proxy_new"      // Agent/Server: 请求创建代理隧道
-	MsgTypeProxyNewResp = "proxy_new_resp" // Server → Agent: 创建代理响应
+	MsgTypeAuth         = "auth"           // Client → Server: 认证请求
+	MsgTypeAuthResp     = "auth_resp"      // Server → Client: 认证响应
+	MsgTypePing         = "ping"           // Client → Server: 心跳
+	MsgTypePong         = "pong"           // Server → Client: 心跳回复
+	MsgTypeProbeReport  = "probe_report"   // Client → Server: 探针数据上报
+	MsgTypeProxyNew     = "proxy_new"      // Client/Server: 请求创建代理隧道
+	MsgTypeProxyNewResp = "proxy_new_resp" // Server → Client: 创建代理响应
 	MsgTypeProxyClose   = "proxy_close"    // 双向: 关闭某条代理隧道
 )
 
@@ -41,19 +41,19 @@ func (m *Message) ParsePayload(target any) error {
 
 // --- 各类消息的 Payload 结构体 ---
 
-// AuthRequest Agent 连接时发送的认证请求
+// AuthRequest Client 连接时发送的认证请求
 type AuthRequest struct {
-	Key       string    `json:"key"`                 // 认证密钥（用于兑换 Token）
-	Token     string    `json:"token,omitempty"`      // 客户端连接密钥（优先使用）
-	InstallID string    `json:"install_id"`           // Agent 稳定安装 ID
-	Agent     AgentInfo `json:"agent"`                // Agent 基本信息
+	Key       string     `json:"key"`                 // 认证密钥（用于兑换 Token）
+	Token     string     `json:"token,omitempty"`      // 客户端连接密钥（优先使用）
+	InstallID string     `json:"install_id"`           // Client 稳定安装 ID
+	Client    ClientInfo `json:"client"`               // Client 基本信息
 }
 
 // AuthResponse Server 返回的认证结果
 type AuthResponse struct {
 	Success   bool   `json:"success"`
 	Message   string `json:"message,omitempty"`
-	AgentID   string `json:"agent_id,omitempty"` // Server 分配的唯一 ID
+	ClientID  string `json:"client_id,omitempty"` // Server 分配的唯一 ID
 	Token     string `json:"token,omitempty"`    // 服务端下发的新 Token（仅兑换时）
 	DataToken string `json:"data_token,omitempty"` // P3: 数据通道握手凭证
 }

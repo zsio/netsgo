@@ -24,14 +24,14 @@ import (
 	buildversion "netsgo/pkg/version"
 )
 
-// Client 是客户端/Agent 的核心结构体
+// Client 是客户端/Client 的核心结构体
 type Client struct {
 	ServerAddr     string // 服务器地址（支持 ws:// wss:// http:// https://，内部统一规范化）
 	Key            string // 认证密钥（用于兑换 Token）
 	Token          string // 客户端连接密钥（由 Key 兑换）
 	InstallID      string // 稳定安装 ID
 	StatePath      string // 安装 ID 持久化路径
-	AgentID        string // Server 分配的稳定 Agent ID
+	ClientID       string // Server 分配的稳定 Client ID
 	TLSSkipVerify  bool   // P1: 跳过 TLS 证书校验（仅开发/测试）
 	TLSFingerprint string // P1: TOFU 证书指纹 pin（空则首次记录）
 	dataToken      string // P3: 从 auth_resp 获取的数据通道凭证
@@ -247,8 +247,8 @@ func (c *Client) cleanup() {
 	// 重置 done channel
 	c.done = make(chan struct{})
 
-	// 重置 AgentID
-	c.AgentID = ""
+	// 重置 ClientID
+	c.ClientID = ""
 	c.dataToken = "" // P3
 }
 
@@ -298,7 +298,7 @@ func (c *Client) connectAndRun() error {
 		conn.Close()
 		return fmt.Errorf("认证失败: %w", err)
 	}
-	log.Printf("✅ 认证成功，Agent ID: %s", c.AgentID)
+	log.Printf("✅ 认证成功，Client ID: %s", c.ClientID)
 
 	// 3. 建立数据通道
 	if err := c.connectDataChannel(); err != nil {
@@ -335,7 +335,7 @@ func (c *Client) authenticate() error {
 		Key:       c.Key,
 		Token:     c.Token,
 		InstallID: c.InstallID,
-		Agent: protocol.AgentInfo{
+		Client: protocol.ClientInfo{
 			Hostname: hostname,
 			OS:       runtime.GOOS,
 			Arch:     runtime.GOARCH,
@@ -368,7 +368,7 @@ func (c *Client) authenticate() error {
 				return fmt.Errorf("解析认证响应失败: %w", err)
 			}
 			if authResp.Success {
-				c.AgentID = authResp.AgentID
+				c.ClientID = authResp.ClientID
 				c.dataToken = authResp.DataToken // P3
 				log.Printf("✅ Token 认证成功")
 				return nil
@@ -417,7 +417,7 @@ func (c *Client) authenticate() error {
 		return fmt.Errorf("认证被拒绝: %s", authResp.Message)
 	}
 
-	c.AgentID = authResp.AgentID
+	c.ClientID = authResp.ClientID
 	c.dataToken = authResp.DataToken // P3
 
 	// 如果服务端返回了新 Token，保存它
@@ -435,7 +435,7 @@ func (c *Client) authenticate() error {
 
 // connectDataChannel 建立数据通道。
 // 从 ServerAddr 提取 host:port，建立 TCP/TLS 连接，
-// 发送握手包（魔数 + AgentID + DataToken），然后在该连接上建立 yamux Client Session。
+// 发送握手包（魔数 + ClientID + DataToken），然后在该连接上建立 yamux Client Session。
 func (c *Client) connectDataChannel() error {
 	// 解析 ServerAddr 获取 host:port
 	u, err := url.Parse(c.ServerAddr)
@@ -473,14 +473,14 @@ func (c *Client) connectDataChannel() error {
 	// 设置握手超时（Server 应当即时回复，2s 足够）
 	dataConn.SetDeadline(time.Now().Add(2 * time.Second))
 
-	// 发送握手包: [1B 魔数] [2B AgentID长度] [NB AgentID] [2B DataToken长度] [NB DataToken]
-	agentIDBytes := []byte(c.AgentID)
+	// 发送握手包: [1B 魔数] [2B ClientID长度] [NB ClientID] [2B DataToken长度] [NB DataToken]
+	clientIDBytes := []byte(c.ClientID)
 	dataTokenBytes := []byte(c.dataToken)
-	handshake := make([]byte, 1+2+len(agentIDBytes)+2+len(dataTokenBytes))
+	handshake := make([]byte, 1+2+len(clientIDBytes)+2+len(dataTokenBytes))
 	handshake[0] = protocol.DataChannelMagic
-	binary.BigEndian.PutUint16(handshake[1:3], uint16(len(agentIDBytes)))
-	copy(handshake[3:], agentIDBytes)
-	offset := 3 + len(agentIDBytes)
+	binary.BigEndian.PutUint16(handshake[1:3], uint16(len(clientIDBytes)))
+	copy(handshake[3:], clientIDBytes)
+	offset := 3 + len(clientIDBytes)
 	binary.BigEndian.PutUint16(handshake[offset:offset+2], uint16(len(dataTokenBytes)))
 	copy(handshake[offset+2:], dataTokenBytes)
 

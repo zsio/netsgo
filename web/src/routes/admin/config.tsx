@@ -86,7 +86,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
           placeholder="例如: https://tunnel.example.com"
         />
         <p className="text-xs text-muted-foreground">
-          Agent 连接时使用的服务器公开地址。创建 Key 后生成的连接命令会使用此地址。
+          Client 连接时使用的服务器公开地址。创建 Key 后生成的连接命令会使用此地址。
         </p>
       </div>
 
@@ -145,7 +145,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
           </div>
         )}
         <p className="text-xs text-muted-foreground">
-          只有在白名单范围内的端口才能被 Agent 用于创建隧道映射。如果不设置任何范围，则所有端口均允许。
+          只有在白名单范围内的端口才能被 Client 用于创建隧道映射。如果不设置任何范围，则所有端口均允许。
         </p>
       </div>
 

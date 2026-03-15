@@ -8,7 +8,7 @@ export function useCreateTunnel() {
   return useMutation({
     mutationFn: (data: CreateTunnelInput) =>
       api.post<{ success: boolean; message: string; remote_port: number }>(
-        `/api/agents/${data.agentId}/tunnels`,
+        `/api/clients/${data.clientId}/tunnels`,
         {
           name: data.name,
           type: data.type,
@@ -19,7 +19,7 @@ export function useCreateTunnel() {
         },
       ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
     },
   });
 }
@@ -28,10 +28,10 @@ export function usePauseTunnel() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ agentId, tunnelName }: { agentId: string; tunnelName: string }) =>
-      api.put(`/api/agents/${agentId}/tunnels/${tunnelName}/pause`),
+    mutationFn: ({ clientId, tunnelName }: { clientId: string; tunnelName: string }) =>
+      api.put(`/api/clients/${clientId}/tunnels/${tunnelName}/pause`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
     },
   });
 }
@@ -40,10 +40,10 @@ export function useResumeTunnel() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ agentId, tunnelName }: { agentId: string; tunnelName: string }) =>
-      api.put(`/api/agents/${agentId}/tunnels/${tunnelName}/resume`),
+    mutationFn: ({ clientId, tunnelName }: { clientId: string; tunnelName: string }) =>
+      api.put(`/api/clients/${clientId}/tunnels/${tunnelName}/resume`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
     },
   });
 }
@@ -52,10 +52,10 @@ export function useStopTunnel() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ agentId, tunnelName }: { agentId: string; tunnelName: string }) =>
-      api.put(`/api/agents/${agentId}/tunnels/${tunnelName}/stop`),
+    mutationFn: ({ clientId, tunnelName }: { clientId: string; tunnelName: string }) =>
+      api.put(`/api/clients/${clientId}/tunnels/${tunnelName}/stop`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
     },
   });
 }
@@ -64,10 +64,10 @@ export function useDeleteTunnel() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ agentId, tunnelName }: { agentId: string; tunnelName: string }) =>
-      api.delete(`/api/agents/${agentId}/tunnels/${tunnelName}`),
+    mutationFn: ({ clientId, tunnelName }: { clientId: string; tunnelName: string }) =>
+      api.delete(`/api/clients/${clientId}/tunnels/${tunnelName}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
     },
   });
 }

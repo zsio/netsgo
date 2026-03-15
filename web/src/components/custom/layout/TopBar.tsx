@@ -3,9 +3,9 @@ import {
   UserPlus, Settings, LogOut, Home
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useAgents } from '@/hooks/use-agents';
+import { useClients } from '@/hooks/use-clients';
 import { ConnectionIndicator } from '@/components/custom/common/ConnectionIndicator';
-import { AddAgentDialog } from '@/components/custom/agent/AddAgentDialog';
+import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
@@ -21,13 +21,13 @@ import {
 export function TopBar() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const [showAddAgent, setShowAddAgent] = useState(false);
-  const { data: agents } = useAgents();
+  const [showAddClient, setShowAddClient] = useState(false);
+  const { data: clients } = useClients();
   const logout = useAuthStore((state) => state.logout);
-  const totalAgents = agents?.length ?? 0;
-  const onlineAgentCount = agents?.filter((agent) => agent.online).length ?? 0;
-  const agentSummary = agents
-    ? (totalAgents > 0 ? `${onlineAgentCount}/${totalAgents} 在线 Agent` : '0 Agent')
+  const totalClients = clients?.length ?? 0;
+  const onlineClientCount = clients?.filter((client) => client.online).length ?? 0;
+  const clientSummary = clients
+    ? (totalClients > 0 ? `${onlineClientCount}/${totalClients} 在线 Client` : '0 Client')
     : '加载中...';
 
   const isAdmin = pathname.startsWith('/admin');
@@ -64,16 +64,16 @@ export function TopBar() {
           <div className="flex items-center gap-3">
             <ConnectionIndicator />
             <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground">
-              {agentSummary}
+              {clientSummary}
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           {!isAdmin && (
-            <Button variant="secondary" size="sm" onClick={() => setShowAddAgent(true)}>
+            <Button variant="secondary" size="sm" onClick={() => setShowAddClient(true)}>
               <UserPlus className="h-4 w-4 mr-1.5" />
-              添加 Agent
+              添加 Client
             </Button>
           )}
 
@@ -119,7 +119,7 @@ export function TopBar() {
         </div>
       </header>
 
-      <AddAgentDialog open={showAddAgent} onOpenChange={setShowAddAgent} />
+      <AddClientDialog open={showAddClient} onOpenChange={setShowAddClient} />
     </>
   );
 }

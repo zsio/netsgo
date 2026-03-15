@@ -144,13 +144,13 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 自动生成首个 Agent Key
+	// 自动生成首个 Client Key
 	rawKey := "sk-" + generateUUID()
-	agentKey, err := s.adminStore.AddAPIKey("default", rawKey, []string{"connect"}, nil)
+	clientKey, err := s.adminStore.AddAPIKey("default", rawKey, []string{"connect"}, nil)
 	if err != nil {
 		// Key 创建失败不阻塞初始化
 		rawKey = ""
-		agentKey = nil
+		clientKey = nil
 	}
 
 	s.adminStore.AddSystemLog("INFO", "服务初始化完成，管理员: "+req.Admin.Username, "setup")
@@ -169,9 +169,9 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 			"role":     user.Role,
 		},
 	}
-	if agentKey != nil {
-		resp["agent_key"] = map[string]any{
-			"name":    agentKey.Name,
+	if clientKey != nil {
+		resp["client_key"] = map[string]any{
+			"name":    clientKey.Name,
 			"raw_key": rawKey,
 		}
 	}

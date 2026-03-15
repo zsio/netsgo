@@ -23,9 +23,9 @@ func newTestTunnelStore(t *testing.T) *TunnelStore {
 func mustAddStableTunnel(t *testing.T, store *TunnelStore, tunnel StoredTunnel) {
 	t.Helper()
 
-	tunnel.Binding = TunnelBindingAgentID
-	if tunnel.AgentID == "" {
-		t.Fatal("测试隧道必须提供 AgentID")
+	tunnel.Binding = TunnelBindingClientID
+	if tunnel.ClientID == "" {
+		t.Fatal("测试隧道必须提供 ClientID")
 	}
 	if err := store.AddTunnel(tunnel); err != nil {
 		t.Fatalf("AddTunnel 失败: %v", err)
@@ -64,7 +64,7 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 			Name: "t1", Type: "tcp", LocalIP: "127.0.0.1", LocalPort: 80, RemotePort: 8080,
 		},
 		Status:   protocol.ProxyStatusActive,
-		AgentID:  "agent-1",
+		ClientID:  "client-1",
 		Hostname: "host-1",
 	})
 
@@ -79,8 +79,8 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 	if tunnels[0].Name != "t1" {
 		t.Errorf("加载的隧道名期望 t1，得到 %s", tunnels[0].Name)
 	}
-	if tunnels[0].Binding != TunnelBindingAgentID {
-		t.Errorf("Binding 期望 %s，得到 %s", TunnelBindingAgentID, tunnels[0].Binding)
+	if tunnels[0].Binding != TunnelBindingClientID {
+		t.Errorf("Binding 期望 %s，得到 %s", TunnelBindingClientID, tunnels[0].Binding)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestTunnelStore_AddTunnel_Success(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "web", RemotePort: 8080},
-		AgentID:         "agent-1",
+		ClientID:         "client-1",
 		Hostname:        "myhost",
 		Status:          protocol.ProxyStatusActive,
 	})
@@ -115,11 +115,11 @@ func TestTunnelStore_AddTunnel_Success(t *testing.T) {
 	if len(tunnels) != 1 {
 		t.Fatalf("期望 1 条，得到 %d", len(tunnels))
 	}
-	if tunnels[0].AgentID != "agent-1" {
-		t.Errorf("AgentID 期望 agent-1，得到 %s", tunnels[0].AgentID)
+	if tunnels[0].ClientID != "client-1" {
+		t.Errorf("ClientID 期望 client-1，得到 %s", tunnels[0].ClientID)
 	}
-	if tunnels[0].Binding != TunnelBindingAgentID {
-		t.Errorf("Binding 期望 %s，得到 %s", TunnelBindingAgentID, tunnels[0].Binding)
+	if tunnels[0].Binding != TunnelBindingClientID {
+		t.Errorf("Binding 期望 %s，得到 %s", TunnelBindingClientID, tunnels[0].Binding)
 	}
 }
 
@@ -128,32 +128,32 @@ func TestTunnelStore_AddTunnel_DuplicateRejected(t *testing.T) {
 
 	tunnel := StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "dup"},
-		AgentID:         "agent-1",
+		ClientID:         "client-1",
 		Hostname:        "host-1",
-		Binding:         TunnelBindingAgentID,
+		Binding:         TunnelBindingClientID,
 	}
 	mustAddStableTunnel(t, store, tunnel)
 
 	if err := store.AddTunnel(tunnel); err == nil {
-		t.Error("相同 agent_id+name 的重复添加应被拒绝")
+		t.Error("相同 client_id+name 的重复添加应被拒绝")
 	}
 }
 
-func TestTunnelStore_AddTunnel_DiffAgentSameNameAllowed(t *testing.T) {
+func TestTunnelStore_AddTunnel_DiffClientSameNameAllowed(t *testing.T) {
 	store := newTestTunnelStore(t)
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "web"},
-		AgentID:         "agent-A",
+		ClientID:         "client-A",
 		Hostname:        "host-A",
 	})
 	if err := store.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "web"},
-		AgentID:         "agent-B",
+		ClientID:         "client-B",
 		Hostname:        "host-B",
-		Binding:         TunnelBindingAgentID,
+		Binding:         TunnelBindingClientID,
 	}); err != nil {
-		t.Errorf("不同 agent_id 同 name 应允许: %v", err)
+		t.Errorf("不同 client_id 同 name 应允许: %v", err)
 	}
 	if len(store.GetAllTunnels()) != 2 {
 		t.Error("应有 2 条记录")
@@ -165,11 +165,11 @@ func TestTunnelStore_RemoveTunnel_Success(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "rm-me"},
-		AgentID:         "agent-1",
+		ClientID:         "client-1",
 		Hostname:        "host",
 	})
 
-	if err := store.RemoveTunnel("agent-1", "rm-me"); err != nil {
+	if err := store.RemoveTunnel("client-1", "rm-me"); err != nil {
 		t.Fatalf("RemoveTunnel 失败: %v", err)
 	}
 	if len(store.GetAllTunnels()) != 0 {
@@ -189,23 +189,23 @@ func TestTunnelStore_UpdateStatus(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t1"},
-		AgentID:         "agent-1",
+		ClientID:         "client-1",
 		Hostname:        "host",
 		Status:          protocol.ProxyStatusActive,
 	})
 
-	if err := store.UpdateStatus("agent-1", "t1", protocol.ProxyStatusPaused); err != nil {
+	if err := store.UpdateStatus("client-1", "t1", protocol.ProxyStatusPaused); err != nil {
 		t.Fatalf("UpdateStatus 失败: %v", err)
 	}
-	st, _ := store.GetTunnel("agent-1", "t1")
+	st, _ := store.GetTunnel("client-1", "t1")
 	if st.Status != protocol.ProxyStatusPaused {
 		t.Errorf("状态期望 paused，得到 %s", st.Status)
 	}
 
-	if err := store.UpdateStatus("agent-1", "t1", protocol.ProxyStatusStopped); err != nil {
+	if err := store.UpdateStatus("client-1", "t1", protocol.ProxyStatusStopped); err != nil {
 		t.Fatalf("UpdateStatus 失败: %v", err)
 	}
-	st2, _ := store.GetTunnel("agent-1", "t1")
+	st2, _ := store.GetTunnel("client-1", "t1")
 	if st2.Status != protocol.ProxyStatusStopped {
 		t.Errorf("状态期望 stopped，得到 %s", st2.Status)
 	}
@@ -218,7 +218,7 @@ func TestTunnelStore_UpdateStatus_NotFound(t *testing.T) {
 	}
 }
 
-func TestTunnelStore_UpdateAgentID(t *testing.T) {
+func TestTunnelStore_UpdateClientID(t *testing.T) {
 	store := newTestTunnelStore(t)
 
 	seedLegacyTunnels(t, store,
@@ -236,15 +236,15 @@ func TestTunnelStore_UpdateAgentID(t *testing.T) {
 		},
 	)
 
-	store.UpdateAgentID("host", "old-id", "new-id")
+	store.UpdateClientID("host", "old-id", "new-id")
 
-	tunnels := store.GetTunnelsByAgentID("new-id")
+	tunnels := store.GetTunnelsByClientID("new-id")
 	if len(tunnels) != 2 {
 		t.Fatalf("期望迁移出 2 条隧道，得到 %d", len(tunnels))
 	}
 	for _, tunnel := range tunnels {
-		if tunnel.Binding != TunnelBindingAgentID {
-			t.Errorf("隧道 %s 的 Binding 期望迁移为 %s，得到 %s", tunnel.Name, TunnelBindingAgentID, tunnel.Binding)
+		if tunnel.Binding != TunnelBindingClientID {
+			t.Errorf("隧道 %s 的 Binding 期望迁移为 %s，得到 %s", tunnel.Name, TunnelBindingClientID, tunnel.Binding)
 		}
 		if tunnel.Hostname != "host" {
 			t.Errorf("隧道 %s 的 Hostname 期望保留 host，得到 %s", tunnel.Name, tunnel.Hostname)
@@ -252,10 +252,10 @@ func TestTunnelStore_UpdateAgentID(t *testing.T) {
 	}
 }
 
-func TestTunnelStore_UpdateAgentID_NoMatch(t *testing.T) {
+func TestTunnelStore_UpdateClientID_NoMatch(t *testing.T) {
 	store := newTestTunnelStore(t)
-	store.UpdateAgentID("no-host", "", "new-id")
-	if len(store.GetTunnelsByAgentID("new-id")) != 0 {
+	store.UpdateClientID("no-host", "", "new-id")
+	if len(store.GetTunnelsByClientID("new-id")) != 0 {
 		t.Error("无匹配时不应迁移出任何隧道")
 	}
 }
@@ -265,11 +265,11 @@ func TestTunnelStore_GetTunnel(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "find-me", RemotePort: 9090},
-		AgentID:         "agent-1",
+		ClientID:         "client-1",
 		Hostname:        "host",
 	})
 
-	st, found := store.GetTunnel("agent-1", "find-me")
+	st, found := store.GetTunnel("client-1", "find-me")
 	if !found {
 		t.Fatal("应找到隧道")
 	}
@@ -277,7 +277,7 @@ func TestTunnelStore_GetTunnel(t *testing.T) {
 		t.Errorf("RemotePort 期望 9090，得到 %d", st.RemotePort)
 	}
 
-	if _, found := store.GetTunnel("agent-1", "not-exist"); found {
+	if _, found := store.GetTunnel("client-1", "not-exist"); found {
 		t.Error("不存在的隧道不应被找到")
 	}
 }
@@ -287,17 +287,17 @@ func TestTunnelStore_GetTunnelsByHostname(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t1"},
-		AgentID:         "agent-1",
+		ClientID:         "client-1",
 		Hostname:        "host-A",
 	})
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t2"},
-		AgentID:         "agent-2",
+		ClientID:         "client-2",
 		Hostname:        "host-A",
 	})
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t3"},
-		AgentID:         "agent-3",
+		ClientID:         "client-3",
 		Hostname:        "host-B",
 	})
 
@@ -317,7 +317,7 @@ func TestTunnelStore_GetAllTunnels_ReturnsCopy(t *testing.T) {
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "original"},
-		AgentID:         "agent-1",
+		ClientID:         "client-1",
 		Hostname:        "host",
 	})
 
@@ -340,16 +340,16 @@ func TestTunnelStore_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			name := fmt.Sprintf("tunnel-%d", idx)
 			hostname := fmt.Sprintf("host-%d", idx%5)
-			agentID := fmt.Sprintf("agent-%d", idx)
+			clientID := fmt.Sprintf("client-%d", idx)
 			_ = store.AddTunnel(StoredTunnel{
 				ProxyNewRequest: protocol.ProxyNewRequest{Name: name},
-				AgentID:         agentID,
+				ClientID:         clientID,
 				Hostname:        hostname,
-				Binding:         TunnelBindingAgentID,
+				Binding:         TunnelBindingClientID,
 			})
 			store.GetAllTunnels()
 			store.GetTunnelsByHostname(hostname)
-			store.GetTunnelsByAgentID(agentID)
+			store.GetTunnelsByClientID(clientID)
 		}(i)
 	}
 	wg.Wait()
