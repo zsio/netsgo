@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"time"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
@@ -20,6 +21,10 @@ func (s *Server) handleDataConn(conn net.Conn) {
 			conn.Close()
 		}
 	}()
+
+	// 设置握手阶段超时（类比 P16 控制通道认证超时），
+	// 防止恶意客户端连接后不发送握手数据占用 goroutine
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	// 1. 读取 AgentID 长度 (2 bytes, big-endian uint16)
 	var lenBuf [2]byte
@@ -90,6 +95,9 @@ func (s *Server) handleDataConn(conn net.Conn) {
 		conn.Close()
 		return
 	}
+
+	// 握手校验完成，清除 deadline（yamux 自行管理超时）
+	conn.SetDeadline(time.Time{})
 
 	// 7. 如果 Agent 已经有数据通道，关闭旧的
 	agent.dataMu.Lock()

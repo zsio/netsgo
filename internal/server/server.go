@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,8 @@ import (
 type Server struct {
 	Port           int
 	StorePath      string             // 隧道配置文件路径（空则使用默认）
+	TLS            *TLSConfig         // P1: TLS 配置（nil 表示无 TLS，等价于 mode=off 且无 trusted proxy）
+	TLSFingerprint string             // P1: 当前证书指纹（启用 TLS 时有值）
 	agents         sync.Map           // stable agentID -> *AgentConn
 	events         *EventBus          // SSE 事件总线
 	store          *TunnelStore       // 隧道持久化存储
@@ -51,6 +54,7 @@ type Server struct {
 	listener       net.Listener       // P15: 保存引用以便关闭
 	done           chan struct{}       // P15: 通知后台 goroutine 退出
 	setupToken     string             // P8: 启动时生成的一次性 Setup Token，初始化完成后清空
+	tlsEnabled     bool               // P1: 当前是否启用了 TLS（用于内部判断）
 }
 
 // AgentConn 代表一个已连接的 Agent
@@ -196,6 +200,15 @@ func (s *Server) initStore() error {
 	return nil
 }
 
+// getDataDir 返回数据目录路径（用于存储 TLS 证书等）
+func (s *Server) getDataDir() string {
+	if s.StorePath != "" {
+		return filepath.Dir(s.StorePath)
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".netsgo")
+}
+
 // RangeAgents 遍历所有已连接的 Agent
 func (s *Server) RangeAgents(fn func(id string, agent *AgentConn) bool) {
 	s.agents.Range(func(key, value any) bool {
@@ -281,25 +294,55 @@ func (s *Server) Start() error {
 	addr := ln.Addr().(*net.TCPAddr)
 	s.Port = addr.Port // 更新为实际端口（当 Port=0 时有用）
 
-	log.Printf("🚀 NetsGo Server 已启动，监听 :%d", s.Port)
-	if s.webFS != nil {
-		log.Printf("📊 Web 面板: http://localhost:%d", s.Port)
+	// P1: 如果配置了 TLS 且模式为 custom/auto，包装 TLS Listener
+	var serveLn net.Listener = ln
+	if s.TLS != nil && s.TLS.IsEnabled() {
+		dataDir := s.getDataDir()
+		tlsConfig, fingerprint, err := s.TLS.loadOrBuildTLSConfig(dataDir)
+		if err != nil {
+			ln.Close()
+			return fmt.Errorf("TLS 初始化失败: %w", err)
+		}
+		s.TLSFingerprint = fingerprint
+		s.tlsEnabled = true
+		serveLn = tls.NewListener(ln, tlsConfig)
 	}
-	log.Printf("🔌 控制通道: ws://localhost:%d/ws/control", s.Port)
-	log.Printf("🔗 数据通道: 同端口 (魔数 0x4E)")
+
+	// 根据 TLS 状态输出启动信息
+	log.Printf("🚀 NetsGo Server 已启动，监听 :%d", s.Port)
+	if s.tlsEnabled {
+		if s.webFS != nil {
+			log.Printf("📊 Web 面板: https://localhost:%d", s.Port)
+		}
+		log.Printf("🔌 控制通道: wss://localhost:%d/ws/control", s.Port)
+		log.Printf("🔗 数据通道: 同端口 TLS (魔数 0x4E)")
+	} else {
+		if s.webFS != nil {
+			log.Printf("📊 Web 面板: http://localhost:%d", s.Port)
+		}
+		log.Printf("🔌 控制通道: ws://localhost:%d/ws/control", s.Port)
+		log.Printf("🔗 数据通道: 同端口 (魔数 0x4E)")
+	}
+
+	// 反代 / 代理头信任策略提示
+	if s.TLS != nil && s.TLS.Mode == TLSModeOff && len(s.TLS.TrustedProxies) == 0 {
+		log.Printf("⚠️ TLS 模式为 off（反向代理模式），但未配置 --trusted-proxies")
+		log.Printf("⚠️ X-Forwarded-For 头将被忽略，速率限制将按代理 IP 而非真实客户端 IP 计算")
+		log.Printf("⚠️ 如果在反向代理后运行，请配置: --trusted-proxies 127.0.0.1/32")
+	}
 
 	// HTTP 服务器（处理 WebSocket + API + Web 面板）
 	// 注意：不设置 ReadTimeout / WriteTimeout，因为 WebSocket 和 SSE 是长连接
 	// ReadHeaderTimeout 足以防御 Slowloris 攻击（限制请求头读取时间）
 	s.httpServer = &http.Server{
-		Handler:           securityHeaders(s.newHTTPMux()), // P10: 统一注入安全响应头
-		ReadHeaderTimeout: 10 * time.Second,                // P14: 防御 Slowloris 慢速请求头攻击
-		IdleTimeout:       120 * time.Second,                // P14: 空闲 keep-alive 连接超时
+		Handler:           s.securityHeadersHandler(s.newHTTPMux()), // P10: 统一注入安全响应头
+		ReadHeaderTimeout: 10 * time.Second,                        // P14: 防御 Slowloris 慢速请求头攻击
+		IdleTimeout:       120 * time.Second,                        // P14: 空闲 keep-alive 连接超时
 	}
 
 	// 包装 listener：peek 分发
 	peekLn := &PeekListener{
-		Listener: ln,
+		Listener: serveLn,
 		server:   s,
 	}
 
@@ -481,13 +524,16 @@ func (pl *PeekListener) dispatchLoop() {
 // 无 Origin 头（Go 客户端）→ 放行；有 Origin 头 → 检查 host 是否匹配
 var upgrader = websocket.Upgrader{}
 
-// securityHeaders 统一注入安全响应头（P10）
-// 注：不添加 HSTS，因为用户不一定有 TLS 证书
-func securityHeaders(next http.Handler) http.Handler {
+// securityHeadersHandler 统一注入安全响应头（P10）
+// P1: TLS 启用时自动添加 HSTS
+func (s *Server) securityHeadersHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		if s.tlsEnabled {
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

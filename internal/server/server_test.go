@@ -76,7 +76,8 @@ func initTestAdminStore(t *testing.T, s *Server) {
 func issueAdminToken(t *testing.T, s *Server) string {
 	t.Helper()
 
-	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "server-test")
+	// P6: UA 必须与 http.DefaultClient 发送的 User-Agent 一致，否则 session binding 校验会拒绝
+	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "Go-http-client/1.1")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -453,7 +454,8 @@ func TestWeb_DevMode_FallbackToDevPage(t *testing.T) {
 // ============================================================
 
 func TestSecurityHeaders_Present(t *testing.T) {
-	handler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := New(8080)
+	handler := s.securityHeadersHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -477,9 +479,25 @@ func TestSecurityHeaders_Present(t *testing.T) {
 		}
 	}
 
-	// 不应包含 HSTS（用户可能没有 TLS）
+	// 不应包含 HSTS（未启用 TLS）
 	if hsts := w.Header().Get("Strict-Transport-Security"); hsts != "" {
-		t.Errorf("不应设置 HSTS，得到 %q", hsts)
+		t.Errorf("未启用 TLS 时不应设置 HSTS，得到 %q", hsts)
+	}
+}
+
+func TestSecurityHeaders_HSTS_WithTLS(t *testing.T) {
+	s := New(8080)
+	s.tlsEnabled = true // 模拟 TLS 已启用
+	handler := s.securityHeadersHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if hsts := w.Header().Get("Strict-Transport-Security"); hsts == "" {
+		t.Error("TLS 启用时应设置 HSTS")
 	}
 }
 

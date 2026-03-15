@@ -248,6 +248,7 @@ func TestAuthMiddleware_ValidTokenSuccess(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenString)
+	req.Header.Set("User-Agent", "test-agent") // P6: 必须与 CreateSession 的 UA 一致
 	w := httptest.NewRecorder()
 
 	// 验证请求是否成功到达了 handler

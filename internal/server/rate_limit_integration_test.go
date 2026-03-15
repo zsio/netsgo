@@ -374,14 +374,20 @@ func TestLogin_RateLimitXForwardedFor(t *testing.T) {
 	})
 	defer cleanup()
 
+	// 配置反代模式：tls.mode=off + 代理 IP 10.0.0.0/8 受信任
+	s.TLS = &TLSConfig{
+		Mode:           TLSModeOff,
+		TrustedProxies: []string{"10.0.0.0/8"},
+	}
+
 	loginBody := []byte(`{"username":"admin","password":"password123"}`)
 
-	// 通过 XFF 头识别真实 IP
+	// 通过 XFF 头识别真实 IP（来源 10.0.0.1 在受信任列表中）
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Forwarded-For", "203.0.113.50")
-		req.RemoteAddr = "10.0.0.1:80" // 代理 IP
+		req.RemoteAddr = "10.0.0.1:80" // 受信任代理 IP
 		w := httptest.NewRecorder()
 		s.handleAPILogin(w, req)
 
@@ -412,5 +418,18 @@ func TestLogin_RateLimitXForwardedFor(t *testing.T) {
 
 	if w2.Code != http.StatusOK {
 		t.Fatalf("不同真实 IP 不应受限速影响，得到 %d", w2.Code)
+	}
+
+	// 来自非受信任代理的请求，即使带了 XFF 也应使用 RemoteAddr
+	req3 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("X-Forwarded-For", "203.0.113.50") // 尝试伪造
+	req3.RemoteAddr = "1.2.3.4:80"                     // 非受信任 IP
+	w3 := httptest.NewRecorder()
+	s.handleAPILogin(w3, req3)
+
+	// 应该使用 RemoteAddr (1.2.3.4) 作为限速 key，而不是 XFF 中的地址
+	if w3.Code != http.StatusOK {
+		t.Fatalf("非受信来源应使用 RemoteAddr 限速，得到 %d", w3.Code)
 	}
 }

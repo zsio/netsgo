@@ -10,8 +10,9 @@ import (
 )
 
 type persistedState struct {
-	InstallID string `json:"install_id"`
-	Token     string `json:"token,omitempty"` // 由 Key 兑换的连接密钥
+	InstallID      string `json:"install_id"`
+	Token          string `json:"token,omitempty"`          // 由 Key 兑换的连接密钥
+	TLSFingerprint string `json:"tls_fingerprint,omitempty"` // P1: TOFU 证书指纹
 }
 
 func defaultStatePath() (string, error) {
@@ -44,6 +45,10 @@ func (c *Client) ensureInstallID() error {
 			// 同时加载 Token（如果有）
 			if state.Token != "" && c.Token == "" {
 				c.Token = state.Token
+			}
+			// P1: 加载 TLS 指纹（如果有）
+			if state.TLSFingerprint != "" && c.TLSFingerprint == "" {
+				c.TLSFingerprint = state.TLSFingerprint
 			}
 			return nil
 		}
@@ -102,3 +107,22 @@ func generateInstallID() (string, error) {
 	return "agent-" + hex.EncodeToString(buf[:]), nil
 }
 
+// saveTLSFingerprint 将 TLS 指纹持久化到客户端状态文件 (P1 TOFU)
+func (c *Client) saveTLSFingerprint(fingerprint string) error {
+	path := c.StatePath
+	if path == "" {
+		return nil
+	}
+
+	state := persistedState{
+		InstallID:      c.InstallID,
+		Token:          c.Token,
+		TLSFingerprint: fingerprint,
+	}
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化客户端状态失败: %w", err)
+	}
+	return os.WriteFile(path, data, 0o600)
+}

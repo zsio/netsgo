@@ -25,19 +25,25 @@ var clientCmd = &cobra.Command{
 
 代理隧道的创建、管理和销毁均由服务端 Web 面板统一控制。
 
+服务端地址支持以下格式:
+  ws://host:port       明文 WebSocket
+  wss://host:port      加密 WebSocket
+  http://host:port     明文 HTTP（自动推导为 ws://）
+  https://host:port    加密 HTTPS（自动推导为 wss://）
+
 所有参数均支持环境变量配置，环境变量前缀为 NETSGO_，例如:
-  NETSGO_SERVER=ws://1.2.3.4:8080 NETSGO_KEY=mykey netsgo client`,
-	Example: `  # 连接到本地服务端
+  NETSGO_SERVER=https://1.2.3.4:8080 NETSGO_KEY=mykey netsgo client`,
+	Example: `  # 连接到本地服务端（明文）
   netsgo client
 
-  # 连接到远程服务端
-  netsgo client --server ws://1.2.3.4:8080
+  # 连接到远程 TLS 服务端
+  netsgo client --server https://1.2.3.4:8080 --key mykey
 
-  # 带认证密钥
-  netsgo client --server ws://1.2.3.4:8080 --key mykey
+  # 跳过 TLS 证书校验（仅测试用）
+  netsgo client --server wss://1.2.3.4:8080 --key mykey --tls-skip-verify
 
-  # 通过环境变量配置
-  NETSGO_SERVER=ws://1.2.3.4:8080 NETSGO_KEY=mykey netsgo client`,
+  # 使用 ws:// 格式连接（向后兼容）
+  netsgo client --server ws://1.2.3.4:8080 --key mykey`,
 	Run: func(cmd *cobra.Command, args []string) {
 		log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
@@ -47,6 +53,12 @@ var clientCmd = &cobra.Command{
 		log.Printf("🔗 NetsGo Client 连接到 %s ...", serverAddr)
 
 		c := client.New(serverAddr, key)
+
+		// P1: TLS 配置
+		c.TLSSkipVerify = viper.GetBool("tls-skip-verify")
+		if fp := viper.GetString("tls-fingerprint"); fp != "" {
+			c.TLSFingerprint = fp
+		}
 
 		// P15: 监听系统信号，优雅关闭
 		sigCh := make(chan os.Signal, 1)
@@ -67,13 +79,20 @@ var clientCmd = &cobra.Command{
 
 func init() {
 	// 定义 flags
-	clientCmd.Flags().StringP("server", "s", "ws://localhost:8080", "Server 的 WebSocket 地址")
+	clientCmd.Flags().StringP("server", "s", "ws://localhost:8080", "服务端地址 (支持 ws/wss/http/https)")
 	clientCmd.Flags().StringP("key", "k", "", "认证密钥")
+
+	// P1: TLS 相关 flags
+	clientCmd.Flags().Bool("tls-skip-verify", false, "跳过 TLS 证书校验（仅开发/测试用）")
+	clientCmd.Flags().String("tls-fingerprint", "", "指定服务器证书 SHA-256 指纹 (AA:BB:CC:... 格式)")
 
 	// 绑定 viper (支持环境变量)
 	viper.BindPFlag("server", clientCmd.Flags().Lookup("server"))
 	viper.BindPFlag("key", clientCmd.Flags().Lookup("key"))
+	viper.BindPFlag("tls-skip-verify", clientCmd.Flags().Lookup("tls-skip-verify"))
+	viper.BindPFlag("tls-fingerprint", clientCmd.Flags().Lookup("tls-fingerprint"))
 
 	// 注册到根命令
 	rootCmd.AddCommand(clientCmd)
 }
+

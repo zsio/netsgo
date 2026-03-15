@@ -176,27 +176,48 @@ func (rl *RateLimiter) cleanup() {
 
 // --- 辅助函数 ---
 
-// clientIP 从 HTTP 请求中提取客户端 IP 地址
-// 支持 X-Forwarded-For 和 X-Real-IP 头（反向代理场景）
-func clientIP(r *http.Request) string {
-	// 优先使用 X-Forwarded-For（取第一个 IP）
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.SplitN(xff, ",", 2)
-		ip := strings.TrimSpace(parts[0])
-		if ip != "" {
-			return ip
+// clientIP 从 HTTP 请求中提取客户端 IP 地址。
+// 信任代理头（X-Forwarded-For / X-Real-IP）的条件：
+//   1. 来源是本地回环地址（127.0.0.1 / ::1）— 同机 nginx/Caddy，默认信任
+//   2. TLS 模式为 off 且来源 IP 在 TrustedProxies 列表中 — 用户显式配置
+// 其他情况一律使用 RemoteAddr，防止攻击者伪造代理头绕过速率限制。
+func (s *Server) clientIP(r *http.Request) string {
+	// 先提取直连 IP
+	directIP := remoteIPFromAddr(r.RemoteAddr)
+
+	// 判断是否信任代理头
+	trustProxy := isLoopback(directIP) || // 本地回环默认信任
+		(s.TLS != nil && s.TLS.isTrustedProxy(directIP)) // 显式配置的受信代理
+
+	if trustProxy {
+		// 优先使用 X-Forwarded-For（取第一个 IP）
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.SplitN(xff, ",", 2)
+			ip := strings.TrimSpace(parts[0])
+			if ip != "" {
+				return ip
+			}
+		}
+
+		// 再尝试 X-Real-IP
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return strings.TrimSpace(xri)
 		}
 	}
 
-	// 再尝试 X-Real-IP
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
+	return directIP
+}
 
-	// 最后使用 RemoteAddr
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+// isLoopback 判断 IP 是否是本地回环地址
+func isLoopback(ip string) bool {
+	return ip == "127.0.0.1" || ip == "::1"
+}
+
+// remoteIPFromAddr 从 host:port 格式的地址中提取 IP
+func remoteIPFromAddr(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return r.RemoteAddr
+		return addr
 	}
 	return host
 }

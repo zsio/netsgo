@@ -205,45 +205,147 @@ func TestRateLimiter_WindowSliding(t *testing.T) {
 func TestClientIP(t *testing.T) {
 	tests := []struct {
 		name       string
+		tls        *TLSConfig // Server 的 TLS 配置
 		remoteAddr string
 		xff        string
 		xri        string
 		want       string
 	}{
+		// === 无 TLS 配置（TLS==nil）: 非回环地址使用 RemoteAddr ===
 		{
-			name:       "从 RemoteAddr 提取",
+			name:       "无TLS配置_非回环_忽略XFF",
+			tls:        nil,
 			remoteAddr: "192.168.1.1:12345",
+			xff:        "203.0.113.50",
 			want:       "192.168.1.1",
 		},
 		{
-			name:       "X-Forwarded-For 单个 IP",
-			remoteAddr: "10.0.0.1:80",
+			name:       "无TLS配置_非回环_使用RemoteAddr",
+			tls:        nil,
+			remoteAddr: "192.168.1.1:12345",
+			want:       "192.168.1.1",
+		},
+
+		// === 本地回环地址: 默认信任代理头（同机 nginx/Caddy 场景）===
+		{
+			name:       "回环IPv4_信任XFF",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
 			xff:        "203.0.113.50",
 			want:       "203.0.113.50",
 		},
 		{
-			name:       "X-Forwarded-For 多个 IP 取第一个",
-			remoteAddr: "10.0.0.1:80",
-			xff:        "203.0.113.50, 70.41.3.18, 150.172.238.178",
+			name:       "回环IPv6_信任XFF",
+			tls:        nil,
+			remoteAddr: "[::1]:80",
+			xff:        "203.0.113.50",
 			want:       "203.0.113.50",
 		},
 		{
-			name:       "X-Real-IP 优先于 RemoteAddr",
+			name:       "回环_信任XRI",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
+			xri:        "198.51.100.1",
+			want:       "198.51.100.1",
+		},
+		{
+			name:       "回环_XFF优先于XRI",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
+			xff:        "203.0.113.50",
+			xri:        "198.51.100.1",
+			want:       "203.0.113.50",
+		},
+		{
+			name:       "回环_无代理头_使用RemoteAddr",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
+			want:       "127.0.0.1",
+		},
+
+		// === TLS mode=custom: 直连 TLS，非回环忽略代理头 ===
+		{
+			name:       "custom模式_非回环_忽略XFF",
+			tls:        &TLSConfig{Mode: TLSModeCustom},
+			remoteAddr: "10.0.0.1:80",
+			xff:        "203.0.113.50",
+			want:       "10.0.0.1",
+		},
+		{
+			name:       "custom模式_回环_信任XFF",
+			tls:        &TLSConfig{Mode: TLSModeCustom},
+			remoteAddr: "127.0.0.1:80",
+			xff:        "203.0.113.50",
+			want:       "203.0.113.50",
+		},
+
+		// === TLS mode=auto: 直连 TLS，非回环忽略代理头 ===
+		{
+			name:       "auto模式_非回环_忽略XFF",
+			tls:        &TLSConfig{Mode: TLSModeAuto},
+			remoteAddr: "10.0.0.1:80",
+			xff:        "203.0.113.50",
+			want:       "10.0.0.1",
+		},
+
+		// === TLS mode=off + 受信任代理: 解析代理头 ===
+		{
+			name:       "off模式_受信任代理_解析XFF",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"127.0.0.1/32"}},
+			remoteAddr: "127.0.0.1:80",
+			xff:        "203.0.113.50",
+			want:       "203.0.113.50",
+		},
+		{
+			name:       "off模式_受信任代理_XFF多IP取第一个",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"10.0.0.0/8"}},
+			remoteAddr: "10.0.0.1:80",
+			xff:        "203.0.113.50, 70.41.3.18",
+			want:       "203.0.113.50",
+		},
+		{
+			name:       "off模式_受信任代理_XFF优先于XRI",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"10.0.0.0/8"}},
+			remoteAddr: "10.0.0.1:80",
+			xff:        "203.0.113.50",
+			xri:        "198.51.100.1",
+			want:       "203.0.113.50",
+		},
+		{
+			name:       "off模式_受信任代理_解析XRI",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"10.0.0.0/8"}},
 			remoteAddr: "10.0.0.1:80",
 			xri:        "198.51.100.1",
 			want:       "198.51.100.1",
 		},
 		{
-			name:       "X-Forwarded-For 优先于 X-Real-IP",
+			name:       "off模式_受信任代理_无代理头_使用RemoteAddr",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"10.0.0.0/8"}},
+			remoteAddr: "10.0.0.1:80",
+			want:       "10.0.0.1",
+		},
+
+		// === TLS mode=off + 不受信任的非回环来源: 忽略代理头 ===
+		{
+			name:       "off模式_非受信非回环来源_忽略XFF",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"192.168.0.0/16"}},
+			remoteAddr: "1.2.3.4:80",
+			xff:        "203.0.113.50",
+			want:       "1.2.3.4",
+		},
+		{
+			name:       "off模式_无TrustedProxies_非回环_忽略XFF",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: nil},
 			remoteAddr: "10.0.0.1:80",
 			xff:        "203.0.113.50",
-			xri:        "198.51.100.1",
-			want:       "203.0.113.50",
+			want:       "10.0.0.1",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{TLS: tt.tls}
+
 			r := httptest.NewRequest(http.MethodGet, "/", nil)
 			r.RemoteAddr = tt.remoteAddr
 			if tt.xff != "" {
@@ -253,7 +355,7 @@ func TestClientIP(t *testing.T) {
 				r.Header.Set("X-Real-IP", tt.xri)
 			}
 
-			got := clientIP(r)
+			got := s.clientIP(r)
 			if got != tt.want {
 				t.Errorf("clientIP() = %q, want %q", got, tt.want)
 			}

@@ -1,7 +1,10 @@
 package client
 
 import (
+	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -23,20 +26,23 @@ import (
 
 // Client 是客户端/Agent 的核心结构体
 type Client struct {
-	ServerAddr  string // Server 的 WebSocket 地址 (ws://host:port)
-	Key         string // 认证密钥（用于兑换 Token）
-	Token       string // 客户端连接密钥（由 Key 兑换）
-	InstallID   string // 稳定安装 ID
-	StatePath   string // 安装 ID 持久化路径
-	AgentID     string // Server 分配的稳定 Agent ID
-	dataToken   string // P3: 从 auth_resp 获取的数据通道凭证
-	conn        *websocket.Conn
-	mu          sync.Mutex
-	done        chan struct{}
-	doneMu      sync.Mutex     // 保护 done channel 的关闭操作
-	dataSession *yamux.Session // 数据通道 yamux Session
-	dataMu      sync.RWMutex
-	proxies     sync.Map // proxy_name -> ProxyNewRequest
+	ServerAddr     string // 服务器地址（支持 ws:// wss:// http:// https://，内部统一规范化）
+	Key            string // 认证密钥（用于兑换 Token）
+	Token          string // 客户端连接密钥（由 Key 兑换）
+	InstallID      string // 稳定安装 ID
+	StatePath      string // 安装 ID 持久化路径
+	AgentID        string // Server 分配的稳定 Agent ID
+	TLSSkipVerify  bool   // P1: 跳过 TLS 证书校验（仅开发/测试）
+	TLSFingerprint string // P1: TOFU 证书指纹 pin（空则首次记录）
+	dataToken      string // P3: 从 auth_resp 获取的数据通道凭证
+	conn           *websocket.Conn
+	mu             sync.Mutex
+	done           chan struct{}
+	doneMu         sync.Mutex     // 保护 done channel 的关闭操作
+	dataSession    *yamux.Session // 数据通道 yamux Session
+	dataMu         sync.RWMutex
+	proxies        sync.Map // proxy_name -> ProxyNewRequest
+	useTLS         bool     // P1: 内部标记，地址规范化后是否为 HTTPS
 	// ProxyConfigs 由服务端下发，Benchmark 测试也可手动设置
 	ProxyConfigs []protocol.ProxyNewRequest
 	// DisableReconnect 禁用自动重连（用于测试等场景）
@@ -49,6 +55,55 @@ func New(serverAddr, key string) *Client {
 		ServerAddr: serverAddr,
 		Key:        key,
 		done:       make(chan struct{}),
+	}
+}
+
+// normalizeServerAddr 将用户输入的地址规范化为统一格式。
+// 支持输入: ws:// wss:// http:// https://
+// 输出: http://host:port 或 https://host:port
+// 同时设置 c.useTLS 标记。
+func (c *Client) normalizeServerAddr() {
+	addr := strings.TrimRight(c.ServerAddr, "/")
+
+	switch {
+	case strings.HasPrefix(addr, "wss://"):
+		addr = "https://" + strings.TrimPrefix(addr, "wss://")
+		c.useTLS = true
+	case strings.HasPrefix(addr, "ws://"):
+		addr = "http://" + strings.TrimPrefix(addr, "ws://")
+		c.useTLS = false
+	case strings.HasPrefix(addr, "https://"):
+		c.useTLS = true
+	case strings.HasPrefix(addr, "http://"):
+		c.useTLS = false
+	default:
+		// 无协议前缀，默认 http
+		addr = "http://" + addr
+		c.useTLS = false
+	}
+
+	c.ServerAddr = addr
+}
+
+// deriveControlURL 从规范化后的 ServerAddr 推导控制通道 WebSocket URL
+// http://host:port -> ws://host:port/ws/control
+// https://host:port -> wss://host:port/ws/control
+func (c *Client) deriveControlURL() string {
+	addr := c.ServerAddr
+	if c.useTLS {
+		addr = "wss://" + strings.TrimPrefix(addr, "https://")
+	} else {
+		addr = "ws://" + strings.TrimPrefix(addr, "http://")
+	}
+	return addr + "/ws/control"
+}
+
+// buildTLSConfig 构建客户端 TLS 配置
+func (c *Client) buildTLSConfig(host string) *tls.Config {
+	return &tls.Config{
+		InsecureSkipVerify: c.TLSSkipVerify,
+		ServerName:         host,
+		MinVersion:         tls.VersionTLS12,
 	}
 }
 
@@ -205,14 +260,35 @@ func (c *Client) connectAndRun() error {
 		return fmt.Errorf("初始化客户端身份失败: %w", err)
 	}
 
+	// P1: 规范化地址（ws/wss/http/https 统一处理）
+	c.normalizeServerAddr()
+
 	// 1. 连接控制通道
-	controlURL := fmt.Sprintf("%s/ws/control", c.ServerAddr)
+	controlURL := c.deriveControlURL()
 	log.Printf("🔌 正在连接 Server: %s", controlURL)
 
-	conn, _, err := websocket.DefaultDialer.Dial(controlURL, nil)
+	// P1: 如果是 TLS，配置 WebSocket Dialer
+	dialer := websocket.DefaultDialer
+	if c.useTLS {
+		u, _ := url.Parse(c.ServerAddr)
+		dialer = &websocket.Dialer{
+			TLSClientConfig: c.buildTLSConfig(u.Hostname()),
+		}
+	}
+
+	conn, _, err := dialer.Dial(controlURL, nil)
 	if err != nil {
 		return fmt.Errorf("连接 Server 失败: %w", err)
 	}
+
+	// P1: TLS 连接时检查证书指纹 (TOFU)
+	if c.useTLS && !c.TLSSkipVerify {
+		if err := c.checkTLSFingerprint(conn); err != nil {
+			conn.Close()
+			return fmt.Errorf("TLS 证书指纹校验失败: %w", err)
+		}
+	}
+
 	c.conn = conn
 
 	log.Printf("✅ 已连接到 Server")
@@ -358,8 +434,8 @@ func (c *Client) authenticate() error {
 }
 
 // connectDataChannel 建立数据通道。
-// 从 ServerAddr (ws://host:port) 提取 host:port，建立 TCP 连接，
-// 发送握手包（魔数 + AgentID），然后在该连接上建立 yamux Client Session。
+// 从 ServerAddr 提取 host:port，建立 TCP/TLS 连接，
+// 发送握手包（魔数 + AgentID + DataToken），然后在该连接上建立 yamux Client Session。
 func (c *Client) connectDataChannel() error {
 	// 解析 ServerAddr 获取 host:port
 	u, err := url.Parse(c.ServerAddr)
@@ -369,17 +445,33 @@ func (c *Client) connectDataChannel() error {
 
 	host := u.Host
 	if u.Port() == "" {
-		host = net.JoinHostPort(u.Hostname(), "80")
+		if c.useTLS {
+			host = net.JoinHostPort(u.Hostname(), "443")
+		} else {
+			host = net.JoinHostPort(u.Hostname(), "80")
+		}
 	}
 
-	// 建立 TCP 连接
-	tcpConn, err := net.DialTimeout("tcp", host, 5*time.Second)
-	if err != nil {
-		return fmt.Errorf("TCP 连接失败: %w", err)
+	// P1: 根据 TLS 状态选择拨号方式
+	var dataConn net.Conn
+	if c.useTLS {
+		log.Printf("🔒 数据通道使用 TLS 连接: %s", host)
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		tlsConn, err := tls.DialWithDialer(dialer, "tcp", host, c.buildTLSConfig(u.Hostname()))
+		if err != nil {
+			return fmt.Errorf("TLS 连接失败: %w", err)
+		}
+		dataConn = tlsConn
+	} else {
+		tcpConn, err := net.DialTimeout("tcp", host, 5*time.Second)
+		if err != nil {
+			return fmt.Errorf("TCP 连接失败: %w", err)
+		}
+		dataConn = tcpConn
 	}
 
 	// 设置握手超时（Server 应当即时回复，2s 足够）
-	tcpConn.SetDeadline(time.Now().Add(2 * time.Second))
+	dataConn.SetDeadline(time.Now().Add(2 * time.Second))
 
 	// 发送握手包: [1B 魔数] [2B AgentID长度] [NB AgentID] [2B DataToken长度] [NB DataToken]
 	agentIDBytes := []byte(c.AgentID)
@@ -392,30 +484,30 @@ func (c *Client) connectDataChannel() error {
 	binary.BigEndian.PutUint16(handshake[offset:offset+2], uint16(len(dataTokenBytes)))
 	copy(handshake[offset+2:], dataTokenBytes)
 
-	if _, err := tcpConn.Write(handshake); err != nil {
-		tcpConn.Close()
+	if _, err := dataConn.Write(handshake); err != nil {
+		dataConn.Close()
 		return fmt.Errorf("发送握手失败: %w", err)
 	}
 
 	// 读取握手响应 (1 byte 状态码)
 	var statusBuf [1]byte
-	if _, err := io.ReadFull(tcpConn, statusBuf[:]); err != nil {
-		tcpConn.Close()
+	if _, err := io.ReadFull(dataConn, statusBuf[:]); err != nil {
+		dataConn.Close()
 		return fmt.Errorf("读取握手响应失败: %w", err)
 	}
 
 	// 清除 deadline
-	tcpConn.SetDeadline(time.Time{})
+	dataConn.SetDeadline(time.Time{})
 
 	if statusBuf[0] != protocol.DataHandshakeOK {
-		tcpConn.Close()
+		dataConn.Close()
 		return fmt.Errorf("数据通道握手被拒绝 (状态码: 0x%02x)", statusBuf[0])
 	}
 
 	// 建立 yamux Client Session
-	session, err := mux.NewClientSession(tcpConn, mux.DefaultConfig())
+	session, err := mux.NewClientSession(dataConn, mux.DefaultConfig())
 	if err != nil {
-		tcpConn.Close()
+		dataConn.Close()
 		return fmt.Errorf("创建 yamux Session 失败: %w", err)
 	}
 
@@ -423,6 +515,59 @@ func (c *Client) connectDataChannel() error {
 	c.dataSession = session
 	c.dataMu.Unlock()
 
+	return nil
+}
+
+// checkTLSFingerprint 检查 TLS 连接的证书指纹 (TOFU)
+func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
+	tlsConn, ok := conn.UnderlyingConn().(*tls.Conn)
+	if !ok {
+		return nil // 非 TLS 连接，跳过
+	}
+
+	state := tlsConn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return fmt.Errorf("服务器未提供证书")
+	}
+
+	// 计算服务端证书指纹
+	certDER := state.PeerCertificates[0].Raw
+	hash := sha256.Sum256(certDER)
+	hexStr := strings.ToUpper(hex.EncodeToString(hash[:]))
+	parts := make([]string, 0, len(hexStr)/2)
+	for i := 0; i < len(hexStr); i += 2 {
+		end := i + 2
+		if end > len(hexStr) {
+			end = len(hexStr)
+		}
+		parts = append(parts, hexStr[i:end])
+	}
+	serverFP := strings.Join(parts, ":")
+
+	if c.TLSFingerprint == "" {
+		// TOFU: 首次连接，记录指纹
+		c.TLSFingerprint = serverFP
+		log.Printf("🔒 TOFU: 首次连接，记录服务器证书指纹")
+		log.Printf("🔒 指纹: %s", serverFP)
+		// 持久化指纹
+		if err := c.saveTLSFingerprint(serverFP); err != nil {
+			log.Printf("⚠️ 保存 TLS 指纹失败: %v", err)
+		}
+		return nil
+	}
+
+	// 已有指纹，严格比对
+	if serverFP != c.TLSFingerprint {
+		return fmt.Errorf(
+			"\n⚠️ TLS 证书指纹不匹配！可能存在中间人攻击。"+
+				"\n  期望: %s"+
+				"\n  实际: %s"+
+				"\n  如果服务器确实更换了证书，请删除客户端状态文件后重试。",
+			c.TLSFingerprint, serverFP,
+		)
+	}
+
+	log.Printf("🔒 TLS 证书指纹校验通过")
 	return nil
 }
 

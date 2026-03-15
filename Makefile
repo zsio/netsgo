@@ -31,19 +31,28 @@ docs:
 	go run ./cmd/netsgo/ docs --output ./docs/cli
 	@echo "✅ 文档已生成到 docs/cli/"
 
-# 开发模式 - 启动服务端（使用 -tags dev 跳过 go:embed）
-dev-server:
-	go run -tags dev ./cmd/netsgo/ server --port 8080
+# ========== 开发模式 ==========
+# 三个终端各跑一个即可：
+#   终端 1:  make dev-server
+#   终端 2:  make dev-client
+#   终端 3:  make dev-web
 
-# 开发模式 - 启动前端开发服务器
+DEV_PORT ?= 8080
+DEV_KEY  ?= dev-key
+
+# 启动服务端（-tags dev 跳过 go:embed，使用 Vite 独立前端）
+dev-server:
+	go run -tags dev ./cmd/netsgo/ server --port $(DEV_PORT)
+
+# 启动客户端，连接本地服务端
+dev-client:
+	go run -tags dev ./cmd/netsgo/ client --server ws://localhost:$(DEV_PORT) --key $(DEV_KEY) $(ARGS)
+
+# 启动前端 Vite 开发服务器（热更新）
 dev-web:
 	cd web && bun run dev
 
-# 开发模式 - 启动客户端 (用法: make dev-client 或 make dev-client ARGS="--key sk-xxx")
-dev-client:
-	go run -tags dev ./cmd/netsgo/ client --server ws://localhost:8080 $(ARGS)
-
-# 开发模式 - 运行压测
+# 运行压测
 dev-bench:
 	go run -tags dev ./cmd/netsgo/ benchmark
 

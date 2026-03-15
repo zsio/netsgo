@@ -667,3 +667,57 @@ func TestClient_ConnectDataChannel_NoPort(t *testing.T) {
 		t.Error("无法连接时应返回错误")
 	}
 }
+
+// ============================================================
+// P1: 地址模型推导测试
+// ============================================================
+
+func TestNormalizeServerAddr(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+		useTLS   bool
+	}{
+		{"ws://localhost:8080", "http://localhost:8080", false},
+		{"wss://localhost:8080", "https://localhost:8080", true},
+		{"http://localhost:8080", "http://localhost:8080", false},
+		{"https://localhost:8080", "https://localhost:8080", true},
+		{"ws://1.2.3.4:9090", "http://1.2.3.4:9090", false},
+		{"wss://example.com:443", "https://example.com:443", true},
+		{"localhost:8080", "http://localhost:8080", false},
+		{"ws://localhost:8080/", "http://localhost:8080", false},
+		{"https://tunnel.example.com", "https://tunnel.example.com", true},
+	}
+
+	for _, tt := range tests {
+		c := New(tt.input, "key")
+		c.normalizeServerAddr()
+		if c.ServerAddr != tt.expected {
+			t.Errorf("normalizeServerAddr(%q) = %q, 期望 %q", tt.input, c.ServerAddr, tt.expected)
+		}
+		if c.useTLS != tt.useTLS {
+			t.Errorf("normalizeServerAddr(%q): useTLS = %v, 期望 %v", tt.input, c.useTLS, tt.useTLS)
+		}
+	}
+}
+
+func TestDeriveControlURL(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"ws://localhost:8080", "ws://localhost:8080/ws/control"},
+		{"wss://localhost:8080", "wss://localhost:8080/ws/control"},
+		{"http://localhost:8080", "ws://localhost:8080/ws/control"},
+		{"https://tunnel.example.com", "wss://tunnel.example.com/ws/control"},
+	}
+
+	for _, tt := range tests {
+		c := New(tt.input, "key")
+		c.normalizeServerAddr()
+		url := c.deriveControlURL()
+		if url != tt.expected {
+			t.Errorf("deriveControlURL() for %q = %q, 期望 %q", tt.input, url, tt.expected)
+		}
+	}
+}

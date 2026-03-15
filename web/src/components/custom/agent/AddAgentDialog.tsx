@@ -87,7 +87,7 @@ export function AddAgentDialog({ open, onOpenChange }: AddAgentDialogProps) {
   }, []);
 
   const connectCmd = generatedKey
-    ? `netsgo agent --server ${serverAddr} --key ${generatedKey}`
+    ? `netsgo client --server ${serverAddr} --key ${generatedKey}`
     : '';
 
   const connectLink = generatedKey

@@ -64,7 +64,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 速率限制检查
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	if s.setupLimiter != nil {
 		if allowed, retryAfter := s.setupLimiter.Allow(ip); !allowed {
 			s.adminStore.AddSystemLog("WARN", "初始化接口被限速: IP="+ip, "security")
@@ -187,7 +187,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 速率限制检查
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	if s.loginLimiter != nil {
 		if allowed, retryAfter := s.loginLimiter.Allow(ip); !allowed {
 			if s.adminStore != nil {
