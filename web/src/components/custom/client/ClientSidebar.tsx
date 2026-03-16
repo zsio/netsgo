@@ -53,10 +53,11 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const clientMatch = useMatch({ from: '/dashboard/clients/$clientId', shouldThrow: false });
   const currentClientId = clientMatch?.params?.clientId;
 
-  // 判断当前是否在概览页（无 clientId 且不在 admin 区）
+  // 判断当前是否在概览页（路径精确为 /dashboard 且无 clientId）
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isAdmin = pathname.includes('/admin');
-  const isOverview = !currentClientId && !isAdmin;
+  const isClientPage = pathname.includes('/clients/');
+  const isOverview = !currentClientId && !isAdmin && !isClientPage;
 
   // 在线排前面，离线排后面
   const sortedClients = useMemo(() => {
@@ -145,7 +146,12 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
         <SidebarGroup>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={isOverview} tooltip="Dashboard">
+              <SidebarMenuButton 
+                asChild 
+                isActive={isOverview} 
+                tooltip="Dashboard"
+                className="data-active:bg-primary/15 data-active:text-primary hover:data-active:bg-primary/20"
+              >
                 <Link to="/dashboard">
                   <LayoutDashboard />
                   <span>Dashboard</span>
@@ -184,7 +190,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                         asChild
                         isActive={isSelected}
                         tooltip={client.display_name ? `${client.display_name} (${client.info.hostname})` : client.info.hostname}
-                        className={!isOnline && !isSelected ? 'opacity-60' : ''}
+                        className={`data-active:bg-primary/15 data-active:text-primary hover:data-active:bg-primary/20 ${!isOnline && !isSelected ? 'opacity-60' : ''}`}
                       >
                         <Link
                           to="/dashboard/clients/$clientId"
@@ -228,6 +234,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                   asChild
                   isActive={pathname === item.path}
                   tooltip={item.name}
+                  className="data-active:bg-primary/15 data-active:text-primary hover:data-active:bg-primary/20"
                 >
                   <Link to={item.path}>
                     <item.icon />
