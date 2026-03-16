@@ -2,7 +2,7 @@ import {
   Monitor, Network, Clock, Cpu, HardDrive, Database,
   Box, CircleHelp, Globe, ArrowDownCircle, ArrowUpCircle,
 } from 'lucide-react';
-import { formatBytes, formatUptime, formatNetSpeed } from '@/lib/format';
+import { formatBytes, formatUptime, formatNetSpeed, formatInstallAge } from '@/lib/format';
 import {
   HoverCard,
   HoverCardContent,
@@ -88,7 +88,29 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />运行时长</span>
-          <span className="font-medium text-sm">{stats?.uptime ? formatUptime(stats.uptime) : '-'}</span>
+          <HoverCard>
+            <HoverCardTrigger asChild>
+              <span className="font-medium text-sm cursor-help border-b border-dashed border-muted-foreground/40 hover:border-foreground/60 transition-colors w-fit">
+                {stats?.process_uptime ? formatUptime(stats.process_uptime) : (stats?.uptime ? formatUptime(stats.uptime) : '-')}
+              </span>
+            </HoverCardTrigger>
+            <HoverCardContent className="w-[220px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">系统开机</span>
+                  <span className="font-medium text-foreground">{stats?.uptime ? formatUptime(stats.uptime) : '-'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">系统安装</span>
+                  <span className="font-medium text-foreground">{formatInstallAge(stats?.os_install_time ?? 0)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">程序启动</span>
+                  <span className="font-medium text-foreground">{stats?.process_uptime ? formatUptime(stats.process_uptime) : '-'}</span>
+                </div>
+              </div>
+            </HoverCardContent>
+          </HoverCard>
           <span className="text-xs text-muted-foreground">v{info.version}</span>
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5">

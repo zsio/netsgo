@@ -44,6 +44,7 @@ type Client struct {
 	dataMu         sync.RWMutex
 	proxies        sync.Map // proxy_name -> ProxyNewRequest
 	useTLS         bool
+	startTime       time.Time // 程序启动时间，用于计算 process uptime
 	publicIPv4      string    // 缓存的公网 IPv4
 	publicIPv6      string    // 缓存的公网 IPv6
 	publicIPFetched time.Time // 上次获取时间
@@ -59,6 +60,7 @@ func New(serverAddr, key string) *Client {
 		ServerAddr: serverAddr,
 		Key:        key,
 		done:       make(chan struct{}),
+		startTime:  time.Now(),
 	}
 }
 
@@ -723,7 +725,7 @@ func (c *Client) probeLoop() {
 
 // reportProbe 采集系统状态并上报
 func (c *Client) reportProbe() {
-	stats, err := CollectSystemStats()
+	stats, err := CollectSystemStats(c.startTime)
 	if err != nil {
 		log.Printf("⚠️ 采集系统状态失败: %v", err)
 		return

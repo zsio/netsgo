@@ -17,10 +17,12 @@ export function formatBytes(bytes: number): string {
 export function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds} 秒`;
 
-  const days = Math.floor(seconds / 86400);
+  const years = Math.floor(seconds / (86400 * 365));
+  const days = Math.floor((seconds % (86400 * 365)) / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
 
+  if (years > 0) return `${years} 年 ${days} 天`;
   if (days > 0) return `${days} 天 ${hours} 小时`;
   if (hours > 0) return `${hours} 小时 ${minutes} 分`;
   return `${minutes} 分`;
@@ -34,4 +36,12 @@ export function formatPercent(value: number): string {
 /** 格式化网速 (bytes/s): 1048576 → "1.0 MB/s" */
 export function formatNetSpeed(bytesPerSec: number): string {
   return `${formatBytes(bytesPerSec)}/s`;
+}
+
+/** 将 Unix 时间戳转换为距今时长: 1609459200 → "5 年 73 天" */
+export function formatInstallAge(unixTimestamp: number): string {
+  if (!unixTimestamp || unixTimestamp <= 0) return '-';
+  const seconds = Math.floor(Date.now() / 1000) - unixTimestamp;
+  if (seconds < 0) return '-';
+  return formatUptime(seconds);
 }

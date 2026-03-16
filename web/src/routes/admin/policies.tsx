@@ -23,7 +23,7 @@ function AdminPoliciesPage() {
         <h2 className="text-2xl font-bold tracking-tight">网络与安全策略</h2>
       </div>
 
-      <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm p-6 shadow-sm overflow-hidden">
+      <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm p-6 shadow-sm">
         {isLoading || !policy ? (
           <div className="space-y-4">
             <Skeleton className="h-10 w-full" />

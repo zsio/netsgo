@@ -163,6 +163,23 @@ func (s *TunnelStore) UpdateStatus(clientID, name, status string) error {
 	return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
 }
 
+// UpdateTunnel 更新隧道的可变配置（local_ip, local_port, remote_port, domain）并持久化
+func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localPort, remotePort int, domain string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, tunnel := range s.tunnels {
+		if tunnel.matchesIdentifier(clientID, name) {
+			s.tunnels[i].LocalIP = localIP
+			s.tunnels[i].LocalPort = localPort
+			s.tunnels[i].RemotePort = remotePort
+			s.tunnels[i].Domain = domain
+			return s.save()
+		}
+	}
+	return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
+}
+
 // UpdateHostname 更新某个 Client 的展示主机名
 func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 	s.mu.Lock()

@@ -71,3 +71,34 @@ export function useDeleteTunnel() {
     },
   });
 }
+
+export function useUpdateTunnel() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      clientId,
+      tunnelName,
+      local_ip,
+      local_port,
+      remote_port,
+      domain,
+    }: {
+      clientId: string;
+      tunnelName: string;
+      local_ip: string;
+      local_port: number;
+      remote_port: number;
+      domain: string;
+    }) =>
+      api.put(`/api/clients/${clientId}/tunnels/${tunnelName}`, {
+        local_ip,
+        local_port,
+        remote_port,
+        domain,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+    },
+  });
+}

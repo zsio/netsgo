@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import {
-  Search, Play, Pause, Trash2, ShieldCheck, HelpCircle, ArrowRightLeft,
+  Search, Play, Pause, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft,
 } from 'lucide-react';
 
 import {
@@ -10,6 +10,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
+import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
+import toast from 'react-hot-toast';
 import {
   usePauseTunnel, useResumeTunnel, useDeleteTunnel,
 } from '@/hooks/use-tunnel-mutations';
@@ -30,7 +32,7 @@ interface TunnelListTableProps {
   icon?: React.ReactNode;
   /** 是否显示归属节点列（全网视图用） */
   showClient?: boolean;
-  /** 是否显示操作按钮（暂停/恢复/删除） */
+  /** 是否显示操作按钮（暂停/恢复/删除/编辑） */
   showActions?: boolean;
   /** 是否显示搜索框 */
   showSearch?: boolean;
@@ -55,6 +57,7 @@ export function TunnelListTable({
   const deleteTunnel = useDeleteTunnel();
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<{ name: string; clientId: string } | null>(null);
+  const [editTarget, setEditTarget] = useState<TunnelEntry | null>(null);
 
   const filteredTunnels = useMemo(() => {
     if (!searchQuery.trim()) return tunnels;
@@ -67,9 +70,62 @@ export function TunnelListTable({
     );
   }, [tunnels, searchQuery]);
 
-
-
   const args = (clientId: string, name: string) => ({ clientId, tunnelName: name });
+
+  /** 根据隧道状态渲染操作按钮 */
+  const renderActionButtons = (tunnel: TunnelEntry) => {
+    const canPause = tunnel.status === 'active';
+    const canResume = tunnel.status === 'paused' || tunnel.status === 'stopped';
+    const canEdit = tunnel.status === 'paused' || tunnel.status === 'stopped' || tunnel.status === 'error';
+    const canDelete = tunnel.status === 'paused' || tunnel.status === 'stopped' || tunnel.status === 'error';
+
+    return (
+      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {canPause && (
+          <button
+            className="p-1.5 hover:bg-amber-500/10 rounded text-amber-500"
+            title="暂停"
+            onClick={() => pauseTunnel.mutate(args(tunnel.clientId, tunnel.name), {
+              onSuccess: () => toast.success(`隧道「${tunnel.name}」已暂停`),
+              onError: (err) => toast.error((err as Error).message),
+            })}
+          >
+            <Pause className="h-4 w-4" />
+          </button>
+        )}
+        {canResume && (
+          <button
+            className="p-1.5 hover:bg-emerald-500/10 rounded text-emerald-500"
+            title="启动"
+            onClick={() => resumeTunnel.mutate(args(tunnel.clientId, tunnel.name), {
+              onSuccess: () => toast.success(`隧道「${tunnel.name}」已启动`),
+              onError: (err) => toast.error((err as Error).message),
+            })}
+          >
+            <Play className="h-4 w-4" />
+          </button>
+        )}
+        {canEdit && (
+          <button
+            className="p-1.5 hover:bg-blue-500/10 rounded text-blue-500"
+            title="编辑"
+            onClick={() => setEditTarget(tunnel)}
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+        )}
+        {canDelete && (
+          <button
+            className="p-1.5 hover:bg-destructive/10 rounded text-destructive"
+            title="删除"
+            onClick={() => setDeleteTarget({ name: tunnel.name, clientId: tunnel.clientId })}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+    );
+  };
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -155,35 +211,7 @@ export function TunnelListTable({
                           {renderRowAction ? (
                             renderRowAction(tunnel)
                           ) : showActions ? (
-                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              {tunnel.status === 'active' && (
-                                <button
-                                  className="p-1.5 hover:bg-amber-500/10 rounded text-amber-500"
-                                  title="暂停"
-                                  onClick={() => pauseTunnel.mutate(args(tunnel.clientId, tunnel.name))}
-                                >
-                                  <Pause className="h-4 w-4" />
-                                </button>
-                              )}
-                              {(tunnel.status === 'paused' || tunnel.status === 'stopped') && (
-                                <>
-                                  <button
-                                    className="p-1.5 hover:bg-primary/10 rounded text-primary"
-                                    title="启动"
-                                    onClick={() => resumeTunnel.mutate(args(tunnel.clientId, tunnel.name))}
-                                  >
-                                    <Play className="h-4 w-4" />
-                                  </button>
-                                  <button
-                                    className="p-1.5 hover:bg-destructive/10 rounded text-destructive"
-                                    title="删除"
-                                    onClick={() => setDeleteTarget({ name: tunnel.name, clientId: tunnel.clientId })}
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </button>
-                                </>
-                              )}
-                            </div>
+                            renderActionButtons(tunnel)
                           ) : null}
                         </td>
                       )}
@@ -208,20 +236,31 @@ export function TunnelListTable({
       </div>
 
       {showActions && (
-        <ConfirmDialog
-          open={deleteTarget !== null}
-          title="删除隧道"
-          description={`确认永久删除隧道「${deleteTarget?.name}」？删除后无法恢复。`}
-          confirmLabel="删除"
-          variant="destructive"
-          onConfirm={() => {
-            if (deleteTarget) {
-              deleteTunnel.mutate(args(deleteTarget.clientId, deleteTarget.name));
-              setDeleteTarget(null);
-            }
-          }}
-          onCancel={() => setDeleteTarget(null)}
-        />
+        <>
+          <ConfirmDialog
+            open={deleteTarget !== null}
+            title="删除隧道"
+            description={`确认永久删除隧道「${deleteTarget?.name}」？删除后无法恢复。`}
+            confirmLabel="删除"
+            variant="destructive"
+            onConfirm={() => {
+              if (deleteTarget) {
+                deleteTunnel.mutate(args(deleteTarget.clientId, deleteTarget.name), {
+                  onSuccess: () => toast.success(`隧道「${deleteTarget.name}」已删除`),
+                  onError: (err) => toast.error((err as Error).message),
+                });
+                setDeleteTarget(null);
+              }
+            }}
+            onCancel={() => setDeleteTarget(null)}
+          />
+          <TunnelDialog
+            mode="edit"
+            tunnel={editTarget}
+            open={editTarget !== null}
+            onOpenChange={(v) => { if (!v) setEditTarget(null); }}
+          />
+        </>
       )}
     </TooltipProvider>
   );

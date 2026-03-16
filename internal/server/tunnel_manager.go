@@ -196,6 +196,85 @@ func (s *Server) deleteManagedTunnel(client *ClientConn, name string) error {
 	return nil
 }
 
+func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP string, localPort, remotePort int, domain string) (protocol.ProxyConfig, error) {
+	tunnel, err := s.mustGetTunnel(client, name)
+	if err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+
+	wasError := tunnel.Config.Status == protocol.ProxyStatusError
+	tunnelType := tunnel.Config.Type
+
+	// 更新运行时内存中的隧道配置
+	client.proxyMu.Lock()
+	tunnel.Config.LocalIP = localIP
+	tunnel.Config.LocalPort = localPort
+	tunnel.Config.RemotePort = remotePort
+	tunnel.Config.Domain = domain
+	if wasError {
+		tunnel.Config.Status = protocol.ProxyStatusPaused
+		tunnel.Config.Error = ""
+	}
+	updated := tunnel.Config
+	client.proxyMu.Unlock()
+
+	// 持久化配置变更到存储
+	if s.store != nil {
+		if err := s.store.UpdateTunnel(client.ID, name, localIP, localPort, remotePort, domain); err != nil {
+			return protocol.ProxyConfig{}, err
+		}
+	}
+
+	// 异常隧道编辑后自动重新启动：删掉旧的占位记录，重新创建隧道
+	if wasError {
+		client.proxyMu.Lock()
+		delete(client.proxies, name)
+		client.proxyMu.Unlock()
+
+		req := protocol.ProxyNewRequest{
+			Name:       name,
+			Type:       tunnelType,
+			LocalIP:    localIP,
+			LocalPort:  localPort,
+			RemotePort: remotePort,
+			Domain:     domain,
+		}
+		config, err := s.createManagedTunnel(client, req, false, "updated")
+		if err != nil {
+			// 启动失败 → 放回 error 状态的占位记录
+			client.proxyMu.Lock()
+			client.proxies[name] = &ProxyTunnel{
+				Config: protocol.ProxyConfig{
+					Name:       name,
+					Type:       tunnelType,
+					LocalIP:    localIP,
+					LocalPort:  localPort,
+					RemotePort: remotePort,
+					Domain:     domain,
+					ClientID:   client.ID,
+					Status:     protocol.ProxyStatusError,
+					Error:      err.Error(),
+				},
+				done: make(chan struct{}),
+			}
+			client.proxyMu.Unlock()
+			if s.store != nil {
+				_ = s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusError)
+			}
+			s.emitTunnelChanged(client.ID, client.proxies[name].Config, "updated")
+			return client.proxies[name].Config, nil // 返回 error 状态但不报 API 错误
+		}
+		// 更新持久化状态为 active
+		if s.store != nil {
+			_ = s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusActive)
+		}
+		return config, nil
+	}
+
+	s.emitTunnelChanged(client.ID, updated, "updated")
+	return updated, nil
+}
+
 func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) error {
 	_, err := s.createManagedTunnel(client, stored.ProxyNewRequest, false, "restored")
 	return err
@@ -321,11 +400,12 @@ func encodeJSON(w http.ResponseWriter, status int, payload any) {
 
 // affectedTunnel 描述一条受端口白名单变更影响的隧道
 type affectedTunnel struct {
-	ClientID   string `json:"client_id"`
-	Hostname   string `json:"hostname"`
-	TunnelName string `json:"tunnel_name"`
-	RemotePort int    `json:"remote_port"`
-	Status     string `json:"status"`
+	ClientID    string `json:"client_id"`
+	Hostname    string `json:"hostname"`
+	DisplayName string `json:"display_name,omitempty"`
+	TunnelName  string `json:"tunnel_name"`
+	RemotePort  int    `json:"remote_port"`
+	Status      string `json:"status"`
 }
 
 // isPortInRanges 检查端口是否在给定的白名单范围内
@@ -360,12 +440,20 @@ func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affecte
 				}
 				key := client.ID + ":" + name
 				seen[key] = true
+				// 尝试获取 display_name
+				displayName := ""
+				if s.adminStore != nil {
+					if reg, ok := s.adminStore.GetRegisteredClient(client.ID); ok {
+						displayName = reg.DisplayName
+					}
+				}
 				affected = append(affected, affectedTunnel{
-					ClientID:   client.ID,
-					Hostname:   client.Info.Hostname,
-					TunnelName: name,
-					RemotePort: tunnel.Config.RemotePort,
-					Status:     tunnel.Config.Status,
+					ClientID:    client.ID,
+					Hostname:    client.Info.Hostname,
+					DisplayName: displayName,
+					TunnelName:  name,
+					RemotePort:  tunnel.Config.RemotePort,
+					Status:      tunnel.Config.Status,
 				})
 			}
 			return true
@@ -389,18 +477,21 @@ func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affecte
 			}
 			if !isPortInRanges(st.RemotePort, newPorts) {
 				hostname := st.Hostname
-				// 尝试从 adminStore 获取更详细的主机名
+				displayName := ""
+				// 尝试从 adminStore 获取更详细的主机名和展示名
 				if s.adminStore != nil && st.ClientID != "" {
 					if reg, ok := s.adminStore.GetRegisteredClient(st.ClientID); ok {
 						hostname = reg.Info.Hostname
+						displayName = reg.DisplayName
 					}
 				}
 				affected = append(affected, affectedTunnel{
-					ClientID:   st.ClientID,
-					Hostname:   hostname,
-					TunnelName: st.Name,
-					RemotePort: st.RemotePort,
-					Status:     st.Status,
+					ClientID:    st.ClientID,
+					Hostname:    hostname,
+					DisplayName: displayName,
+					TunnelName:  st.Name,
+					RemotePort:  st.RemotePort,
+					Status:      st.Status,
 				})
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"runtime"
 	"testing"
+	"time"
 )
 
 // ============================================================
@@ -11,7 +12,7 @@ import (
 // ============================================================
 
 func TestProbe_NotNil(t *testing.T) {
-	stats, err := CollectSystemStats()
+	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
 		t.Fatalf("CollectSystemStats 失败: %v", err)
 	}
@@ -21,7 +22,7 @@ func TestProbe_NotNil(t *testing.T) {
 }
 
 func TestProbe_CPURange(t *testing.T) {
-	stats, err := CollectSystemStats()
+	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
 		t.Fatalf("CollectSystemStats 失败: %v", err)
 	}
@@ -31,7 +32,7 @@ func TestProbe_CPURange(t *testing.T) {
 }
 
 func TestProbe_NumCPU(t *testing.T) {
-	stats, err := CollectSystemStats()
+	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
 		t.Fatalf("CollectSystemStats 失败: %v", err)
 	}
@@ -46,7 +47,7 @@ func TestProbe_NumCPU(t *testing.T) {
 // ============================================================
 
 func TestProbe_MemValid(t *testing.T) {
-	stats, err := CollectSystemStats()
+	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
 		t.Fatalf("CollectSystemStats 失败: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestProbe_MemValid(t *testing.T) {
 }
 
 func TestProbe_DiskValid(t *testing.T) {
-	stats, err := CollectSystemStats()
+	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
 		t.Fatalf("CollectSystemStats 失败: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestProbe_DiskValid(t *testing.T) {
 }
 
 func TestProbe_UptimePositive(t *testing.T) {
-	stats, err := CollectSystemStats()
+	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
 		t.Fatalf("CollectSystemStats 失败: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestProbe_UptimePositive(t *testing.T) {
 }
 
 func TestProbe_NetCounters(t *testing.T) {
-	stats, err := CollectSystemStats()
+	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
 		t.Fatalf("CollectSystemStats 失败: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestProbe_NetCounters(t *testing.T) {
 
 func TestProbe_MultipleCollections(t *testing.T) {
 	for i := 0; i < 3; i++ {
-		stats, err := CollectSystemStats()
+		stats, err := CollectSystemStats(time.Time{})
 		if err != nil {
 			t.Fatalf("第 %d 次采集失败: %v", i, err)
 		}
@@ -119,7 +120,7 @@ func TestProbe_MultipleCollections(t *testing.T) {
 }
 
 func TestProbe_JSONRoundTrip(t *testing.T) {
-	stats, err := CollectSystemStats()
+	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
 		t.Fatalf("CollectSystemStats 失败: %v", err)
 	}

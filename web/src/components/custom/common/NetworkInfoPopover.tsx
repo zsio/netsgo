@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Copy, Check, Globe, Wifi, Server, Network } from 'lucide-react';
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from '@/components/ui/hover-card';
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 
 interface IPEntry {
   label: string;
@@ -16,9 +16,23 @@ function CopyableIP({ label, value, icon }: IPEntry) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(value);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // fallback for older browsers
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
   };
 
   return (
@@ -66,6 +80,26 @@ export function NetworkInfoPopover({
   port,
   children,
 }: NetworkInfoPopoverProps) {
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  }, []);
+
+  const scheduleClose = useCallback((delay = 150) => {
+    cancelClose();
+    closeTimer.current = setTimeout(() => setOpen(false), delay);
+  }, [cancelClose]);
+
+  const handleEnter = useCallback(() => {
+    cancelClose();
+    setOpen(true);
+  }, [cancelClose]);
+
   const entries: IPEntry[] = [];
 
   if (localIP) {
@@ -86,11 +120,26 @@ export function NetworkInfoPopover({
   }
 
   return (
-    <HoverCard openDelay={200} closeDelay={100}>
-      <HoverCardTrigger asChild>
+    <Popover open={open}>
+      <PopoverTrigger
+        asChild
+        onMouseEnter={handleEnter}
+        onMouseLeave={() => scheduleClose()}
+      >
         {children}
-      </HoverCardTrigger>
-      <HoverCardContent className="w-auto min-w-[260px] max-w-[380px] p-3" side="bottom" align="start">
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-auto min-w-[260px] max-w-[380px] p-3"
+        side="bottom"
+        align="start"
+        onMouseEnter={cancelClose}
+        onMouseLeave={() => scheduleClose()}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onCloseAutoFocus={(e) => e.preventDefault()}
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={() => setOpen(false)}
+      >
         <div className="flex flex-col">
           <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
             网络信息
@@ -107,7 +156,7 @@ export function NetworkInfoPopover({
             </div>
           )}
         </div>
-      </HoverCardContent>
-    </HoverCard>
+      </PopoverContent>
+    </Popover>
   );
 }

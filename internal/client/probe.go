@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"netsgo/pkg/protocol"
+	"netsgo/pkg/sysinfo"
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
@@ -31,7 +32,8 @@ func baseDiskName(device string) string {
 }
 
 // CollectSystemStats 采集当前系统的运行状态
-func CollectSystemStats() (*protocol.SystemStats, error) {
+// processStart 为程序启动时间，用于计算 NetsGo 进程运行时长。
+func CollectSystemStats(processStart time.Time) (*protocol.SystemStats, error) {
 	stats := &protocol.SystemStats{
 		NumCPU: runtime.NumCPU(),
 	}
@@ -119,6 +121,14 @@ func CollectSystemStats() (*protocol.SystemStats, error) {
 	if err == nil {
 		stats.Uptime = uptime
 	}
+
+	// 程序运行时间
+	if !processStart.IsZero() {
+		stats.ProcessUptime = uint64(time.Since(processStart).Seconds())
+	}
+
+	// 系统安装时间
+	stats.OSInstallTime = sysinfo.GetOSInstallTime()
 
 	// 程序（NetsGo Client）自身内存占用
 	var m runtime.MemStats

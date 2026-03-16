@@ -1,7 +1,7 @@
 import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp } from 'lucide-react';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatUptime, formatBytes } from '@/lib/format';
+import { formatUptime, formatBytes, formatInstallAge } from '@/lib/format';
 import {
   HoverCard,
   HoverCardContent,
@@ -74,7 +74,29 @@ export function ServerInfoCard() {
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />运行时长</span>
-          <span className="font-medium text-sm">{formatUptime(status?.uptime ?? 0)}</span>
+          <HoverCard>
+            <HoverCardTrigger asChild>
+              <span className="font-medium text-sm cursor-help border-b border-dashed border-muted-foreground/40 hover:border-foreground/60 transition-colors w-fit">
+                {formatUptime(status?.uptime ?? 0)}
+              </span>
+            </HoverCardTrigger>
+            <HoverCardContent className="w-[220px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">系统开机</span>
+                  <span className="font-medium text-foreground">{formatUptime(status?.system_uptime ?? 0)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">系统安装</span>
+                  <span className="font-medium text-foreground">{formatInstallAge(status?.os_install_time ?? 0)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">程序启动</span>
+                  <span className="font-medium text-foreground">{formatUptime(status?.uptime ?? 0)}</span>
+                </div>
+              </div>
+            </HoverCardContent>
+          </HoverCard>
           <span className="text-xs text-muted-foreground">v{status?.version}</span>
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5">

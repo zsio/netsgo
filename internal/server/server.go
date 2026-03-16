@@ -25,10 +25,12 @@ import (
 	"github.com/hashicorp/yamux"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
 
 	"netsgo/pkg/netutil"
 	"netsgo/pkg/protocol"
+	"netsgo/pkg/sysinfo"
 	buildversion "netsgo/pkg/version"
 	"netsgo/web"
 )
@@ -105,6 +107,8 @@ type serverStatusView struct {
 	Version        string                   `json:"version"`
 	ListenPort     int                      `json:"listen_port"`
 	Uptime         int64                    `json:"uptime"`
+	SystemUptime   int64                    `json:"system_uptime"`
+	OSInstallTime  int64                    `json:"os_install_time,omitempty"`
 	StorePath      string                   `json:"store_path"`
 	TunnelActive   int                      `json:"tunnel_active"`
 	TunnelPaused   int                      `json:"tunnel_paused"`
@@ -445,6 +449,7 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/pause", s.RequireAuth(s.handlePauseTunnel))
 	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/resume", s.RequireAuth(s.handleResumeTunnel))
 	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/stop", s.RequireAuth(s.handleStopTunnel))
+	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}", s.RequireAuth(s.handleUpdateTunnel))
 	mux.HandleFunc("DELETE /api/clients/{id}/tunnels/{name}", s.RequireAuth(s.handleDeleteTunnel))
 
 	// Admin API (JWT + Session Binding 鉴权)
@@ -1275,12 +1280,20 @@ func (s *Server) collectServerStatus() serverStatusView {
 	appMemUsed := m.Alloc
 	appMemSys := m.Sys
 
+	// 服务端系统开机时长
+	sysUptime, _ := host.Uptime()
+
+	// 系统安装时间
+	osInstallTime := int64(sysinfo.GetOSInstallTime())
+
 	return serverStatusView{
 		Status:         "running",
 		ClientCount:    clientCount,
 		Version:        buildversion.Current,
 		ListenPort:     s.Port,
 		Uptime:         int64(time.Since(s.startTime).Seconds()),
+		SystemUptime:   int64(sysUptime),
+		OSInstallTime:  osInstallTime,
 		StorePath:      s.getStorePath(),
 		TunnelActive:   tunnelActive,
 		TunnelPaused:   tunnelPaused,
@@ -1503,12 +1516,15 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 只有 stopped 状态才能删除
-	if tunnel.Config.Status != protocol.ProxyStatusStopped {
+	// 只有暂停、已停止或异常状态才能删除
+	switch tunnel.Config.Status {
+	case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped, protocol.ProxyStatusError:
+		// 允许删除
+	default:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{
-			"error": fmt.Sprintf("隧道当前状态为 %q，只有 stopped 状态才能删除", tunnel.Config.Status),
+			"error": fmt.Sprintf("隧道当前状态为 %q，只有暂停、已停止或异常状态才能删除", tunnel.Config.Status),
 		})
 		return
 	}
@@ -1519,6 +1535,57 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
+	client, ok := s.readClientFromPath(w, r)
+	if !ok {
+		return
+	}
+	tunnelName := r.PathValue("name")
+
+	// 检查隧道是否存在
+	client.proxyMu.RLock()
+	tunnel, exists := client.proxies[tunnelName]
+	client.proxyMu.RUnlock()
+	if !exists {
+		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
+		return
+	}
+
+	// 只有暂停、已停止或异常状态才能编辑
+	switch tunnel.Config.Status {
+	case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped, protocol.ProxyStatusError:
+		// 允许编辑
+	default:
+		encodeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("隧道当前状态为 %q，只有暂停、已停止或异常状态才能编辑", tunnel.Config.Status),
+		})
+		return
+	}
+
+	var req struct {
+		LocalIP    string `json:"local_ip"`
+		LocalPort  int    `json:"local_port"`
+		RemotePort int    `json:"remote_port"`
+		Domain     string `json:"domain"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体无效"})
+		return
+	}
+
+	updated, err := s.updateManagedTunnel(client, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain)
+	if err != nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	encodeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"message": "隧道配置已更新",
+		"tunnel":  updated,
+	})
 }
 
 // restoreTunnels 在 Client 重连后恢复之前的隧道配置

@@ -28,7 +28,9 @@ export interface SystemStats {
   net_recv: number;       // bytes (cumulative)
   net_sent_speed: number; // bytes/s (server-computed)
   net_recv_speed: number; // bytes/s (server-computed)
-  uptime: number;         // seconds
+  uptime: number;         // seconds (system boot uptime)
+  process_uptime: number;  // seconds (NetsGo process uptime)
+  os_install_time?: number; // unix timestamp (seconds)
   num_cpu: number;
   app_mem_used: number;   // bytes (Go heap alloc)
   app_mem_sys: number;    // bytes (Go process sys)
@@ -109,7 +111,9 @@ export interface ServerStatus {
   client_count: number;
   version: string;
   listen_port: number;
-  uptime: number;         // seconds
+  uptime: number;         // seconds (process uptime)
+  system_uptime: number;  // seconds (OS boot uptime)
+  os_install_time?: number; // unix timestamp (seconds)
   store_path: string;
   tunnel_active: number;
   tunnel_paused: number;

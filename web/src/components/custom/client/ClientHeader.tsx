@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
-import { AddTunnelDialog } from '@/components/custom/tunnel/AddTunnelDialog';
+import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
 import { Pencil, Check, X, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
@@ -205,10 +205,15 @@ export function ClientHeader({ client }: ClientHeaderProps) {
               <span>{osLabels[client.info.os] ?? client.info.os} / {client.info.arch}</span>
               <span>•</span>
               <span>{client.info.ip}</span>
-              {client.stats?.uptime != null && (
+              {client.stats?.process_uptime != null && client.stats.process_uptime > 0 ? (
                 <>
                   <span>•</span>
-                  <span>运行 {formatUptime(client.stats.uptime)}</span>
+                  <span>运行 {formatUptime(client.stats.process_uptime)}</span>
+                </>
+              ) : client.stats?.uptime != null && (
+                <>
+                  <span>•</span>
+                  <span>开机 {formatUptime(client.stats.uptime)}</span>
                 </>
               )}
             </div>
@@ -217,7 +222,7 @@ export function ClientHeader({ client }: ClientHeaderProps) {
       </div>
 
       <div className="flex gap-2">
-        <AddTunnelDialog clientId={client.id} />
+        <TunnelDialog mode="create" clientId={client.id} />
       </div>
     </div>
   );

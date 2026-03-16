@@ -33,6 +33,8 @@ type SystemStats struct {
 	NetSentSpeed   float64         `json:"net_sent_speed"`           // 发送速率 (bytes/s)，服务端计算
 	NetRecvSpeed   float64         `json:"net_recv_speed"`           // 接收速率 (bytes/s)，服务端计算
 	Uptime         uint64          `json:"uptime"`                   // 系统运行时间 (秒)
+	ProcessUptime  uint64          `json:"process_uptime"`           // 程序运行时间 (秒)
+	OSInstallTime  uint64          `json:"os_install_time,omitempty"` // 系统安装时间 (Unix 时间戳，秒)
 	NumCPU         int             `json:"num_cpu"`                  // CPU 核心数
 	AppMemUsed     uint64          `json:"app_mem_used"`             // 程序堆内存 (bytes)
 	AppMemSys      uint64          `json:"app_mem_sys"`              // 程序进程占用 (bytes)
