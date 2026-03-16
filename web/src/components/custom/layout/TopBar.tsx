@@ -108,18 +108,24 @@ function TopBarInner() {
     navigate({ to: '/login' });
   };
 
-  const { state: sidebarState } = useSidebar();
+  const { state: sidebarState, isMobile, openMobile } = useSidebar();
   const sidebarOpen = sidebarState === 'expanded';
+
+  // On mobile: show logo when sidebar sheet is closed
+  // On desktop: show logo when sidebar is collapsed
+  const showLogoInHeader = isMobile ? !openMobile : !sidebarOpen;
+  // On mobile, center the logo; on desktop, keep it next to the trigger
+  const showCenteredLogo = isMobile && !openMobile;
 
   return (
     <>
-      <header className="h-14 flex items-center justify-between px-4 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50 shrink-0">
+      <header className="h-14 flex items-center justify-between px-4 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50 shrink-0 relative">
         <div className="flex items-center gap-2">
           {/* Sidebar trigger */}
           <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
 
-          {/* Logo — only visible when sidebar is collapsed */}
-          {!sidebarOpen && (
+          {/* Logo — desktop collapsed mode: next to sidebar trigger */}
+          {showLogoInHeader && !showCenteredLogo && (
             <>
               <Separator orientation="vertical" className="h-6" />
               <div
@@ -196,6 +202,20 @@ function TopBarInner() {
             </div>
           </div>
         </div>
+
+        {/* Logo — mobile centered mode: absolutely centered in header */}
+        {showCenteredLogo && (
+          <div
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-2 cursor-pointer select-none hover:opacity-80 transition-opacity"
+            onClick={() => navigate({ to: '/dashboard' })}
+          >
+            <img src="/logo.svg" alt="NetsGo" className="h-7 w-7" />
+            <div className="flex flex-col -space-y-0.5">
+              <span className="font-bold text-sm tracking-tight leading-tight">NetsGo</span>
+              <span className="text-[9px] font-medium text-muted-foreground uppercase tracking-widest leading-tight">Console</span>
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" onClick={() => setShowAddClient(true)}>

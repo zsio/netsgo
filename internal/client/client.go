@@ -44,6 +44,9 @@ type Client struct {
 	dataMu         sync.RWMutex
 	proxies        sync.Map // proxy_name -> ProxyNewRequest
 	useTLS         bool
+	publicIPv4     string       // 缓存的公网 IPv4
+	publicIPv6     string       // 缓存的公网 IPv6
+	publicIPMu     sync.RWMutex // 保护公网 IP 缓存
 	// ProxyConfigs 由服务端下发，Benchmark 测试也可手动设置
 	ProxyConfigs []protocol.ProxyNewRequest
 	// DisableReconnect 禁用自动重连（用于测试等场景）
@@ -313,6 +316,9 @@ func (c *Client) connectAndRun() error {
 	// 5. 启动探针上报协程
 	go c.probeLoop()
 
+	// 6. 启动公网 IP 定时刷新（首次已在认证前完成，此处负责后续刷新）
+	go c.publicIPLoop()
+
 	// 6. 如果有预设代理配置（Benchmark 模式），主动请求创建
 	for _, cfg := range c.ProxyConfigs {
 		go c.requestProxy(cfg)
@@ -329,7 +335,14 @@ func (c *Client) connectAndRun() error {
 func (c *Client) authenticate() error {
 	hostname, _ := os.Hostname()
 	localIP := netutil.GetOutboundIP()
-	publicIPv4, publicIPv6 := netutil.FetchPublicIPs()
+
+	// 首次认证前同步获取公网 IP（保证首次查询有值）
+	c.refreshPublicIPs()
+
+	c.publicIPMu.RLock()
+	ipv4 := c.publicIPv4
+	ipv6 := c.publicIPv6
+	c.publicIPMu.RUnlock()
 
 	authReq := protocol.AuthRequest{
 		Key:       c.Key,
@@ -341,8 +354,8 @@ func (c *Client) authenticate() error {
 			Arch:       runtime.GOARCH,
 			IP:         localIP,
 			Version:    buildversion.Current,
-			PublicIPv4: publicIPv4,
-			PublicIPv6: publicIPv6,
+			PublicIPv4: ipv4,
+			PublicIPv6: ipv6,
 		},
 	}
 
@@ -741,6 +754,34 @@ func (c *Client) reportProbe() {
 	c.mu.Unlock()
 	if err != nil {
 		log.Printf("⚠️ 上报探针数据失败: %v", err)
+	}
+}
+
+// refreshPublicIPs 获取公网 IP 并缓存
+func (c *Client) refreshPublicIPs() {
+	ipv4, ipv6 := netutil.FetchPublicIPs()
+	c.publicIPMu.Lock()
+	if ipv4 != "" {
+		c.publicIPv4 = ipv4
+	}
+	if ipv6 != "" {
+		c.publicIPv6 = ipv6
+	}
+	c.publicIPMu.Unlock()
+}
+
+// publicIPLoop 每 5 分钟刷新一次公网 IP
+func (c *Client) publicIPLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			c.refreshPublicIPs()
+		case <-c.done:
+			return
+		}
 	}
 }
 

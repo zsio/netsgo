@@ -57,9 +57,9 @@ type Server struct {
 	done           chan struct{}
 	setupToken     string
 	tlsEnabled     bool
-	publicIPv4     string    // 缓存的公网 IPv4
-	publicIPv6     string    // 缓存的公网 IPv6
-	publicIPOnce   sync.Once // 确保只获取一次
+	publicIPv4     string       // 缓存的公网 IPv4
+	publicIPv6     string       // 缓存的公网 IPv6
+	publicIPMu     sync.RWMutex // 保护公网 IP 缓存
 }
 
 // ClientConn 代表一个已连接的 Client
@@ -1078,25 +1078,49 @@ func (s *Server) collectClientViews() []clientView {
 
 // serverStatusLoop 后台定时采集服务端状态并缓存
 func (s *Server) serverStatusLoop() {
+	// 首次同步获取公网 IP（保证首次 web 查询有值）
+	s.refreshPublicIPs()
+
 	// 首次立即采集
 	status := s.collectServerStatus()
 	s.cachedStatusMu.Lock()
 	s.cachedStatus = &status
 	s.cachedStatusMu.Unlock()
 
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+	statusTicker := time.NewTicker(10 * time.Second)
+	defer statusTicker.Stop()
+
+	publicIPTicker := time.NewTicker(5 * time.Minute)
+	defer publicIPTicker.Stop()
 
 	for {
 		select {
 		case <-s.done:
 			return
-		case <-ticker.C:
+		case <-statusTicker.C:
 			status := s.collectServerStatus()
 			s.cachedStatusMu.Lock()
 			s.cachedStatus = &status
 			s.cachedStatusMu.Unlock()
+		case <-publicIPTicker.C:
+			s.refreshPublicIPs()
 		}
+	}
+}
+
+// refreshPublicIPs 获取公网 IP 并更新缓存
+func (s *Server) refreshPublicIPs() {
+	ipv4, ipv6 := netutil.FetchPublicIPs()
+	s.publicIPMu.Lock()
+	if ipv4 != "" {
+		s.publicIPv4 = ipv4
+	}
+	if ipv6 != "" {
+		s.publicIPv6 = ipv6
+	}
+	s.publicIPMu.Unlock()
+	if ipv4 != "" || ipv6 != "" {
+		log.Printf("🌐 公网 IP 已刷新: IPv4=%s IPv6=%s", ipv4, ipv6)
 	}
 }
 
@@ -1152,16 +1176,11 @@ func (s *Server) collectServerStatus() serverStatusView {
 
 	ipAddr := netutil.GetOutboundIP()
 
-	// 公网 IP 只采集一次，缓存在 Server 上
-	s.publicIPOnce.Do(func() {
-		s.publicIPv4, s.publicIPv6 = netutil.FetchPublicIPs()
-		if s.publicIPv4 != "" {
-			log.Printf("🌐 公网 IPv4: %s", s.publicIPv4)
-		}
-		if s.publicIPv6 != "" {
-			log.Printf("🌐 公网 IPv6: %s", s.publicIPv6)
-		}
-	})
+	// 读取缓存的公网 IP（由后台 publicIPLoop 定时更新）
+	s.publicIPMu.RLock()
+	pubV4 := s.publicIPv4
+	pubV6 := s.publicIPv6
+	s.publicIPMu.RUnlock()
 
 	cpuPercents, _ := cpu.Percent(0, false)
 	cpuUsage := 0.0
@@ -1272,8 +1291,8 @@ func (s *Server) collectServerStatus() serverStatusView {
 		DiskTotal:      diskTotal,
 		DiskPartitions: diskPartitions,
 		GoroutineCount: goroutines,
-		PublicIPv4:     s.publicIPv4,
-		PublicIPv6:     s.publicIPv6,
+		PublicIPv4:     pubV4,
+		PublicIPv6:     pubV6,
 	}
 }
 
