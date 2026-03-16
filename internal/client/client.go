@@ -20,6 +20,7 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"netsgo/pkg/mux"
+	"netsgo/pkg/netutil"
 	"netsgo/pkg/protocol"
 	buildversion "netsgo/pkg/version"
 )
@@ -327,18 +328,21 @@ func (c *Client) connectAndRun() error {
 // 优先使用 Token，失败后降级到 Key
 func (c *Client) authenticate() error {
 	hostname, _ := os.Hostname()
-	localIP := getOutboundIP()
+	localIP := netutil.GetOutboundIP()
+	publicIPv4, publicIPv6 := netutil.FetchPublicIPs()
 
 	authReq := protocol.AuthRequest{
 		Key:       c.Key,
 		Token:     c.Token,
 		InstallID: c.InstallID,
 		Client: protocol.ClientInfo{
-			Hostname: hostname,
-			OS:       runtime.GOOS,
-			Arch:     runtime.GOARCH,
-			IP:       localIP,
-			Version:  buildversion.Current,
+			Hostname:   hostname,
+			OS:         runtime.GOOS,
+			Arch:       runtime.GOARCH,
+			IP:         localIP,
+			Version:    buildversion.Current,
+			PublicIPv4: publicIPv4,
+			PublicIPv6: publicIPv6,
 		},
 	}
 

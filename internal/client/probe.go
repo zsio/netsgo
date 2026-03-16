@@ -1,7 +1,6 @@
 package client
 
 import (
-	"net"
 	"regexp"
 	"runtime"
 	"strings"
@@ -128,17 +127,4 @@ func CollectSystemStats() (*protocol.SystemStats, error) {
 	stats.AppMemSys = m.Sys
 
 	return stats, nil
-}
-
-// getOutboundIP 获取本机出站 IP 地址
-// 通过 UDP dial 一个公网地址（不实际发送数据），获取本地使用的网络接口 IP
-func getOutboundIP() string {
-	conn, err := net.Dial("udp4", "8.8.8.8:80")
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
 }

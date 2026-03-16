@@ -2,11 +2,13 @@ package protocol
 
 // ClientInfo 描述一个 Client 的基本信息，在认证时发送给 Server
 type ClientInfo struct {
-	Hostname string `json:"hostname"` // 主机名
-	OS       string `json:"os"`       // 操作系统 (windows/linux/darwin)
-	Arch     string `json:"arch"`     // CPU 架构 (amd64/arm64)
-	IP       string `json:"ip"`       // Client 本地 IP 地址
-	Version  string `json:"version"`  // Client 版本号
+	Hostname   string `json:"hostname"`              // 主机名
+	OS         string `json:"os"`                    // 操作系统 (windows/linux/darwin)
+	Arch       string `json:"arch"`                  // CPU 架构 (amd64/arm64)
+	IP         string `json:"ip"`                    // Client 本地 IP 地址
+	Version    string `json:"version"`               // Client 版本号
+	PublicIPv4 string `json:"public_ipv4,omitempty"` // 公网 IPv4
+	PublicIPv6 string `json:"public_ipv6,omitempty"` // 公网 IPv6
 }
 
 // DiskPartition 描述单个磁盘分区的使用情况

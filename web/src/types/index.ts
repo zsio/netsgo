@@ -10,6 +10,8 @@ export interface ClientInfo {
   arch: "amd64" | "arm64";
   ip: string;
   version: string;
+  public_ipv4?: string;
+  public_ipv6?: string;
 }
 
 /** 对齐 protocol.SystemStats */
@@ -127,6 +129,8 @@ export interface ServerStatus {
   disk_total: number;
   disk_partitions: DiskPartition[];
   goroutine_count: number;
+  public_ipv4?: string;
+  public_ipv6?: string;
 }
 
 // --- Admin System ---

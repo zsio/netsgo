@@ -27,6 +27,7 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
 
+	"netsgo/pkg/netutil"
 	"netsgo/pkg/protocol"
 	buildversion "netsgo/pkg/version"
 	"netsgo/web"
@@ -56,6 +57,9 @@ type Server struct {
 	done           chan struct{}
 	setupToken     string
 	tlsEnabled     bool
+	publicIPv4     string    // 缓存的公网 IPv4
+	publicIPv6     string    // 缓存的公网 IPv6
+	publicIPOnce   sync.Once // 确保只获取一次
 }
 
 // ClientConn 代表一个已连接的 Client
@@ -120,6 +124,8 @@ type serverStatusView struct {
 	DiskTotal      uint64                   `json:"disk_total"`
 	DiskPartitions []protocol.DiskPartition `json:"disk_partitions"`
 	GoroutineCount int                      `json:"goroutine_count"`
+	PublicIPv4     string                   `json:"public_ipv4,omitempty"`
+	PublicIPv6     string                   `json:"public_ipv6,omitempty"`
 }
 
 type consoleSnapshot struct {
@@ -349,26 +355,23 @@ func (s *Server) Start() error {
 }
 
 // Shutdown 优雅关闭服务端 (P15)
-// 1. 停止接受新连接
-// 2. 关闭所有 Client 连接
-// 3. 通知后台 goroutine 退出
-// 4. 关闭事件总线
+// 1. 通知后台 goroutine 退出
+// 2. 关闭事件总线（让 SSE 连接退出）
+// 3. 断开所有 Client 连接（让 WebSocket 连接退出）
+// 4. 关闭 HTTP 服务器（等待活跃请求结束——此时 SSE/WS 已退出，不会阻塞）
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Printf("🛑 开始优雅关闭...")
 
 	// 1. 通知所有后台 goroutine 退出
 	close(s.done)
 
-	// 2. 关闭 HTTP 服务器（停止接受新连接，等待活跃请求结束）
-	var shutdownErr error
-	if s.httpServer != nil {
-		if err := s.httpServer.Shutdown(ctx); err != nil {
-			log.Printf("⚠️ HTTP 服务器关闭出错: %v", err)
-			shutdownErr = err
-		}
+	// 2. 关闭事件总线（让 SSE handler 的 channel 读到 close，自然退出）
+	if s.events != nil {
+		s.events.Close()
+		log.Printf("📡 SSE 事件总线已关闭")
 	}
 
-	// 3. 断开所有 Client 连接
+	// 3. 断开所有 Client 连接（让 WebSocket handler 的 ReadJSON 返回 error，自然退出）
 	clientCount := 0
 	s.clients.Range(func(key, value any) bool {
 		client := value.(*ClientConn)
@@ -402,13 +405,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		log.Printf("🔌 已断开 %d 个 Client 连接", clientCount)
 	}
 
-	// 4. 关闭事件总线
-	if s.events != nil {
-		s.events.Close()
+	// 短暂等待，让 SSE/WebSocket handler 有时间处理断开并从 ServeHTTP 返回
+	time.Sleep(200 * time.Millisecond)
+
+	// 4. 关闭 HTTP 服务器（此时长连接已断开，Shutdown 应能快速完成）
+	if s.httpServer != nil {
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			log.Printf("⚠️ HTTP 服务器关闭出错: %v", err)
+			return err
+		}
 	}
 
 	log.Printf("✅ 优雅关闭完成")
-	return shutdownErr
+	return nil
 }
 
 // StartHTTPOnly 仅启动 HTTP 模式（用于测试，不做 peek 分发）
@@ -1141,7 +1150,18 @@ func (s *Server) collectServerStatus() serverStatusView {
 	goroutines := runtime.NumGoroutine()
 	hostname, _ := os.Hostname()
 
-	ipAddr := getOutboundIP()
+	ipAddr := netutil.GetOutboundIP()
+
+	// 公网 IP 只采集一次，缓存在 Server 上
+	s.publicIPOnce.Do(func() {
+		s.publicIPv4, s.publicIPv6 = netutil.FetchPublicIPs()
+		if s.publicIPv4 != "" {
+			log.Printf("🌐 公网 IPv4: %s", s.publicIPv4)
+		}
+		if s.publicIPv6 != "" {
+			log.Printf("🌐 公网 IPv6: %s", s.publicIPv6)
+		}
+	})
 
 	cpuPercents, _ := cpu.Percent(0, false)
 	cpuUsage := 0.0
@@ -1252,20 +1272,11 @@ func (s *Server) collectServerStatus() serverStatusView {
 		DiskTotal:      diskTotal,
 		DiskPartitions: diskPartitions,
 		GoroutineCount: goroutines,
+		PublicIPv4:     s.publicIPv4,
+		PublicIPv6:     s.publicIPv6,
 	}
 }
 
-// getOutboundIP 尝试获取当前机器的有效内网/公网 IP
-func getOutboundIP() string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		return "127.0.0.1"
-	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
-}
 
 // baseDiskName 从设备路径提取物理磁盘基础名，用于去重。
 // macOS APFS: /dev/disk3s1s1, /dev/disk3s5 → "disk3"

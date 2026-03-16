@@ -1006,8 +1006,12 @@ func remoteIP(remoteAddr string) string {
 		return ""
 	}
 	host, _, err := net.SplitHostPort(remoteAddr)
-	if err == nil {
-		return host
+	if err != nil {
+		host = remoteAddr
 	}
-	return remoteAddr
+	// 统一 IPv6 loopback 为 IPv4
+	if host == "::1" {
+		return "127.0.0.1"
+	}
+	return host
 }

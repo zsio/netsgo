@@ -7,6 +7,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
+import { NetworkInfoPopover } from '@/components/custom/common/NetworkInfoPopover';
 
 function ProgressBar({ value, label, total, colorClass = "bg-primary" }: { value: number, label: string, total?: string, colorClass?: string }) {
   return (
@@ -55,11 +56,20 @@ export function ServerInfoCard() {
           <span className="font-medium text-sm truncate" title={status?.hostname}>{status?.hostname || '-'}</span>
           <span className="text-xs text-muted-foreground">{status?.os_arch || '-'}</span>
         </div>
-        <div className="p-4 sm:p-5 flex flex-col gap-1.5 md:border-r border-border/40">
-          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Network className="w-4 h-4" />IP 地址</span>
-          <span className="font-medium text-sm">{status?.ip_address || '-'}</span>
-          <span className="text-xs text-muted-foreground">Port: {status?.listen_port}</span>
-        </div>
+        <NetworkInfoPopover
+          localIP={status?.ip_address}
+          publicIPv4={status?.public_ipv4}
+          publicIPv6={status?.public_ipv6}
+          port={status?.listen_port}
+        >
+          <div className="p-4 sm:p-5 flex flex-col gap-1.5 md:border-r border-border/40 cursor-default">
+            <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Network className="w-4 h-4" />IP 地址</span>
+            <span className="font-medium text-sm">{status?.public_ipv4 || status?.ip_address || '-'}</span>
+            {status?.public_ipv4 && status?.ip_address && status.public_ipv4 !== status.ip_address && (
+              <span className="text-xs text-muted-foreground">内网: {status.ip_address}</span>
+            )}
+          </div>
+        </NetworkInfoPopover>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />运行时长</span>
           <span className="font-medium text-sm">{formatUptime(status?.uptime ?? 0)}</span>
