@@ -327,6 +327,7 @@ func (c *Client) connectAndRun() error {
 // 优先使用 Token，失败后降级到 Key
 func (c *Client) authenticate() error {
 	hostname, _ := os.Hostname()
+	localIP := getOutboundIP()
 
 	authReq := protocol.AuthRequest{
 		Key:       c.Key,
@@ -336,6 +337,7 @@ func (c *Client) authenticate() error {
 			Hostname: hostname,
 			OS:       runtime.GOOS,
 			Arch:     runtime.GOARCH,
+			IP:       localIP,
 			Version:  buildversion.Current,
 		},
 	}

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"net"
 	"regexp"
 	"runtime"
 	"strings"
@@ -12,7 +13,7 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
-	"github.com/shirou/gopsutil/v4/net"
+	psnet "github.com/shirou/gopsutil/v4/net"
 )
 
 // reDiskBase extracts the base physical disk identifier from device paths.
@@ -108,7 +109,7 @@ func CollectSystemStats() (*protocol.SystemStats, error) {
 	}
 
 	// 网络 IO（所有网卡累计）
-	netIO, err := net.IOCounters(false)
+	netIO, err := psnet.IOCounters(false)
 	if err == nil && len(netIO) > 0 {
 		stats.NetSent = netIO[0].BytesSent
 		stats.NetRecv = netIO[0].BytesRecv
@@ -127,4 +128,17 @@ func CollectSystemStats() (*protocol.SystemStats, error) {
 	stats.AppMemSys = m.Sys
 
 	return stats, nil
+}
+
+// getOutboundIP 获取本机出站 IP 地址
+// 通过 UDP dial 一个公网地址（不实际发送数据），获取本地使用的网络接口 IP
+func getOutboundIP() string {
+	conn, err := net.Dial("udp4", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
 }
