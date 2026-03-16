@@ -66,20 +66,22 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
           <span className="font-medium text-sm">{osLabels[info.os] ?? info.os} / {info.arch}</span>
           <span className="text-xs text-muted-foreground font-mono">{client.id.slice(0, 8)}</span>
         </div>
-        <NetworkInfoPopover
-          localIP={info.ip}
-          publicIPv4={info.public_ipv4}
-          publicIPv6={info.public_ipv6}
-          remoteIP={client.last_ip}
-        >
-          <div className="p-4 sm:p-5 flex flex-col gap-1.5 md:border-r border-border/40 cursor-default">
-            <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Network className="w-4 h-4" />IP 地址</span>
-            <span className="font-medium text-sm">{info.public_ipv4 || info.ip || '-'}</span>
-            {info.public_ipv4 && info.ip && info.public_ipv4 !== info.ip && (
-              <span className="text-xs text-muted-foreground">内网: {info.ip}</span>
-            )}
-          </div>
-        </NetworkInfoPopover>
+        <div className="p-4 sm:p-5 flex flex-col gap-1.5 md:border-r border-border/40">
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Network className="w-4 h-4" />IP 地址</span>
+          <NetworkInfoPopover
+            localIP={info.ip}
+            publicIPv4={info.public_ipv4}
+            publicIPv6={info.public_ipv6}
+            remoteIP={client.last_ip}
+          >
+            <span className="font-medium text-sm cursor-default border-b border-dashed border-muted-foreground/40 hover:border-foreground/60 transition-colors w-fit">
+              {info.public_ipv4 || info.ip || '-'}
+            </span>
+          </NetworkInfoPopover>
+          {info.public_ipv4 && info.ip && info.public_ipv4 !== info.ip && (
+            <span className="text-xs text-muted-foreground">内网: {info.ip}</span>
+          )}
+        </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />运行时长</span>
           <span className="font-medium text-sm">{stats?.uptime ? formatUptime(stats.uptime) : '-'}</span>
