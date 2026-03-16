@@ -822,6 +822,13 @@ func (s *Server) controlLoop(client *ClientConn) {
 			// 计算派生指标（网络速率等）
 			client.enrichStats(&stats)
 			client.SetStats(&stats)
+			// 合并公网 IP 到 ClientInfo（探针附带）
+			if stats.PublicIPv4 != "" {
+				client.Info.PublicIPv4 = stats.PublicIPv4
+			}
+			if stats.PublicIPv6 != "" {
+				client.Info.PublicIPv6 = stats.PublicIPv6
+			}
 			// 更新基准快照
 			client.statsMu.Lock()
 			client.prevStats = cloneSystemStats(&stats)
@@ -1078,8 +1085,8 @@ func (s *Server) collectClientViews() []clientView {
 
 // serverStatusLoop 后台定时采集服务端状态并缓存
 func (s *Server) serverStatusLoop() {
-	// 首次同步获取公网 IP（保证首次 web 查询有值）
-	s.refreshPublicIPs()
+	// 异步获取公网 IP（不阻塞首次状态采集）
+	go s.refreshPublicIPs()
 
 	// 首次立即采集
 	status := s.collectServerStatus()

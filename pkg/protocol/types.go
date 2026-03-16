@@ -20,22 +20,24 @@ type DiskPartition struct {
 
 // SystemStats 描述一台机器的实时系统状态，由 Client 探针定时采集并上报
 type SystemStats struct {
-	CPUUsage       float64         `json:"cpu_usage"`       // CPU 使用率 (0-100)
-	MemTotal       uint64          `json:"mem_total"`       // 总内存 (bytes)
-	MemUsed        uint64          `json:"mem_used"`        // 已用内存 (bytes)
-	MemUsage       float64         `json:"mem_usage"`       // 内存使用率 (0-100)
-	DiskTotal      uint64          `json:"disk_total"`      // 磁盘总容量 (bytes) — 所有分区聚合
-	DiskUsed       uint64          `json:"disk_used"`       // 磁盘已用 (bytes) — 所有分区聚合
-	DiskUsage      float64         `json:"disk_usage"`      // 磁盘使用率 (0-100) — 聚合百分比
-	DiskPartitions []DiskPartition `json:"disk_partitions"` // 各分区明细
-	NetSent        uint64          `json:"net_sent"`        // 网络发送字节数（累计）
-	NetRecv        uint64          `json:"net_recv"`        // 网络接收字节数（累计）
-	NetSentSpeed   float64         `json:"net_sent_speed"`  // 发送速率 (bytes/s)，服务端计算
-	NetRecvSpeed   float64         `json:"net_recv_speed"`  // 接收速率 (bytes/s)，服务端计算
-	Uptime         uint64          `json:"uptime"`          // 系统运行时间 (秒)
-	NumCPU         int             `json:"num_cpu"`         // CPU 核心数
-	AppMemUsed     uint64          `json:"app_mem_used"`    // 程序堆内存 (bytes)
-	AppMemSys      uint64          `json:"app_mem_sys"`     // 程序进程占用 (bytes)
+	CPUUsage       float64         `json:"cpu_usage"`                // CPU 使用率 (0-100)
+	MemTotal       uint64          `json:"mem_total"`                // 总内存 (bytes)
+	MemUsed        uint64          `json:"mem_used"`                 // 已用内存 (bytes)
+	MemUsage       float64         `json:"mem_usage"`                // 内存使用率 (0-100)
+	DiskTotal      uint64          `json:"disk_total"`               // 磁盘总容量 (bytes) — 所有分区聚合
+	DiskUsed       uint64          `json:"disk_used"`                // 磁盘已用 (bytes) — 所有分区聚合
+	DiskUsage      float64         `json:"disk_usage"`               // 磁盘使用率 (0-100) — 聚合百分比
+	DiskPartitions []DiskPartition `json:"disk_partitions"`          // 各分区明细
+	NetSent        uint64          `json:"net_sent"`                 // 网络发送字节数（累计）
+	NetRecv        uint64          `json:"net_recv"`                 // 网络接收字节数（累计）
+	NetSentSpeed   float64         `json:"net_sent_speed"`           // 发送速率 (bytes/s)，服务端计算
+	NetRecvSpeed   float64         `json:"net_recv_speed"`           // 接收速率 (bytes/s)，服务端计算
+	Uptime         uint64          `json:"uptime"`                   // 系统运行时间 (秒)
+	NumCPU         int             `json:"num_cpu"`                  // CPU 核心数
+	AppMemUsed     uint64          `json:"app_mem_used"`             // 程序堆内存 (bytes)
+	AppMemSys      uint64          `json:"app_mem_sys"`              // 程序进程占用 (bytes)
+	PublicIPv4     string          `json:"public_ipv4,omitempty"`    // 公网 IPv4（探针附带）
+	PublicIPv6     string          `json:"public_ipv6,omitempty"`    // 公网 IPv6（探针附带）
 }
 
 // ProxyConfig 代理隧道的完整配置

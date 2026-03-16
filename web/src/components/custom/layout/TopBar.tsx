@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { useClients } from '@/hooks/use-clients';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { ConnectionIndicator } from '@/components/custom/common/ConnectionIndicator';
+
 import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
 import { useNavigate } from '@tanstack/react-router';
 import { api } from '@/lib/api';
@@ -144,10 +144,7 @@ function TopBarInner() {
           <div className="w-px h-6 bg-border/60 mx-2 hidden sm:block" />
 
           {/* Status Group */}
-          <div className="flex items-center gap-3">
-            <ConnectionIndicator />
-
-            <div className="hidden sm:flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-2">
               <DualTriggerCard
                 triggers={
                   <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
@@ -199,7 +196,6 @@ function TopBarInner() {
                   </div>
                 </div>
               </DualTriggerCard>
-            </div>
           </div>
         </div>
 

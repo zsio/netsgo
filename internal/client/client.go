@@ -44,9 +44,9 @@ type Client struct {
 	dataMu         sync.RWMutex
 	proxies        sync.Map // proxy_name -> ProxyNewRequest
 	useTLS         bool
-	publicIPv4     string       // 缓存的公网 IPv4
-	publicIPv6     string       // 缓存的公网 IPv6
-	publicIPMu     sync.RWMutex // 保护公网 IP 缓存
+	publicIPv4      string    // 缓存的公网 IPv4
+	publicIPv6      string    // 缓存的公网 IPv6
+	publicIPFetched time.Time // 上次获取时间
 	// ProxyConfigs 由服务端下发，Benchmark 测试也可手动设置
 	ProxyConfigs []protocol.ProxyNewRequest
 	// DisableReconnect 禁用自动重连（用于测试等场景）
@@ -316,9 +316,6 @@ func (c *Client) connectAndRun() error {
 	// 5. 启动探针上报协程
 	go c.probeLoop()
 
-	// 6. 启动公网 IP 定时刷新（首次已在认证前完成，此处负责后续刷新）
-	go c.publicIPLoop()
-
 	// 6. 如果有预设代理配置（Benchmark 模式），主动请求创建
 	for _, cfg := range c.ProxyConfigs {
 		go c.requestProxy(cfg)
@@ -336,26 +333,16 @@ func (c *Client) authenticate() error {
 	hostname, _ := os.Hostname()
 	localIP := netutil.GetOutboundIP()
 
-	// 首次认证前同步获取公网 IP（保证首次查询有值）
-	c.refreshPublicIPs()
-
-	c.publicIPMu.RLock()
-	ipv4 := c.publicIPv4
-	ipv6 := c.publicIPv6
-	c.publicIPMu.RUnlock()
-
 	authReq := protocol.AuthRequest{
 		Key:       c.Key,
 		Token:     c.Token,
 		InstallID: c.InstallID,
 		Client: protocol.ClientInfo{
-			Hostname:   hostname,
-			OS:         runtime.GOOS,
-			Arch:       runtime.GOARCH,
-			IP:         localIP,
-			Version:    buildversion.Current,
-			PublicIPv4: ipv4,
-			PublicIPv6: ipv6,
+			Hostname: hostname,
+			OS:       runtime.GOOS,
+			Arch:     runtime.GOARCH,
+			IP:       localIP,
+			Version:  buildversion.Current,
 		},
 	}
 
@@ -742,6 +729,11 @@ func (c *Client) reportProbe() {
 		return
 	}
 
+	// 刷新公网 IP（内部有 5 分钟 TTL 控制）并附加到探针数据
+	c.refreshPublicIPs()
+	stats.PublicIPv4 = c.publicIPv4
+	stats.PublicIPv6 = c.publicIPv6
+
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
 	c.mu.Lock()
 	conn := c.conn
@@ -757,32 +749,19 @@ func (c *Client) reportProbe() {
 	}
 }
 
-// refreshPublicIPs 获取公网 IP 并缓存
+// refreshPublicIPs 获取公网 IP 并缓存（仅当距上次获取超过 5 分钟时才实际请求）
 func (c *Client) refreshPublicIPs() {
+	if !c.publicIPFetched.IsZero() && time.Since(c.publicIPFetched) < 5*time.Minute {
+		return // 还没过期，使用缓存
+	}
 	ipv4, ipv6 := netutil.FetchPublicIPs()
-	c.publicIPMu.Lock()
 	if ipv4 != "" {
 		c.publicIPv4 = ipv4
 	}
 	if ipv6 != "" {
 		c.publicIPv6 = ipv6
 	}
-	c.publicIPMu.Unlock()
-}
-
-// publicIPLoop 每 5 分钟刷新一次公网 IP
-func (c *Client) publicIPLoop() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			c.refreshPublicIPs()
-		case <-c.done:
-			return
-		}
-	}
+	c.publicIPFetched = time.Now()
 }
 
 // controlLoop 监听 Server 下发的控制消息

@@ -84,7 +84,7 @@ export function TunnelListTable({
             </span>
           </h3>
           {showSearch && (
-            <div className="relative">
+            <div className="relative hidden sm:block">
               <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
               <input
                 type="text"

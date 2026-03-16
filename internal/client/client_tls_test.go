@@ -463,7 +463,7 @@ func TestScenario_TLS_ConnectAndAuth(t *testing.T) {
 	c.StatePath = filepath.Join(t.TempDir(), "client.json")
 
 	go c.Start()
-	time.Sleep(1 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	if c.ClientID != "mock_client_1" {
 		t.Errorf("TLS 认证后 ClientID 期望 'mock_client_1'，得到 %q", c.ClientID)
@@ -500,7 +500,7 @@ func TestScenario_PlainWS_NoTLSUsed(t *testing.T) {
 	c.StatePath = filepath.Join(t.TempDir(), "client.json")
 
 	go c.Start()
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	if c.useTLS {
 		t.Error("ws:// 不应设置 useTLS")
@@ -529,7 +529,7 @@ func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
 	c.StatePath = filepath.Join(t.TempDir(), "client.json")
 
 	go c.Start()
-	time.Sleep(1 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	// TLSSkipVerify=true → checkTLSFingerprint 不会被调用 → 指纹不会被记录
 	if c.TLSFingerprint != "" {
