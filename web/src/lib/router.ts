@@ -25,6 +25,7 @@ const adminRouteTree = adminRoute.addChildren([
 const dashboardRouteTree = dashboardRoute.addChildren([
   dashboardIndexRoute,
   dashboardClientRoute,
+  adminRouteTree,
 ]);
 
 const routeTree = rootRoute.addChildren([
@@ -32,7 +33,6 @@ const routeTree = rootRoute.addChildren([
   dashboardRouteTree,
   loginRoute,
   setupRoute,
-  adminRouteTree,
 ]);
 
 const hashHistory = createHashHistory();

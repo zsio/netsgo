@@ -1,36 +1,102 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
-  UserPlus, Settings, LogOut, Home
+  UserPlus, LogOut, Monitor, Zap, MonitorOff, Pause
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useClients } from '@/hooks/use-clients';
+import { useServerStatus } from '@/hooks/use-server-status';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ConnectionIndicator } from '@/components/custom/common/ConnectionIndicator';
 import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
-import { useNavigate, useRouterState } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
-export function TopBar() {
+import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
+import { Separator } from '@/components/ui/separator';
+
+function DualTriggerCard({ triggers, children }: { triggers: React.ReactNode, children: React.ReactNode }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isPinned, setIsPinned] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const onMouseEnter = () => {
+    clearTimeout(timeoutRef.current);
+    setIsOpen(true);
+  };
+
+  const onMouseLeave = () => {
+    timeoutRef.current = setTimeout(() => {
+      setIsOpen(false);
+    }, 150);
+  };
+
+  const onClick = () => {
+    setIsPinned(!isPinned);
+    if (!isPinned) {
+      setIsOpen(true);
+    }
+  };
+
+  const onOpenChange = (open: boolean) => {
+    if (!open) {
+      setIsOpen(false);
+      setIsPinned(false);
+    } else {
+      setIsOpen(true);
+    }
+  };
+
+  return (
+    <Popover open={isOpen || isPinned} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        <div
+          onClick={onClick}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
+        >
+          {triggers}
+        </div>
+      </PopoverTrigger>
+      <PopoverContent
+        align="center"
+        className="w-auto p-3 outline-none"
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+      >
+        {children}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function TopBarInner() {
   const navigate = useNavigate();
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [showAddClient, setShowAddClient] = useState(false);
   const { data: clients } = useClients();
+  const { data: status } = useServerStatus();
   const logout = useAuthStore((state) => state.logout);
+
   const totalClients = clients?.length ?? 0;
   const onlineClientCount = clients?.filter((client) => client.online).length ?? 0;
-  const clientSummary = clients
-    ? (totalClients > 0 ? `${onlineClientCount}/${totalClients} 在线 Client` : '0 Client')
-    : '加载中...';
+  const offlineClientCount = totalClients - onlineClientCount;
 
-  const isAdmin = pathname.startsWith('/admin');
+  const activeTunnels = status?.tunnel_active ?? 0;
+  const pausedTunnels = status?.tunnel_paused ?? 0;
+  const stoppedTunnels = status?.tunnel_stopped ?? 0;
+  const totalTunnels = activeTunnels + pausedTunnels + stoppedTunnels;
+  const suspendedTunnels = pausedTunnels + stoppedTunnels;
 
   const handleLogout = async () => {
     try {
@@ -42,84 +108,135 @@ export function TopBar() {
     navigate({ to: '/login' });
   };
 
+  const { state: sidebarState } = useSidebar();
+  const sidebarOpen = sidebarState === 'expanded';
+
   return (
     <>
-      <header className="h-14 flex items-center justify-between px-4 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50">
-        <div className="flex items-center gap-4">
-          {/* Logo Group */}
-          <div
-            className="flex items-center gap-2.5 cursor-pointer select-none hover:opacity-80 transition-opacity"
-            onClick={() => navigate({ to: '/dashboard' })}
-          >
-            <img src="/logo.svg" alt="NetsGo" className="h-8 w-8" />
-            <div className="flex flex-col -space-y-0.5">
-              <span className="font-bold text-base tracking-tight leading-tight">NetsGo</span>
-              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest leading-tight">Console</span>
-            </div>
-          </div>
+      <header className="h-14 flex items-center justify-between px-4 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50 shrink-0">
+        <div className="flex items-center gap-2">
+          {/* Sidebar trigger */}
+          <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
 
-          <div className="w-px h-6 bg-border/60 mx-2" />
+          {/* Logo — only visible when sidebar is collapsed */}
+          {!sidebarOpen && (
+            <>
+              <Separator orientation="vertical" className="h-6" />
+              <div
+                className="flex items-center gap-2.5 cursor-pointer select-none hover:opacity-80 transition-opacity"
+                onClick={() => navigate({ to: '/dashboard' })}
+              >
+                <img src="/logo.svg" alt="NetsGo" className="h-8 w-8" />
+                <div className="flex flex-col -space-y-0.5">
+                  <span className="font-bold text-base tracking-tight leading-tight">NetsGo</span>
+                  <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest leading-tight">Console</span>
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="w-px h-6 bg-border/60 mx-2 hidden sm:block" />
 
           {/* Status Group */}
           <div className="flex items-center gap-3">
             <ConnectionIndicator />
-            <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground">
-              {clientSummary}
+
+            <div className="hidden sm:flex items-center gap-2">
+              <DualTriggerCard
+                triggers={
+                  <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
+                    <Monitor className="h-3.5 w-3.5" />
+                    <span className="font-mono tracking-tight">{onlineClientCount}/{totalClients}</span>
+                  </div>
+                }
+              >
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex items-center justify-between gap-6 text-sm">
+                    <div className="flex items-center gap-2.5 text-emerald-500">
+                      <Monitor className="h-4 w-4" />
+                      <span className="font-medium">在线节点</span>
+                    </div>
+                    <span className="font-bold font-mono">{onlineClientCount}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-6 text-sm">
+                    <div className="flex items-center gap-2.5 text-rose-500">
+                      <MonitorOff className="h-4 w-4" />
+                      <span className="font-medium">离线节点</span>
+                    </div>
+                    <span className="font-bold font-mono">{offlineClientCount}</span>
+                  </div>
+                </div>
+              </DualTriggerCard>
+
+              <DualTriggerCard
+                triggers={
+                  <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
+                    <Zap className="h-3.5 w-3.5" />
+                    <span className="font-mono tracking-tight">{activeTunnels}/{totalTunnels}</span>
+                  </div>
+                }
+              >
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex items-center justify-between gap-6 text-sm">
+                    <div className="flex items-center gap-2.5 text-blue-500">
+                      <Zap className="h-4 w-4" />
+                      <span className="font-medium">活跃隧道</span>
+                    </div>
+                    <span className="font-bold font-mono">{activeTunnels}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-6 text-sm">
+                    <div className="flex items-center gap-2.5 text-amber-500">
+                      <Pause className="h-4 w-4" />
+                      <span className="font-medium">挂起隧道</span>
+                    </div>
+                    <span className="font-bold font-mono">{suspendedTunnels}</span>
+                  </div>
+                </div>
+              </DualTriggerCard>
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {!isAdmin && (
-            <Button variant="secondary" size="sm" onClick={() => setShowAddClient(true)}>
-              <UserPlus className="h-4 w-4 mr-1.5" />
-              添加 Client
-            </Button>
-          )}
+          <Button variant="secondary" size="sm" onClick={() => setShowAddClient(true)}>
+            <UserPlus className="h-4 w-4 mr-1.5" />
+            <span className="hidden sm:inline">添加 Client</span>
+          </Button>
 
-          <div className="w-px h-5 bg-border mx-2" />
+          <div className="w-px h-5 bg-border mx-1 sm:mx-2" />
 
-          {isAdmin ? (
-            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground" onClick={() => navigate({ to: '/dashboard' })}>
-              <Home className="h-5 w-5" />
-            </Button>
-          ) : (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-                  <Settings className="h-5 w-5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>系统设置</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => navigate({ to: '/admin/config' })}>
-                  服务配置
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => navigate({ to: '/admin/keys' })}>
-                  API Key 管理
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => navigate({ to: '/admin/policies' })}>
-                  隧道策略
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => navigate({ to: '/admin/events' })}>
-                  审计事件
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => navigate({ to: '/admin/logs' })}>
-                  系统日志
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onClick={handleLogout}>
-                  <LogOut className="h-4 w-4 mr-2" />
-                  退出登录
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <LogOut className="h-4 w-4 mr-1.5" />
+                <span className="hidden sm:inline">退出</span>
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>确认退出？</AlertDialogTitle>
+                <AlertDialogDescription>
+                  退出后需要重新登录才能访问控制台。
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogAction onClick={handleLogout}>确认退出</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </header>
 
       <AddClientDialog open={showAddClient} onOpenChange={setShowAddClient} />
     </>
   );
+}
+
+export function TopBar() {
+  return <TopBarInner />;
 }

@@ -1,14 +1,39 @@
 import { useState, useMemo } from 'react';
 import {
   Search, Server as ServerIcon, Activity, LayoutDashboard,
+  Settings, Key, Shield, FileText, Activity as EventIcon,
 } from 'lucide-react';
-import { Link, useMatch } from '@tanstack/react-router';
+import { Link, useMatch, useRouterState } from '@tanstack/react-router';
 import type { Client } from '@/types';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarFooter,
+  SidebarInput,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuButton,
+  SidebarMenuBadge,
+  SidebarRail,
+  SidebarSeparator,
+} from '@/components/ui/sidebar';
 
 interface ClientSidebarProps {
   clients: Client[];
   isLoading: boolean;
 }
+
+const ADMIN_NAV = [
+  { path: '/dashboard/admin/config', name: '服务配置', icon: Settings },
+  { path: '/dashboard/admin/keys', name: 'Key 管理', icon: Key },
+  { path: '/dashboard/admin/policies', name: '隧道策略', icon: Shield },
+  { path: '/dashboard/admin/logs', name: '系统日志', icon: FileText },
+  { path: '/dashboard/admin/events', name: '审计事件', icon: EventIcon },
+];
 
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -17,8 +42,10 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const clientMatch = useMatch({ from: '/dashboard/clients/$clientId', shouldThrow: false });
   const currentClientId = clientMatch?.params?.clientId;
 
-  // 判断当前是否在概览页（无 clientId）
-  const isOverview = !currentClientId;
+  // 判断当前是否在概览页（无 clientId 且不在 admin 区）
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isAdmin = pathname.includes('/admin');
+  const isOverview = !currentClientId && !isAdmin;
 
   const filteredClients = useMemo(() => {
     if (!searchQuery.trim()) return clients;
@@ -41,95 +68,131 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   }, [filteredClients]);
 
   return (
-    <aside className="w-64 flex flex-col border-r border-border/40 bg-muted/10">
-      <div className="p-3">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="过滤节点..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full h-9 pl-9 pr-3 rounded-md bg-background border border-border/50 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-shadow"
-          />
-        </div>
-      </div>
-
-      {/* Dashboard 概览入口 */}
-      <Link
-        to="/dashboard"
-        className={`flex items-center mx-3 py-2 px-3 rounded-md cursor-pointer text-sm transition-colors ${
-          isOverview
-            ? 'bg-primary/10 text-primary font-medium'
-            : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-        }`}
-      >
-        <LayoutDashboard className="h-4 w-4 mr-2" />
-        Dashboard
-      </Link>
-      <div className="mx-3 my-2 border-t border-border/30" />
-
-      <div className="flex-1 overflow-y-auto px-2 pb-4 select-none">
-        {isLoading ? (
-          <div className="space-y-2 px-2 pt-2">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-8 w-full rounded-md bg-muted/50 animate-pulse" />
-            ))}
+    <Sidebar collapsible="offcanvas">
+      <SidebarHeader>
+        <Link
+          to="/dashboard"
+          className="flex items-center gap-2.5 px-2 py-2.5 select-none hover:opacity-80 transition-opacity"
+        >
+          <img src="/logo.svg" alt="NetsGo" className="h-8 w-8" />
+          <div className="flex flex-col -space-y-0.5">
+            <span className="font-bold text-base tracking-tight leading-tight">NetsGo</span>
+            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest leading-tight">Console</span>
           </div>
-        ) : clients.length === 0 ? (
-          <div className="flex flex-col items-center justify-center text-muted-foreground py-12 px-4 text-center">
-            <Activity className="h-10 w-10 mb-3 opacity-20" />
-            <p className="text-sm">暂无 Client</p>
-            <p className="text-xs opacity-60 mt-1">启动 Client 后将自动显示</p>
-          </div>
-        ) : filteredClients.length === 0 ? (
-          <div className="flex flex-col items-center justify-center text-muted-foreground py-12 px-4 text-center">
-            <Search className="h-10 w-10 mb-3 opacity-20" />
-            <p className="text-sm">未找到匹配的节点</p>
-          </div>
-        ) : (
-          <div className="space-y-0.5">
-            {sortedClients.map((client) => {
-              const isOnline = client.online;
-              const isSelected = currentClientId === client.id;
+        </Link>
+        <SidebarInput
+          placeholder="过滤节点..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+      </SidebarHeader>
 
-              return (
-                <Link
-                  key={client.id}
-                  to="/dashboard/clients/$clientId"
-                  params={{ clientId: client.id }}
-                  className={`flex items-center py-1.5 px-3 rounded-md cursor-pointer text-sm transition-colors ${
-                    isSelected
-                      ? 'bg-primary/10 text-primary font-medium'
-                      : isOnline
-                        ? 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-                        : 'text-muted-foreground opacity-60 hover:opacity-100 hover:bg-muted/50'
-                  }`}
-                >
-                  {/* 在线/离线状态点 */}
-                  {isOnline ? (
-                    <span className="relative flex h-2 w-2 mr-2.5 shrink-0">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                    </span>
-                  ) : (
-                    <span className="h-2 w-2 rounded-full bg-muted-foreground/50 mr-2.5 shrink-0" />
-                  )}
-
-                  <ServerIcon className="h-4 w-4 mr-2 opacity-70 shrink-0" />
-                  <span className="truncate flex-1">{client.info.hostname}</span>
-
-                  {(client.proxies?.length ?? 0) > 0 && (
-                    <span className="text-[10px] bg-background border border-border/50 px-1.5 rounded text-muted-foreground ml-1">
-                      {client.proxies!.length}
-                    </span>
-                  )}
+      <SidebarContent>
+        {/* Dashboard 概览入口 */}
+        <SidebarGroup>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={isOverview} tooltip="Dashboard">
+                <Link to="/dashboard">
+                  <LayoutDashboard />
+                  <span>Dashboard</span>
                 </Link>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </aside>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
+
+        <SidebarSeparator />
+
+        {/* Client 列表 */}
+        <SidebarGroup>
+          <SidebarGroupContent>
+            {isLoading ? (
+              <div className="flex flex-col gap-2 px-2 pt-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-8 w-full rounded-md bg-muted/50 animate-pulse" />
+                ))}
+              </div>
+            ) : clients.length === 0 ? (
+              <div className="flex flex-col items-center justify-center text-muted-foreground py-12 px-4 text-center">
+                <Activity className="h-10 w-10 mb-3 opacity-20" />
+                <p className="text-sm">暂无 Client</p>
+                <p className="text-xs opacity-60 mt-1">启动 Client 后将自动显示</p>
+              </div>
+            ) : filteredClients.length === 0 ? (
+              <div className="flex flex-col items-center justify-center text-muted-foreground py-12 px-4 text-center">
+                <Search className="h-10 w-10 mb-3 opacity-20" />
+                <p className="text-sm">未找到匹配的节点</p>
+              </div>
+            ) : (
+              <SidebarMenu>
+                {sortedClients.map((client) => {
+                  const isOnline = client.online;
+                  const isSelected = currentClientId === client.id;
+
+                  return (
+                    <SidebarMenuItem key={client.id}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={isSelected}
+                        tooltip={client.info.hostname}
+                        className={!isOnline && !isSelected ? 'opacity-60' : ''}
+                      >
+                        <Link
+                          to="/dashboard/clients/$clientId"
+                          params={{ clientId: client.id }}
+                        >
+                          {isOnline ? (
+                            <span className="relative flex h-2 w-2 shrink-0">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                            </span>
+                          ) : (
+                            <span className="h-2 w-2 rounded-full bg-muted-foreground/50 shrink-0" />
+                          )}
+                          <ServerIcon className="opacity-70 shrink-0" />
+                          <span>{client.info.hostname}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      {(client.proxies?.length ?? 0) > 0 && (
+                        <SidebarMenuBadge>
+                          {client.proxies!.length}
+                        </SidebarMenuBadge>
+                      )}
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            )}
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+
+      {/* 底部 — 系统设置 */}
+      <SidebarFooter>
+        <SidebarSeparator />
+        <SidebarGroup>
+          <SidebarGroupLabel>系统设置</SidebarGroupLabel>
+          <SidebarMenu>
+            {ADMIN_NAV.map((item) => (
+              <SidebarMenuItem key={item.path}>
+                <SidebarMenuButton
+                  asChild
+                  isActive={pathname === item.path}
+                  tooltip={item.name}
+                >
+                  <Link to={item.path}>
+                    <item.icon />
+                    <span>{item.name}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
+      </SidebarFooter>
+
+      <SidebarRail />
+    </Sidebar>
   );
 }
