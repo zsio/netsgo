@@ -31,13 +31,14 @@ type AdminUser struct {
 
 // RegisteredClient 表示一个具有稳定身份的 Client 记录
 type RegisteredClient struct {
-	ID        string                `json:"id"`
-	InstallID string                `json:"install_id"`
-	Info      protocol.ClientInfo   `json:"info"`
-	Stats     *protocol.SystemStats `json:"stats,omitempty"`
-	CreatedAt time.Time             `json:"created_at"`
-	LastSeen  time.Time             `json:"last_seen"`
-	LastIP    string                `json:"last_ip"`
+	ID          string                `json:"id"`
+	InstallID   string                `json:"install_id"`
+	DisplayName string                `json:"display_name,omitempty"` // 自定义展示名（空则使用 hostname）
+	Info        protocol.ClientInfo   `json:"info"`
+	Stats       *protocol.SystemStats `json:"stats,omitempty"`
+	CreatedAt   time.Time             `json:"created_at"`
+	LastSeen    time.Time             `json:"last_seen"`
+	LastIP      string                `json:"last_ip"`
 }
 
 // TunnelPolicy 隧道策略控制（旧版，保留向后兼容）

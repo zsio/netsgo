@@ -4,6 +4,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowRightLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
+import { getClientDisplayName } from '@/lib/client-utils';
 
 export function DashboardTunnelTable() {
   const { data: clients, isLoading } = useClients();
@@ -18,7 +19,7 @@ export function DashboardTunnelTable() {
     (client.proxies || []).map((proxy) => ({
       ...proxy,
       clientId: client.id,
-      clientName: client.info.hostname,
+      clientName: getClientDisplayName(client),
     }))
   ) || [];
 

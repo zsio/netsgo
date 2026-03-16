@@ -318,3 +318,144 @@ func encodeJSON(w http.ResponseWriter, status int, payload any) {
 		log.Printf("⚠️ JSON 响应编码失败: %v", err)
 	}
 }
+
+// affectedTunnel 描述一条受端口白名单变更影响的隧道
+type affectedTunnel struct {
+	ClientID   string `json:"client_id"`
+	Hostname   string `json:"hostname"`
+	TunnelName string `json:"tunnel_name"`
+	RemotePort int    `json:"remote_port"`
+	Status     string `json:"status"`
+}
+
+// isPortInRanges 检查端口是否在给定的白名单范围内
+func isPortInRanges(port int, ranges []PortRange) bool {
+	for _, pr := range ranges {
+		if port >= pr.Start && port <= pr.End {
+			return true
+		}
+	}
+	return false
+}
+
+// findTunnelsAffectedByPortChange 找出所有会被新端口白名单规则影响的隧道
+// 扫描运行时内存中的隧道 + 持久化存储中的隧道（离线客户端的隧道）
+func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affectedTunnel {
+	// 新白名单为空 → 不限制端口，不会有受影响的隧道
+	if len(newPorts) == 0 {
+		return []affectedTunnel{}
+	}
+
+	affected := []affectedTunnel{}
+	seen := map[string]bool{} // key: "clientID:tunnelName"
+
+	// 1) 扫描运行时内存中的隧道（在线客户端）
+	s.clients.Range(func(_, value any) bool {
+		client := value.(*ClientConn)
+		client.RangeProxies(func(name string, tunnel *ProxyTunnel) bool {
+			if tunnel.Config.RemotePort != 0 && !isPortInRanges(tunnel.Config.RemotePort, newPorts) {
+				// 已经是 error 状态的不重复通报（除非端口也变了）
+				if tunnel.Config.Status == protocol.ProxyStatusError {
+					return true
+				}
+				key := client.ID + ":" + name
+				seen[key] = true
+				affected = append(affected, affectedTunnel{
+					ClientID:   client.ID,
+					Hostname:   client.Info.Hostname,
+					TunnelName: name,
+					RemotePort: tunnel.Config.RemotePort,
+					Status:     tunnel.Config.Status,
+				})
+			}
+			return true
+		})
+		return true
+	})
+
+	// 2) 扫描持久化存储中的隧道（包含离线客户端的隧道）
+	if s.store != nil {
+		allStored := s.store.GetAllTunnels()
+		for _, st := range allStored {
+			if st.RemotePort == 0 {
+				continue
+			}
+			if st.Status == protocol.ProxyStatusError {
+				continue
+			}
+			key := st.ClientID + ":" + st.Name
+			if seen[key] {
+				continue // 已在运行时中统计过
+			}
+			if !isPortInRanges(st.RemotePort, newPorts) {
+				hostname := st.Hostname
+				// 尝试从 adminStore 获取更详细的主机名
+				if s.adminStore != nil && st.ClientID != "" {
+					if reg, ok := s.adminStore.GetRegisteredClient(st.ClientID); ok {
+						hostname = reg.Info.Hostname
+					}
+				}
+				affected = append(affected, affectedTunnel{
+					ClientID:   st.ClientID,
+					Hostname:   hostname,
+					TunnelName: st.Name,
+					RemotePort: st.RemotePort,
+					Status:     st.Status,
+				})
+			}
+		}
+	}
+
+	return affected
+}
+
+// markTunnelsPortNotAllowed 将受端口白名单变更影响的隧道标记为 error 状态
+func (s *Server) markTunnelsPortNotAllowed(affected []affectedTunnel) {
+	for _, a := range affected {
+		errMsg := fmt.Sprintf("端口 %d 不在允许范围内", a.RemotePort)
+
+		// 更新运行时状态（在线客户端）
+		if value, ok := s.clients.Load(a.ClientID); ok {
+			client := value.(*ClientConn)
+			client.proxyMu.Lock()
+			if tunnel, exists := client.proxies[a.TunnelName]; exists {
+				// 如果隧道是 active 状态，先关闭 listener
+				if tunnel.Config.Status == protocol.ProxyStatusActive {
+					tunnel.once.Do(func() {
+						close(tunnel.done)
+						if tunnel.UDPState != nil {
+							tunnel.UDPState.Close()
+						}
+						if tunnel.Listener != nil {
+							tunnel.Listener.Close()
+						}
+					})
+					// 通知客户端关闭隧道
+					go func(c *ClientConn, name string) {
+						_ = s.notifyClientProxyClose(c, name, "port_not_allowed")
+					}(client, a.TunnelName)
+				}
+				tunnel.Config.Status = protocol.ProxyStatusError
+				tunnel.Config.Error = errMsg
+			}
+			client.proxyMu.Unlock()
+
+			// 发送 tunnel_changed 事件
+			s.emitTunnelChanged(a.ClientID, protocol.ProxyConfig{
+				Name:       a.TunnelName,
+				RemotePort: a.RemotePort,
+				ClientID:   a.ClientID,
+				Status:     protocol.ProxyStatusError,
+				Error:      errMsg,
+			}, "port_not_allowed")
+		}
+
+		// 更新持久化状态
+		if s.store != nil {
+			_ = s.store.UpdateStatus(a.ClientID, a.TunnelName, protocol.ProxyStatusError)
+		}
+
+		log.Printf("⚠️ 隧道 %s (端口 %d, 客户端 %s) 因端口白名单变更被标记为异常",
+			a.TunnelName, a.RemotePort, a.ClientID)
+	}
+}

@@ -68,7 +68,7 @@ export function AddTunnelDialog({ clientId }: AddTunnelDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetForm(); }}>
       <DialogTrigger asChild>
-        <Button variant="default" className="shadow-sm shadow-primary/20">
+        <Button>
           添加隧道
         </Button>
       </DialogTrigger>
@@ -98,18 +98,15 @@ export function AddTunnelDialog({ clientId }: AddTunnelDialogProps) {
             <label className="text-sm font-medium">协议类型</label>
             <div className="flex gap-2">
               {typeOptions.map((opt) => (
-                <button
+                <Button
                   key={opt.value}
                   type="button"
-                  className={`flex-1 py-2 rounded-md text-sm font-medium border transition-colors ${
-                    type === opt.value
-                      ? 'bg-primary text-primary-foreground border-primary'
-                      : 'bg-background text-muted-foreground border-border hover:bg-muted/50'
-                  }`}
+                  variant={type === opt.value ? 'default' : 'outline'}
+                  className="flex-1"
                   onClick={() => setType(opt.value)}
                 >
                   {opt.label}
-                </button>
+                </Button>
               ))}
             </div>
           </div>

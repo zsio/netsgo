@@ -425,6 +425,22 @@ func (s *AdminStore) CountClientsByHostname(hostname string) int {
 	return count
 }
 
+// ========== Display Name ==========
+
+// UpdateClientDisplayName 更新 Client 的自定义展示名
+func (s *AdminStore) UpdateClientDisplayName(clientID, displayName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, client := range s.data.Clients {
+		if client.ID == clientID {
+			s.data.Clients[i].DisplayName = displayName
+			return s.save()
+		}
+	}
+	return fmt.Errorf("client %q 不存在", clientID)
+}
+
 // ========== Sessions ==========
 
 // CreateSession 创建新 session（会先删除同用户旧 session → 单端登录）

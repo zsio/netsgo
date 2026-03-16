@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   UserPlus, LogOut, Monitor, Zap, MonitorOff, Pause
 } from 'lucide-react';
@@ -125,27 +126,44 @@ function TopBarInner() {
           <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
 
           {/* Logo — desktop collapsed mode: next to sidebar trigger */}
-          {showLogoInHeader && !showCenteredLogo && (
-            <>
-              <Separator orientation="vertical" className="h-6" />
-              <div
-                className="flex items-center gap-2.5 cursor-pointer select-none hover:opacity-80 transition-opacity"
-                onClick={() => navigate({ to: '/dashboard' })}
+          <AnimatePresence>
+            {showLogoInHeader && !showCenteredLogo && (
+              <motion.div
+                key="header-logo"
+                className="flex items-center gap-2.5"
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -8 }}
+                transition={{ duration: 0.2, ease: 'easeOut' as const }}
               >
-                <img src="/logo.svg" alt="NetsGo" className="h-8 w-8" />
-                <div className="flex flex-col -space-y-0.5">
-                  <span className="font-bold text-base tracking-tight leading-tight">NetsGo</span>
-                  <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest leading-tight">Console</span>
+                <Separator orientation="vertical" className="h-6" />
+                <div
+                  className="flex items-center gap-2.5 cursor-pointer select-none hover:opacity-80 transition-opacity"
+                  onClick={() => navigate({ to: '/dashboard' })}
+                >
+                  <img src="/logo.svg" alt="NetsGo" className="h-8 w-8" />
+                  <div className="flex flex-col -space-y-0.5">
+                    <span className="font-bold text-base tracking-tight leading-tight">NetsGo</span>
+                    <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest leading-tight">Console</span>
+                  </div>
                 </div>
-              </div>
-            </>
-          )}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div className="w-px h-6 bg-border/60 mx-2 hidden sm:block" />
 
           {/* Status Group */}
-          {showLogoInHeader && !showCenteredLogo && (
-            <div className="hidden sm:flex items-center gap-2">
+          <AnimatePresence>
+            {showLogoInHeader && !showCenteredLogo && (
+              <motion.div
+                key="header-status"
+                className="hidden sm:flex items-center gap-2"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+              >
                 <DualTriggerCard
                   triggers={
                     <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
@@ -197,8 +215,9 @@ function TopBarInner() {
                     </div>
                   </div>
                 </DualTriggerCard>
-            </div>
-          )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Logo — mobile centered mode: absolutely centered in header */}

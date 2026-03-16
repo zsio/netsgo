@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { motion, useSpring, useTransform } from 'motion/react';
 import {
   Server as ServerIcon, Activity, LayoutDashboard,
   Settings, Key, Shield, FileText, Activity as EventIcon,
@@ -6,6 +7,7 @@ import {
 } from 'lucide-react';
 import { Link, useMatch, useRouterState } from '@tanstack/react-router';
 import type { Client } from '@/types';
+import { getClientDisplayName } from '@/lib/client-utils';
 import { useServerStatus } from '@/hooks/use-server-status';
 import {
   Sidebar,
@@ -26,6 +28,16 @@ import {
 interface ClientSidebarProps {
   clients: Client[];
   isLoading: boolean;
+}
+
+function AnimatedNumber({ value, className }: { value: number; className?: string }) {
+  const spring = useSpring(value, { stiffness: 80, damping: 20 });
+  const display = useTransform(spring, (v) => Math.round(v).toString());
+
+  // Update spring target when value changes
+  spring.set(value);
+
+  return <motion.span className={className}>{display}</motion.span>;
 }
 
 const ADMIN_NAV = [
@@ -121,7 +133,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
               </div>
             </div>
             <div className="flex items-baseline gap-1">
-              <span className="text-sm font-bold font-mono tracking-tight">{activeTunnels}</span>
+              <AnimatedNumber value={activeTunnels} className="text-sm font-bold font-mono tracking-tight" />
               <span className="text-[10px] text-muted-foreground/60 font-mono">/ {totalTunnels}</span>
             </div>
           </div>
@@ -171,7 +183,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                       <SidebarMenuButton
                         asChild
                         isActive={isSelected}
-                        tooltip={client.info.hostname}
+                        tooltip={client.display_name ? `${client.display_name} (${client.info.hostname})` : client.info.hostname}
                         className={!isOnline && !isSelected ? 'opacity-60' : ''}
                       >
                         <Link
@@ -187,7 +199,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                             <span className="h-2 w-2 rounded-full bg-muted-foreground/50 shrink-0" />
                           )}
                           <ServerIcon className="opacity-70 shrink-0" />
-                          <span>{client.info.hostname}</span>
+                          <span>{getClientDisplayName(client)}</span>
                         </Link>
                       </SidebarMenuButton>
                       {(client.proxies?.length ?? 0) > 0 && (

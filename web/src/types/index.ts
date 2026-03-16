@@ -37,6 +37,7 @@ export interface SystemStats {
 /** 对齐 /api/clients 响应中的 clientView (server.go handleAPIClients) */
 export interface Client {
   id: string;
+  display_name?: string;
   info: ClientInfo;
   stats: SystemStats | null;
   proxies?: ProxyConfig[];

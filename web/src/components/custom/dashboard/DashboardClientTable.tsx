@@ -5,12 +5,13 @@ import { Laptop, Cpu, HardDrive } from 'lucide-react';
 import { formatPercent } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 import type { Client } from '@/types';
+import { getClientDisplayName } from '@/lib/client-utils';
 
 function ClientMobileCard({ client, onNavigate }: { client: Client; onNavigate: () => void }) {
   return (
     <div className="p-4 flex flex-col gap-3 border-b border-border/40 last:border-b-0">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-foreground text-sm truncate mr-2">{client.info.hostname}</span>
+        <span className="font-medium text-foreground text-sm truncate mr-2">{getClientDisplayName(client)}</span>
         {client.online ? (
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-500 text-xs font-medium shrink-0">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
@@ -95,7 +96,7 @@ export function DashboardClientTable() {
             ) : (
               clients.map((client) => (
                 <tr key={client.id} className="hover:bg-muted/30 transition-colors">
-                  <td className="px-6 py-3 font-medium text-foreground">{client.info.hostname}</td>
+                  <td className="px-6 py-3 font-medium text-foreground">{getClientDisplayName(client)}</td>
                   <td className="px-6 py-3">{client.last_ip || client.info.ip || '-'}</td>
                   <td className="px-6 py-3">
                     {client.online ? (

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -402,6 +403,19 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 			config.AllowedPorts = []PortRange{}
 		}
 
+		// 检查受影响的隧道（当新白名单非空时）
+		affected := s.findTunnelsAffectedByPortChange(config.AllowedPorts)
+
+		// dry_run 模式：仅预览受影响的隧道，不保存
+		if r.URL.Query().Get("dry_run") == "true" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"affected_tunnels": affected,
+			})
+			return
+		}
+
+		// 实际保存配置
 		if err := s.adminStore.UpdateServerConfig(config); err != nil {
 			http.Error(w, `{"error":"failed to update config"}`, http.StatusInternalServerError)
 			return
@@ -414,8 +428,19 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		s.adminStore.AddSystemLog("INFO", "Server config updated by "+adminName, "admin")
 
+		// 将受影响的运行时隧道标记为 error
+		if len(affected) > 0 {
+			s.markTunnelsPortNotAllowed(affected)
+			s.adminStore.AddSystemLog("WARN",
+				fmt.Sprintf("端口白名单变更导致 %d 条隧道被标记为异常", len(affected)),
+				"admin")
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"success": true})
+		json.NewEncoder(w).Encode(map[string]any{
+			"success":          true,
+			"affected_tunnels": affected,
+		})
 
 	default:
 		http.Error(w, `{"error":"not allowed"}`, http.StatusMethodNotAllowed)

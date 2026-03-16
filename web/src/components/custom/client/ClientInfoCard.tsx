@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/hover-card';
 import { NetworkInfoPopover } from '@/components/custom/common/NetworkInfoPopover';
 import type { Client } from '@/types';
+import { getClientDisplayName } from '@/lib/client-utils';
 
 interface ClientInfoCardProps {
   client: Client;
@@ -51,7 +52,10 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
       <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-border/40 bg-muted/20 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Monitor className="h-5 w-5 text-primary" />
-          <h3 className="font-semibold text-foreground">{info.hostname}</h3>
+          <h3 className="font-semibold text-foreground">{getClientDisplayName(client)}</h3>
+          {client.display_name && (
+            <span className="text-xs text-muted-foreground font-normal">({info.hostname})</span>
+          )}
         </div>
         <div className="flex items-center gap-2 text-sm">
           <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500' : 'bg-destructive'}`} />

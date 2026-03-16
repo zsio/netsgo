@@ -89,13 +89,14 @@ func generateDataToken() string {
 }
 
 type clientView struct {
-	ID       string                 `json:"id"`
-	Info     protocol.ClientInfo    `json:"info"`
-	Stats    *protocol.SystemStats  `json:"stats,omitempty"`
-	Proxies  []protocol.ProxyConfig `json:"proxies"`
-	Online   bool                   `json:"online"`
-	LastSeen *time.Time             `json:"last_seen,omitempty"`
-	LastIP   string                 `json:"last_ip,omitempty"`
+	ID          string                 `json:"id"`
+	DisplayName string                 `json:"display_name,omitempty"`
+	Info        protocol.ClientInfo    `json:"info"`
+	Stats       *protocol.SystemStats  `json:"stats,omitempty"`
+	Proxies     []protocol.ProxyConfig `json:"proxies"`
+	Online      bool                   `json:"online"`
+	LastSeen    *time.Time             `json:"last_seen,omitempty"`
+	LastIP      string                 `json:"last_ip,omitempty"`
 }
 
 type serverStatusView struct {
@@ -439,6 +440,7 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 	// API
 	mux.HandleFunc("GET /api/status", s.RequireAuth(s.handleAPIStatus))
 	mux.HandleFunc("GET /api/clients", s.RequireAuth(s.handleAPIClients))
+	mux.HandleFunc("PUT /api/clients/{id}/display-name", s.RequireAuth(s.handleUpdateDisplayName))
 	mux.HandleFunc("POST /api/clients/{id}/tunnels", s.RequireAuth(s.handleCreateTunnel))
 	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/pause", s.RequireAuth(s.handlePauseTunnel))
 	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/resume", s.RequireAuth(s.handleResumeTunnel))
@@ -1013,13 +1015,14 @@ func (s *Server) collectClientViews() []clientView {
 		for _, registered := range s.adminStore.GetRegisteredClients() {
 			lastSeen := registered.LastSeen
 			view := clientView{
-				ID:       registered.ID,
-				Info:     registered.Info,
-				Stats:    registered.Stats,
-				Proxies:  []protocol.ProxyConfig{},
-				Online:   false,
-				LastSeen: &lastSeen,
-				LastIP:   registered.LastIP,
+				ID:          registered.ID,
+				DisplayName: registered.DisplayName,
+				Info:        registered.Info,
+				Stats:       registered.Stats,
+				Proxies:     []protocol.ProxyConfig{},
+				Online:      false,
+				LastSeen:    &lastSeen,
+				LastIP:      registered.LastIP,
 			}
 			if s.store != nil {
 				stored := s.store.GetTunnelsByClientID(registered.ID)
@@ -1329,6 +1332,38 @@ func (s *Server) getStorePath() string {
 func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.collectClientViews())
+}
+// --- Client 展示名 API ---
+
+func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request) {
+	clientID := r.PathValue("id")
+	if clientID == "" {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing client id"})
+		return
+	}
+
+	var req struct {
+		DisplayName string `json:"display_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+
+	if s.adminStore == nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "admin store unavailable"})
+		return
+	}
+
+	if err := s.adminStore.UpdateClientDisplayName(clientID, req.DisplayName); err != nil {
+		encodeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		return
+	}
+
+	encodeJSON(w, http.StatusOK, map[string]any{
+		"success":      true,
+		"display_name": req.DisplayName,
+	})
 }
 
 // --- 隧道 CRUD API ---

@@ -2,6 +2,7 @@ import { ArrowRightLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
 import type { Client } from '@/types';
+import { getClientDisplayName } from '@/lib/client-utils';
 
 interface TunnelTableProps {
   client: Client;
@@ -11,7 +12,7 @@ export function TunnelTable({ client }: TunnelTableProps) {
   const tunnels: TunnelEntry[] = (client.proxies ?? []).map((proxy) => ({
     ...proxy,
     clientId: client.id,
-    clientName: client.info.hostname,
+    clientName: getClientDisplayName(client),
   }));
 
   return (
