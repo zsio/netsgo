@@ -26,7 +26,7 @@ import {
 import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
 
-function DualTriggerCard({ triggers, children }: { triggers: React.ReactNode, children: React.ReactNode }) {
+export function DualTriggerCard({ triggers, children }: { triggers: React.ReactNode, children: React.ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -144,59 +144,61 @@ function TopBarInner() {
           <div className="w-px h-6 bg-border/60 mx-2 hidden sm:block" />
 
           {/* Status Group */}
-          <div className="hidden sm:flex items-center gap-2">
-              <DualTriggerCard
-                triggers={
-                  <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
-                    <Monitor className="h-3.5 w-3.5" />
-                    <span className="font-mono tracking-tight">{onlineClientCount}/{totalClients}</span>
-                  </div>
-                }
-              >
-                <div className="flex flex-col gap-2.5">
-                  <div className="flex items-center justify-between gap-6 text-sm">
-                    <div className="flex items-center gap-2.5 text-emerald-500">
-                      <Monitor className="h-4 w-4" />
-                      <span className="font-medium">在线节点</span>
+          {showLogoInHeader && !showCenteredLogo && (
+            <div className="hidden sm:flex items-center gap-2">
+                <DualTriggerCard
+                  triggers={
+                    <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
+                      <Monitor className="h-3.5 w-3.5" />
+                      <span className="font-mono tracking-tight">{onlineClientCount}/{totalClients}</span>
                     </div>
-                    <span className="font-bold font-mono">{onlineClientCount}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-6 text-sm">
-                    <div className="flex items-center gap-2.5 text-rose-500">
-                      <MonitorOff className="h-4 w-4" />
-                      <span className="font-medium">离线节点</span>
+                  }
+                >
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex items-center justify-between gap-6 text-sm">
+                      <div className="flex items-center gap-2.5 text-emerald-500">
+                        <Monitor className="h-4 w-4" />
+                        <span className="font-medium">在线节点</span>
+                      </div>
+                      <span className="font-bold font-mono">{onlineClientCount}</span>
                     </div>
-                    <span className="font-bold font-mono">{offlineClientCount}</span>
+                    <div className="flex items-center justify-between gap-6 text-sm">
+                      <div className="flex items-center gap-2.5 text-rose-500">
+                        <MonitorOff className="h-4 w-4" />
+                        <span className="font-medium">离线节点</span>
+                      </div>
+                      <span className="font-bold font-mono">{offlineClientCount}</span>
+                    </div>
                   </div>
-                </div>
-              </DualTriggerCard>
+                </DualTriggerCard>
 
-              <DualTriggerCard
-                triggers={
-                  <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
-                    <Zap className="h-3.5 w-3.5" />
-                    <span className="font-mono tracking-tight">{activeTunnels}/{totalTunnels}</span>
-                  </div>
-                }
-              >
-                <div className="flex flex-col gap-2.5">
-                  <div className="flex items-center justify-between gap-6 text-sm">
-                    <div className="flex items-center gap-2.5 text-blue-500">
-                      <Zap className="h-4 w-4" />
-                      <span className="font-medium">活跃隧道</span>
+                <DualTriggerCard
+                  triggers={
+                    <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
+                      <Zap className="h-3.5 w-3.5" />
+                      <span className="font-mono tracking-tight">{activeTunnels}/{totalTunnels}</span>
                     </div>
-                    <span className="font-bold font-mono">{activeTunnels}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-6 text-sm">
-                    <div className="flex items-center gap-2.5 text-amber-500">
-                      <Pause className="h-4 w-4" />
-                      <span className="font-medium">挂起隧道</span>
+                  }
+                >
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex items-center justify-between gap-6 text-sm">
+                      <div className="flex items-center gap-2.5 text-blue-500">
+                        <Zap className="h-4 w-4" />
+                        <span className="font-medium">活跃隧道</span>
+                      </div>
+                      <span className="font-bold font-mono">{activeTunnels}</span>
                     </div>
-                    <span className="font-bold font-mono">{suspendedTunnels}</span>
+                    <div className="flex items-center justify-between gap-6 text-sm">
+                      <div className="flex items-center gap-2.5 text-amber-500">
+                        <Pause className="h-4 w-4" />
+                        <span className="font-medium">挂起隧道</span>
+                      </div>
+                      <span className="font-bold font-mono">{suspendedTunnels}</span>
+                    </div>
                   </div>
-                </div>
-              </DualTriggerCard>
-          </div>
+                </DualTriggerCard>
+            </div>
+          )}
         </div>
 
         {/* Logo — mobile centered mode: absolutely centered in header */}

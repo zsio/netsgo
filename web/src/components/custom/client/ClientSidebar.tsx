@@ -1,10 +1,12 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import {
-  Search, Server as ServerIcon, Activity, LayoutDashboard,
+  Server as ServerIcon, Activity, LayoutDashboard,
   Settings, Key, Shield, FileText, Activity as EventIcon,
+  Monitor, Zap
 } from 'lucide-react';
 import { Link, useMatch, useRouterState } from '@tanstack/react-router';
 import type { Client } from '@/types';
+import { useServerStatus } from '@/hooks/use-server-status';
 import {
   Sidebar,
   SidebarContent,
@@ -13,7 +15,6 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarFooter,
-  SidebarInput,
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
@@ -36,8 +37,6 @@ const ADMIN_NAV = [
 ];
 
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
-  const [searchQuery, setSearchQuery] = useState('');
-
   // 从路由匹配获取当前选中的 clientId
   const clientMatch = useMatch({ from: '/dashboard/clients/$clientId', shouldThrow: false });
   const currentClientId = clientMatch?.params?.clientId;
@@ -47,44 +46,86 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const isAdmin = pathname.includes('/admin');
   const isOverview = !currentClientId && !isAdmin;
 
-  const filteredClients = useMemo(() => {
-    if (!searchQuery.trim()) return clients;
-    const q = searchQuery.toLowerCase();
-    return clients.filter(
-      (a) =>
-        a.info.hostname.toLowerCase().includes(q) ||
-        a.id.toLowerCase().includes(q) ||
-        (a.last_ip || a.info.ip || '').toLowerCase().includes(q),
-    );
-  }, [clients, searchQuery]);
-
   // 在线排前面，离线排后面
   const sortedClients = useMemo(() => {
-    return [...filteredClients].sort((a, b) => {
+    return [...clients].sort((a, b) => {
       const aOnline = a.online ? 0 : 1;
       const bOnline = b.online ? 0 : 1;
       return aOnline - bOnline;
     });
-  }, [filteredClients]);
+  }, [clients]);
+
+  const onlineCount = clients.filter((c) => c.online).length;
+  const totalCount = clients.length;
+
+  const { data: status } = useServerStatus();
+  const activeTunnels = status?.tunnel_active ?? 0;
+  const totalTunnels = activeTunnels + (status?.tunnel_paused ?? 0) + (status?.tunnel_stopped ?? 0);
 
   return (
     <Sidebar collapsible="offcanvas">
-      <SidebarHeader>
-        <Link
-          to="/dashboard"
-          className="flex items-center gap-2.5 px-2 py-2.5 select-none hover:opacity-80 transition-opacity"
-        >
-          <img src="/logo.svg" alt="NetsGo" className="h-8 w-8" />
-          <div className="flex flex-col -space-y-0.5">
-            <span className="font-bold text-base tracking-tight leading-tight">NetsGo</span>
-            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest leading-tight">Console</span>
+      <SidebarHeader className="p-0">
+        <div className="h-14 flex flex-row items-center border-b border-border/40 px-4 shrink-0">
+          <Link
+            to="/dashboard"
+            className="flex items-center gap-2.5 w-full select-none hover:opacity-80 transition-opacity"
+          >
+            <img src="/logo.svg" alt="NetsGo" className="h-8 w-8" />
+            <div className="flex flex-col -space-y-0.5">
+              <span className="font-bold text-base tracking-tight leading-tight">NetsGo</span>
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest leading-tight">Console</span>
+            </div>
+          </Link>
+        </div>
+        <div className="flex items-center gap-1.5 px-3 py-3 w-full">
+          {/* Node Status Card */}
+          <div className="flex-1 flex flex-col bg-muted/40 rounded-lg p-2 border border-border/50 text-xs shadow-sm shadow-black/5">
+            <div className="flex items-center justify-between opacity-80 mb-1.5">
+              <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
+                <Monitor className="h-3 w-3" />
+                <span>节点</span>
+              </div>
+              <div className="relative flex h-1.5 w-1.5">
+                {onlineCount > 0 ? (
+                  <>
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+                  </>
+                ) : (
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-muted-foreground/50" />
+                )}
+              </div>
+            </div>
+            <div className="flex items-baseline gap-1">
+              <span className="text-sm font-bold font-mono tracking-tight">{onlineCount}</span>
+              <span className="text-[10px] text-muted-foreground/60 font-mono">/ {totalCount}</span>
+            </div>
           </div>
-        </Link>
-        <SidebarInput
-          placeholder="过滤节点..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
+
+          {/* Tunnel Status Card */}
+          <div className="flex-1 flex flex-col bg-muted/40 rounded-lg p-2 border border-border/50 text-xs shadow-sm shadow-black/5">
+            <div className="flex items-center justify-between opacity-80 mb-1.5">
+              <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
+                <Zap className="h-3 w-3" />
+                <span>隧道</span>
+              </div>
+              <div className="relative flex h-1.5 w-1.5">
+                {activeTunnels > 0 ? (
+                  <>
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
+                  </>
+                ) : (
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-muted-foreground/50" />
+                )}
+              </div>
+            </div>
+            <div className="flex items-baseline gap-1">
+              <span className="text-sm font-bold font-mono tracking-tight">{activeTunnels}</span>
+              <span className="text-[10px] text-muted-foreground/60 font-mono">/ {totalTunnels}</span>
+            </div>
+          </div>
+        </div>
       </SidebarHeader>
 
       <SidebarContent>
@@ -118,11 +159,6 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                 <Activity className="h-10 w-10 mb-3 opacity-20" />
                 <p className="text-sm">暂无 Client</p>
                 <p className="text-xs opacity-60 mt-1">启动 Client 后将自动显示</p>
-              </div>
-            ) : filteredClients.length === 0 ? (
-              <div className="flex flex-col items-center justify-center text-muted-foreground py-12 px-4 text-center">
-                <Search className="h-10 w-10 mb-3 opacity-20" />
-                <p className="text-sm">未找到匹配的节点</p>
               </div>
             ) : (
               <SidebarMenu>
