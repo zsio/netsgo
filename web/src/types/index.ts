@@ -28,6 +28,8 @@ export interface SystemStats {
   net_recv_speed: number; // bytes/s (server-computed)
   uptime: number;         // seconds
   num_cpu: number;
+  app_mem_used: number;   // bytes (Go heap alloc)
+  app_mem_sys: number;    // bytes (Go process sys)
 }
 
 /** 对齐 /api/clients 响应中的 clientView (server.go handleAPIClients) */

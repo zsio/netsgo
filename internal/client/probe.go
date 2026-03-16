@@ -120,5 +120,11 @@ func CollectSystemStats() (*protocol.SystemStats, error) {
 		stats.Uptime = uptime
 	}
 
+	// 程序（NetsGo Client）自身内存占用
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	stats.AppMemUsed = m.Alloc
+	stats.AppMemSys = m.Sys
+
 	return stats, nil
 }

@@ -32,6 +32,8 @@ type SystemStats struct {
 	NetRecvSpeed   float64         `json:"net_recv_speed"`  // 接收速率 (bytes/s)，服务端计算
 	Uptime         uint64          `json:"uptime"`          // 系统运行时间 (秒)
 	NumCPU         int             `json:"num_cpu"`         // CPU 核心数
+	AppMemUsed     uint64          `json:"app_mem_used"`    // 程序堆内存 (bytes)
+	AppMemSys      uint64          `json:"app_mem_sys"`     // 程序进程占用 (bytes)
 }
 
 // ProxyConfig 代理隧道的完整配置
