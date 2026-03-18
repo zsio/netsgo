@@ -293,16 +293,34 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 		msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 		conn.WriteJSON(msg)
 
-		// 等待服务端关闭连接（认证失败）
 		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		_, _, err = conn.ReadMessage()
-		if err == nil {
-			t.Fatalf("第 %d 次错误 Key 应导致连接关闭", i+1)
+		var resp protocol.Message
+		if err := conn.ReadJSON(&resp); err != nil {
+			t.Fatalf("第 %d 次错误 Key 认证读取响应失败: %v", i+1, err)
+		}
+		if resp.Type != protocol.MsgTypeAuthResp {
+			t.Fatalf("第 %d 次错误 Key 期望 auth_resp，得到 %s", i+1, resp.Type)
+		}
+		var authResp protocol.AuthResponse
+		if err := resp.ParsePayload(&authResp); err != nil {
+			t.Fatalf("第 %d 次错误 Key 解析 auth_resp 失败: %v", i+1, err)
+		}
+		if authResp.Success {
+			t.Fatalf("第 %d 次错误 Key 不应认证成功", i+1)
+		}
+		if authResp.Code != protocol.AuthCodeInvalidKey {
+			t.Fatalf("第 %d 次错误 Key 错误码应为 invalid_key，得到 %s", i+1, authResp.Code)
+		}
+		if authResp.Retryable {
+			t.Fatalf("第 %d 次错误 Key 不应标记为 retryable", i+1)
+		}
+		if authResp.ClearToken {
+			t.Fatalf("第 %d 次错误 Key 不应要求清除 token", i+1)
 		}
 		conn.Close()
 	}
 
-	// 第 4 次连接：即使用了正确 Key，也应被限速关闭
+	// 第 4 次连接：即使用了正确 Key，也应被限速拒绝
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("WebSocket 连接失败: %v", err)
@@ -323,9 +341,28 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	conn.WriteJSON(msg)
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, _, err = conn.ReadMessage()
-	if err == nil {
-		t.Fatal("被锁定的 IP 应无法通过认证")
+	var resp protocol.Message
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("读取限速认证响应失败: %v", err)
+	}
+	if resp.Type != protocol.MsgTypeAuthResp {
+		t.Fatalf("被限速时期望 auth_resp，得到 %s", resp.Type)
+	}
+	var authResp protocol.AuthResponse
+	if err := resp.ParsePayload(&authResp); err != nil {
+		t.Fatalf("解析限速认证响应失败: %v", err)
+	}
+	if authResp.Success {
+		t.Fatal("被锁定的 IP 不应认证成功")
+	}
+	if authResp.Code != protocol.AuthCodeRateLimited {
+		t.Fatalf("被限速时错误码应为 rate_limited，得到 %s", authResp.Code)
+	}
+	if !authResp.Retryable {
+		t.Fatal("rate_limited 应标记为 retryable")
+	}
+	if authResp.ClearToken {
+		t.Fatal("rate_limited 不应要求清除 token")
 	}
 
 	// 等待锁定过期后恢复
@@ -351,12 +388,19 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	conn2.WriteJSON(msg2)
 
 	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var resp protocol.Message
-	if err := conn2.ReadJSON(&resp); err != nil {
+	var recoveryResp protocol.Message
+	if err := conn2.ReadJSON(&recoveryResp); err != nil {
 		t.Fatalf("锁定过期后认证应成功: %v", err)
 	}
-	if resp.Type != protocol.MsgTypeAuthResp {
-		t.Fatalf("期望 auth_resp，得到 %s", resp.Type)
+	if recoveryResp.Type != protocol.MsgTypeAuthResp {
+		t.Fatalf("期望 auth_resp，得到 %s", recoveryResp.Type)
+	}
+	var recoveredAuth protocol.AuthResponse
+	if err := recoveryResp.ParsePayload(&recoveredAuth); err != nil {
+		t.Fatalf("解析恢复后的 auth_resp 失败: %v", err)
+	}
+	if !recoveredAuth.Success {
+		t.Fatalf("锁定过期后认证应成功，得到 code=%s message=%s", recoveredAuth.Code, recoveredAuth.Message)
 	}
 }
 

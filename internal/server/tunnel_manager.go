@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,34 +10,79 @@ import (
 	"netsgo/pkg/protocol"
 )
 
+func tunnelProvisionErrorMessage(err error) string {
+	var rejected *tunnelReadyRejectedError
+	switch {
+	case errors.As(err, &rejected):
+		if rejected.message != "" {
+			return rejected.message
+		}
+		return "client 拒绝隧道初始化"
+	case errors.Is(err, errTunnelReadyTimeout):
+		return "等待 client ready 超时"
+	case errors.Is(err, errTunnelReadyCancelled):
+		return "逻辑会话已失效"
+	default:
+		return err.Error()
+	}
+}
+
+func (s *Server) markPendingTunnelErrorIfCurrent(client *ClientConn, name, message string) {
+	if !s.isCurrentGeneration(client.ID, client.generation) {
+		return
+	}
+	config, ok := s.setTunnelState(client, name, protocol.ProxyStatusError, message)
+	if !ok {
+		return
+	}
+	_ = s.persistTunnelState(client.ID, name, protocol.ProxyStatusError, message)
+	s.emitTunnelChanged(client.ID, config, "error")
+	_ = s.notifyClientProxyClose(client, name, "provision_failed")
+}
+
 func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRequest, persist bool, action string) (protocol.ProxyConfig, error) {
-	if err := s.StartProxy(client, req); err != nil {
+	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyStatusPending)
+	if err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+	s.emitTunnelChanged(client.ID, tunnel.Config, "pending")
+
+	if _, err := s.waitForTunnelReady(client, tunnel.Config.ToProxyNewRequest()); err != nil {
+		if s.isCurrentGeneration(client.ID, client.generation) {
+			s.removeTunnelRuntime(client, req.Name)
+			_ = s.notifyClientProxyClose(client, req.Name, "provision_failed")
+		}
 		return protocol.ProxyConfig{}, err
 	}
 
-	tunnel, err := s.mustGetTunnel(client, req.Name)
+	if !s.isCurrentGeneration(client.ID, client.generation) {
+		return protocol.ProxyConfig{}, errTunnelReadyCancelled
+	}
+
+	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
+		if s.isCurrentGeneration(client.ID, client.generation) {
+			s.removeTunnelRuntime(client, req.Name)
+			_ = s.notifyClientProxyClose(client, req.Name, "provision_failed")
+		}
+		return protocol.ProxyConfig{}, err
+	}
+
+	updated, err := s.mustGetTunnel(client, req.Name)
 	if err != nil {
-		_ = s.StopProxy(client, req.Name)
+		s.removeTunnelRuntime(client, req.Name)
 		return protocol.ProxyConfig{}, err
 	}
 
 	if persist && s.store != nil {
-		if err := s.store.AddTunnel(storedTunnelFromRuntime(client, tunnel)); err != nil {
-			_ = s.StopProxy(client, req.Name)
+		if err := s.store.AddTunnel(storedTunnelFromRuntime(client, updated)); err != nil {
+			s.removeTunnelRuntime(client, req.Name)
+			_ = s.notifyClientProxyClose(client, req.Name, "provision_failed")
 			return protocol.ProxyConfig{}, err
 		}
 	}
 
-	if err := s.notifyClientProxyNew(client, tunnel.Config.ToProxyNewRequest()); err != nil {
-		if persist && s.store != nil {
-			_ = s.store.RemoveTunnel(client.ID, req.Name)
-		}
-		_ = s.StopProxy(client, req.Name)
-		return protocol.ProxyConfig{}, err
-	}
-
-	s.emitTunnelChanged(client.ID, tunnel.Config, action)
-	return tunnel.Config, nil
+	s.emitTunnelChanged(client.ID, updated.Config, action)
+	return updated.Config, nil
 }
 
 func (s *Server) pauseManagedTunnel(client *ClientConn, name string) error {
@@ -46,21 +92,19 @@ func (s *Server) pauseManagedTunnel(client *ClientConn, name string) error {
 	}
 
 	previousStatus := tunnel.Config.Status
+	previousError := tunnel.Config.Error
 	if err := s.PauseProxy(client, name); err != nil {
 		return err
 	}
 
-	if s.store != nil {
-		if err := s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusPaused); err != nil {
-			_ = s.ResumeProxy(client, name)
-			return err
-		}
+	if err := s.persistTunnelState(client.ID, name, protocol.ProxyStatusPaused, ""); err != nil {
+		_ = s.ResumeProxy(client, name)
+		return err
 	}
 
 	if err := s.notifyClientProxyClose(client, name, "paused"); err != nil {
-		if s.store != nil {
-			_ = s.store.UpdateStatus(client.ID, name, previousStatus)
-		}
+		_ = s.persistTunnelState(client.ID, name, previousStatus, previousError)
+		_, _ = s.setTunnelState(client, name, previousStatus, previousError)
 		_ = s.ResumeProxy(client, name)
 		return err
 	}
@@ -80,29 +124,42 @@ func (s *Server) resumeManagedTunnel(client *ClientConn, name string) error {
 	}
 
 	previousStatus := tunnel.Config.Status
-	if err := s.ResumeProxy(client, name); err != nil {
+	previousError := tunnel.Config.Error
+	pendingConfig, err := s.stageTunnelPending(client, name)
+	if err != nil {
+		return err
+	}
+	if err := s.persistTunnelState(client.ID, name, protocol.ProxyStatusPending, ""); err != nil {
+		_, _ = s.setTunnelState(client, name, previousStatus, previousError)
+		return err
+	}
+	s.emitTunnelChanged(client.ID, pendingConfig, "pending")
+
+	if _, err := s.waitForTunnelReady(client, pendingConfig.ToProxyNewRequest()); err != nil {
+		if errors.Is(err, errTunnelReadyCancelled) {
+			return err
+		}
+		s.markPendingTunnelErrorIfCurrent(client, name, tunnelProvisionErrorMessage(err))
 		return err
 	}
 
-	if s.store != nil {
-		if err := s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusActive); err != nil {
-			_ = s.PauseProxy(client, name)
-			s.setTunnelStatus(client, name, previousStatus)
-			return err
-		}
+	if !s.isCurrentGeneration(client.ID, client.generation) {
+		return errTunnelReadyCancelled
+	}
+
+	if err := s.ResumeProxy(client, name); err != nil {
+		s.rollbackResumedTunnelAfterReady(client, name, previousStatus, previousError)
+		return err
+	}
+
+	if err := s.persistTunnelState(client.ID, name, protocol.ProxyStatusActive, ""); err != nil {
+		s.rollbackResumedTunnelAfterReady(client, name, previousStatus, previousError)
+		return err
 	}
 
 	updated, err := s.mustGetTunnel(client, name)
 	if err != nil {
-		return err
-	}
-
-	if err := s.notifyClientProxyNew(client, updated.Config.ToProxyNewRequest()); err != nil {
-		if s.store != nil {
-			_ = s.store.UpdateStatus(client.ID, name, previousStatus)
-		}
-		_ = s.PauseProxy(client, name)
-		s.setTunnelStatus(client, name, previousStatus)
+		s.rollbackResumedTunnelAfterReady(client, name, previousStatus, previousError)
 		return err
 	}
 
@@ -117,6 +174,7 @@ func (s *Server) stopManagedTunnel(client *ClientConn, name string) error {
 	}
 
 	previousStatus := tunnel.Config.Status
+	previousError := tunnel.Config.Error
 	pausedDuringStop := false
 	if tunnel.Config.Status == protocol.ProxyStatusActive {
 		if err := s.PauseProxy(client, name); err != nil {
@@ -131,30 +189,19 @@ func (s *Server) stopManagedTunnel(client *ClientConn, name string) error {
 	}
 	client.proxyMu.Unlock()
 
-	if s.store != nil {
-		if err := s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusStopped); err != nil {
-			client.proxyMu.Lock()
-			if current, ok := client.proxies[name]; ok {
-				current.Config.Status = previousStatus
-			}
-			client.proxyMu.Unlock()
-			if pausedDuringStop {
-				_ = s.ResumeProxy(client, name)
-			}
-			return err
+	_, _ = s.setTunnelState(client, name, protocol.ProxyStatusStopped, "")
+	if err := s.persistTunnelState(client.ID, name, protocol.ProxyStatusStopped, ""); err != nil {
+		_, _ = s.setTunnelState(client, name, previousStatus, previousError)
+		if pausedDuringStop {
+			_ = s.ResumeProxy(client, name)
 		}
+		return err
 	}
 
 	if pausedDuringStop {
 		if err := s.notifyClientProxyClose(client, name, "stopped"); err != nil {
-			if s.store != nil {
-				_ = s.store.UpdateStatus(client.ID, name, previousStatus)
-			}
-			client.proxyMu.Lock()
-			if current, ok := client.proxies[name]; ok {
-				current.Config.Status = previousStatus
-			}
-			client.proxyMu.Unlock()
+			_ = s.persistTunnelState(client.ID, name, previousStatus, previousError)
+			_, _ = s.setTunnelState(client, name, previousStatus, previousError)
 			_ = s.ResumeProxy(client, name)
 			return err
 		}
@@ -242,32 +289,13 @@ func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP st
 		config, err := s.createManagedTunnel(client, req, false, "updated")
 		if err != nil {
 			// 启动失败 → 放回 error 状态的占位记录
-			client.proxyMu.Lock()
-			client.proxies[name] = &ProxyTunnel{
-				Config: protocol.ProxyConfig{
-					Name:       name,
-					Type:       tunnelType,
-					LocalIP:    localIP,
-					LocalPort:  localPort,
-					RemotePort: remotePort,
-					Domain:     domain,
-					ClientID:   client.ID,
-					Status:     protocol.ProxyStatusError,
-					Error:      err.Error(),
-				},
-				done: make(chan struct{}),
-			}
-			client.proxyMu.Unlock()
-			if s.store != nil {
-				_ = s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusError)
-			}
-			s.emitTunnelChanged(client.ID, client.proxies[name].Config, "updated")
-			return client.proxies[name].Config, nil // 返回 error 状态但不报 API 错误
+			errorConfig := s.upsertTunnelPlaceholder(client, req, protocol.ProxyStatusError, err.Error())
+			_ = s.persistTunnelState(client.ID, name, protocol.ProxyStatusError, err.Error())
+			s.emitTunnelChanged(client.ID, errorConfig, "updated")
+			return errorConfig, nil // 返回 error 状态但不报 API 错误
 		}
 		// 更新持久化状态为 active
-		if s.store != nil {
-			_ = s.store.UpdateStatus(client.ID, name, protocol.ProxyStatusActive)
-		}
+		_ = s.persistTunnelState(client.ID, name, protocol.ProxyStatusActive, "")
 		return config, nil
 	}
 
@@ -276,8 +304,44 @@ func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP st
 }
 
 func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) error {
-	_, err := s.createManagedTunnel(client, stored.ProxyNewRequest, false, "restored")
-	return err
+	tunnel, err := s.prepareProxyTunnel(client, stored.ProxyNewRequest, protocol.ProxyStatusPending)
+	if err != nil {
+		return err
+	}
+	if err := s.persistTunnelState(client.ID, stored.Name, protocol.ProxyStatusPending, ""); err != nil {
+		s.removeTunnelRuntime(client, stored.Name)
+		return err
+	}
+	s.emitTunnelChanged(client.ID, tunnel.Config, "pending")
+
+	if _, err := s.waitForTunnelReady(client, tunnel.Config.ToProxyNewRequest()); err != nil {
+		if errors.Is(err, errTunnelReadyCancelled) {
+			return err
+		}
+		s.markPendingTunnelErrorIfCurrent(client, stored.Name, tunnelProvisionErrorMessage(err))
+		return err
+	}
+
+	if !s.isCurrentGeneration(client.ID, client.generation) {
+		return errTunnelReadyCancelled
+	}
+
+	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
+		s.failRestoredTunnelAfterReady(client, stored, err.Error())
+		return err
+	}
+	if err := s.persistTunnelState(client.ID, stored.Name, protocol.ProxyStatusActive, ""); err != nil {
+		s.failRestoredTunnelAfterReady(client, stored, err.Error())
+		return err
+	}
+
+	updated, err := s.mustGetTunnel(client, stored.Name)
+	if err != nil {
+		s.failRestoredTunnelAfterReady(client, stored, err.Error())
+		return err
+	}
+	s.emitTunnelChanged(client.ID, updated.Config, "restored")
+	return nil
 }
 
 func (s *Server) mustGetTunnel(client *ClientConn, name string) (*ProxyTunnel, error) {
@@ -291,18 +355,93 @@ func (s *Server) mustGetTunnel(client *ClientConn, name string) (*ProxyTunnel, e
 	return tunnel, nil
 }
 
-func (s *Server) setTunnelStatus(client *ClientConn, name, status string) {
+func (s *Server) setTunnelState(client *ClientConn, name, status, errMsg string) (protocol.ProxyConfig, bool) {
 	client.proxyMu.Lock()
 	defer client.proxyMu.Unlock()
-	if tunnel, ok := client.proxies[name]; ok {
-		tunnel.Config.Status = status
+	tunnel, ok := client.proxies[name]
+	if !ok {
+		return protocol.ProxyConfig{}, false
 	}
+	tunnel.Config.Status = status
+	tunnel.Config.Error = storedTunnelErrorForStatus(status, errMsg)
+	return tunnel.Config, true
+}
+
+func (s *Server) persistTunnelState(clientID, name, status, errMsg string) error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.UpdateState(clientID, name, status, errMsg)
+}
+
+func tunnelChangedActionForStatus(status string) string {
+	switch status {
+	case protocol.ProxyStatusPaused:
+		return "paused"
+	case protocol.ProxyStatusStopped:
+		return "stopped"
+	case protocol.ProxyStatusError:
+		return "error"
+	case protocol.ProxyStatusPending:
+		return "pending"
+	case protocol.ProxyStatusActive:
+		return "active"
+	default:
+		return "updated"
+	}
+}
+
+func (s *Server) rollbackResumedTunnelAfterReady(client *ClientConn, name, previousStatus, previousError string) {
+	tunnel, err := s.mustGetTunnel(client, name)
+	if err == nil && tunnel.Config.Status == protocol.ProxyStatusActive {
+		_ = s.PauseProxy(client, name)
+	}
+	config, ok := s.setTunnelState(client, name, previousStatus, previousError)
+	if !ok {
+		return
+	}
+	_ = s.persistTunnelState(client.ID, name, previousStatus, previousError)
+	_ = s.notifyClientProxyClose(client, name, "provision_failed")
+	s.emitTunnelChanged(client.ID, config, tunnelChangedActionForStatus(previousStatus))
+}
+
+func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyNewRequest, status, errMsg string) protocol.ProxyConfig {
+	config := protocol.ProxyConfig{
+		Name:       req.Name,
+		Type:       req.Type,
+		LocalIP:    req.LocalIP,
+		LocalPort:  req.LocalPort,
+		RemotePort: req.RemotePort,
+		Domain:     req.Domain,
+		ClientID:   client.ID,
+		Status:     status,
+		Error:      storedTunnelErrorForStatus(status, errMsg),
+	}
+	client.proxyMu.Lock()
+	if client.proxies == nil {
+		client.proxies = make(map[string]*ProxyTunnel)
+	}
+	client.proxies[req.Name] = &ProxyTunnel{
+		Config: config,
+		done:   make(chan struct{}),
+	}
+	client.proxyMu.Unlock()
+	return config
+}
+
+func (s *Server) failRestoredTunnelAfterReady(client *ClientConn, stored StoredTunnel, message string) {
+	s.removeTunnelRuntime(client, stored.Name)
+	_ = s.notifyClientProxyClose(client, stored.Name, "provision_failed")
+	config := s.upsertTunnelPlaceholder(client, stored.ProxyNewRequest, protocol.ProxyStatusError, message)
+	_ = s.persistTunnelState(client.ID, stored.Name, protocol.ProxyStatusError, message)
+	s.emitTunnelChanged(client.ID, config, "error")
 }
 
 func storedTunnelFromRuntime(client *ClientConn, tunnel *ProxyTunnel) StoredTunnel {
 	return StoredTunnel{
 		ProxyNewRequest: tunnel.Config.ToProxyNewRequest(),
 		Status:          tunnel.Config.Status,
+		Error:           tunnel.Config.Error,
 		ClientID:        client.ID,
 		Hostname:        client.Info.Hostname,
 		Binding:         TunnelBindingClientID,
@@ -329,6 +468,10 @@ func (s *Server) notifyClientProxyClose(client *ClientConn, name, reason string)
 }
 
 func (s *Server) writeControlMessage(client *ClientConn, message *protocol.Message) error {
+	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
+		return fmt.Errorf("client %s 当前不处于 live 会话", client.ID)
+	}
+
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
@@ -352,12 +495,12 @@ func (s *Server) emitTunnelChanged(clientID string, tunnel protocol.ProxyConfig,
 
 func (s *Server) readClientFromPath(w http.ResponseWriter, r *http.Request) (*ClientConn, bool) {
 	clientID := r.PathValue("id")
-	value, ok := s.clients.Load(clientID)
+	client, ok := s.loadLiveClient(clientID)
 	if !ok {
 		http.Error(w, `{"error":"client not found"}`, http.StatusNotFound)
 		return nil, false
 	}
-	return value.(*ClientConn), true
+	return client, true
 }
 
 func (s *Server) migrateLegacyTunnels(client *ClientConn) (int, error) {
@@ -375,19 +518,7 @@ func (s *Server) migrateLegacyTunnels(client *ClientConn) (int, error) {
 }
 
 func (s *Server) forceDisconnectClient(client *ClientConn) {
-	client.mu.Lock()
-	if client.conn != nil {
-		_ = client.conn.Close()
-	}
-	client.mu.Unlock()
-
-	client.dataMu.Lock()
-	if client.dataSession != nil && !client.dataSession.IsClosed() {
-		_ = client.dataSession.Close()
-	}
-	client.dataMu.Unlock()
-
-	s.PauseAllProxies(client)
+	_ = s.invalidateLogicalSessionIfCurrent(client.ID, client.generation, "force_disconnect")
 }
 
 func encodeJSON(w http.ResponseWriter, status int, payload any) {
@@ -542,9 +673,7 @@ func (s *Server) markTunnelsPortNotAllowed(affected []affectedTunnel) {
 		}
 
 		// 更新持久化状态
-		if s.store != nil {
-			_ = s.store.UpdateStatus(a.ClientID, a.TunnelName, protocol.ProxyStatusError)
-		}
+		_ = s.persistTunnelState(a.ClientID, a.TunnelName, protocol.ProxyStatusError, errMsg)
 
 		log.Printf("⚠️ 隧道 %s (端口 %d, 客户端 %s) 因端口白名单变更被标记为异常",
 			a.TunnelName, a.RemotePort, a.ClientID)

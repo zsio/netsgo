@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -19,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -39,6 +41,7 @@ import (
 type Server struct {
 	Port           int
 	StorePath      string // 隧道配置文件路径（空则使用默认）
+	SetupToken     string // 显式配置初始化 Token（空则启动时随机生成）
 	TLS            *TLSConfig
 	TLSFingerprint string
 	clients        sync.Map          // stable clientID -> *ClientConn
@@ -62,25 +65,37 @@ type Server struct {
 	publicIPv4     string       // 缓存的公网 IPv4
 	publicIPv6     string       // 缓存的公网 IPv6
 	publicIPMu     sync.RWMutex // 保护公网 IP 缓存
+	nextGeneration atomic.Uint64
+	pendingReadyMu sync.Mutex
+	pendingReady   map[pendingTunnelReadyKey]chan protocol.ProxyNewResponse
+
+	pendingDataTimeout      time.Duration
+	dataHandshakeTimeout    time.Duration
+	dataHandshakeAckTimeout time.Duration
+	tunnelReadyTimeout      time.Duration
 }
 
 // ClientConn 代表一个已连接的 Client
 type ClientConn struct {
-	ID          string
-	InstallID   string
-	Info        protocol.ClientInfo
-	RemoteAddr  string
-	stats       *protocol.SystemStats
-	prevStats   *protocol.SystemStats // 上一次探针快照（用于计算速率）
-	prevStatsAt time.Time             // 上一次快照时间
-	statsMu     sync.RWMutex          // 保护 stats / prevStats
-	conn        *websocket.Conn
-	mu          sync.Mutex
-	dataSession *yamux.Session // 数据通道 yamux Session
-	dataMu      sync.RWMutex   // 保护 dataSession
-	dataToken   string
-	proxies     map[string]*ProxyTunnel // 代理隧道 name -> tunnel
-	proxyMu     sync.RWMutex            // 保护 proxies
+	ID           string
+	InstallID    string
+	Info         protocol.ClientInfo
+	RemoteAddr   string
+	stats        *protocol.SystemStats
+	prevStats    *protocol.SystemStats // 上一次探针快照（用于计算速率）
+	prevStatsAt  time.Time             // 上一次快照时间
+	statsMu      sync.RWMutex          // 保护 stats / prevStats
+	conn         *websocket.Conn
+	mu           sync.Mutex
+	dataSession  *yamux.Session // 数据通道 yamux Session
+	dataMu       sync.RWMutex   // 保护 dataSession
+	dataToken    string
+	generation   uint64
+	state        clientState
+	stateMu      sync.RWMutex
+	pendingTimer *time.Timer
+	proxies      map[string]*ProxyTunnel // 代理隧道 name -> tunnel
+	proxyMu      sync.RWMutex            // 保护 proxies
 }
 
 // generateDataToken 生成 32 字节随机 hex 字符串，用作数据通道握手凭证
@@ -175,9 +190,15 @@ func (a *ClientConn) enrichStats(stats *protocol.SystemStats) {
 // New 创建一个新的 Server 实例
 func New(port int) *Server {
 	return &Server{
-		Port:      port,
-		events:    NewEventBus(),
-		startTime: time.Now(),
+		Port:                    port,
+		events:                  NewEventBus(),
+		startTime:               time.Now(),
+		done:                    make(chan struct{}),
+		pendingReady:            make(map[pendingTunnelReadyKey]chan protocol.ProxyNewResponse),
+		pendingDataTimeout:      15 * time.Second,
+		dataHandshakeTimeout:    10 * time.Second,
+		dataHandshakeAckTimeout: 2 * time.Second,
+		tunnelReadyTimeout:      5 * time.Second,
 	}
 }
 
@@ -239,8 +260,7 @@ func (a *ClientConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool
 	}
 }
 
-// Start 启动服务端，单端口同时处理 HTTP/WebSocket 和数据通道。
-// 通过 peek 首字节区分：HTTP 请求 vs 数据通道魔数 (0x4E)。
+// Start 启动服务端，单端口同时处理 HTTP、控制通道和数据通道 WebSocket。
 func (s *Server) Start() error {
 	s.startTime = time.Now()
 	s.done = make(chan struct{})
@@ -279,11 +299,17 @@ func (s *Server) Start() error {
 	}
 
 	if s.adminStore != nil && !s.adminStore.IsInitialized() {
-		buf := make([]byte, 32)
-		if _, err := rand.Read(buf); err != nil {
-			return fmt.Errorf("生成 Setup Token 失败: %w", err)
+		if s.setupToken == "" {
+			if s.SetupToken != "" {
+				s.setupToken = s.SetupToken
+			} else {
+				buf := make([]byte, 32)
+				if _, err := rand.Read(buf); err != nil {
+					return fmt.Errorf("生成 Setup Token 失败: %w", err)
+				}
+				s.setupToken = hex.EncodeToString(buf)
+			}
 		}
-		s.setupToken = hex.EncodeToString(buf)
 		log.Printf("")
 		log.Printf("┌──────────────────────────────────────────────────────────────────┐")
 		log.Printf("│  ⚠️  服务尚未初始化                                              │")
@@ -325,13 +351,13 @@ func (s *Server) Start() error {
 			log.Printf("📊 Web 面板: https://localhost:%d", s.Port)
 		}
 		log.Printf("🔌 控制通道: wss://localhost:%d/ws/control", s.Port)
-		log.Printf("🔗 数据通道: 同端口 TLS (魔数 0x4E)")
+		log.Printf("🔗 数据通道: wss://localhost:%d/ws/data", s.Port)
 	} else {
 		if s.webFS != nil {
 			log.Printf("📊 Web 面板: http://localhost:%d", s.Port)
 		}
 		log.Printf("🔌 控制通道: ws://localhost:%d/ws/control", s.Port)
-		log.Printf("🔗 数据通道: 同端口 (魔数 0x4E)")
+		log.Printf("🔗 数据通道: ws://localhost:%d/ws/data", s.Port)
 	}
 
 	// 反代 / 代理头信任策略提示
@@ -350,13 +376,7 @@ func (s *Server) Start() error {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// 包装 listener：peek 分发
-	peekLn := &PeekListener{
-		Listener: serveLn,
-		server:   s,
-	}
-
-	return s.httpServer.Serve(peekLn)
+	return s.httpServer.Serve(serveLn)
 }
 
 // Shutdown 优雅关闭服务端 (P15)
@@ -381,28 +401,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.clients.Range(func(key, value any) bool {
 		client := value.(*ClientConn)
 		clientCount++
-
-		// 关闭 WebSocket 连接
-		client.mu.Lock()
-		if client.conn != nil {
-			client.conn.WriteMessage(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
-			)
-			client.conn.Close()
-		}
-		client.mu.Unlock()
-
-		// 关闭数据通道 yamux session
-		client.dataMu.Lock()
-		if client.dataSession != nil && !client.dataSession.IsClosed() {
-			client.dataSession.Close()
-		}
-		client.dataMu.Unlock()
-
-		// 停止所有代理隧道
-		s.PauseAllProxies(client)
-
+		s.invalidateLogicalSessionIfCurrent(client.ID, client.generation, "server_shutdown")
 		s.clients.Delete(key)
 		return true
 	})
@@ -425,7 +424,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// StartHTTPOnly 仅启动 HTTP 模式（用于测试，不做 peek 分发）
+// StartHTTPOnly 仅返回 HTTP 路由（用于测试）
 func (s *Server) StartHTTPOnly() *http.ServeMux {
 	return s.newHTTPMux()
 }
@@ -472,65 +471,10 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 	// 控制通道 WebSocket
 	mux.HandleFunc("/ws/control", s.handleControlWS)
 
-	// 数据通道端点信息
-	mux.HandleFunc("/ws/data", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"info": "数据通道已迁移到同端口 TCP 二进制协议，魔数 0x4E",
-		})
-	})
+	// 数据通道 WebSocket
+	mux.HandleFunc("/ws/data", s.handleDataWS)
 
 	return mux
-}
-
-// PeekListener 包装 net.Listener，peek 首字节区分 HTTP 和数据通道。
-// HTTP 连接直接交给 http.Server，数据通道连接交给 handleDataConn。
-type PeekListener struct {
-	net.Listener
-	server  *Server
-	pending chan net.Conn
-	once    sync.Once
-}
-
-func (pl *PeekListener) Accept() (net.Conn, error) {
-	pl.once.Do(func() {
-		pl.pending = make(chan net.Conn, 64)
-		go pl.dispatchLoop()
-	})
-
-	conn, ok := <-pl.pending
-	if !ok {
-		return nil, net.ErrClosed
-	}
-	return conn, nil
-}
-
-// dispatchLoop 从底层 Listener Accept 连接，peek 首字节分发。
-func (pl *PeekListener) dispatchLoop() {
-	defer close(pl.pending)
-
-	for {
-		conn, err := pl.Listener.Accept()
-		if err != nil {
-			return
-		}
-
-		pc := &PeekConn{Conn: conn}
-		b, err := pc.PeekByte()
-		if err != nil {
-			conn.Close()
-			continue
-		}
-
-		if b == protocol.DataChannelMagic {
-			// 数据通道：消费掉魔数字节，交给 handleDataConn
-			pc.hasPeek = false // 消费掉已 peek 的魔数
-			go pl.server.handleDataConn(pc)
-		} else {
-			// HTTP/WebSocket：送入 pending channel 交给 http.Server
-			pl.pending <- pc
-		}
-	}
 }
 
 // --- WebSocket 升级器 ---
@@ -539,19 +483,31 @@ func (pl *PeekListener) dispatchLoop() {
 // 防止恶意 Client 发送超大 JSON 消息导致服务端 OOM。
 const wsMaxMessageSize = 1 << 20 // 1 MiB
 
+const wsDataMaxMessageSize = 512 * 1024
+
+func checkWSOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // Go 客户端不发 Origin → 放行
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Host == r.Host
+}
+
 // 无 Origin 头（Go 客户端）→ 放行；有 Origin 头 → 严格校验 host 是否匹配
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true // Go 客户端不发 Origin → 放行
-		}
-		u, err := url.Parse(origin)
-		if err != nil {
-			return false
-		}
-		return u.Host == r.Host
-	},
+	CheckOrigin: checkWSOrigin,
+}
+
+var dataUpgrader = websocket.Upgrader{
+	HandshakeTimeout:  10 * time.Second,
+	ReadBufferSize:    32 * 1024,
+	WriteBufferSize:   32 * 1024,
+	CheckOrigin:       checkWSOrigin,
+	EnableCompression: false,
 }
 
 // securityHeadersHandler 统一注入安全响应头（P10）
@@ -565,7 +521,7 @@ func (s *Server) securityHeadersHandler(next http.Handler) http.Handler {
 			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
 				"img-src 'self' data:; connect-src 'self'; font-src 'self' data:; "+
 				"frame-ancestors 'none'; form-action 'self'")
-		if s.tlsEnabled {
+		if s.isHTTPSRequest(r) {
 			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}
 		next.ServeHTTP(w, r)
@@ -588,17 +544,13 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	log.Printf("📡 新的控制通道连接: %s", r.RemoteAddr)
 
 	// 等待 Client 发送认证消息
-	client, replaced, err := s.handleAuth(conn, r.RemoteAddr)
+	client, err := s.handleAuth(conn, r.RemoteAddr)
 	if err != nil {
 		log.Printf("❌ Client 认证失败 [%s]: %v", r.RemoteAddr, err)
 		return
 	}
 
-	if replaced != nil {
-		s.forceDisconnectClient(replaced)
-	}
-
-	log.Printf("✅ Client 已连接: %s (%s/%s) [ID: %s]", client.Info.Hostname, client.Info.OS, client.Info.Arch, client.ID)
+	log.Printf("✅ Client 已认证: %s (%s/%s) [ID: %s, generation=%d]", client.Info.Hostname, client.Info.OS, client.Info.Arch, client.ID, client.generation)
 
 	if s.store != nil {
 		if err := s.store.UpdateHostname(client.ID, client.Info.Hostname); err != nil {
@@ -611,41 +563,15 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("🔄 已迁移 %d 条旧版 hostname 绑定隧道 [%s]", migrated, client.ID)
 	}
 
-	// 发布 Client 上线事件
-	s.events.PublishJSON("client_online", map[string]any{
-		"client_id": client.ID,
-		"info":      client.Info,
-	})
-
-	// 启动隧道恢复（等数据通道建立后执行）
-	go s.restoreTunnels(client)
-
-	defer func() {
-		current, ok := s.clients.Load(client.ID)
-		isCurrent := ok && current == client
-
-		s.PauseAllProxies(client)
-		client.dataMu.Lock()
-		if client.dataSession != nil && !client.dataSession.IsClosed() {
-			client.dataSession.Close()
-		}
-		client.dataMu.Unlock()
-		if isCurrent {
-			s.clients.Delete(client.ID)
-			log.Printf("🔌 Client 已断开: %s [ID: %s]", client.Info.Hostname, client.ID)
-			s.events.PublishJSON("client_offline", map[string]any{
-				"client_id": client.ID,
-			})
-		}
-	}()
+	defer s.invalidateLogicalSessionIfCurrent(client.ID, client.generation, "control_loop_exit")
 
 	// 持续读取控制消息
 	s.controlLoop(client)
 }
 
 // handleAuth 处理 Client 的认证流程
-// 认证优先级: Token > Key 兑换 Token
-func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientConn, *ClientConn, error) {
+// 未初始化时一律拒绝 Client 连接；初始化后认证优先级: Token > Key 兑换 Token
+func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientConn, error) {
 	// 速率限制检查
 	ip := remoteIP(remoteAddr)
 	if s.clientLimiter != nil {
@@ -654,7 +580,13 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 			if s.adminStore != nil {
 				s.adminStore.AddSystemLog("WARN", "Client 认证被限速: IP="+ip, "security")
 			}
-			return nil, nil, fmt.Errorf("认证失败")
+			_ = writeAuthResult(conn, protocol.AuthResponse{
+				Success:   false,
+				Message:   "认证失败",
+				Code:      protocol.AuthCodeRateLimited,
+				Retryable: true,
+			})
+			return nil, fmt.Errorf("认证失败")
 		}
 	}
 
@@ -667,102 +599,124 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 	// 读取认证消息
 	var msg protocol.Message
 	if err := conn.ReadJSON(&msg); err != nil {
-		return nil, nil, fmt.Errorf("读取认证消息失败: %w", err)
+		return nil, fmt.Errorf("读取认证消息失败: %w", err)
 	}
 
 	// 认证消息已收到，清除读超时（后续 controlLoop 自行管理）
 	conn.SetReadDeadline(time.Time{})
 	if msg.Type != protocol.MsgTypeAuth {
-		return nil, nil, fmt.Errorf("期望认证消息，收到: %s", msg.Type)
+		return nil, fmt.Errorf("期望认证消息，收到: %s", msg.Type)
 	}
 
 	var authReq protocol.AuthRequest
 	if err := msg.ParsePayload(&authReq); err != nil {
-		return nil, nil, fmt.Errorf("解析认证数据失败: %w", err)
+		return nil, fmt.Errorf("解析认证数据失败: %w", err)
 	}
 	if authReq.InstallID == "" {
-		return nil, nil, fmt.Errorf("认证失败: install_id 不能为空")
+		return nil, fmt.Errorf("认证失败: install_id 不能为空")
 	}
 
 	var newToken string // 如果通过 Key 兑换，需要下发给客户端
+	var clientID string
 
 	if s.adminStore != nil {
-		// 阶段 1: 尝试 Token 认证（不消耗 Key）
-		if authReq.Token != "" {
-			clientToken, err := s.adminStore.ValidateClientToken(authReq.Token, authReq.InstallID)
-			if err == nil {
-				// Token 有效 — 检查是否已有同 ClientID 的在线连接
-				if current, loaded := s.clients.Load(clientToken.ClientID); loaded {
-					oldClient := current.(*ClientConn)
-					oldClient.mu.Lock()
-					connAlive := oldClient.conn != nil
-					oldClient.mu.Unlock()
-					if connAlive {
-						// 已有活跃连接 → 拒绝新连接（不暴露原因）
-						log.Printf("⚠️ Token 并发连接被拒: client_id=%s, install_id=%s, remote=%s",
-							clientToken.ClientID, authReq.InstallID, remoteAddr)
-						return nil, nil, fmt.Errorf("认证失败")
-					}
-				}
-				// Token 认证通过，直接进入后续流程
-				log.Printf("🔑 Client Token 认证通过 [install_id=%s]", authReq.InstallID)
-				if s.clientLimiter != nil {
-					s.clientLimiter.ResetFailures(ip)
-				}
-				goto authPassed
-			}
-			// Token 无效，记录失败
-			log.Printf("⚠️ Client Token 验证失败 [%s]: %v, 将尝试 Key 认证", remoteAddr, err)
+		if !s.adminStore.IsInitialized() {
+			log.Printf("⚠️ 服务未初始化，拒绝 Client 连接 [%s]", remoteAddr)
+			s.adminStore.AddSystemLog("WARN", "服务未初始化时拒绝 Client 连接: IP="+ip, "security")
 			if s.clientLimiter != nil {
 				s.clientLimiter.RecordFailure(ip)
 			}
+			_ = writeAuthResult(conn, protocol.AuthResponse{
+				Success:   false,
+				Message:   "认证失败",
+				Code:      protocol.AuthCodeServerUninitialized,
+				Retryable: true,
+			})
+			return nil, fmt.Errorf("认证失败")
 		}
 
-		// 阶段 2: 尝试 Key 兑换 Token
-		if authReq.Key != "" {
-			// 先获取或创建 Client 记录以得到稳定 clientID
-			record, err := s.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, remoteAddr)
+		if authReq.Token != "" {
+			clientToken, err := s.adminStore.ValidateClientToken(authReq.Token, authReq.InstallID)
 			if err != nil {
-				return nil, nil, fmt.Errorf("登记 Client 失败: %w", err)
+				log.Printf("⚠️ Client Token 验证失败 [%s]: %v", remoteAddr, err)
+				if s.clientLimiter != nil {
+					s.clientLimiter.RecordFailure(ip)
+				}
+				code := protocol.AuthCodeInvalidToken
+				if errors.Is(err, ErrClientTokenRevoked) {
+					code = protocol.AuthCodeRevokedToken
+				}
+				_ = writeAuthResult(conn, protocol.AuthResponse{
+					Success:    false,
+					Message:    "认证失败",
+					Code:       code,
+					ClearToken: true,
+				})
+				return nil, fmt.Errorf("认证失败")
 			}
 
-			tokenStr, _, err := s.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, record.ID, remoteAddr)
+			clientID = clientToken.ClientID
+			if current, loaded := s.clients.Load(clientID); loaded {
+				currentClient := current.(*ClientConn)
+				if currentClient.getState() != clientStateClosing {
+					log.Printf("⚠️ Token 并发连接被拒: client_id=%s, install_id=%s, remote=%s", clientID, authReq.InstallID, remoteAddr)
+					_ = writeAuthResult(conn, protocol.AuthResponse{
+						Success:   false,
+						Message:   "认证失败",
+						Code:      protocol.AuthCodeConcurrentSession,
+						Retryable: true,
+					})
+					return nil, fmt.Errorf("认证失败")
+				}
+			}
+
+			log.Printf("🔑 Client Token 认证通过 [install_id=%s]", authReq.InstallID)
+			if s.clientLimiter != nil {
+				s.clientLimiter.ResetFailures(ip)
+			}
+		} else {
+			record, err := s.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, remoteAddr)
+			if err != nil {
+				return nil, fmt.Errorf("登记 Client 失败: %w", err)
+			}
+			clientID = record.ID
+
+			if current, loaded := s.clients.Load(clientID); loaded {
+				currentClient := current.(*ClientConn)
+				if currentClient.getState() != clientStateClosing {
+					_ = writeAuthResult(conn, protocol.AuthResponse{
+						Success:   false,
+						Message:   "认证失败",
+						Code:      protocol.AuthCodeConcurrentSession,
+						Retryable: true,
+					})
+					return nil, fmt.Errorf("认证失败")
+				}
+			}
+
+			tokenStr, _, err := s.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, clientID, remoteAddr)
 			if err != nil {
 				log.Printf("❌ Client Key 兑换 Token 失败 [%s]: %v", remoteAddr, err)
 				if s.clientLimiter != nil {
 					s.clientLimiter.RecordFailure(ip)
 				}
-				return nil, nil, fmt.Errorf("认证失败")
+				_ = writeAuthResult(conn, protocol.AuthResponse{
+					Success: false,
+					Message: "认证失败",
+					Code:    protocol.AuthCodeInvalidKey,
+				})
+				return nil, fmt.Errorf("认证失败")
 			}
 			newToken = tokenStr
 			log.Printf("🔑 Client Key 兑换 Token 成功 [install_id=%s]", authReq.InstallID)
 			if s.clientLimiter != nil {
 				s.clientLimiter.ResetFailures(ip)
 			}
-			goto authPassed
 		}
-
-		// 阶段 3: 两者都没有
-		// 检查是否属于开放模式（无 Key 配置）
-		valid, err := s.adminStore.ValidateClientKey("")
-		if !valid {
-			log.Printf("❌ Client 认证失败 [%s]: 未提供 Token 或 Key, %v", remoteAddr, err)
-			if s.clientLimiter != nil {
-				s.clientLimiter.RecordFailure(ip)
-			}
-			return nil, nil, fmt.Errorf("认证失败")
-		}
-		// 开放模式，允许连接
 	}
 
-authPassed:
-	clientID := "unmanaged-" + authReq.InstallID
-	if s.adminStore != nil {
-		record, err := s.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, remoteAddr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("登记 Client 失败: %w", err)
-		}
-		clientID = record.ID
+	if clientID == "" {
+		clientID = "unmanaged-" + authReq.InstallID
 	}
 
 	client := &ClientConn{
@@ -773,11 +727,8 @@ authPassed:
 		conn:       conn,
 		proxies:    make(map[string]*ProxyTunnel),
 		dataToken:  generateDataToken(),
-	}
-
-	var replaced *ClientConn
-	if current, loaded := s.clients.Load(clientID); loaded {
-		replaced = current.(*ClientConn)
+		generation: s.nextClientGeneration(),
+		state:      clientStatePendingData,
 	}
 	s.clients.Store(clientID, client)
 
@@ -788,16 +739,17 @@ authPassed:
 		ClientID:  clientID,
 		Token:     newToken, // 仅 Key 兑换时非空
 		DataToken: client.dataToken,
+		Code:      protocol.AuthCodeOK,
 	}
-	resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, authResp)
-	if err := conn.WriteJSON(resp); err != nil {
+	if err := writeAuthResult(conn, authResp); err != nil {
 		if current, ok := s.clients.Load(clientID); ok && current == client {
-			s.clients.Delete(clientID)
+			_ = s.invalidateLogicalSessionIfCurrent(clientID, client.generation, "auth_response_failed")
 		}
-		return nil, nil, fmt.Errorf("发送认证响应失败: %w", err)
+		return nil, fmt.Errorf("发送认证响应失败: %w", err)
 	}
 
-	return client, replaced, nil
+	s.startPendingDataTimer(client)
+	return client, nil
 }
 
 // controlLoop 持续处理控制通道上的消息
@@ -813,6 +765,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 
 		switch msg.Type {
 		case protocol.MsgTypePing:
+			if !s.isCurrentLive(client.ID, client.generation) {
+				continue
+			}
 			// 收到心跳，回复 Pong
 			pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
 			client.mu.Lock()
@@ -820,6 +775,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 			client.mu.Unlock()
 
 		case protocol.MsgTypeProbeReport:
+			if !s.isCurrentLive(client.ID, client.generation) {
+				continue
+			}
 			// 收到探针数据
 			var stats protocol.SystemStats
 			if err := msg.ParsePayload(&stats); err != nil {
@@ -856,6 +814,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 			})
 
 		case protocol.MsgTypeProxyNew:
+			if !s.isCurrentLive(client.ID, client.generation) {
+				continue
+			}
 			// 收到创建代理隧道请求
 			var req protocol.ProxyNewRequest
 			if err := msg.ParsePayload(&req); err != nil {
@@ -868,6 +829,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 			if err != nil {
 				log.Printf("❌ 创建代理失败 [%s]: %v", client.ID, err)
 				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+					Name:    req.Name,
 					Success: false,
 					Message: err.Error(),
 				})
@@ -879,6 +841,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 				client.proxyMu.RUnlock()
 
 				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+					Name:       req.Name,
 					Success:    true,
 					Message:    "代理隧道创建成功",
 					RemotePort: actualPort,
@@ -891,7 +854,21 @@ func (s *Server) controlLoop(client *ClientConn) {
 			client.conn.WriteJSON(resp)
 			client.mu.Unlock()
 
+		case protocol.MsgTypeProxyNewResp:
+			var resp protocol.ProxyNewResponse
+			if err := msg.ParsePayload(&resp); err != nil {
+				log.Printf("⚠️ 解析代理 ready 响应失败 [%s]: %v", client.ID, err)
+				continue
+			}
+			if s.resolveTunnelReadyWaiter(client.ID, client.generation, resp) {
+				continue
+			}
+			log.Printf("📩 收到未匹配的 proxy_new_resp [%s]: name=%s success=%v", client.ID, resp.Name, resp.Success)
+
 		case protocol.MsgTypeProxyClose:
+			if !s.isCurrentLive(client.ID, client.generation) {
+				continue
+			}
 			var req protocol.ProxyCloseRequest
 			if err := msg.ParsePayload(&req); err != nil {
 				log.Printf("⚠️ 解析关闭代理请求失败 [%s]: %v", client.ID, err)
@@ -911,6 +888,14 @@ func (s *Server) controlLoop(client *ClientConn) {
 			log.Printf("⚠️ 未知消息类型 [%s]: %s", client.ID, msg.Type)
 		}
 	}
+}
+
+func writeAuthResult(conn *websocket.Conn, authResp protocol.AuthResponse) error {
+	message, err := protocol.NewMessage(protocol.MsgTypeAuthResp, authResp)
+	if err != nil {
+		return err
+	}
+	return conn.WriteJSON(message)
 }
 
 // persistEventsLoop 订阅事件总线并将关键事件持久化到 AdminStore
@@ -1051,6 +1036,9 @@ func (s *Server) collectClientViews() []clientView {
 
 	s.clients.Range(func(_, value any) bool {
 		client := value.(*ClientConn)
+		if !client.isLive() {
+			return true
+		}
 		proxies := make([]protocol.ProxyConfig, 0)
 		client.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
 			proxies = append(proxies, tunnel.Config)
@@ -1319,7 +1307,6 @@ func (s *Server) collectServerStatus() serverStatusView {
 	}
 }
 
-
 // baseDiskName 从设备路径提取物理磁盘基础名，用于去重。
 // macOS APFS: /dev/disk3s1s1, /dev/disk3s5 → "disk3"
 // Linux SCSI: /dev/sda1 → "sda"
@@ -1346,6 +1333,7 @@ func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.collectClientViews())
 }
+
 // --- Client 展示名 API ---
 
 func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request) {
@@ -1395,7 +1383,15 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	config, err := s.createManagedTunnel(client, req, true, "created")
 	if err != nil {
-		encodeJSON(w, http.StatusConflict, map[string]any{
+		status := http.StatusConflict
+		var rejected *tunnelReadyRejectedError
+		switch {
+		case errors.Is(err, errTunnelReadyTimeout):
+			status = http.StatusGatewayTimeout
+		case errors.As(err, &rejected):
+			status = http.StatusBadGateway
+		}
+		encodeJSON(w, status, map[string]any{
 			"success": false,
 			"error":   err.Error(),
 		})
@@ -1458,15 +1454,25 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
 		return
 	}
-	if tunnel.Config.Status != protocol.ProxyStatusPaused && tunnel.Config.Status != protocol.ProxyStatusStopped {
+	if tunnel.Config.Status != protocol.ProxyStatusPaused &&
+		tunnel.Config.Status != protocol.ProxyStatusStopped &&
+		tunnel.Config.Status != protocol.ProxyStatusError {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "只有 paused 或 stopped 状态的隧道才能恢复"})
+		json.NewEncoder(w).Encode(map[string]any{"error": "只有 paused、stopped 或 error 状态的隧道才能恢复"})
 		return
 	}
 
 	if err := s.resumeManagedTunnel(client, tunnelName); err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		status := http.StatusInternalServerError
+		var rejected *tunnelReadyRejectedError
+		switch {
+		case errors.Is(err, errTunnelReadyTimeout):
+			status = http.StatusGatewayTimeout
+		case errors.As(err, &rejected):
+			status = http.StatusBadGateway
+		}
+		encodeJSON(w, status, map[string]any{"error": err.Error()})
 		return
 	}
 
@@ -1593,35 +1599,20 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 	if s.store == nil {
 		return
 	}
+	if !s.isCurrentLive(client.ID, client.generation) {
+		return
+	}
 
 	tunnels := s.store.GetTunnelsByClientID(client.ID)
 	if len(tunnels) == 0 {
 		return
 	}
 
-	needsDataSession := false
-	for _, st := range tunnels {
-		if st.Status == protocol.ProxyStatusActive {
-			needsDataSession = true
-			break
-		}
-	}
-
-	if needsDataSession {
-		// 仅在需要恢复 active 隧道时等待数据通道建立。
-		for i := 0; i < 30; i++ {
-			client.dataMu.RLock()
-			hasData := client.dataSession != nil && !client.dataSession.IsClosed()
-			client.dataMu.RUnlock()
-			if hasData {
-				break
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
-
 	restoredCount := 0
 	for _, st := range tunnels {
+		if !s.isCurrentLive(client.ID, client.generation) {
+			return
+		}
 		// 检查端口是否仍在白名单范围内
 		if st.RemotePort != 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(st.RemotePort) {
 			log.Printf("⚠️ 隧道 %s 端口 %d 不在当前允许范围内，标记为 error", st.Name, st.RemotePort)
@@ -1641,9 +1632,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 				done: make(chan struct{}),
 			}
 			client.proxyMu.Unlock()
-			if s.store != nil {
-				_ = s.store.UpdateStatus(client.ID, st.Name, protocol.ProxyStatusError)
-			}
+			_ = s.persistTunnelState(client.ID, st.Name, protocol.ProxyStatusError, errMsg)
 			s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
 				Name:       st.Name,
 				Type:       st.Type,
@@ -1657,7 +1646,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 		}
 
 		switch st.Status {
-		case protocol.ProxyStatusActive:
+		case protocol.ProxyStatusActive, protocol.ProxyStatusPending:
 			log.Printf("🔄 恢复隧道: %s (:%d → %s:%d)", st.Name, st.RemotePort, st.LocalIP, st.LocalPort)
 			if err := s.restoreManagedTunnel(client, st); err != nil {
 				log.Printf("⚠️ 恢复隧道失败 [%s]: %v", st.Name, err)
@@ -1676,6 +1665,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 					RemotePort: st.RemotePort,
 					ClientID:   client.ID,
 					Status:     st.Status,
+					Error:      st.Error,
 				},
 				done: make(chan struct{}),
 			}
@@ -1685,7 +1675,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 	}
 
 	// 恢复完成后一次性通知前端刷新
-	if restoredCount > 0 {
+	if restoredCount > 0 && s.isCurrentLive(client.ID, client.generation) {
 		s.events.PublishJSON("tunnel_changed", map[string]any{
 			"client_id": client.ID,
 			"action":    "restored_batch",

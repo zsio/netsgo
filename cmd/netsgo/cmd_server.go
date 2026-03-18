@@ -45,6 +45,7 @@ TLS 模式:
 		log.Printf("🚀 NetsGo Server 启动中 (端口: %d)...", port)
 
 		s := server.New(port)
+		s.SetupToken = viper.GetString("setup-token")
 
 		tlsMode := viper.GetString("tls-mode")
 		if tlsMode != "" {
@@ -107,6 +108,7 @@ func init() {
 	serverCmd.Flags().String("tls-key", "", "TLS 私钥文件路径 (custom 模式)")
 	serverCmd.Flags().String("tls-auto-dir", "", "自签证书存储目录 (auto 模式, 默认 ~/.netsgo/tls)")
 	serverCmd.Flags().String("trusted-proxies", "", "受信任代理 CIDR 列表, 逗号分隔 (off 模式)")
+	serverCmd.Flags().String("setup-token", "", "显式指定初始化 Setup Token（用于自动化部署/测试）")
 
 	// 绑定 viper (支持环境变量)
 	viper.BindPFlag("port", serverCmd.Flags().Lookup("port"))
@@ -115,6 +117,7 @@ func init() {
 	viper.BindPFlag("tls-key", serverCmd.Flags().Lookup("tls-key"))
 	viper.BindPFlag("tls-auto-dir", serverCmd.Flags().Lookup("tls-auto-dir"))
 	viper.BindPFlag("trusted-proxies", serverCmd.Flags().Lookup("trusted-proxies"))
+	viper.BindPFlag("setup-token", serverCmd.Flags().Lookup("setup-token"))
 
 	// 注册到根命令
 	rootCmd.AddCommand(serverCmd)

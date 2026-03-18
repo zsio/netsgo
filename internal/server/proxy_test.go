@@ -134,7 +134,9 @@ func TestStopProxy(t *testing.T) {
 	client.dataSession = sSession
 
 	req := protocol.ProxyNewRequest{Name: "to-be-stopped", RemotePort: 0}
-	s.StartProxy(client, req)
+	if err := s.StartProxy(client, req); err != nil {
+		t.Fatalf("StartProxy 失败: %v", err)
+	}
 
 	client.proxyMu.RLock()
 	port := client.proxies[req.Name].Config.RemotePort
@@ -170,8 +172,12 @@ func TestStopAllProxies(t *testing.T) {
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
 	client.dataSession = sSession
 
-	s.StartProxy(client, protocol.ProxyNewRequest{Name: "t1", RemotePort: 0})
-	s.StartProxy(client, protocol.ProxyNewRequest{Name: "t2", RemotePort: 0})
+	if err := s.StartProxy(client, protocol.ProxyNewRequest{Name: "t1", RemotePort: 0}); err != nil {
+		t.Fatalf("启动 t1 失败: %v", err)
+	}
+	if err := s.StartProxy(client, protocol.ProxyNewRequest{Name: "t2", RemotePort: 0}); err != nil {
+		t.Fatalf("启动 t2 失败: %v", err)
+	}
 
 	client.proxyMu.RLock()
 	count := len(client.proxies)

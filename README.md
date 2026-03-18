@@ -107,7 +107,7 @@ make dev-web      # 终端 3 — 前端热更新 (Vite)
 | 通道 | 协议 | 用途 |
 |------|------|------|
 | 控制通道 | WebSocket `/ws/control` | 认证、心跳、探针上报、隧道指令下发 |
-| 数据通道 | TCP 二进制 (yamux) | 隧道流量转发（TCP / UDP） |
+| 数据通道 | WebSocket `/ws/data` + yamux | 隧道流量转发（TCP / UDP） |
 | 管理 API | REST `/api/*` | Web 面板后端、Key 管理 |
 | 实时事件 | SSE `/api/events` | Client 上下线、隧道变更推送 |
 
@@ -135,7 +135,7 @@ make dev-web      # 终端 3 — 前端热更新 (Vite)
 | TLS 加密 | 控制与数据通道均支持 TLS，三种模式可选 |
 | httpOnly Cookie | 管理端 JWT 通过 httpOnly cookie 传递，防 XSS |
 | 速率限制 | 登录、Client 认证、初始化接口均有速率限制 |
-| Session 绑定 | 绑定 IP + User-Agent，防 token 盗用 |
+| Session 绑定 | 绑定 User-Agent，降低 token 被不同终端直接复用的风险 |
 | 数据通道认证 | DataToken 机制绑定数据通道到已认证的控制通道 |
 | Setup Token | 首次初始化需一次性 token，防未授权初始化 |
 | 安全头 | HSTS、CSP、X-Frame-Options 等 |
@@ -182,6 +182,7 @@ netsgo/
 | `NETSGO_TLS_MODE` | `--tls-mode` | TLS 模式: `auto` / `custom` / `off` |
 | `NETSGO_TLS_CERT` | `--tls-cert` | TLS 证书路径 |
 | `NETSGO_TLS_KEY` | `--tls-key` | TLS 私钥路径 |
+| `NETSGO_SETUP_TOKEN` | `--setup-token` | 显式指定初始化 Setup Token（适合自动化部署 / E2E） |
 | `NETSGO_SERVER` | `--server` | 服务端地址 |
 | `NETSGO_KEY` | `--key` | Client 认证密钥 |
 
@@ -190,6 +191,36 @@ netsgo/
 - **CI** — Push / PR 时自动运行前端构建 + `go test` + 跨平台构建
 - **Release** — 推送 `v*` tag 后自动发布 Linux / macOS / Windows 二进制 + 多架构 Docker 镜像
 - **Docker** — 默认发布到 `ghcr.io`，配置 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 后同步 Docker Hub
+
+## 验证入口
+
+```bash
+go build ./...
+go test ./...
+go vet ./...
+
+make bench-data
+make test-e2e-nginx
+make test-e2e-caddy
+make test-compose-stack-nginx
+make test-compose-stack-caddy
+make soak-data STACK_PROXY=nginx
+```
+
+`test/e2e/` 下的 nginx / Caddy 验证会把 `/ws/control` 和 `/ws/data` 一起经过反向代理，覆盖首连、空闲存活和代理重启后的自动恢复。
+
+如果需要保留一套可复用的多容器联调环境，可以直接使用 Compose stack：
+
+```bash
+make compose-stack-up STACK_PROXY=nginx
+make compose-stack-logs STACK_PROXY=nginx
+make compose-stack-down STACK_PROXY=nginx
+make compose-stack-clean STACK_PROXY=nginx
+```
+
+这套 stack 会同时启动 `server`、`client`、`backend`、`bootstrap` 和 `proxy`。其中 `bootstrap` 会自动完成初始化、登录、创建 API key、等待 client 上线并创建测试隧道；`compose-stack-down` 保留卷，便于继续做长时间测试，`compose-stack-clean` 会连卷一起删除。
+
+`make soak-data` 现在会基于这套 Compose stack 做短周期 soak：默认空闲 `45s`（显式跨过 yamux 默认 `30s` keepalive）、验证 live client 计数稳定，并在过程中分别重启 `proxy` 和 `client` 检查整会话恢复。
 
 ## License
 

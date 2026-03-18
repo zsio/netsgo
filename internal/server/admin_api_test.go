@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -92,6 +93,43 @@ func doAuthorizedRequest(t *testing.T, client *http.Client, method, url, token s
 		t.Fatalf("请求失败: %v", err)
 	}
 	return resp
+}
+
+func doMuxRequest(t *testing.T, handler http.Handler, method, path, token string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	return w
+}
+
+func loginAdminTokenLocal(t *testing.T, handler http.Handler, username, password string) string {
+	t.Helper()
+
+	body := []byte(`{"username":"` + username + `","password":"` + password + `"}`)
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/auth/login", "", body)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("登录期望 200，得到 %d", resp.Code)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("解析登录响应失败: %v", err)
+	}
+
+	token, _ := payload["token"].(string)
+	if token == "" {
+		t.Fatal("登录响应未返回 token")
+	}
+	return token
 }
 
 func TestAPI_SetupStatus_NotInitialized(t *testing.T) {
@@ -230,8 +268,7 @@ func TestAPI_ProtectedRoutes_LoginLogoutAndSingleSession(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
 
-	ts := httptest.NewServer(s.newHTTPMux())
-	defer ts.Close()
+	mux := s.newHTTPMux()
 
 	protected := []string{
 		"/api/status",
@@ -241,52 +278,45 @@ func TestAPI_ProtectedRoutes_LoginLogoutAndSingleSession(t *testing.T) {
 	}
 
 	for _, path := range protected {
-		resp := doAuthorizedRequest(t, http.DefaultClient, http.MethodGet, ts.URL+path, "", nil)
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("%s 匿名访问应返回 401，得到 %d", path, resp.StatusCode)
+		resp := doMuxRequest(t, mux, http.MethodGet, path, "", nil)
+		if resp.Code != http.StatusUnauthorized {
+			t.Fatalf("%s 匿名访问应返回 401，得到 %d", path, resp.Code)
 		}
-		resp.Body.Close()
 	}
 
-	setupResp := doAuthorizedRequest(t, http.DefaultClient, http.MethodGet, ts.URL+"/api/setup/status", "", nil)
-	if setupResp.StatusCode != http.StatusOK {
-		t.Fatalf("/api/setup/status 应保持公开，得到 %d", setupResp.StatusCode)
+	setupResp := doMuxRequest(t, mux, http.MethodGet, "/api/setup/status", "", nil)
+	if setupResp.Code != http.StatusOK {
+		t.Fatalf("/api/setup/status 应保持公开，得到 %d", setupResp.Code)
 	}
-	setupResp.Body.Close()
 
-	token1 := loginAdminToken(t, ts, "admin", "password123")
+	token1 := loginAdminTokenLocal(t, mux, "admin", "password123")
 
-	statusResp := doAuthorizedRequest(t, http.DefaultClient, http.MethodGet, ts.URL+"/api/status", token1, nil)
-	if statusResp.StatusCode != http.StatusOK {
-		t.Fatalf("登录后访问 /api/status 应成功，得到 %d", statusResp.StatusCode)
+	statusResp := doMuxRequest(t, mux, http.MethodGet, "/api/status", token1, nil)
+	if statusResp.Code != http.StatusOK {
+		t.Fatalf("登录后访问 /api/status 应成功，得到 %d", statusResp.Code)
 	}
-	statusResp.Body.Close()
 
-	token2 := loginAdminToken(t, ts, "admin", "password123")
+	token2 := loginAdminTokenLocal(t, mux, "admin", "password123")
 
-	oldSessionResp := doAuthorizedRequest(t, http.DefaultClient, http.MethodGet, ts.URL+"/api/status", token1, nil)
-	if oldSessionResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("单端登录后旧 token 应失效，得到 %d", oldSessionResp.StatusCode)
+	oldSessionResp := doMuxRequest(t, mux, http.MethodGet, "/api/status", token1, nil)
+	if oldSessionResp.Code != http.StatusUnauthorized {
+		t.Fatalf("单端登录后旧 token 应失效，得到 %d", oldSessionResp.Code)
 	}
-	oldSessionResp.Body.Close()
 
-	currentSessionResp := doAuthorizedRequest(t, http.DefaultClient, http.MethodGet, ts.URL+"/api/clients", token2, nil)
-	if currentSessionResp.StatusCode != http.StatusOK {
-		t.Fatalf("新 token 应可访问受保护路由，得到 %d", currentSessionResp.StatusCode)
+	currentSessionResp := doMuxRequest(t, mux, http.MethodGet, "/api/clients", token2, nil)
+	if currentSessionResp.Code != http.StatusOK {
+		t.Fatalf("新 token 应可访问受保护路由，得到 %d", currentSessionResp.Code)
 	}
-	currentSessionResp.Body.Close()
 
-	logoutResp := doAuthorizedRequest(t, http.DefaultClient, http.MethodPost, ts.URL+"/api/auth/logout", token2, nil)
-	if logoutResp.StatusCode != http.StatusOK {
-		t.Fatalf("logout 应返回 200，得到 %d", logoutResp.StatusCode)
+	logoutResp := doMuxRequest(t, mux, http.MethodPost, "/api/auth/logout", token2, nil)
+	if logoutResp.Code != http.StatusOK {
+		t.Fatalf("logout 应返回 200，得到 %d", logoutResp.Code)
 	}
-	logoutResp.Body.Close()
 
-	revokedResp := doAuthorizedRequest(t, http.DefaultClient, http.MethodGet, ts.URL+"/api/status", token2, nil)
-	if revokedResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("logout 后 token 应立即失效，得到 %d", revokedResp.StatusCode)
+	revokedResp := doMuxRequest(t, mux, http.MethodGet, "/api/status", token2, nil)
+	if revokedResp.Code != http.StatusUnauthorized {
+		t.Fatalf("logout 后 token 应立即失效，得到 %d", revokedResp.Code)
 	}
-	revokedResp.Body.Close()
 }
 
 func TestAPI_AdminKeys_CreateAndList(t *testing.T) {
@@ -509,6 +539,9 @@ func TestAPI_Login_SetsCookie(t *testing.T) {
 	if sessionCookie.Value == "" {
 		t.Error("session cookie 值不应为空")
 	}
+	if sessionCookie.Secure {
+		t.Error("普通 HTTP 登录默认不应设置 Secure")
+	}
 }
 
 func TestAPI_Logout_ClearsCookie(t *testing.T) {
@@ -546,5 +579,108 @@ func TestAPI_Logout_ClearsCookie(t *testing.T) {
 	}
 	if sessionCookie.MaxAge != -1 {
 		t.Errorf("清除 cookie 的 MaxAge 应为 -1，得到 %d", sessionCookie.MaxAge)
+	}
+}
+
+func TestAPI_Login_SetsSecureCookie_WhenRequestIsTLS(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+
+	body := []byte(`{"username":"admin","password":"password123"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.TLS = &tls.ConnectionState{}
+	w := httptest.NewRecorder()
+
+	s.handleAPILogin(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望登录成功 200，得到 %d", w.Code)
+	}
+
+	var sessionCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("登录响应中缺少 netsgo_session cookie")
+	}
+	if !sessionCookie.Secure {
+		t.Error("TLS 请求下应设置 Secure cookie")
+	}
+}
+
+func TestAPI_Login_SetsSecureCookie_WhenTrustedProxyReportsHTTPS(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+	s.TLS = &TLSConfig{
+		Mode:           TLSModeOff,
+		TrustedProxies: []string{"10.0.0.0/8"},
+	}
+
+	body := []byte(`{"username":"admin","password":"password123"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "10.1.2.3:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+
+	s.handleAPILogin(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望登录成功 200，得到 %d", w.Code)
+	}
+
+	var sessionCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("登录响应中缺少 netsgo_session cookie")
+	}
+	if !sessionCookie.Secure {
+		t.Error("受信反代声明 HTTPS 时应设置 Secure cookie")
+	}
+}
+
+func TestAPI_Login_IgnoresUntrustedProxyHTTPSForSecureCookie(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+	s.TLS = &TLSConfig{
+		Mode:           TLSModeOff,
+		TrustedProxies: []string{"10.0.0.0/8"},
+	}
+
+	body := []byte(`{"username":"admin","password":"password123"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.10:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+
+	s.handleAPILogin(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望登录成功 200，得到 %d", w.Code)
+	}
+
+	var sessionCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("登录响应中缺少 netsgo_session cookie")
+	}
+	if sessionCookie.Secure {
+		t.Error("不应信任非受信代理伪造的 HTTPS 头")
 	}
 }

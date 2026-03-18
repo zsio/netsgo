@@ -240,12 +240,14 @@ func TestAdminStore_IsPortAllowed_OutOfRange(t *testing.T) {
 
 // --- Client Key ---
 
-func TestAdminStore_ValidateClientKey_NoKeys(t *testing.T) {
+func TestAdminStore_ValidateClientKey_NoKeysBeforeInit(t *testing.T) {
 	store := newTestAdminStore(t)
-	// 无 key 时开放
 	valid, err := store.ValidateClientKey("")
-	if !valid || err != nil {
-		t.Error("无 Key 配置时应开放所有连接")
+	if valid {
+		t.Error("未初始化时不应接受 Client 连接")
+	}
+	if err == nil {
+		t.Error("未初始化时应返回错误")
 	}
 }
 
@@ -737,6 +739,9 @@ func TestAdminStore_Token_ValidateExpired(t *testing.T) {
 	if err == nil {
 		t.Error("过期 Token 应验证失败")
 	}
+	if !errors.Is(err, ErrClientTokenExpired) {
+		t.Fatalf("过期 Token 应返回 ErrClientTokenExpired，得到 %v", err)
+	}
 }
 
 func TestAdminStore_Token_ValidateRevoked(t *testing.T) {
@@ -757,6 +762,9 @@ func TestAdminStore_Token_ValidateRevoked(t *testing.T) {
 	_, err = store.ValidateClientToken(tokenStr, "install-1")
 	if err == nil {
 		t.Error("已吊销 Token 应验证失败")
+	}
+	if !errors.Is(err, ErrClientTokenRevoked) {
+		t.Fatalf("已吊销 Token 应返回 ErrClientTokenRevoked，得到 %v", err)
 	}
 }
 

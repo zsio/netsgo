@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -215,6 +216,75 @@ func TestTunnelStore_UpdateStatus_NotFound(t *testing.T) {
 	store := newTestTunnelStore(t)
 	if err := store.UpdateStatus("ghost", "no-tunnel", "active"); err == nil {
 		t.Error("更新不存在的隧道应返回错误")
+	}
+}
+
+func TestTunnelStore_UpdateState_ErrorRoundTrip(t *testing.T) {
+	store := newTestTunnelStore(t)
+
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t-error"},
+		ClientID:        "client-1",
+		Hostname:        "host",
+		Status:          protocol.ProxyStatusActive,
+	})
+
+	if err := store.UpdateState("client-1", "t-error", protocol.ProxyStatusError, "restore failed"); err != nil {
+		t.Fatalf("UpdateState 设置 error 失败: %v", err)
+	}
+	st, _ := store.GetTunnel("client-1", "t-error")
+	if st.Status != protocol.ProxyStatusError {
+		t.Fatalf("状态期望 error，得到 %s", st.Status)
+	}
+	if st.Error != "restore failed" {
+		t.Fatalf("错误原因期望 %q，得到 %q", "restore failed", st.Error)
+	}
+
+	if err := store.UpdateState("client-1", "t-error", protocol.ProxyStatusPaused, "should-clear"); err != nil {
+		t.Fatalf("UpdateState 清理 error 失败: %v", err)
+	}
+	st, _ = store.GetTunnel("client-1", "t-error")
+	if st.Status != protocol.ProxyStatusPaused {
+		t.Fatalf("状态期望 paused，得到 %s", st.Status)
+	}
+	if st.Error != "" {
+		t.Fatalf("paused 状态下错误原因应清空，得到 %q", st.Error)
+	}
+}
+
+func TestTunnelStore_UpdateState_RollbackOnSaveFailure(t *testing.T) {
+	store := newTestTunnelStore(t)
+
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t-rollback"},
+		ClientID:        "client-1",
+		Hostname:        "host",
+		Status:          protocol.ProxyStatusActive,
+	})
+
+	store.mu.Lock()
+	store.failSaveErr = errors.New("injected save failure")
+	store.failSaveCount = 1
+	store.mu.Unlock()
+
+	if err := store.UpdateState("client-1", "t-rollback", protocol.ProxyStatusError, "boom"); err == nil {
+		t.Fatal("预期 UpdateState 在注入 save 失败时返回错误")
+	}
+
+	st, _ := store.GetTunnel("client-1", "t-rollback")
+	if st.Status != protocol.ProxyStatusActive {
+		t.Fatalf("save 失败时状态应回滚为 active，得到 %s", st.Status)
+	}
+	if st.Error != "" {
+		t.Fatalf("save 失败时错误字段应保持为空，得到 %q", st.Error)
+	}
+
+	if err := store.UpdateState("client-1", "t-rollback", protocol.ProxyStatusError, "boom"); err != nil {
+		t.Fatalf("注入失败耗尽后 UpdateState 应成功，得到: %v", err)
+	}
+	st, _ = store.GetTunnel("client-1", "t-rollback")
+	if st.Status != protocol.ProxyStatusError || st.Error != "boom" {
+		t.Fatalf("最终状态应为 error/boom，得到 status=%s error=%q", st.Status, st.Error)
 	}
 }
 

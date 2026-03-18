@@ -20,6 +20,7 @@ const (
 type StoredTunnel struct {
 	protocol.ProxyNewRequest
 	Status   string `json:"status"`              // active, paused, stopped
+	Error    string `json:"error,omitempty"`     // error 状态时的具体原因
 	ClientID string `json:"client_id,omitempty"` // 所属稳定 Client ID
 	Hostname string `json:"hostname,omitempty"`  // 当前主机名（展示用）
 	Binding  string `json:"binding,omitempty"`   // client_id | legacy_hostname
@@ -37,6 +38,7 @@ func (t *StoredTunnel) normalize() {
 		t.Binding = TunnelBindingLegacyHostname
 		t.ClientID = ""
 	}
+	t.Error = storedTunnelErrorForStatus(t.Status, t.Error)
 }
 
 func (t StoredTunnel) matchesClient(clientID, name string) bool {
@@ -62,6 +64,10 @@ type TunnelStore struct {
 	path    string
 	mu      sync.RWMutex
 	tunnels []StoredTunnel
+
+	// 仅供测试使用：注入下一次 save 失败，验证回滚路径。
+	failSaveErr   error
+	failSaveCount int
 }
 
 // NewTunnelStore 创建或加载一个隧道存储
@@ -102,11 +108,32 @@ func (s *TunnelStore) load() error {
 }
 
 func (s *TunnelStore) save() error {
+	if s.failSaveErr != nil && s.failSaveCount > 0 {
+		err := s.failSaveErr
+		s.failSaveCount--
+		if s.failSaveCount == 0 {
+			s.failSaveErr = nil
+		}
+		return err
+	}
 	data, err := json.MarshalIndent(s.tunnels, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(s.path, data, 0o600)
+}
+
+func cloneStoredTunnels(tunnels []StoredTunnel) []StoredTunnel {
+	cloned := make([]StoredTunnel, len(tunnels))
+	copy(cloned, tunnels)
+	return cloned
+}
+
+func storedTunnelErrorForStatus(status, errMsg string) string {
+	if status == protocol.ProxyStatusError {
+		return errMsg
+	}
+	return ""
 }
 
 // AddTunnel 添加一条隧道配置并持久化
@@ -125,8 +152,13 @@ func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
 		}
 	}
 
+	previous := cloneStoredTunnels(s.tunnels)
 	s.tunnels = append(s.tunnels, tunnel)
-	return s.save()
+	if err := s.save(); err != nil {
+		s.tunnels = previous
+		return err
+	}
+	return nil
 }
 
 // RemoveTunnel 删除一条隧道配置并持久化
@@ -145,19 +177,35 @@ func (s *TunnelStore) RemoveTunnel(clientID, name string) error {
 		return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
 	}
 
+	previous := cloneStoredTunnels(s.tunnels)
 	s.tunnels = append(s.tunnels[:idx], s.tunnels[idx+1:]...)
-	return s.save()
+	if err := s.save(); err != nil {
+		s.tunnels = previous
+		return err
+	}
+	return nil
 }
 
 // UpdateStatus 更新隧道状态并持久化
 func (s *TunnelStore) UpdateStatus(clientID, name, status string) error {
+	return s.UpdateState(clientID, name, status, "")
+}
+
+// UpdateState 更新隧道状态和错误信息并持久化。
+func (s *TunnelStore) UpdateState(clientID, name, status, errMsg string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for i, tunnel := range s.tunnels {
 		if tunnel.matchesIdentifier(clientID, name) {
+			previous := s.tunnels[i]
 			s.tunnels[i].Status = status
-			return s.save()
+			s.tunnels[i].Error = storedTunnelErrorForStatus(status, errMsg)
+			if err := s.save(); err != nil {
+				s.tunnels[i] = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
@@ -170,11 +218,16 @@ func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localP
 
 	for i, tunnel := range s.tunnels {
 		if tunnel.matchesIdentifier(clientID, name) {
+			previous := s.tunnels[i]
 			s.tunnels[i].LocalIP = localIP
 			s.tunnels[i].LocalPort = localPort
 			s.tunnels[i].RemotePort = remotePort
 			s.tunnels[i].Domain = domain
-			return s.save()
+			if err := s.save(); err != nil {
+				s.tunnels[i] = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
@@ -186,6 +239,7 @@ func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 	defer s.mu.Unlock()
 
 	changed := false
+	previous := cloneStoredTunnels(s.tunnels)
 	for i, tunnel := range s.tunnels {
 		if tunnel.Binding == TunnelBindingClientID && tunnel.ClientID == clientID && tunnel.Hostname != hostname {
 			s.tunnels[i].Hostname = hostname
@@ -195,7 +249,11 @@ func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 	if !changed {
 		return nil
 	}
-	return s.save()
+	if err := s.save(); err != nil {
+		s.tunnels = previous
+		return err
+	}
+	return nil
 }
 
 // MigrateLegacyTunnels 以 hostname 为条件，将旧版记录迁移到稳定 client_id
@@ -204,6 +262,7 @@ func (s *TunnelStore) MigrateLegacyTunnels(hostname, clientID string) (int, erro
 	defer s.mu.Unlock()
 
 	changed := 0
+	previous := cloneStoredTunnels(s.tunnels)
 	for i, tunnel := range s.tunnels {
 		if tunnel.matchesLegacyHostname(hostname) {
 			s.tunnels[i].ClientID = clientID
@@ -214,7 +273,11 @@ func (s *TunnelStore) MigrateLegacyTunnels(hostname, clientID string) (int, erro
 	if changed == 0 {
 		return 0, nil
 	}
-	return changed, s.save()
+	if err := s.save(); err != nil {
+		s.tunnels = previous
+		return 0, err
+	}
+	return changed, nil
 }
 
 // UpdateClientID 向后兼容旧接口：将 hostname 绑定的旧隧道迁移到稳定 client_id

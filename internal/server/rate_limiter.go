@@ -187,10 +187,7 @@ func (s *Server) clientIP(r *http.Request) string {
 	directIP := remoteIPFromAddr(r.RemoteAddr)
 
 	// 判断是否信任代理头
-	trustProxy := isLoopback(directIP) || // 本地回环默认信任
-		(s.TLS != nil && s.TLS.isTrustedProxy(directIP)) // 显式配置的受信代理
-
-	if trustProxy {
+	if s.trustProxyHeaders(r) {
 		// 优先使用 X-Forwarded-For（取第一个 IP）
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := strings.SplitN(xff, ",", 2)
@@ -207,6 +204,59 @@ func (s *Server) clientIP(r *http.Request) string {
 	}
 
 	return directIP
+}
+
+// trustProxyHeaders 判断当前请求是否可以信任代理头。
+// 规则与 clientIP 保持一致：本地回环默认信任，或来源于显式配置的受信代理。
+func (s *Server) trustProxyHeaders(r *http.Request) bool {
+	directIP := remoteIPFromAddr(r.RemoteAddr)
+	return isLoopback(directIP) || (s.TLS != nil && s.TLS.isTrustedProxy(directIP))
+}
+
+// isHTTPSRequest 判断浏览器侧看到的请求是否是 HTTPS。
+// 1. 服务端自身 TLS 终止时，看 r.TLS
+// 2. 反向代理模式下，仅对受信代理发送的协议头做判断
+func (s *Server) isHTTPSRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if !s.trustProxyHeaders(r) {
+		return false
+	}
+
+	if proto := firstHeaderToken(r.Header.Get("X-Forwarded-Proto")); strings.EqualFold(proto, "https") {
+		return true
+	}
+
+	return strings.EqualFold(forwardedProto(r.Header.Get("Forwarded")), "https")
+}
+
+func firstHeaderToken(v string) string {
+	if v == "" {
+		return ""
+	}
+	parts := strings.SplitN(v, ",", 2)
+	return strings.TrimSpace(parts[0])
+}
+
+// forwardedProto 从 RFC 7239 Forwarded 头中提取首个 proto 值。
+func forwardedProto(v string) string {
+	if v == "" {
+		return ""
+	}
+
+	for _, entry := range strings.Split(v, ",") {
+		for _, param := range strings.Split(entry, ";") {
+			param = strings.TrimSpace(param)
+			if len(param) < 6 || !strings.EqualFold(param[:6], "proto=") {
+				continue
+			}
+			value := strings.TrimSpace(param[6:])
+			return strings.Trim(value, `"`)
+		}
+	}
+
+	return ""
 }
 
 // isLoopback 判断 IP 是否是本地回环地址

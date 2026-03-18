@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 
 	buildversion "netsgo/pkg/version"
 
@@ -29,6 +30,7 @@ func init() {
 	// 设置环境变量前缀: NETSGO_
 	// 例如 --port 对应 NETSGO_PORT
 	viper.SetEnvPrefix("NETSGO")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
 }
 

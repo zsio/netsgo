@@ -1,352 +1,364 @@
 package server
 
 import (
+	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
+	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
 
-// ============================================================
-// 数据通道处理测试 (handleDataConn & DataHandshakeBytes)
-// ============================================================
-
 const testDataToken = "test-data-token-abc123"
 
-func TestDataChannel_HandshakeSuccess(t *testing.T) {
-	s := New(0)
-	// 注册一个预设的 Client
-	clientID := "test-client-123"
-	cc := &ClientConn{
-		ID:        clientID,
-		proxies:   make(map[string]*ProxyTunnel),
-		dataToken: testDataToken,
+type unixDataTestServer struct {
+	socketPath string
+	httpServer *http.Server
+	listener   net.Listener
+	httpClient *http.Client
+}
+
+func newUnixDataTestServer(t *testing.T, handler http.Handler) *unixDataTestServer {
+	t.Helper()
+
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("netsgo-data-%d.sock", time.Now().UnixNano()))
+	_ = os.Remove(socketPath)
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("创建 unix socket 测试监听器失败: %v", err)
 	}
-	s.clients.Store(clientID, cc)
 
-	// 用 net.Pipe 模拟网络连接
-	client, serverConn := net.Pipe()
-	defer client.Close()
-	defer serverConn.Close()
-
-	// 服务器端开启处理数据通道
+	srv := &http.Server{Handler: handler}
 	go func() {
-		// Mock peekByte 已消费魔数后的处理
-		s.handleDataConn(serverConn)
+		_ = srv.Serve(ln)
 	}()
 
-	// 客户端发送合法的握手包体
-	// DataHandshakeBytes 返回 [1B 魔数] [2B ClientID长度] [NB ClientID] [2B DataToken长度] [NB DataToken]
-	// server 侧 handleDataConn 预期消费的只有魔数之后的部分
-	handshakePkg := DataHandshakeBytes(clientID, testDataToken)
-	// 去掉第一个魔数字节
-	payload := handshakePkg[1:]
-
-	if _, err := client.Write(payload); err != nil {
-		t.Fatalf("客户端发送握手失败: %v", err)
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socketPath)
+		},
 	}
 
-	// 读取服务端的响应
-	respBuf := make([]byte, 1)
-	client.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := client.Read(respBuf); err != nil {
-		t.Fatalf("读取服务端响应失败: %v", err)
+	return &unixDataTestServer{
+		socketPath: socketPath,
+		httpServer: srv,
+		listener:   ln,
+		httpClient: &http.Client{Transport: transport},
+	}
+}
+
+func (ts *unixDataTestServer) Close() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = ts.httpServer.Shutdown(ctx)
+	_ = ts.listener.Close()
+	_ = os.Remove(ts.socketPath)
+}
+
+func setupDataWSTest(t *testing.T) (*Server, *unixDataTestServer, func()) {
+	t.Helper()
+	s := New(0)
+	ts := newUnixDataTestServer(t, s.newHTTPMux())
+	return s, ts, ts.Close
+}
+
+func dialDataWS(t *testing.T, ts *unixDataTestServer) *websocket.Conn {
+	t.Helper()
+	dialer := websocket.Dialer{
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", ts.socketPath)
+		},
+	}
+	conn, _, err := dialer.Dial("ws://unix/ws/data", nil)
+	if err != nil {
+		t.Fatalf("连接 /ws/data 失败: %v", err)
+	}
+	return conn
+}
+
+func readHandshakeStatus(t *testing.T, conn *websocket.Conn) byte {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	messageType, payload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("读取握手响应失败: %v", err)
+	}
+	if messageType != websocket.BinaryMessage {
+		t.Fatalf("握手响应类型错误: %d", messageType)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("握手响应长度错误: %d", len(payload))
+	}
+	return payload[0]
+}
+
+func newPendingTestClient(clientID, token string) *ClientConn {
+	return &ClientConn{
+		ID:         clientID,
+		proxies:    make(map[string]*ProxyTunnel),
+		dataToken:  token,
+		generation: 1,
+		state:      clientStatePendingData,
+	}
+}
+
+func TestDataChannel_HandshakeSuccess(t *testing.T) {
+	s, ts, cleanup := setupDataWSTest(t)
+	defer cleanup()
+
+	clientID := "test-client-123"
+	cc := newPendingTestClient(clientID, testDataToken)
+	s.clients.Store(clientID, cc)
+
+	conn := dialDataWS(t, ts)
+	defer conn.Close()
+
+	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, testDataToken)); err != nil {
+		t.Fatalf("发送握手失败: %v", err)
 	}
 
-	if respBuf[0] != protocol.DataHandshakeOK {
-		t.Errorf("期望握手成功 OK(%d)，得到 %d", protocol.DataHandshakeOK, respBuf[0])
+	if status := readHandshakeStatus(t, conn); status != protocol.DataHandshakeOK {
+		t.Fatalf("期望 OK，得到 0x%02x", status)
 	}
 
-	// 验证远端 Server 已经正确为 cc 注册了 dataSession
 	time.Sleep(50 * time.Millisecond)
 	cc.dataMu.RLock()
 	hasSession := cc.dataSession != nil && !cc.dataSession.IsClosed()
 	cc.dataMu.RUnlock()
 	if !hasSession {
-		t.Error("Server 成功握手后未给 Client 赋值 dataSession")
+		t.Fatal("握手成功后应建立 dataSession")
+	}
+	if cc.getState() != clientStateLive {
+		t.Fatalf("握手成功后状态应提升为 live，得到 %s", cc.getState())
 	}
 }
 
 func TestDataChannel_Handshake_InvalidLength(t *testing.T) {
-	s := New(0)
+	_, ts, cleanup := setupDataWSTest(t)
+	defer cleanup()
 
-	client, serverConn := net.Pipe()
-	defer client.Close()
-	defer serverConn.Close()
+	conn := dialDataWS(t, ts)
+	defer conn.Close()
 
-	go s.handleDataConn(serverConn)
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte{0x00, 0x00}); err != nil {
+		t.Fatalf("发送非法握手失败: %v", err)
+	}
 
-	// 发送错误长度 0
-	badLen := []byte{0x00, 0x00}
-	client.Write(badLen)
-
-	respBuf := make([]byte, 1)
-	client.SetReadDeadline(time.Now().Add(1 * time.Second))
-	client.Read(respBuf)
-
-	if respBuf[0] != protocol.DataHandshakeFail {
-		t.Errorf("期望失败 Fail(%d)，得到 %d", protocol.DataHandshakeFail, respBuf[0])
+	if status := readHandshakeStatus(t, conn); status != protocol.DataHandshakeFail {
+		t.Fatalf("期望 Fail，得到 0x%02x", status)
 	}
 }
 
 func TestDataChannel_Handshake_UnregisteredClient(t *testing.T) {
-	s := New(0)
+	_, ts, cleanup := setupDataWSTest(t)
+	defer cleanup()
 
-	client, serverConn := net.Pipe()
-	defer client.Close()
-	defer serverConn.Close()
+	conn := dialDataWS(t, ts)
+	defer conn.Close()
 
-	go s.handleDataConn(serverConn)
+	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake("ghost-client", "some-token")); err != nil {
+		t.Fatalf("发送握手失败: %v", err)
+	}
 
-	unregisteredID := "ghost-client"
-	handshakePkg := DataHandshakeBytes(unregisteredID, "some-token")[1:]
-	client.Write(handshakePkg)
-
-	respBuf := make([]byte, 1)
-	client.SetReadDeadline(time.Now().Add(1 * time.Second))
-	client.Read(respBuf)
-
-	if respBuf[0] != protocol.DataHandshakeFail {
-		t.Errorf("期望未注册 Client 握手失败(%d)，得到 %d", protocol.DataHandshakeFail, respBuf[0])
+	if status := readHandshakeStatus(t, conn); status != protocol.DataHandshakeFail {
+		t.Fatalf("期望 Fail，得到 0x%02x", status)
 	}
 }
 
 func TestDataChannel_Handshake_ReconnectClosesOldSession(t *testing.T) {
-	s := New(0)
+	s, ts, cleanup := setupDataWSTest(t)
+	defer cleanup()
+
 	clientID := "reconnect-client"
-	cc := &ClientConn{
-		ID:        clientID,
-		proxies:   make(map[string]*ProxyTunnel),
-		dataToken: testDataToken,
-	}
+	cc := newPendingTestClient(clientID, testDataToken)
+	cc.state = clientStateLive
 	s.clients.Store(clientID, cc)
 
-	// --- 第一次握手 ---
-	client1, serverConn1 := net.Pipe()
-	go s.handleDataConn(serverConn1)
+	conn1 := dialDataWS(t, ts)
+	defer conn1.Close()
+	if err := conn1.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, testDataToken)); err != nil {
+		t.Fatalf("发送第一次握手失败: %v", err)
+	}
+	if status := readHandshakeStatus(t, conn1); status != protocol.DataHandshakeOK {
+		t.Fatalf("第一次握手失败: 0x%02x", status)
+	}
 
-	client1.Write(DataHandshakeBytes(clientID, testDataToken)[1:])
-	resp1 := make([]byte, 1)
-	client1.Read(resp1)
-
-	time.Sleep(50 * time.Millisecond) // 等待 session 初始化
+	time.Sleep(50 * time.Millisecond)
 	cc.dataMu.RLock()
 	session1 := cc.dataSession
 	cc.dataMu.RUnlock()
-
 	if session1 == nil {
-		t.Fatal("第一次握手失败，session为空")
+		t.Fatal("第一次握手后 session1 不应为空")
 	}
 
-	// --- 第二次握手 ---
-	client2, serverConn2 := net.Pipe()
-	go s.handleDataConn(serverConn2)
-
-	client2.Write(DataHandshakeBytes(clientID, testDataToken)[1:])
-	resp2 := make([]byte, 1)
-	client2.Read(resp2)
+	conn2 := dialDataWS(t, ts)
+	defer conn2.Close()
+	if err := conn2.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, testDataToken)); err != nil {
+		t.Fatalf("发送第二次握手失败: %v", err)
+	}
+	if status := readHandshakeStatus(t, conn2); status != protocol.DataHandshakeOK {
+		t.Fatalf("第二次握手失败: 0x%02x", status)
+	}
 
 	time.Sleep(50 * time.Millisecond)
 	cc.dataMu.RLock()
 	session2 := cc.dataSession
 	cc.dataMu.RUnlock()
-
+	if session2 == nil {
+		t.Fatal("第二次握手后 session2 不应为空")
+	}
 	if session1 == session2 {
-		t.Error("第二次握手应该生成了新的 session 对象")
+		t.Fatal("第二次接入应替换 dataSession")
 	}
 	if !session1.IsClosed() {
-		t.Error("第二次接入时，应当关闭旧的 dataSession1")
-	}
-
-	client1.Close()
-	client2.Close()
-	serverConn1.Close()
-	serverConn2.Close()
-}
-
-func TestDataHandshakeBytes(t *testing.T) {
-	clientID := "my-client-id-1234"
-	dataToken := "test-token-xyz"
-	res := DataHandshakeBytes(clientID, dataToken)
-
-	if res[0] != protocol.DataChannelMagic {
-		t.Fatalf("首字节异常: 期望 %d, 得到 %d", protocol.DataChannelMagic, res[0])
-	}
-
-	idLen := binary.BigEndian.Uint16(res[1:3])
-	if int(idLen) != len(clientID) {
-		t.Fatalf("ClientID 长度编码异常: 期望 %d, 得到 %d", len(clientID), idLen)
-	}
-
-	parsedID := string(res[3 : 3+idLen])
-	if parsedID != clientID {
-		t.Fatalf("ClientID 异常: 期望 %q, 得到 %q", clientID, parsedID)
-	}
-
-	// 验证 DataToken 段
-	offset := 3 + int(idLen)
-	tokenLen := binary.BigEndian.Uint16(res[offset : offset+2])
-	if int(tokenLen) != len(dataToken) {
-		t.Fatalf("DataToken 长度编码异常: 期望 %d, 得到 %d", len(dataToken), tokenLen)
-	}
-
-	parsedToken := string(res[offset+2 : offset+2+int(tokenLen)])
-	if parsedToken != dataToken {
-		t.Fatalf("DataToken 异常: 期望 %q, 得到 %q", dataToken, parsedToken)
+		t.Fatal("旧 dataSession 应被关闭")
 	}
 }
-
-// ==================== P3: DataToken 校验测试 ====================
 
 func TestDataChannel_Handshake_WrongToken(t *testing.T) {
-	s := New(0)
+	s, ts, cleanup := setupDataWSTest(t)
+	defer cleanup()
+
 	clientID := "token-test-client"
-	cc := &ClientConn{
-		ID:        clientID,
-		proxies:   make(map[string]*ProxyTunnel),
-		dataToken: "correct-token",
-	}
+	cc := newPendingTestClient(clientID, "correct-token")
 	s.clients.Store(clientID, cc)
 
-	client, serverConn := net.Pipe()
-	defer client.Close()
-	defer serverConn.Close()
+	conn := dialDataWS(t, ts)
+	defer conn.Close()
+	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, "wrong-token")); err != nil {
+		t.Fatalf("发送握手失败: %v", err)
+	}
 
-	go s.handleDataConn(serverConn)
-
-	// 发送错误的 DataToken
-	handshakePkg := DataHandshakeBytes(clientID, "wrong-token")[1:]
-	client.Write(handshakePkg)
-
-	respBuf := make([]byte, 1)
-	client.SetReadDeadline(time.Now().Add(1 * time.Second))
-	client.Read(respBuf)
-
-	if respBuf[0] != protocol.DataHandshakeAuthFail {
-		t.Errorf("错误 DataToken 应返回 AuthFail(0x%02x)，得到 0x%02x",
-			protocol.DataHandshakeAuthFail, respBuf[0])
+	if status := readHandshakeStatus(t, conn); status != protocol.DataHandshakeAuthFail {
+		t.Fatalf("期望 AuthFail，得到 0x%02x", status)
 	}
 }
 
 func TestDataChannel_Handshake_EmptyToken(t *testing.T) {
-	s := New(0)
+	s, ts, cleanup := setupDataWSTest(t)
+	defer cleanup()
+
 	clientID := "empty-token-client"
-	cc := &ClientConn{
-		ID:        clientID,
-		proxies:   make(map[string]*ProxyTunnel),
-		dataToken: "some-valid-token",
-	}
+	cc := newPendingTestClient(clientID, "some-valid-token")
 	s.clients.Store(clientID, cc)
 
-	client, serverConn := net.Pipe()
-	defer client.Close()
-	defer serverConn.Close()
+	conn := dialDataWS(t, ts)
+	defer conn.Close()
+	payload := protocol.EncodeDataHandshake(clientID, "")
+	if err := conn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
+		t.Fatalf("发送握手失败: %v", err)
+	}
 
-	go s.handleDataConn(serverConn)
-
-	// 发送空 DataToken（tokenLen=0 会被 tokenLen == 0 检查拒绝）
-	idBytes := []byte(clientID)
-	payload := make([]byte, 2+len(idBytes)+2)
-	binary.BigEndian.PutUint16(payload[0:2], uint16(len(idBytes)))
-	copy(payload[2:], idBytes)
-	// tokenLen = 0
-	binary.BigEndian.PutUint16(payload[2+len(idBytes):], 0)
-	client.Write(payload)
-
-	respBuf := make([]byte, 1)
-	client.SetReadDeadline(time.Now().Add(1 * time.Second))
-	client.Read(respBuf)
-
-	if respBuf[0] != protocol.DataHandshakeFail {
-		t.Errorf("空 DataToken 应返回 Fail(0x%02x)，得到 0x%02x",
-			protocol.DataHandshakeFail, respBuf[0])
+	if status := readHandshakeStatus(t, conn); status != protocol.DataHandshakeFail {
+		t.Fatalf("期望 Fail，得到 0x%02x", status)
 	}
 }
 
 func TestDataChannel_Handshake_ClientHasNoToken(t *testing.T) {
-	s := New(0)
+	s, ts, cleanup := setupDataWSTest(t)
+	defer cleanup()
+
 	clientID := "no-token-client"
-	cc := &ClientConn{
-		ID:        clientID,
-		proxies:   make(map[string]*ProxyTunnel),
-		dataToken: "", // Client 没有 DataToken（不应该发生，但需要防御）
-	}
+	cc := newPendingTestClient(clientID, "")
 	s.clients.Store(clientID, cc)
 
-	client, serverConn := net.Pipe()
-	defer client.Close()
-	defer serverConn.Close()
+	conn := dialDataWS(t, ts)
+	defer conn.Close()
+	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, "any-token")); err != nil {
+		t.Fatalf("发送握手失败: %v", err)
+	}
 
-	go s.handleDataConn(serverConn)
-
-	// 发送任意 token，cc.dataToken 为空也应拒绝
-	handshakePkg := DataHandshakeBytes(clientID, "any-token")[1:]
-	client.Write(handshakePkg)
-
-	respBuf := make([]byte, 1)
-	client.SetReadDeadline(time.Now().Add(1 * time.Second))
-	client.Read(respBuf)
-
-	if respBuf[0] != protocol.DataHandshakeAuthFail {
-		t.Errorf("Client 无 DataToken 时应返回 AuthFail(0x%02x)，得到 0x%02x",
-			protocol.DataHandshakeAuthFail, respBuf[0])
+	if status := readHandshakeStatus(t, conn); status != protocol.DataHandshakeAuthFail {
+		t.Fatalf("期望 AuthFail，得到 0x%02x", status)
 	}
 }
 
-// ============================================================
-// openStreamToClient 测试
-// ============================================================
+func TestDataChannel_Handshake_NonBinaryFrame(t *testing.T) {
+	s, ts, cleanup := setupDataWSTest(t)
+	defer cleanup()
+
+	clientID := "text-frame-client"
+	cc := newPendingTestClient(clientID, testDataToken)
+	s.clients.Store(clientID, cc)
+
+	conn := dialDataWS(t, ts)
+	defer conn.Close()
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("not-binary")); err != nil {
+		t.Fatalf("发送 text frame 失败: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("首帧非 binary 时应被关闭")
+	}
+}
+
+func TestDataChannel_NonUpgradeRequestReturns426(t *testing.T) {
+	_, ts, cleanup := setupDataWSTest(t)
+	defer cleanup()
+
+	resp, err := ts.httpClient.Get("http://unix/ws/data")
+	if err != nil {
+		t.Fatalf("HTTP GET /ws/data 失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUpgradeRequired {
+		t.Fatalf("状态码应为 426，得到 %d", resp.StatusCode)
+	}
+}
 
 func TestOpenStreamToClient_Success(t *testing.T) {
 	s := New(0)
 	clientID := "stream-client"
 	cc := &ClientConn{
-		ID:      clientID,
-		proxies: make(map[string]*ProxyTunnel),
+		ID:         clientID,
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
 	}
 	s.clients.Store(clientID, cc)
 
-	// 伪造一个已建立的数据通道 Session (通过自己构造 Yamux 互联)
 	clientPipe, serverPipe := net.Pipe()
 	defer clientPipe.Close()
 	defer serverPipe.Close()
 
 	go func() {
-		// Server 端初始化 Yamux as Server
 		cc.dataMu.Lock()
 		cc.dataSession, _ = mux.NewServerSession(serverPipe, mux.DefaultConfig())
 		cc.dataMu.Unlock()
 	}()
 
-	// Client 端初始化 Yamux as Client，模拟收到握手
 	clientSession, err := mux.NewClientSession(clientPipe, mux.DefaultConfig())
 	if err != nil {
 		t.Fatalf("创建客户端 Yamux Session 失败: %v", err)
 	}
 	defer clientSession.Close()
 
-	// 等待服务端 Session 被创建赋值
 	time.Sleep(50 * time.Millisecond)
 
-	// 服务器端主动 OpenStreamToClient()
 	var stream net.Conn
 	var openErr error
-	proxyName := "test-tunnel"
 	go func() {
-		stream, openErr = s.openStreamToClient(cc, proxyName)
+		stream, openErr = s.openStreamToClient(cc, "test-tunnel")
 	}()
 
-	// 客户端侧 AcceptStream 并读取 StreamHeader
 	clientStream, err := clientSession.Accept()
 	if err != nil {
 		t.Fatalf("客户端接受 Stream 失败: %v", err)
 	}
 	defer clientStream.Close()
 
-	// 校验通过 Stream 传过来的 header (2字节长度 + Name)
 	var lenBuf [2]byte
 	if _, err := clientStream.Read(lenBuf[:]); err != nil {
 		t.Fatalf("读取 proxyName 长度失败: %v", err)
@@ -356,32 +368,32 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 	if _, err := clientStream.Read(nameBuf); err != nil {
 		t.Fatalf("读取 proxyName 内容失败: %v", err)
 	}
-
-	if string(nameBuf) != proxyName {
-		t.Errorf("ProxyName 期望 %q, 得到 %q", proxyName, string(nameBuf))
+	if string(nameBuf) != "test-tunnel" {
+		t.Fatalf("proxyName 错误: %q", string(nameBuf))
 	}
 
 	time.Sleep(50 * time.Millisecond)
 	if openErr != nil {
-		t.Errorf("openStreamToClient 报错: %v", openErr)
+		t.Fatalf("openStreamToClient 报错: %v", openErr)
 	}
 	if stream == nil {
-		t.Fatal("openStream 期望返回有效 Conn")
+		t.Fatal("openStreamToClient 应返回有效 conn")
 	}
-	stream.Close()
+	_ = stream.Close()
 }
 
 func TestOpenStreamToClient_NoDataSession(t *testing.T) {
 	s := New(0)
 	clientID := "no-data-client"
 	cc := &ClientConn{
-		ID:      clientID,
-		proxies: make(map[string]*ProxyTunnel),
+		ID:         clientID,
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
 	}
 	s.clients.Store(clientID, cc)
 
-	_, err := s.openStreamToClient(cc, "test-proxy")
-	if err == nil {
-		t.Error("期望没有建立数据通道时报错，但返回了 nil error")
+	if _, err := s.openStreamToClient(cc, "test-proxy"); err == nil {
+		t.Fatal("没有 dataSession 时应报错")
 	}
 }

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,20 +22,36 @@ import (
 
 // mockServer 模拟 Server 端行为，用于测试 Client
 type mockServer struct {
-	mu           sync.Mutex
-	receivedMsgs []protocol.Message
-	authSuccess  bool
-	conns        []*websocket.Conn
-	onMessage    func(msg protocol.Message) *protocol.Message // 收到消息后的回调
+	mu                   sync.Mutex
+	receivedMsgs         []protocol.Message
+	authResp             protocol.AuthResponse
+	dataStatus           byte
+	closeDataOnHandshake bool
+	conns                []*websocket.Conn
+	dataConns            []*websocket.Conn
+	dataSessions         []io.Closer
+	onMessage            func(msg protocol.Message) *protocol.Message // 收到消息后的回调
 }
 
 func newMockServer(authSuccess bool) *mockServer {
+	authResp := protocol.AuthResponse{
+		Success:   authSuccess,
+		Message:   "mock response",
+		ClientID:  "mock_client_1",
+		DataToken: "mock-data-token",
+	}
+	if authSuccess {
+		authResp.Code = protocol.AuthCodeOK
+	} else {
+		authResp.Code = protocol.AuthCodeInvalidKey
+	}
 	return &mockServer{
-		authSuccess: authSuccess,
+		authResp:   authResp,
+		dataStatus: protocol.DataHandshakeOK,
 	}
 }
 
-func (ms *mockServer) handler(w http.ResponseWriter, r *http.Request) {
+func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -59,12 +76,7 @@ func (ms *mockServer) handler(w http.ResponseWriter, r *http.Request) {
 		// 处理消息
 		switch msg.Type {
 		case protocol.MsgTypeAuth:
-			resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
-				Success:   ms.authSuccess,
-				Message:   "mock response",
-				ClientID:  "mock_client_1",
-				DataToken: "mock-data-token",
-			})
+			resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, ms.authResp)
 			conn.WriteJSON(resp)
 
 		case protocol.MsgTypePing:
@@ -84,6 +96,63 @@ func (ms *mockServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (ms *mockServer) dataHandler(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	ms.mu.Lock()
+	ms.dataConns = append(ms.dataConns, conn)
+	ms.mu.Unlock()
+
+	messageType, payload, err := conn.ReadMessage()
+	if err != nil {
+		return
+	}
+	if ms.closeDataOnHandshake {
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "closing"),
+			time.Now().Add(time.Second),
+		)
+		return
+	}
+	if messageType != websocket.BinaryMessage {
+		return
+	}
+
+	clientID, dataToken, err := protocol.DecodeDataHandshake(payload)
+	if err != nil {
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte{protocol.DataHandshakeFail})
+		return
+	}
+	if clientID != ms.authResp.ClientID || dataToken != ms.authResp.DataToken {
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte{protocol.DataHandshakeAuthFail})
+		return
+	}
+	if ms.dataStatus != protocol.DataHandshakeOK {
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte{ms.dataStatus})
+		return
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte{protocol.DataHandshakeOK}); err != nil {
+		return
+	}
+
+	session, err := mux.NewServerSession(mux.NewWSConn(conn), mux.DefaultConfig())
+	if err != nil {
+		return
+	}
+
+	ms.mu.Lock()
+	ms.dataSessions = append(ms.dataSessions, session)
+	ms.mu.Unlock()
+
+	<-session.CloseChan()
+}
+
 // closeConns 主动关闭所有 WebSocket 连接
 func (ms *mockServer) closeConns() {
 	ms.mu.Lock()
@@ -91,7 +160,15 @@ func (ms *mockServer) closeConns() {
 	for _, conn := range ms.conns {
 		conn.Close()
 	}
+	for _, conn := range ms.dataConns {
+		conn.Close()
+	}
+	for _, session := range ms.dataSessions {
+		session.Close()
+	}
 	ms.conns = nil
+	ms.dataConns = nil
+	ms.dataSessions = nil
 }
 
 func (ms *mockServer) getReceivedMsgs() []protocol.Message {
@@ -102,15 +179,20 @@ func (ms *mockServer) getReceivedMsgs() []protocol.Message {
 	return result
 }
 
+func newMockHTTPServer(ms *mockServer) *httptest.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws/control", ms.controlHandler)
+	mux.HandleFunc("/ws/data", ms.dataHandler)
+	return httptest.NewServer(mux)
+}
+
 // ============================================================
 // Client 集成测试
 // ============================================================
 
 func TestClient_ConnectAndAuth(t *testing.T) {
 	ms := newMockServer(true)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/control", ms.handler)
-	ts := httptest.NewServer(mux)
+	ts := newMockHTTPServer(ms)
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
@@ -143,9 +225,7 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 
 func TestClient_HeartbeatSent(t *testing.T) {
 	ms := newMockServer(true)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/control", ms.handler)
-	ts := httptest.NewServer(mux)
+	ts := newMockHTTPServer(ms)
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
@@ -172,9 +252,7 @@ func TestClient_HeartbeatSent(t *testing.T) {
 
 func TestClient_ProbeReportSent(t *testing.T) {
 	ms := newMockServer(true)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/control", ms.handler)
-	ts := httptest.NewServer(mux)
+	ts := newMockHTTPServer(ms)
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
@@ -218,9 +296,8 @@ func TestClient_ProbeReportSent(t *testing.T) {
 
 func TestClient_ServerDisconnect_WithReconnect(t *testing.T) {
 	ms := newMockServer(true)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/control", ms.handler)
-	ts := httptest.NewServer(mux)
+	ts := newMockHTTPServer(ms)
+	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
@@ -257,16 +334,14 @@ func TestClient_ServerDisconnect_WithReconnect(t *testing.T) {
 
 func TestClient_AuthFailed(t *testing.T) {
 	ms := newMockServer(false) // 模拟认证失败
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/control", ms.handler)
-	ts := httptest.NewServer(mux)
+	ts := newMockHTTPServer(ms)
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "wrong-key")
 
 	err := c.Start()
-	if err == nil || !strings.Contains(err.Error(), "认证被拒绝") {
+	if err == nil || !strings.Contains(err.Error(), "认证失败") {
 		t.Errorf("期望因认证失败而 Start 报错，实际得到: %v", err)
 	}
 }
@@ -286,6 +361,13 @@ func TestClient_DataChannelConnectErrorHandling(t *testing.T) {
 
 func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 	ms := newMockServer(true)
+	ms.authResp = protocol.AuthResponse{
+		Success:   true,
+		Message:   "ok",
+		ClientID:  "reconnect-client",
+		DataToken: "reconnect-data-token",
+		Code:      protocol.AuthCodeOK,
+	}
 
 	// 统计认证次数
 	var authCount int
@@ -315,12 +397,7 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 				authMu.Lock()
 				authCount++
 				authMu.Unlock()
-				resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, protocol.AuthResponse{
-					Success:   true,
-					Message:   "ok",
-					ClientID:  "reconnect-client",
-					DataToken: "reconnect-data-token",
-				})
+				resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, ms.authResp)
 				conn.WriteJSON(resp)
 			case protocol.MsgTypePing:
 				pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
@@ -328,6 +405,7 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 			}
 		}
 	})
+	httpMux.HandleFunc("/ws/data", ms.dataHandler)
 	ts := httptest.NewServer(httpMux)
 	defer ts.Close()
 
@@ -455,9 +533,7 @@ func TestClient_RequestProxy(t *testing.T) {
 		return nil
 	}
 
-	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/ws/control", ms.handler)
-	ts := httptest.NewServer(httpMux)
+	ts := newMockHTTPServer(ms)
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
@@ -505,9 +581,7 @@ func TestClient_RequestProxy(t *testing.T) {
 
 func TestClient_ControlLoop_ProxyNewResp_Success(t *testing.T) {
 	ms := newMockServer(true)
-	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/ws/control", ms.handler)
-	ts := httptest.NewServer(httpMux)
+	ts := newMockHTTPServer(ms)
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
@@ -535,9 +609,7 @@ func TestClient_ControlLoop_ProxyNewResp_Success(t *testing.T) {
 
 func TestClient_ControlLoop_ProxyNewResp_Failure(t *testing.T) {
 	ms := newMockServer(true)
-	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/ws/control", ms.handler)
-	ts := httptest.NewServer(httpMux)
+	ts := newMockHTTPServer(ms)
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
@@ -561,53 +633,138 @@ func TestClient_ControlLoop_ProxyNewResp_Failure(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 }
 
+func TestClient_ControlLoop_ServerProxyNewSendsReadyAck(t *testing.T) {
+	readyAck := make(chan protocol.ProxyNewResponse, 1)
+	ackErr := make(chan error, 1)
+	ms := newMockServer(true)
+	ms.onMessage = func(msg protocol.Message) *protocol.Message {
+		if msg.Type != protocol.MsgTypeProxyNewResp {
+			return nil
+		}
+		var resp protocol.ProxyNewResponse
+		if err := msg.ParsePayload(&resp); err != nil {
+			ackErr <- err
+			return nil
+		}
+		readyAck <- resp
+		return nil
+	}
+	ts := newMockHTTPServer(ms)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	c := New(wsURL, "test-key")
+	c.DisableReconnect = true
+
+	go c.Start()
+	time.Sleep(500 * time.Millisecond)
+
+	ms.mu.Lock()
+	if len(ms.conns) == 0 {
+		ms.mu.Unlock()
+		t.Fatal("客户端控制连接未建立")
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, protocol.ProxyNewRequest{
+		Name:       "server-pushed-proxy",
+		Type:       protocol.ProxyTypeTCP,
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8080,
+		RemotePort: 19090,
+	})
+	err := ms.conns[len(ms.conns)-1].WriteJSON(msg)
+	ms.mu.Unlock()
+	if err != nil {
+		t.Fatalf("服务端发送 proxy_new 失败: %v", err)
+	}
+
+	select {
+	case err := <-ackErr:
+		t.Fatalf("解析 proxy_new_resp 失败: %v", err)
+	case resp := <-readyAck:
+		if resp.Name != "server-pushed-proxy" {
+			t.Fatalf("ready ack name 错误: %s", resp.Name)
+		}
+		if !resp.Success {
+			t.Fatal("ready ack 应标记为 success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未收到 client 返回的 proxy_new_resp ready ack")
+	}
+}
+
+func TestClient_FailRuntime_DoesNotCloseNewRuntime(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	oldRT := c.beginRuntime()
+	newRT := c.beginRuntime()
+
+	oldClosed := make(chan struct{})
+	go func() {
+		<-oldRT.done
+		close(oldClosed)
+	}()
+
+	c.failRuntime(oldRT, "old_runtime_failed")
+
+	select {
+	case <-oldClosed:
+	case <-time.After(time.Second):
+		t.Fatal("旧 runtime 应在 failRuntime 后关闭")
+	}
+
+	select {
+	case <-newRT.done:
+		t.Fatal("关闭旧 runtime 不应影响新 runtime")
+	default:
+	}
+
+	if got := c.getCurrentRuntime(); got != newRT {
+		t.Fatal("当前 runtime 应保持为新 runtime")
+	}
+}
+
+func TestClient_Cleanup_WaitsForRuntimeGoroutines(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	rt := c.beginRuntime()
+
+	exited := make(chan struct{})
+	rt.wg.Add(1)
+	go func() {
+		defer rt.wg.Done()
+		<-rt.done
+		time.Sleep(50 * time.Millisecond)
+		close(exited)
+	}()
+
+	start := time.Now()
+	c.cleanup()
+
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup 应等待 runtime goroutine 退出")
+	}
+
+	if time.Since(start) < 50*time.Millisecond {
+		t.Fatal("cleanup 应等待 WaitGroup，而不是立即返回")
+	}
+}
+
 // ============================================================
 // connectDataChannel 完整握手测试
 // ============================================================
 
 func TestClient_ConnectDataChannel_Success(t *testing.T) {
-	// 启动一个 TCP Server 模拟完整数据通道握手
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("监听失败: %v", err)
-	}
-	defer ln.Close()
+	ms := newMockServer(true)
+	ms.authResp.ClientID = "test-client-dc"
+	ms.authResp.DataToken = "test-dc-token"
+	ts := newMockHTTPServer(ms)
+	defer ts.Close()
 
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
+	c := New("ws"+strings.TrimPrefix(ts.URL, "http"), "key")
+	c.ClientID = ms.authResp.ClientID
+	c.dataToken = ms.authResp.DataToken
 
-		// 读取握手: [1B 魔数] [2B len] [NB clientID] [2B tokenLen] [NB dataToken]
-		magic := make([]byte, 1)
-		conn.Read(magic)
-
-		lenBuf := make([]byte, 2)
-		conn.Read(lenBuf)
-		idLen := int(lenBuf[0])<<8 | int(lenBuf[1])
-		idBuf := make([]byte, idLen)
-		conn.Read(idBuf)
-
-		tokenLenBuf := make([]byte, 2)
-		conn.Read(tokenLenBuf)
-		tokenLen := int(tokenLenBuf[0])<<8 | int(tokenLenBuf[1])
-		tokenBuf := make([]byte, tokenLen)
-		conn.Read(tokenBuf)
-
-		// 回复握手成功
-		conn.Write([]byte{protocol.DataHandshakeOK})
-
-		// 保持连接以便建立 yamux session
-		time.Sleep(1 * time.Second)
-	}()
-
-	c := New("ws://"+ln.Addr().String(), "key")
-	c.ClientID = "test-client-dc"
-	c.dataToken = "test-dc-token"
-
-	err = c.connectDataChannel()
+	err := c.connectDataChannel()
 	if err != nil {
 		t.Fatalf("connectDataChannel 应成功: %v", err)
 	}
@@ -622,37 +779,40 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 }
 
 func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("监听失败: %v", err)
-	}
-	defer ln.Close()
+	ms := newMockServer(true)
+	ms.authResp.ClientID = "rejected-client"
+	ms.authResp.DataToken = "some-token"
+	ms.dataStatus = protocol.DataHandshakeFail
+	ts := newMockHTTPServer(ms)
+	defer ts.Close()
 
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
+	c := New("ws"+strings.TrimPrefix(ts.URL, "http"), "key")
+	c.ClientID = ms.authResp.ClientID
+	c.dataToken = ms.authResp.DataToken
 
-		// 读取完整握手包内容
-		buf := make([]byte, 512)
-		conn.Read(buf)
-
-		// 回复拒绝
-		conn.Write([]byte{protocol.DataHandshakeFail})
-	}()
-
-	c := New("ws://"+ln.Addr().String(), "key")
-	c.ClientID = "rejected-client"
-	c.dataToken = "some-token"
-
-	err = c.connectDataChannel()
+	err := c.connectDataChannel()
 	if err == nil {
 		t.Error("Server 拒绝握手时应返回错误")
 	}
 	if !strings.Contains(err.Error(), "握手被拒绝") {
 		t.Errorf("错误信息应包含'握手被拒绝'，实际得到: %v", err)
+	}
+}
+
+func TestClient_ConnectDataChannel_HandlesCloseWithoutStatusByte(t *testing.T) {
+	ms := newMockServer(true)
+	ms.authResp.ClientID = "close-without-status"
+	ms.authResp.DataToken = "close-token"
+	ms.closeDataOnHandshake = true
+	ts := newMockHTTPServer(ms)
+	defer ts.Close()
+
+	c := New("ws"+strings.TrimPrefix(ts.URL, "http"), "key")
+	c.ClientID = ms.authResp.ClientID
+	c.dataToken = ms.authResp.DataToken
+
+	if err := c.connectDataChannel(); err == nil {
+		t.Fatal("握手阶段直接 close 时应返回错误")
 	}
 }
 
@@ -716,6 +876,27 @@ func TestDeriveControlURL(t *testing.T) {
 		url := c.deriveControlURL()
 		if url != tt.expected {
 			t.Errorf("deriveControlURL() for %q = %q, 期望 %q", tt.input, url, tt.expected)
+		}
+	}
+}
+
+func TestDeriveDataURL(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"ws://localhost:8080", "ws://localhost:8080/ws/data"},
+		{"wss://localhost:8080", "wss://localhost:8080/ws/data"},
+		{"http://localhost:8080", "ws://localhost:8080/ws/data"},
+		{"https://tunnel.example.com", "wss://tunnel.example.com/ws/data"},
+	}
+
+	for _, tt := range tests {
+		c := New(tt.input, "key")
+		c.normalizeServerAddr()
+		url := c.deriveDataURL()
+		if url != tt.expected {
+			t.Errorf("deriveDataURL() for %q = %q, 期望 %q", tt.input, url, tt.expected)
 		}
 	}
 }

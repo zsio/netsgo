@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,25 +27,26 @@ import (
 	buildversion "netsgo/pkg/version"
 )
 
+const wsDataMaxMessageSize = 512 * 1024
+
 // Client 是客户端/Client 的核心结构体
 type Client struct {
-	ServerAddr     string // 服务器地址（支持 ws:// wss:// http:// https://，内部统一规范化）
-	Key            string // 认证密钥（用于兑换 Token）
-	Token          string // 客户端连接密钥（由 Key 兑换）
-	InstallID      string // 稳定安装 ID
-	StatePath      string // 安装 ID 持久化路径
-	ClientID       string // Server 分配的稳定 Client ID
-	TLSSkipVerify  bool
-	TLSFingerprint string
-	dataToken      string
-	conn           *websocket.Conn
-	mu             sync.Mutex
-	done           chan struct{}
-	doneMu         sync.Mutex     // 保护 done channel 的关闭操作
-	dataSession    *yamux.Session // 数据通道 yamux Session
-	dataMu         sync.RWMutex
-	proxies        sync.Map // proxy_name -> ProxyNewRequest
-	useTLS         bool
+	ServerAddr      string // 服务器地址（支持 ws:// wss:// http:// https://，内部统一规范化）
+	Key             string // 认证密钥（用于兑换 Token）
+	Token           string // 客户端连接密钥（由 Key 兑换）
+	InstallID       string // 稳定安装 ID
+	StatePath       string // 安装 ID 持久化路径
+	ClientID        string // Server 分配的稳定 Client ID
+	TLSSkipVerify   bool
+	TLSFingerprint  string
+	dataToken       string
+	conn            *websocket.Conn
+	mu              sync.Mutex // 保护当前 runtime 与镜像字段
+	done            chan struct{}
+	dataSession     *yamux.Session // 数据通道 yamux Session
+	dataMu          sync.RWMutex
+	proxies         sync.Map // proxy_name -> ProxyNewRequest
+	useTLS          bool
 	startTime       time.Time // 程序启动时间，用于计算 process uptime
 	publicIPv4      string    // 缓存的公网 IPv4
 	publicIPv6      string    // 缓存的公网 IPv6
@@ -52,16 +55,133 @@ type Client struct {
 	ProxyConfigs []protocol.ProxyNewRequest
 	// DisableReconnect 禁用自动重连（用于测试等场景）
 	DisableReconnect bool
+
+	dataHandshakeTimeout time.Duration
+	currentRuntime       *sessionRuntime
+	nextRuntimeEpoch     atomic.Uint64
+}
+
+type clientRunError struct {
+	message string
+	fatal   bool
+}
+
+func (e *clientRunError) Error() string {
+	return e.message
+}
+
+type sessionRuntime struct {
+	epoch       uint64
+	done        chan struct{}
+	doneOnce    sync.Once
+	wg          sync.WaitGroup
+	conn        *websocket.Conn
+	connMu      sync.Mutex
+	dataSession *yamux.Session
+	dataMu      sync.RWMutex
+}
+
+func newSessionRuntime(epoch uint64) *sessionRuntime {
+	return &sessionRuntime{
+		epoch: epoch,
+		done:  make(chan struct{}),
+	}
+}
+
+func (rt *sessionRuntime) closeDone() {
+	rt.doneOnce.Do(func() {
+		close(rt.done)
+	})
 }
 
 // New 创建一个新的 Client 实例
 func New(serverAddr, key string) *Client {
 	return &Client{
-		ServerAddr: serverAddr,
-		Key:        key,
-		done:       make(chan struct{}),
-		startTime:  time.Now(),
+		ServerAddr:           serverAddr,
+		Key:                  key,
+		done:                 make(chan struct{}),
+		startTime:            time.Now(),
+		dataHandshakeTimeout: 10 * time.Second,
 	}
+}
+
+func (c *Client) beginRuntime() *sessionRuntime {
+	rt := newSessionRuntime(c.nextRuntimeEpoch.Add(1))
+
+	c.mu.Lock()
+	c.currentRuntime = rt
+	c.conn = nil
+	c.done = rt.done
+	c.mu.Unlock()
+
+	c.dataMu.Lock()
+	c.dataSession = nil
+	c.dataMu.Unlock()
+
+	return rt
+}
+
+func (c *Client) getCurrentRuntime() *sessionRuntime {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.currentRuntime
+}
+
+func (c *Client) clearCurrentRuntime(rt *sessionRuntime) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.currentRuntime != rt {
+		return
+	}
+	c.currentRuntime = nil
+	c.conn = nil
+	c.done = make(chan struct{})
+	c.dataMu.Lock()
+	c.dataSession = nil
+	c.dataMu.Unlock()
+}
+
+func (c *Client) setRuntimeConn(rt *sessionRuntime, conn *websocket.Conn) {
+	rt.connMu.Lock()
+	rt.conn = conn
+	rt.connMu.Unlock()
+
+	c.mu.Lock()
+	if c.currentRuntime == rt || c.currentRuntime == nil {
+		c.conn = conn
+	}
+	c.mu.Unlock()
+}
+
+func (c *Client) setRuntimeDataSession(rt *sessionRuntime, session *yamux.Session) {
+	rt.dataMu.Lock()
+	rt.dataSession = session
+	rt.dataMu.Unlock()
+
+	c.mu.Lock()
+	shouldMirror := c.currentRuntime == rt || c.currentRuntime == nil
+	c.mu.Unlock()
+	if shouldMirror {
+		c.dataMu.Lock()
+		c.dataSession = session
+		c.dataMu.Unlock()
+	}
+}
+
+func (c *Client) runtimeForStandaloneUse() *sessionRuntime {
+	rt := &sessionRuntime{}
+
+	c.mu.Lock()
+	rt.done = c.done
+	rt.conn = c.conn
+	c.mu.Unlock()
+	c.dataMu.RLock()
+	rt.dataSession = c.dataSession
+	c.dataMu.RUnlock()
+	if rt.done == nil {
+		rt.done = make(chan struct{})
+	}
+	return rt
 }
 
 // normalizeServerAddr 将用户输入的地址规范化为统一格式。
@@ -104,6 +224,16 @@ func (c *Client) deriveControlURL() string {
 	return addr + "/ws/control"
 }
 
+func (c *Client) deriveDataURL() string {
+	addr := c.ServerAddr
+	if c.useTLS {
+		addr = "wss://" + strings.TrimPrefix(addr, "https://")
+	} else {
+		addr = "ws://" + strings.TrimPrefix(addr, "http://")
+	}
+	return addr + "/ws/data"
+}
+
 // buildTLSConfig 构建客户端 TLS 配置
 func (c *Client) buildTLSConfig(host string) *tls.Config {
 	return &tls.Config{
@@ -111,6 +241,18 @@ func (c *Client) buildTLSConfig(host string) *tls.Config {
 		ServerName:         host,
 		MinVersion:         tls.VersionTLS12,
 	}
+}
+
+func (c *Client) newWSDialer(host string) *websocket.Dialer {
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = c.dataHandshakeTimeout
+	dialer.ReadBufferSize = 32 * 1024
+	dialer.WriteBufferSize = 32 * 1024
+	dialer.EnableCompression = false
+	if c.useTLS {
+		dialer.TLSClientConfig = c.buildTLSConfig(host)
+	}
+	return &dialer
 }
 
 // retryInterval 根据首次断连时间计算重试间隔
@@ -177,10 +319,9 @@ func isFatalError(err error) bool {
 	if err == nil {
 		return false
 	}
-	errMsg := err.Error()
-	// 认证失败不应重连
-	if strings.HasPrefix(errMsg, "认证") {
-		return true
+	var runErr *clientRunError
+	if errors.As(err, &runErr) {
+		return runErr.fatal
 	}
 	return false
 }
@@ -190,17 +331,17 @@ func isFatalError(err error) bool {
 func (c *Client) Shutdown() {
 	log.Printf("🛑 客户端开始优雅关闭...")
 
-	// 发送 WebSocket 正常关闭帧
-	c.mu.Lock()
-	if c.conn != nil {
-		c.conn.WriteMessage(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "client shutting down"),
-		)
+	if rt := c.getCurrentRuntime(); rt != nil {
+		rt.connMu.Lock()
+		if rt.conn != nil {
+			rt.conn.WriteMessage(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "client shutting down"),
+			)
+		}
+		rt.connMu.Unlock()
 	}
-	c.mu.Unlock()
 
-	// 等待服务端处理关闭帧
 	time.Sleep(100 * time.Millisecond)
 
 	c.cleanup()
@@ -208,54 +349,67 @@ func (c *Client) Shutdown() {
 	log.Printf("✅ 客户端优雅关闭完成")
 }
 
-// closeDone 安全关闭 done channel（用 mutex 保证原子性，防止并发 double-close panic）
 func (c *Client) closeDone() {
-	c.doneMu.Lock()
-	defer c.doneMu.Unlock()
-	select {
-	case <-c.done:
-		// 已经关闭
-	default:
-		close(c.done)
+	if rt := c.getCurrentRuntime(); rt != nil {
+		rt.closeDone()
+	}
+}
+
+func (c *Client) stopRuntime(rt *sessionRuntime, reason string) {
+	if rt == nil {
+		return
+	}
+
+	rt.closeDone()
+
+	rt.dataMu.Lock()
+	session := rt.dataSession
+	rt.dataSession = nil
+	rt.dataMu.Unlock()
+	if session != nil && !session.IsClosed() {
+		_ = session.Close()
+	}
+
+	rt.connMu.Lock()
+	conn := rt.conn
+	rt.conn = nil
+	rt.connMu.Unlock()
+	if conn != nil {
+		if reason != "" {
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, reason),
+				time.Now().Add(time.Second),
+			)
+		}
+		_ = conn.Close()
 	}
 }
 
 // cleanup 清理旧连接资源，为重连做准备
 func (c *Client) cleanup() {
-	// 先关闭 done channel，通知所有 goroutine 退出
-	c.closeDone()
-
-	// 等待 goroutine 退出（它们通过 done channel 感知退出信号）
-	time.Sleep(100 * time.Millisecond)
-
-	// 关闭 dataSession
-	c.dataMu.Lock()
-	if c.dataSession != nil && !c.dataSession.IsClosed() {
-		c.dataSession.Close()
+	rt := c.getCurrentRuntime()
+	c.stopRuntime(rt, "")
+	if rt != nil {
+		rt.wg.Wait()
 	}
-	c.dataSession = nil
-	c.dataMu.Unlock()
+	c.clearCurrentRuntime(rt)
 
-	// 关闭 WebSocket
-	c.mu.Lock()
-	if c.conn != nil {
-		c.conn.Close()
-		c.conn = nil
-	}
-	c.mu.Unlock()
-
-	// 清空 proxies
 	c.proxies.Range(func(key, _ any) bool {
 		c.proxies.Delete(key)
 		return true
 	})
 
-	// 重置 done channel
-	c.done = make(chan struct{})
-
-	// 重置 ClientID
 	c.ClientID = ""
 	c.dataToken = ""
+}
+
+func (c *Client) failRuntime(rt *sessionRuntime, reason string) {
+	c.stopRuntime(rt, reason)
+}
+
+func (c *Client) failCurrentSession(reason string) {
+	c.failRuntime(c.getCurrentRuntime(), reason)
 }
 
 // connectAndRun 执行完整的连接流程并阻塞直到断连。
@@ -267,71 +421,90 @@ func (c *Client) connectAndRun() error {
 	}
 
 	c.normalizeServerAddr()
+	rt := c.beginRuntime()
 
 	// 1. 连接控制通道
 	controlURL := c.deriveControlURL()
 	log.Printf("🔌 正在连接 Server: %s", controlURL)
 
-	dialer := websocket.DefaultDialer
+	dialer := *websocket.DefaultDialer
 	if c.useTLS {
 		u, _ := url.Parse(c.ServerAddr)
-		dialer = &websocket.Dialer{
-			TLSClientConfig: c.buildTLSConfig(u.Hostname()),
-		}
+		dialer.TLSClientConfig = c.buildTLSConfig(u.Hostname())
 	}
 
 	conn, _, err := dialer.Dial(controlURL, nil)
 	if err != nil {
+		c.clearCurrentRuntime(rt)
 		return fmt.Errorf("连接 Server 失败: %w", err)
 	}
 
 	if c.useTLS && !c.TLSSkipVerify {
 		if err := c.checkTLSFingerprint(conn); err != nil {
 			conn.Close()
+			c.clearCurrentRuntime(rt)
 			return fmt.Errorf("TLS 证书指纹校验失败: %w", err)
 		}
 	}
 
-	c.conn = conn
+	c.setRuntimeConn(rt, conn)
 
 	log.Printf("✅ 已连接到 Server")
 
 	// 2. 发送认证
-	if err := c.authenticate(); err != nil {
-		conn.Close()
-		return fmt.Errorf("认证失败: %w", err)
+	if err := c.authenticateRuntime(rt); err != nil {
+		c.stopRuntime(rt, "")
+		c.clearCurrentRuntime(rt)
+		return err
 	}
 	log.Printf("✅ 认证成功，Client ID: %s", c.ClientID)
 
 	// 3. 建立数据通道
-	if err := c.connectDataChannel(); err != nil {
-		log.Printf("⚠️ 数据通道建立失败（代理功能不可用）: %v", err)
-	} else {
-		log.Printf("✅ 数据通道已建立")
-		// 启动 Stream 接收循环
-		go c.acceptStreamLoop()
+	if err := c.connectDataChannelRuntime(rt); err != nil {
+		log.Printf("⚠️ 数据通道建立失败，当前逻辑会话将重建: %v", err)
+		c.failRuntime(rt, "data_channel_start_failed")
+		return fmt.Errorf("数据通道建立失败: %w", err)
 	}
+	log.Printf("✅ 数据通道已建立")
 
-	// 4. 启动心跳协程
-	go c.heartbeatLoop()
+	rt.wg.Add(1)
+	go func() {
+		defer rt.wg.Done()
+		c.acceptStreamLoopRuntime(rt)
+	}()
 
-	// 5. 启动探针上报协程
-	go c.probeLoop()
+	rt.wg.Add(1)
+	go func() {
+		defer rt.wg.Done()
+		c.heartbeatLoopRuntime(rt)
+	}()
 
-	// 6. 如果有预设代理配置（Benchmark 模式），主动请求创建
+	rt.wg.Add(1)
+	go func() {
+		defer rt.wg.Done()
+		c.probeLoopRuntime(rt)
+	}()
+
 	for _, cfg := range c.ProxyConfigs {
-		go c.requestProxy(cfg)
+		cfg := cfg
+		rt.wg.Add(1)
+		go func() {
+			defer rt.wg.Done()
+			c.requestProxyRuntime(rt, cfg)
+		}()
 	}
 
-	// 7. 监听控制消息（阻塞，断连后返回）
-	c.controlLoop()
-
+	c.controlLoopRuntime(rt)
 	return nil
 }
 
 // authenticate 发送认证请求
 // 优先使用 Token，失败后降级到 Key
 func (c *Client) authenticate() error {
+	return c.authenticateRuntime(c.runtimeForStandaloneUse())
+}
+
+func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 	hostname, _ := os.Hostname()
 	localIP := netutil.GetOutboundIP()
 
@@ -352,80 +525,72 @@ func (c *Client) authenticate() error {
 	if c.Token != "" {
 		tokenReq := authReq
 		tokenReq.Key = "" // 不发送 Key
-		msg, err := protocol.NewMessage(protocol.MsgTypeAuth, tokenReq)
+		authResp, err := c.sendAuthRequestRuntime(rt, tokenReq)
 		if err != nil {
-			return err
+			return fmt.Errorf("认证阶段连接失败: %w", err)
+		}
+		if authResp.Success {
+			c.applyAuthSuccess(authResp)
+			log.Printf("✅ Token 认证成功")
+			return nil
 		}
 
-		if err := c.conn.WriteJSON(msg); err != nil {
-			return fmt.Errorf("发送认证消息失败: %w", err)
-		}
-
-		// 等待认证响应
-		var resp protocol.Message
-		if err := c.conn.ReadJSON(&resp); err != nil {
-			return fmt.Errorf("读取认证响应失败: %w", err)
-		}
-
-		if resp.Type == protocol.MsgTypeAuthResp {
-			var authResp protocol.AuthResponse
-			if err := resp.ParsePayload(&authResp); err != nil {
-				return fmt.Errorf("解析认证响应失败: %w", err)
-			}
-			if authResp.Success {
-				c.ClientID = authResp.ClientID
-				c.dataToken = authResp.DataToken
-				log.Printf("✅ Token 认证成功")
-				return nil
-			}
-			// Token 认证失败，清除本地 Token
-			log.Printf("⚠️ Token 认证失败: %s，将尝试 Key 认证", authResp.Message)
-			c.clearToken()
-		} else {
-			// 连接被关闭或异常响应，清除 Token 并重试
-			log.Printf("⚠️ Token 认证异常响应: %s，清除本地 Token", resp.Type)
-			c.clearToken()
-			return fmt.Errorf("认证失败: 服务端异常响应")
-		}
-
-		// Token 失败，需要重新建立连接后用 Key 重试
-		// 返回特定错误，由 connectAndRun 层面重连
-		return fmt.Errorf("认证失败: Token 无效，需要重新连接")
+		return c.handleAuthFailure(authResp, true)
 	}
 
 	// 没有 Token，用 Key 认证
+	authResp, err := c.sendAuthRequestRuntime(rt, authReq)
+	if err != nil {
+		return fmt.Errorf("认证阶段连接失败: %w", err)
+	}
+	if !authResp.Success {
+		return c.handleAuthFailure(authResp, false)
+	}
+
+	c.applyAuthSuccess(authResp)
+	return nil
+}
+
+func (c *Client) sendAuthRequest(authReq protocol.AuthRequest) (protocol.AuthResponse, error) {
+	return c.sendAuthRequestRuntime(c.runtimeForStandaloneUse(), authReq)
+}
+
+func (c *Client) sendAuthRequestRuntime(rt *sessionRuntime, authReq protocol.AuthRequest) (protocol.AuthResponse, error) {
 	msg, err := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 	if err != nil {
-		return err
+		return protocol.AuthResponse{}, err
 	}
 
-	if err := c.conn.WriteJSON(msg); err != nil {
-		return fmt.Errorf("发送认证消息失败: %w", err)
+	rt.connMu.Lock()
+	conn := rt.conn
+	rt.connMu.Unlock()
+	if conn == nil {
+		return protocol.AuthResponse{}, fmt.Errorf("控制通道不可用")
 	}
 
-	// 等待认证响应
+	if err := conn.WriteJSON(msg); err != nil {
+		return protocol.AuthResponse{}, fmt.Errorf("发送认证消息失败: %w", err)
+	}
+
 	var resp protocol.Message
-	if err := c.conn.ReadJSON(&resp); err != nil {
-		return fmt.Errorf("读取认证响应失败: %w", err)
+	if err := conn.ReadJSON(&resp); err != nil {
+		return protocol.AuthResponse{}, fmt.Errorf("读取认证响应失败: %w", err)
 	}
-
 	if resp.Type != protocol.MsgTypeAuthResp {
-		return fmt.Errorf("期望认证响应，收到: %s", resp.Type)
+		return protocol.AuthResponse{}, fmt.Errorf("期望认证响应，收到: %s", resp.Type)
 	}
 
 	var authResp protocol.AuthResponse
 	if err := resp.ParsePayload(&authResp); err != nil {
-		return fmt.Errorf("解析认证响应失败: %w", err)
+		return protocol.AuthResponse{}, fmt.Errorf("解析认证响应失败: %w", err)
 	}
+	return authResp, nil
+}
 
-	if !authResp.Success {
-		return fmt.Errorf("认证被拒绝: %s", authResp.Message)
-	}
-
+func (c *Client) applyAuthSuccess(authResp protocol.AuthResponse) {
 	c.ClientID = authResp.ClientID
 	c.dataToken = authResp.DataToken
 
-	// 如果服务端返回了新 Token，保存它
 	if authResp.Token != "" {
 		c.Token = authResp.Token
 		if err := c.saveToken(authResp.Token); err != nil {
@@ -434,90 +599,110 @@ func (c *Client) authenticate() error {
 			log.Printf("🔑 Token 已保存，后续重连将自动使用")
 		}
 	}
+}
 
-	return nil
+func (c *Client) handleAuthFailure(authResp protocol.AuthResponse, attemptedWithToken bool) error {
+	message := authResp.Message
+	if message == "" {
+		message = authResp.Code
+	}
+
+	if authResp.ClearToken {
+		log.Printf("⚠️ 服务端要求清除本地 Token: code=%s", authResp.Code)
+		c.Token = ""
+		if err := c.clearToken(); err != nil {
+			log.Printf("⚠️ 清除本地 Token 失败: %v", err)
+		}
+		if c.Key != "" {
+			return &clientRunError{
+				message: fmt.Sprintf("认证失败(%s)，已清除 Token，准备改用 Key 重连", authResp.Code),
+				fatal:   false,
+			}
+		}
+		return &clientRunError{
+			message: fmt.Sprintf("认证失败: %s", message),
+			fatal:   true,
+		}
+	}
+
+	if authResp.Retryable {
+		return &clientRunError{
+			message: fmt.Sprintf("认证失败(%s)，稍后重试", authResp.Code),
+			fatal:   false,
+		}
+	}
+
+	if attemptedWithToken && c.Key != "" && (authResp.Code == protocol.AuthCodeInvalidToken || authResp.Code == protocol.AuthCodeRevokedToken) {
+		return &clientRunError{
+			message: fmt.Sprintf("认证失败(%s)，准备改用 Key 重连", authResp.Code),
+			fatal:   false,
+		}
+	}
+
+	return &clientRunError{
+		message: fmt.Sprintf("认证失败: %s", message),
+		fatal:   true,
+	}
 }
 
 // connectDataChannel 建立数据通道。
-// 从 ServerAddr 提取 host:port，建立 TCP/TLS 连接，
-// 发送握手包（魔数 + ClientID + DataToken），然后在该连接上建立 yamux Client Session。
+// 通过 /ws/data 建立 WebSocket，发送首个 binary 握手帧，
+// 然后在 WSConn 上建立 yamux Client Session。
 func (c *Client) connectDataChannel() error {
-	// 解析 ServerAddr 获取 host:port
+	return c.connectDataChannelRuntime(c.runtimeForStandaloneUse())
+}
+
+func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
+	c.normalizeServerAddr()
+
 	u, err := url.Parse(c.ServerAddr)
 	if err != nil {
 		return fmt.Errorf("解析 ServerAddr 失败: %w", err)
 	}
 
-	host := u.Host
-	if u.Port() == "" {
-		if c.useTLS {
-			host = net.JoinHostPort(u.Hostname(), "443")
-		} else {
-			host = net.JoinHostPort(u.Hostname(), "80")
-		}
+	dataURL := c.deriveDataURL()
+	dialer := c.newWSDialer(u.Hostname())
+	wsConn, _, err := dialer.Dial(dataURL, nil)
+	if err != nil {
+		return fmt.Errorf("建立数据通道 WebSocket 失败: %w", err)
+	}
+	wsConn.SetReadLimit(wsDataMaxMessageSize)
+	wsConn.SetReadDeadline(time.Now().Add(c.dataHandshakeTimeout))
+
+	handshake := protocol.EncodeDataHandshake(c.ClientID, c.dataToken)
+	if err := wsConn.WriteMessage(websocket.BinaryMessage, handshake); err != nil {
+		wsConn.Close()
+		return fmt.Errorf("发送数据通道握手失败: %w", err)
 	}
 
-	var dataConn net.Conn
-	if c.useTLS {
-		log.Printf("🔒 数据通道使用 TLS 连接: %s", host)
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
-		tlsConn, err := tls.DialWithDialer(dialer, "tcp", host, c.buildTLSConfig(u.Hostname()))
-		if err != nil {
-			return fmt.Errorf("TLS 连接失败: %w", err)
-		}
-		dataConn = tlsConn
-	} else {
-		tcpConn, err := net.DialTimeout("tcp", host, 5*time.Second)
-		if err != nil {
-			return fmt.Errorf("TCP 连接失败: %w", err)
-		}
-		dataConn = tcpConn
+	messageType, payload, err := wsConn.ReadMessage()
+	if err != nil {
+		wsConn.Close()
+		return fmt.Errorf("读取数据通道握手响应失败: %w", err)
+	}
+	if messageType != websocket.BinaryMessage {
+		wsConn.Close()
+		return fmt.Errorf("数据通道握手响应类型错误: %d", messageType)
+	}
+	if len(payload) != 1 {
+		wsConn.Close()
+		return fmt.Errorf("数据通道握手响应长度错误: %d", len(payload))
+	}
+	if payload[0] != protocol.DataHandshakeOK {
+		wsConn.Close()
+		return fmt.Errorf("数据通道握手被拒绝 (状态码: 0x%02x)", payload[0])
 	}
 
-	// 设置握手超时（Server 应当即时回复，2s 足够）
-	dataConn.SetDeadline(time.Now().Add(2 * time.Second))
-
-	// 发送握手包: [1B 魔数] [2B ClientID长度] [NB ClientID] [2B DataToken长度] [NB DataToken]
-	clientIDBytes := []byte(c.ClientID)
-	dataTokenBytes := []byte(c.dataToken)
-	handshake := make([]byte, 1+2+len(clientIDBytes)+2+len(dataTokenBytes))
-	handshake[0] = protocol.DataChannelMagic
-	binary.BigEndian.PutUint16(handshake[1:3], uint16(len(clientIDBytes)))
-	copy(handshake[3:], clientIDBytes)
-	offset := 3 + len(clientIDBytes)
-	binary.BigEndian.PutUint16(handshake[offset:offset+2], uint16(len(dataTokenBytes)))
-	copy(handshake[offset+2:], dataTokenBytes)
-
-	if _, err := dataConn.Write(handshake); err != nil {
-		dataConn.Close()
-		return fmt.Errorf("发送握手失败: %w", err)
-	}
-
-	// 读取握手响应 (1 byte 状态码)
-	var statusBuf [1]byte
-	if _, err := io.ReadFull(dataConn, statusBuf[:]); err != nil {
-		dataConn.Close()
-		return fmt.Errorf("读取握手响应失败: %w", err)
-	}
-
-	// 清除 deadline
-	dataConn.SetDeadline(time.Time{})
-
-	if statusBuf[0] != protocol.DataHandshakeOK {
-		dataConn.Close()
-		return fmt.Errorf("数据通道握手被拒绝 (状态码: 0x%02x)", statusBuf[0])
-	}
+	wsConn.SetReadDeadline(time.Time{})
 
 	// 建立 yamux Client Session
-	session, err := mux.NewClientSession(dataConn, mux.DefaultConfig())
+	session, err := mux.NewClientSession(mux.NewWSConn(wsConn), mux.DefaultConfig())
 	if err != nil {
-		dataConn.Close()
+		wsConn.Close()
 		return fmt.Errorf("创建 yamux Session 失败: %w", err)
 	}
 
-	c.dataMu.Lock()
-	c.dataSession = session
-	c.dataMu.Unlock()
+	c.setRuntimeDataSession(rt, session)
 
 	return nil
 }
@@ -578,10 +763,13 @@ func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
 // acceptStreamLoop 持续接收 Server 发来的 yamux Stream。
 // 每个 Stream 代表一个外部连接需要转发到本地服务。
 func (c *Client) acceptStreamLoop() {
-	c.dataMu.RLock()
-	session := c.dataSession
-	c.dataMu.RUnlock()
+	c.acceptStreamLoopRuntime(c.runtimeForStandaloneUse())
+}
 
+func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
+	rt.dataMu.RLock()
+	session := rt.dataSession
+	rt.dataMu.RUnlock()
 	if session == nil {
 		return
 	}
@@ -590,12 +778,13 @@ func (c *Client) acceptStreamLoop() {
 		stream, err := session.AcceptStream()
 		if err != nil {
 			select {
-			case <-c.done:
+			case <-rt.done:
 				return
 			default:
 				if !session.IsClosed() {
 					log.Printf("⚠️ AcceptStream 失败: %v", err)
 				}
+				c.failRuntime(rt, "data_session_closed")
 				return
 			}
 		}
@@ -659,16 +848,21 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 
 // requestProxy 通过控制通道请求创建代理隧道
 func (c *Client) requestProxy(cfg protocol.ProxyNewRequest) {
-	// 等待数据通道就绪
-	time.Sleep(500 * time.Millisecond)
+	c.requestProxyRuntime(c.runtimeForStandaloneUse(), cfg)
+}
 
+func (c *Client) requestProxyRuntime(rt *sessionRuntime, cfg protocol.ProxyNewRequest) {
 	// 先注册本地代理配置
 	c.proxies.Store(cfg.Name, cfg)
 
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, cfg)
-	c.mu.Lock()
-	err := c.conn.WriteJSON(msg)
-	c.mu.Unlock()
+	rt.connMu.Lock()
+	conn := rt.conn
+	rt.connMu.Unlock()
+	if conn == nil {
+		return
+	}
+	err := conn.WriteJSON(msg)
 	if err != nil {
 		log.Printf("❌ 发送代理请求失败 [%s]: %v", cfg.Name, err)
 		return
@@ -679,6 +873,10 @@ func (c *Client) requestProxy(cfg protocol.ProxyNewRequest) {
 
 // heartbeatLoop 定时发送心跳
 func (c *Client) heartbeatLoop() {
+	c.heartbeatLoopRuntime(c.runtimeForStandaloneUse())
+}
+
+func (c *Client) heartbeatLoopRuntime(rt *sessionRuntime) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -686,20 +884,19 @@ func (c *Client) heartbeatLoop() {
 		select {
 		case <-ticker.C:
 			msg, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
-			c.mu.Lock()
-			conn := c.conn
-			c.mu.Unlock()
+			rt.connMu.Lock()
+			conn := rt.conn
+			rt.connMu.Unlock()
 			if conn == nil {
 				return
 			}
-			c.mu.Lock()
-			err := c.conn.WriteJSON(msg)
-			c.mu.Unlock()
+			err := conn.WriteJSON(msg)
 			if err != nil {
 				log.Printf("⚠️ 发送心跳失败: %v", err)
+				c.failRuntime(rt, "heartbeat_write_failed")
 				return
 			}
-		case <-c.done:
+		case <-rt.done:
 			return
 		}
 	}
@@ -707,8 +904,12 @@ func (c *Client) heartbeatLoop() {
 
 // probeLoop 定时采集并上报系统状态
 func (c *Client) probeLoop() {
+	c.probeLoopRuntime(c.runtimeForStandaloneUse())
+}
+
+func (c *Client) probeLoopRuntime(rt *sessionRuntime) {
 	// 启动时立即上报一次
-	c.reportProbe()
+	c.reportProbeRuntime(rt)
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -716,8 +917,8 @@ func (c *Client) probeLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			c.reportProbe()
-		case <-c.done:
+			c.reportProbeRuntime(rt)
+		case <-rt.done:
 			return
 		}
 	}
@@ -725,6 +926,10 @@ func (c *Client) probeLoop() {
 
 // reportProbe 采集系统状态并上报
 func (c *Client) reportProbe() {
+	c.reportProbeRuntime(c.runtimeForStandaloneUse())
+}
+
+func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 	stats, err := CollectSystemStats(c.startTime)
 	if err != nil {
 		log.Printf("⚠️ 采集系统状态失败: %v", err)
@@ -737,17 +942,16 @@ func (c *Client) reportProbe() {
 	stats.PublicIPv6 = c.publicIPv6
 
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
-	c.mu.Lock()
-	conn := c.conn
-	c.mu.Unlock()
+	rt.connMu.Lock()
+	conn := rt.conn
+	rt.connMu.Unlock()
 	if conn == nil {
 		return
 	}
-	c.mu.Lock()
-	err = c.conn.WriteJSON(msg)
-	c.mu.Unlock()
+	err = conn.WriteJSON(msg)
 	if err != nil {
 		log.Printf("⚠️ 上报探针数据失败: %v", err)
+		c.failRuntime(rt, "probe_write_failed")
 	}
 }
 
@@ -768,14 +972,24 @@ func (c *Client) refreshPublicIPs() {
 
 // controlLoop 监听 Server 下发的控制消息
 func (c *Client) controlLoop() {
+	c.controlLoopRuntime(c.runtimeForStandaloneUse())
+}
+
+func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
+	rt.connMu.Lock()
+	conn := rt.conn
+	rt.connMu.Unlock()
+	if conn == nil {
+		return
+	}
+
 	for {
 		var msg protocol.Message
-		if err := c.conn.ReadJSON(&msg); err != nil {
+		if err := conn.ReadJSON(&msg); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				log.Printf("⚠️ 控制通道连接异常: %v", err)
 			}
-			// 安全关闭 done channel（可能已被 Shutdown/cleanup 关闭）
-			c.closeDone()
+			rt.closeDone()
 			return
 		}
 
@@ -792,8 +1006,18 @@ func (c *Client) controlLoop() {
 			}
 			log.Printf("📥 收到服务端代理指令: %s (本地 %s:%d → 公网 :%d)",
 				req.Name, req.LocalIP, req.LocalPort, req.RemotePort)
-			// 注册本地代理配置，后续 Stream 会根据 proxy_name 查找
 			c.proxies.Store(req.Name, req)
+			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+				Name:       req.Name,
+				Success:    true,
+				Message:    "proxy ready",
+				RemotePort: req.RemotePort,
+			})
+			if err := conn.WriteJSON(resp); err != nil {
+				log.Printf("⚠️ 返回代理 ready 失败 [%s]: %v", req.Name, err)
+				c.failRuntime(rt, "proxy_ready_write_failed")
+				return
+			}
 
 		case protocol.MsgTypeProxyNewResp:
 			// 代理创建响应（客户端主动请求场景，如 Benchmark）
@@ -803,9 +1027,9 @@ func (c *Client) controlLoop() {
 				continue
 			}
 			if resp.Success {
-				log.Printf("✅ 代理隧道创建成功，公网端口: %d", resp.RemotePort)
+				log.Printf("✅ 代理隧道创建成功 [%s]，公网端口: %d", resp.Name, resp.RemotePort)
 			} else {
-				log.Printf("❌ 代理隧道创建失败: %s", resp.Message)
+				log.Printf("❌ 代理隧道创建失败 [%s]: %s", resp.Name, resp.Message)
 			}
 
 		case protocol.MsgTypeProxyClose:

@@ -19,10 +19,7 @@ type ProxyTunnel struct {
 	once     sync.Once
 }
 
-// StartProxy 启动一条新的代理隧道。
-// 在 RemotePort 上监听外部连接，每收到一个连接就通过 yamux 转发给 Client。
-func (s *Server) StartProxy(client *ClientConn, req protocol.ProxyNewRequest) error {
-	// 1. 策略校验
+func (s *Server) validateProxyRequest(client *ClientConn, req protocol.ProxyNewRequest) error {
 	if s.adminStore != nil {
 		policy := s.adminStore.GetTunnelPolicy()
 
@@ -61,12 +58,25 @@ func (s *Server) StartProxy(client *ClientConn, req protocol.ProxyNewRequest) er
 		}
 	}
 
-	// 检查 Client 数据通道
+	return nil
+}
+
+func (s *Server) ensureClientDataReady(client *ClientConn) error {
 	client.dataMu.RLock()
 	hasData := client.dataSession != nil && !client.dataSession.IsClosed()
 	client.dataMu.RUnlock()
 	if !hasData {
 		return fmt.Errorf("Client [%s] 数据通道未建立，无法创建代理", client.ID)
+	}
+	return nil
+}
+
+func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewRequest, status string) (*ProxyTunnel, error) {
+	if err := s.validateProxyRequest(client, req); err != nil {
+		return nil, err
+	}
+	if err := s.ensureClientDataReady(client); err != nil {
+		return nil, err
 	}
 
 	// 检查是否已存在同名代理
@@ -76,89 +86,146 @@ func (s *Server) StartProxy(client *ClientConn, req protocol.ProxyNewRequest) er
 	}
 	if _, exists := client.proxies[req.Name]; exists {
 		client.proxyMu.Unlock()
-		return fmt.Errorf("代理隧道 %q 已存在", req.Name)
+		return nil, fmt.Errorf("代理隧道 %q 已存在", req.Name)
 	}
-	client.proxyMu.Unlock()
-
-	// UDP 类型：走 startUDPProxy 分支
-	if req.Type == protocol.ProxyTypeUDP {
-		tunnel := &ProxyTunnel{
-			Config: protocol.ProxyConfig{
-				Name:       req.Name,
-				Type:       req.Type,
-				LocalIP:    req.LocalIP,
-				LocalPort:  req.LocalPort,
-				RemotePort: req.RemotePort,
-				ClientID:   client.ID,
-				Status:     protocol.ProxyStatusActive,
-			},
-			done: make(chan struct{}),
-		}
-
-		client.proxyMu.Lock()
-		client.proxies[req.Name] = tunnel
-		client.proxyMu.Unlock()
-
-		if err := s.startUDPProxy(client, tunnel); err != nil {
-			client.proxyMu.Lock()
-			delete(client.proxies, req.Name)
-			client.proxyMu.Unlock()
-			return err
-		}
-
-		// 自动分配端口后：检查分配到的端口是否在白名单内
-		if req.RemotePort == 0 && s.adminStore != nil && s.adminStore.IsInitialized() {
-			actualPort := tunnel.Config.RemotePort
-			if !s.adminStore.IsPortAllowed(actualPort) {
-				_ = s.StopProxy(client, req.Name)
-				return fmt.Errorf("自动分配的端口 %d 不在允许范围内", actualPort)
-			}
-		}
-
-		return nil
-	}
-
-	// TCP 类型：监听公网端口
-	addr := fmt.Sprintf(":%d", req.RemotePort)
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("监听端口 %d 失败: %w", req.RemotePort, err)
-	}
-
-	// 获取实际分配的端口（如果 RemotePort 为 0，系统会随机分配）
-	actualPort := ln.Addr().(*net.TCPAddr).Port
-
-	// 自动分配端口后：检查分配到的端口是否在白名单内
-	if req.RemotePort == 0 && s.adminStore != nil && s.adminStore.IsInitialized() {
-		if !s.adminStore.IsPortAllowed(actualPort) {
-			ln.Close()
-			return fmt.Errorf("自动分配的端口 %d 不在允许范围内", actualPort)
-		}
-	}
-
 	tunnel := &ProxyTunnel{
 		Config: protocol.ProxyConfig{
 			Name:       req.Name,
 			Type:       req.Type,
 			LocalIP:    req.LocalIP,
 			LocalPort:  req.LocalPort,
-			RemotePort: actualPort,
+			RemotePort: req.RemotePort,
 			ClientID:   client.ID,
-			Status:     protocol.ProxyStatusActive,
+			Status:     status,
 		},
-		Listener: ln,
-		done:     make(chan struct{}),
+		done: make(chan struct{}),
+	}
+
+	client.proxies[req.Name] = tunnel
+	client.proxyMu.Unlock()
+	return tunnel, nil
+}
+
+func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel) error {
+	if err := s.validateProxyRequest(client, tunnel.Config.ToProxyNewRequest()); err != nil {
+		return err
+	}
+	if err := s.ensureClientDataReady(client); err != nil {
+		return err
+	}
+
+	if tunnel.Config.Type == protocol.ProxyTypeUDP {
+		tunnel.done = make(chan struct{})
+		tunnel.once = sync.Once{}
+		tunnel.Config.Error = ""
+		if err := s.startUDPProxy(client, tunnel); err != nil {
+			return err
+		}
+		if tunnel.Config.RemotePort != 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
+			s.removeTunnelRuntime(client, tunnel.Config.Name)
+			return fmt.Errorf("自动分配的端口 %d 不在允许范围内", tunnel.Config.RemotePort)
+		}
+		tunnel.Config.Status = protocol.ProxyStatusActive
+		return nil
+	}
+
+	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("监听端口 %d 失败: %w", tunnel.Config.RemotePort, err)
+	}
+
+	actualPort := ln.Addr().(*net.TCPAddr).Port
+	if tunnel.Config.RemotePort == 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(actualPort) {
+		ln.Close()
+		return fmt.Errorf("自动分配的端口 %d 不在允许范围内", actualPort)
 	}
 
 	client.proxyMu.Lock()
-	client.proxies[req.Name] = tunnel
+	current, exists := client.proxies[tunnel.Config.Name]
+	if !exists || current != tunnel {
+		client.proxyMu.Unlock()
+		ln.Close()
+		return fmt.Errorf("代理隧道 %q 不存在", tunnel.Config.Name)
+	}
+	tunnel.Listener = ln
+	tunnel.done = make(chan struct{})
+	tunnel.once = sync.Once{}
+	tunnel.Config.RemotePort = actualPort
+	tunnel.Config.Status = protocol.ProxyStatusActive
+	tunnel.Config.Error = ""
 	client.proxyMu.Unlock()
 
 	log.Printf("🚇 代理隧道已创建: %s [:%d → %s:%d] Client [%s]",
-		req.Name, actualPort, req.LocalIP, req.LocalPort, client.ID)
+		tunnel.Config.Name, actualPort, tunnel.Config.LocalIP, tunnel.Config.LocalPort, client.ID)
 
-	// 启动 Accept 循环
 	go s.proxyAcceptLoop(client, tunnel)
+	return nil
+}
+
+func (s *Server) removeTunnelRuntime(client *ClientConn, name string) {
+	client.proxyMu.Lock()
+	tunnel, exists := client.proxies[name]
+	if exists {
+		delete(client.proxies, name)
+	}
+	client.proxyMu.Unlock()
+	if !exists {
+		return
+	}
+
+	tunnel.once.Do(func() {
+		close(tunnel.done)
+		if tunnel.UDPState != nil {
+			tunnel.UDPState.Close()
+		}
+		if tunnel.Listener != nil {
+			tunnel.Listener.Close()
+		}
+	})
+}
+
+func (s *Server) stageTunnelPending(client *ClientConn, name string) (protocol.ProxyConfig, error) {
+	if err := s.ensureClientDataReady(client); err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+
+	client.proxyMu.Lock()
+	defer client.proxyMu.Unlock()
+
+	tunnel, exists := client.proxies[name]
+	if !exists {
+		return protocol.ProxyConfig{}, fmt.Errorf("代理隧道 %q 不存在", name)
+	}
+	tunnel.Config.Status = protocol.ProxyStatusPending
+	tunnel.Config.Error = ""
+	return tunnel.Config, nil
+}
+
+func (s *Server) setTunnelError(client *ClientConn, name, message string) (protocol.ProxyConfig, bool) {
+	client.proxyMu.Lock()
+	defer client.proxyMu.Unlock()
+
+	tunnel, exists := client.proxies[name]
+	if !exists {
+		return protocol.ProxyConfig{}, false
+	}
+	tunnel.Config.Status = protocol.ProxyStatusError
+	tunnel.Config.Error = message
+	return tunnel.Config, true
+}
+
+// StartProxy 启动一条新的代理隧道。
+// 在 RemotePort 上监听外部连接，每收到一个连接就通过 yamux 转发给 Client。
+func (s *Server) StartProxy(client *ClientConn, req protocol.ProxyNewRequest) error {
+	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyStatusPending)
+	if err != nil {
+		return err
+	}
+	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
+		s.removeTunnelRuntime(client, req.Name)
+		return err
+	}
 
 	return nil
 }
@@ -202,24 +269,13 @@ func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, extCon
 
 // StopProxy 停止一条代理隧道
 func (s *Server) StopProxy(client *ClientConn, name string) error {
-	client.proxyMu.Lock()
-	tunnel, exists := client.proxies[name]
+	client.proxyMu.RLock()
+	_, exists := client.proxies[name]
+	client.proxyMu.RUnlock()
 	if !exists {
-		client.proxyMu.Unlock()
 		return fmt.Errorf("代理隧道 %q 不存在", name)
 	}
-	delete(client.proxies, name)
-	client.proxyMu.Unlock()
-
-	tunnel.once.Do(func() {
-		close(tunnel.done)
-		if tunnel.UDPState != nil {
-			tunnel.UDPState.Close()
-		}
-		if tunnel.Listener != nil {
-			tunnel.Listener.Close()
-		}
-	})
+	s.removeTunnelRuntime(client, name)
 
 	log.Printf("🛑 代理隧道已停止: %s", name)
 	return nil
@@ -273,71 +329,22 @@ func (s *Server) PauseProxy(client *ClientConn, name string) error {
 
 // ResumeProxy 恢复一条暂停的代理隧道（重新监听端口）
 func (s *Server) ResumeProxy(client *ClientConn, name string) error {
-	client.proxyMu.Lock()
+	client.proxyMu.RLock()
 	tunnel, exists := client.proxies[name]
 	if !exists {
-		client.proxyMu.Unlock()
+		client.proxyMu.RUnlock()
 		return fmt.Errorf("代理隧道 %q 不存在", name)
 	}
-	client.proxyMu.Unlock()
+	client.proxyMu.RUnlock()
 
 	// 检查端口是否仍在白名单范围内
 	if tunnel.Config.RemotePort != 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
 		return fmt.Errorf("端口 %d 不在当前允许范围内，无法恢复", tunnel.Config.RemotePort)
 	}
 
-	// 检查 Client 数据通道
-	client.dataMu.RLock()
-	hasData := client.dataSession != nil && !client.dataSession.IsClosed()
-	client.dataMu.RUnlock()
-	if !hasData {
-		return fmt.Errorf("Client [%s] 数据通道未建立，无法恢复代理", client.ID)
+	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
+		return err
 	}
-
-	// UDP 类型：重新启动 UDP 代理
-	if tunnel.Config.Type == protocol.ProxyTypeUDP {
-		addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
-		packetConn, err := net.ListenPacket("udp", addr)
-		if err != nil {
-			return fmt.Errorf("重新监听 UDP 端口 %d 失败: %w", tunnel.Config.RemotePort, err)
-		}
-
-		state := &UDPProxyState{
-			packetConn: packetConn,
-			done:       make(chan struct{}),
-		}
-
-		client.proxyMu.Lock()
-		tunnel.UDPState = state
-		tunnel.done = make(chan struct{})
-		tunnel.once = sync.Once{}
-		tunnel.Config.Status = protocol.ProxyStatusActive
-		client.proxyMu.Unlock()
-
-		go s.udpReadLoop(client, tunnel, state)
-		go s.udpReaper(state)
-
-		log.Printf("▶️ UDP 代理隧道已恢复: %s [:%d]", name, tunnel.Config.RemotePort)
-		return nil
-	}
-
-	// TCP 类型：重新监听端口
-	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("重新监听端口 %d 失败: %w", tunnel.Config.RemotePort, err)
-	}
-
-	// 重置 tunnel 状态
-	client.proxyMu.Lock()
-	tunnel.Listener = ln
-	tunnel.done = make(chan struct{})
-	tunnel.once = sync.Once{}
-	tunnel.Config.Status = protocol.ProxyStatusActive
-	client.proxyMu.Unlock()
-
-	// 启动 Accept 循环
-	go s.proxyAcceptLoop(client, tunnel)
 
 	log.Printf("▶️ 代理隧道已恢复: %s [:%d]", name, tunnel.Config.RemotePort)
 	return nil

@@ -3,7 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -131,6 +133,30 @@ func connectAndAuth(t *testing.T, ts *httptest.Server, hostname string) (*websoc
 	return connectAndAuthWithInstallID(t, ts, hostname, "install-"+hostname)
 }
 
+func connectDataWSForClient(t *testing.T, ts *httptest.Server, authResp protocol.AuthResponse) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/data"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("数据通道 WebSocket 连接失败: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(authResp.ClientID, authResp.DataToken)); err != nil {
+		conn.Close()
+		t.Fatalf("发送数据通道握手失败: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	messageType, payload, err := conn.ReadMessage()
+	if err != nil {
+		conn.Close()
+		t.Fatalf("读取数据通道握手响应失败: %v", err)
+	}
+	if messageType != websocket.BinaryMessage || len(payload) != 1 || payload[0] != protocol.DataHandshakeOK {
+		conn.Close()
+		t.Fatalf("数据通道握手未成功: type=%d payload=%v", messageType, payload)
+	}
+	return conn
+}
+
 func connectAndAuthWithInstallID(t *testing.T, ts *httptest.Server, hostname, installID string) (*websocket.Conn, protocol.AuthResponse) {
 	t.Helper()
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
@@ -139,6 +165,8 @@ func connectAndAuthWithInstallID(t *testing.T, ts *httptest.Server, hostname, in
 		t.Fatalf("WebSocket 连接失败: %v", err)
 	}
 	authResp := doAuthWithInstallID(t, conn, hostname, installID, "test-key")
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	t.Cleanup(func() { dataConn.Close() })
 	return conn, authResp
 }
 
@@ -323,7 +351,10 @@ func TestAPI_Clients_Multiple(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/clients", nil)
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("请求 clients 失败: %v", err)
+	}
 	defer resp.Body.Close()
 
 	var clients []map[string]any
@@ -357,7 +388,10 @@ func TestAPI_Clients_WithStats(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/clients", nil)
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("请求 clients 失败: %v", err)
+	}
 	defer resp.Body.Close()
 
 	var clients []map[string]any
@@ -486,17 +520,59 @@ func TestSecurityHeaders_Present(t *testing.T) {
 
 func TestSecurityHeaders_HSTS_WithTLS(t *testing.T) {
 	s := New(8080)
-	s.tlsEnabled = true // 模拟 TLS 已启用
 	handler := s.securityHeadersHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.TLS = &tls.ConnectionState{}
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	if hsts := w.Header().Get("Strict-Transport-Security"); hsts == "" {
 		t.Error("TLS 启用时应设置 HSTS")
+	}
+}
+
+func TestSecurityHeaders_HSTS_WithTrustedProxyHTTPS(t *testing.T) {
+	s := New(8080)
+	s.TLS = &TLSConfig{
+		Mode:           TLSModeOff,
+		TrustedProxies: []string{"10.0.0.0/8"},
+	}
+	handler := s.securityHeadersHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.1.2.3:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if hsts := w.Header().Get("Strict-Transport-Security"); hsts == "" {
+		t.Error("受信反代声明 HTTPS 时应设置 HSTS")
+	}
+}
+
+func TestSecurityHeaders_HSTS_IgnoresUntrustedProxyHTTPS(t *testing.T) {
+	s := New(8080)
+	s.TLS = &TLSConfig{
+		Mode:           TLSModeOff,
+		TrustedProxies: []string{"10.0.0.0/8"},
+	}
+	handler := s.securityHeadersHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.10:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if hsts := w.Header().Get("Strict-Transport-Security"); hsts != "" {
+		t.Errorf("不应信任非受信代理的 HTTPS 头，得到 %q", hsts)
 	}
 }
 
@@ -593,25 +669,56 @@ func TestAuth_EmptyKey(t *testing.T) {
 	_, conn, _, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	authReq := protocol.AuthRequest{
-		Key:       "",
-		InstallID: "install-empty-key",
-		Client: protocol.ClientInfo{
-			Hostname: "host",
-			OS:       "linux",
-			Arch:     "amd64",
-			Version:  "0.1.0",
-		},
+	authResp := doAuthWithInstallID(t, conn, "host", "install-empty-key", "")
+	if authResp.Success {
+		t.Fatal("缺少 API Key 时服务端应拒绝认证")
 	}
-	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
-	if err := conn.WriteJSON(msg); err != nil {
-		t.Fatalf("发送认证消息失败: %v", err)
+	if authResp.Code != protocol.AuthCodeInvalidKey {
+		t.Fatalf("期望 invalid_key，得到 %q", authResp.Code)
+	}
+	if authResp.Retryable {
+		t.Fatal("invalid_key 不应标记为可重试")
+	}
+	if authResp.ClearToken {
+		t.Fatal("invalid_key 不应要求清理 token")
+	}
+}
+
+func TestAuth_UninitializedServerRejected(t *testing.T) {
+	s := New(0)
+	s.adminStore = newTestAdminStore(t)
+
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	authResp := doAuthWithInstallID(t, conn, "host", "install-uninitialized", "test-key")
+	if authResp.Success {
+		t.Fatal("未初始化时服务端应拒绝认证")
+	}
+	if authResp.Code != protocol.AuthCodeServerUninitialized {
+		t.Fatalf("期望 server_uninitialized，得到 %q", authResp.Code)
+	}
+	if !authResp.Retryable {
+		t.Fatal("server_uninitialized 应标记为可重试")
+	}
+	if authResp.ClearToken {
+		t.Fatal("server_uninitialized 不应要求清理 token")
 	}
 
-	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	var resp protocol.Message
-	if err := conn.ReadJSON(&resp); err == nil {
-		t.Fatal("缺少 API Key 时服务端应拒绝连接")
+	clientCount := 0
+	s.RangeClients(func(_ string, _ *ClientConn) bool {
+		clientCount++
+		return true
+	})
+	if clientCount != 0 {
+		t.Fatalf("未初始化时不应注册任何 Client，得到 %d", clientCount)
 	}
 }
 
@@ -629,7 +736,7 @@ func TestAuth_EmptyHostname(t *testing.T) {
 	}
 }
 
-func TestAuth_ReconnectSameInstallIDReplacesOldConnection(t *testing.T) {
+func TestAuth_ReconnectSameInstallIDRejectedWhileSessionAlive(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
@@ -637,31 +744,30 @@ func TestAuth_ReconnectSameInstallIDReplacesOldConnection(t *testing.T) {
 	defer conn1.Close()
 
 	time.Sleep(50 * time.Millisecond)
-	previous, ok := s.clients.Load(auth1.ClientID)
+	current, ok := s.clients.Load(auth1.ClientID)
 	if !ok {
 		t.Fatal("第一次认证后 Client 应已注册")
 	}
+	if current.(*ClientConn).getState() != clientStateLive {
+		t.Fatalf("第一次认证并建链后应处于 live，得到 %s", current.(*ClientConn).getState())
+	}
 
-	conn2, auth2 := connectAndAuthWithInstallID(t, ts, "stable-host", "install-stable-host")
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	conn2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("第二条控制连接失败: %v", err)
+	}
 	defer conn2.Close()
 
-	if auth2.ClientID != auth1.ClientID {
-		t.Fatalf("相同 install_id 重连后应保持稳定 ClientID: %s != %s", auth2.ClientID, auth1.ClientID)
+	auth2 := doAuthWithInstallID(t, conn2, "stable-host", "install-stable-host", "test-key")
+	if auth2.Success {
+		t.Fatal("已有 live 会话时第二次认证应被拒绝")
 	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	current, ok := s.clients.Load(auth1.ClientID)
-	if !ok {
-		t.Fatal("重连后 Client 应仍然在线")
+	if auth2.Code != protocol.AuthCodeConcurrentSession {
+		t.Fatalf("错误码应为 concurrent_session，得到 %s", auth2.Code)
 	}
-	if current == previous {
-		t.Error("重连后应以新连接替换旧连接")
-	}
-
-	conn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	if _, _, err := conn1.ReadMessage(); err == nil {
-		t.Error("旧连接应被服务端主动断开")
+	if !auth2.Retryable {
+		t.Fatal("并发会话拒绝应标记为 retryable")
 	}
 
 	count := 0
@@ -671,6 +777,52 @@ func TestAuth_ReconnectSameInstallIDReplacesOldConnection(t *testing.T) {
 	})
 	if count != 1 {
 		t.Errorf("相同 install_id 在线会话应被收敛为 1 个，得到 %d", count)
+	}
+}
+
+func TestInvalidateLogicalSession_DoesNotDeleteNewGeneration(t *testing.T) {
+	s := New(0)
+
+	oldClient := &ClientConn{
+		ID:         "race-client",
+		Info:       protocol.ClientInfo{Hostname: "old"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	newClient := &ClientConn{
+		ID:         "race-client",
+		Info:       protocol.ClientInfo{Hostname: "new"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 2,
+		state:      clientStatePendingData,
+	}
+	s.clients.Store(oldClient.ID, oldClient)
+
+	oldClient.stateMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		_ = s.invalidateLogicalSessionIfCurrent(oldClient.ID, oldClient.generation, "test_race")
+		close(done)
+	}()
+
+	// 让失效流程先 Load 到 oldClient，再替换为新代际。
+	time.Sleep(30 * time.Millisecond)
+	s.clients.Store(oldClient.ID, newClient)
+	oldClient.stateMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待旧会话失效流程超时")
+	}
+
+	value, ok := s.clients.Load(oldClient.ID)
+	if !ok {
+		t.Fatal("新代际不应被旧会话失效流程删除")
+	}
+	if value != newClient {
+		t.Fatal("s.clients 应保留新代际 client 记录")
 	}
 }
 
@@ -753,10 +905,12 @@ func TestAuth_TimeoutNoMessage(t *testing.T) {
 // ============================================================
 
 func TestHeartbeat_PingPong(t *testing.T) {
-	_, conn, _, cleanup := setupWSTest(t)
+	_, conn, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	doAuth(t, conn)
+	authResp := doAuth(t, conn)
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
 
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 	conn.WriteJSON(ping)
@@ -772,10 +926,12 @@ func TestHeartbeat_PingPong(t *testing.T) {
 }
 
 func TestHeartbeat_MultiplePings(t *testing.T) {
-	_, conn, _, cleanup := setupWSTest(t)
+	_, conn, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	doAuth(t, conn)
+	authResp := doAuth(t, conn)
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
 
 	for i := 0; i < 10; i++ {
 		ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
@@ -799,10 +955,12 @@ func TestHeartbeat_MultiplePings(t *testing.T) {
 // ============================================================
 
 func TestProbe_SingleReport(t *testing.T) {
-	s, conn, _, cleanup := setupWSTest(t)
+	s, conn, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
 	authResp := doAuth(t, conn)
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
 
 	stats := protocol.SystemStats{
 		CPUUsage: 42.5,
@@ -840,6 +998,8 @@ func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
 	defer cleanup()
 
 	authResp := doAuth(t, conn)
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
 
 	stats := protocol.SystemStats{
 		CPUUsage: 42.5,
@@ -950,10 +1110,12 @@ func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 }
 
 func TestProbe_MultipleReports(t *testing.T) {
-	s, conn, _, cleanup := setupWSTest(t)
+	s, conn, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
 	authResp := doAuth(t, conn)
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
 
 	for i := 0; i < 5; i++ {
 		cpuVal := float64(i+1) * 10.0
@@ -1055,7 +1217,7 @@ func TestMultipleClients_Concurrent(t *testing.T) {
 			var authResp protocol.AuthResponse
 			resp.ParsePayload(&authResp)
 			if !authResp.Success {
-				errors <- json.Unmarshal([]byte("auth failed"), nil)
+				errors <- fmt.Errorf("auth failed: %s", authResp.Message)
 				return
 			}
 
@@ -1234,188 +1396,15 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 }
 
 // ============================================================
-// PeekConn 测试 (2)
-// ============================================================
-
-func TestPeekConn_PeekByte(t *testing.T) {
-	// 创建一个 net.Pipe 来测试
-	client, server := pipeConn()
-	defer client.Close()
-	defer server.Close()
-
-	// 向 server 端写入数据
-	go func() {
-		server.Write([]byte("Hello"))
-	}()
-
-	pc := &PeekConn{Conn: client}
-
-	// Peek 应返回 'H' 但不消费
-	b, err := pc.PeekByte()
-	if err != nil {
-		t.Fatalf("PeekByte 失败: %v", err)
-	}
-	if b != 'H' {
-		t.Errorf("PeekByte 期望 'H'，得到 %c", b)
-	}
-
-	// 再次 Peek 应返回相同值
-	b2, _ := pc.PeekByte()
-	if b2 != 'H' {
-		t.Errorf("重复 PeekByte 期望 'H'，得到 %c", b2)
-	}
-
-	// Read 应先返回 'H'，然后正常继续
-	buf := make([]byte, 5)
-	n, err := pc.Read(buf)
-	if err != nil {
-		t.Fatalf("Read 失败: %v", err)
-	}
-	if string(buf[:n]) != "Hello" {
-		t.Errorf("Read 期望 'Hello'，得到 %q", buf[:n])
-	}
-}
-
-func TestPeekConn_ReadWithoutPeek(t *testing.T) {
-	client, server := pipeConn()
-	defer client.Close()
-	defer server.Close()
-
-	go func() {
-		server.Write([]byte("World"))
-	}()
-
-	pc := &PeekConn{Conn: client}
-
-	// 不 Peek 直接 Read
-	buf := make([]byte, 5)
-	n, err := pc.Read(buf)
-	if err != nil {
-		t.Fatalf("Read 失败: %v", err)
-	}
-	if string(buf[:n]) != "World" {
-		t.Errorf("Read 期望 'World'，得到 %q", buf[:n])
-	}
-}
-
-// pipeConn 创建一对 net.Conn 用于测试
-func pipeConn() (net.Conn, net.Conn) {
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	var serverConn net.Conn
-	done := make(chan struct{})
-	go func() {
-		serverConn, _ = ln.Accept()
-		close(done)
-	}()
-	clientConn, _ := net.Dial("tcp", ln.Addr().String())
-	<-done
-	ln.Close()
-	return clientConn, serverConn
-}
-
-// ============================================================
-// PeekListener 分发测试 (2)
-// ============================================================
-
-func TestPeekListener_HTTPDispatch(t *testing.T) {
-	s := New(0)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("监听失败: %v", err)
-	}
-	defer ln.Close()
-
-	pl := &PeekListener{
-		Listener: ln,
-		server:   s,
-	}
-
-	// 发送 HTTP 首字节 'G' (GET)
-	go func() {
-		conn, _ := net.Dial("tcp", ln.Addr().String())
-		conn.Write([]byte("GET / HTTP/1.1\r\n\r\n"))
-		time.Sleep(200 * time.Millisecond)
-		conn.Close()
-	}()
-
-	// Accept 应该把 HTTP 连接送入 pending channel
-	accepted, err := pl.Accept()
-	if err != nil {
-		t.Fatalf("Accept 失败: %v", err)
-	}
-	defer accepted.Close()
-
-	// 读取内容验证是 HTTP
-	buf := make([]byte, 3)
-	accepted.Read(buf)
-	if string(buf) != "GET" {
-		t.Errorf("期望读到 GET，得到 %q", string(buf))
-	}
-}
-
-func TestPeekListener_DataChannelDispatch(t *testing.T) {
-	s := New(0)
-	clientID := "peek-dispatch-client"
-	client := &ClientConn{
-		ID:        clientID,
-		proxies:   make(map[string]*ProxyTunnel),
-		dataToken: "peek-test-token",
-	}
-	s.clients.Store(clientID, client)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("监听失败: %v", err)
-	}
-	defer ln.Close()
-
-	pl := &PeekListener{
-		Listener: ln,
-		server:   s,
-	}
-
-	// 启动 dispatch loop
-	pl.once.Do(func() {
-		pl.pending = make(chan net.Conn, 64)
-		go pl.dispatchLoop()
-	})
-
-	// 发送数据通道魔数 + 握手
-	go func() {
-		conn, _ := net.Dial("tcp", ln.Addr().String())
-		handshake := DataHandshakeBytes(clientID, "peek-test-token")
-		conn.Write(handshake)
-
-		// 读取响应
-		resp := make([]byte, 1)
-		conn.Read(resp)
-		// 不关注结果，重点是走通了 dispatchLoop 的数据通道分支
-		time.Sleep(100 * time.Millisecond)
-		conn.Close()
-	}()
-
-	// 数据通道连接不应出现在 pending channel 里
-	// 等一下看 pending 是否为空
-	time.Sleep(300 * time.Millisecond)
-	select {
-	case conn := <-pl.pending:
-		// 如果收到了连接，说明被错误路由到了 HTTP
-		conn.Close()
-		t.Error("数据通道连接不应出现在 pending channel")
-	default:
-		// 正确：数据通道被 handleDataConn 处理了
-	}
-}
-
-// ============================================================
 // controlLoop 边缘场景测试 (2)
 // ============================================================
 
 func TestControlLoop_UnknownMsgType(t *testing.T) {
-	_, conn, _, cleanup := setupWSTest(t)
+	_, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
 
-	doAuth(t, conn)
+	conn, _ := connectAndAuth(t, ts, "unknown-msg-host")
+	defer conn.Close()
 
 	// 发送一个未知消息类型
 	unknownMsg, _ := protocol.NewMessage("unknown_type_xyz", nil)
@@ -1527,9 +1516,88 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		return resp.StatusCode, result
 	}
 
+	var wsConn *websocket.Conn
+	var clientID string
+	var err error
+
+	type apiResult struct {
+		code int
+		body map[string]any
+	}
+	runPendingAction := func(method, path string, body []byte, expectedName string) apiResult {
+		t.Helper()
+
+		resultCh := make(chan apiResult, 1)
+		go func() {
+			code, resp := doRequest(method, path, body)
+			resultCh <- apiResult{code: code, body: resp}
+		}()
+
+		wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var serverMsg protocol.Message
+		if err := wsConn.ReadJSON(&serverMsg); err != nil {
+			t.Fatalf("读取服务端 proxy_new 失败: %v", err)
+		}
+		wsConn.SetReadDeadline(time.Time{})
+		if serverMsg.Type != protocol.MsgTypeProxyNew {
+			t.Fatalf("期望服务端下发 %s，得到 %s", protocol.MsgTypeProxyNew, serverMsg.Type)
+		}
+
+		var proxyReq protocol.ProxyNewRequest
+		if err := serverMsg.ParsePayload(&proxyReq); err != nil {
+			t.Fatalf("解析服务端 proxy_new 失败: %v", err)
+		}
+		if proxyReq.Name != expectedName {
+			t.Fatalf("期望 proxy_new.Name=%s，得到 %s", expectedName, proxyReq.Name)
+		}
+
+		val, ok := s.clients.Load(clientID)
+		if !ok {
+			t.Fatalf("client %s 不存在", clientID)
+		}
+		liveClient := val.(*ClientConn)
+		liveClient.proxyMu.RLock()
+		pendingTunnel := liveClient.proxies[expectedName]
+		liveClient.proxyMu.RUnlock()
+		if pendingTunnel == nil {
+			t.Fatalf("收到 proxy_new 时应已有 pending tunnel: %s", expectedName)
+		}
+		if pendingTunnel.Config.Status != protocol.ProxyStatusPending {
+			t.Fatalf("proxy_new 下发时 tunnel 状态应为 pending，得到 %s", pendingTunnel.Config.Status)
+		}
+		if method == http.MethodPost {
+			if _, exists := s.store.GetTunnel(clientID, expectedName); exists {
+				t.Fatalf("create 在 client ack 前不应写入 Store: %s", expectedName)
+			}
+		}
+		if method == http.MethodPut {
+			if stored, exists := s.store.GetTunnel(clientID, expectedName); !exists || stored.Status != protocol.ProxyStatusPending {
+				t.Fatalf("resume 在 client ack 前 Store 状态应为 pending，exists=%v status=%s", exists, stored.Status)
+			}
+		}
+
+		respMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+			Name:       expectedName,
+			Success:    true,
+			Message:    "ok",
+			RemotePort: proxyReq.RemotePort,
+		})
+		if err := wsConn.WriteJSON(respMsg); err != nil {
+			t.Fatalf("发送 proxy_new_resp 失败: %v", err)
+		}
+
+		select {
+		case result := <-resultCh:
+			return result
+		case <-time.After(3 * time.Second):
+			t.Fatalf("等待 API %s %s 返回超时", method, path)
+			return apiResult{}
+		}
+	}
+
 	// 2. 模拟一个 Client 连接
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
-	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	wsConn, _, err = websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("WebSocket 连接失败: %v", err)
 	}
@@ -1548,25 +1616,18 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	var authResp protocol.AuthResponse
 	authRespMsg.ParsePayload(&authResp)
 
-	clientID := authResp.ClientID
-	time.Sleep(50 * time.Millisecond) // 等待 client 注册到 s.clients
+	clientID = authResp.ClientID
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
 
-	// 设置假的 DataSession，避免 StartProxy 失败
-	val, _ := s.clients.Load(clientID)
-	clientConn := val.(*ClientConn)
-	cConn, sConn := net.Pipe()
-	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
-	clientConn.dataSession = sSession
-	defer func() {
-		cConn.Close()
-		sConn.Close()
-	}()
+	time.Sleep(50 * time.Millisecond) // 等待 client 提升到 live
 
 	// ========= 测试开始 =========
 
 	// 1. 创建隧道 (/api/clients/{id}/tunnels)
 	createReq := []byte(`{"name":"test-tunnel","type":"tcp","local_ip":"127.0.0.1","local_port":8080,"remote_port":18080}`)
-	code, resp := doRequest(http.MethodPost, fmt.Sprintf("/api/clients/%s/tunnels", clientID), createReq)
+	result := runPendingAction(http.MethodPost, fmt.Sprintf("/api/clients/%s/tunnels", clientID), createReq, "test-tunnel")
+	code, resp := result.code, result.body
 
 	if code != http.StatusCreated {
 		t.Errorf("创建隧道期望 201 Created，得到 %d, 响应: %v", code, resp)
@@ -1581,21 +1642,6 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		t.Errorf("初创状态应为 active，得到 %s", tunnel.Status)
 	}
 
-	// 模拟 Client 返回 proxy_new_resp (成功)
-	proxyNewRespMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
-		Success:    true,
-		Message:    "ok",
-		RemotePort: 18080,
-	})
-	wsConn.WriteJSON(proxyNewRespMsg)
-	time.Sleep(100 * time.Millisecond) // 等待服务端处理状态更新
-
-	// 二次检查 Store，状态应为 active
-	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
-	if tunnel.Status != protocol.ProxyStatusActive {
-		t.Errorf("隧道已成功创建，状态应为 active，但仍为 %s", tunnel.Status)
-	}
-
 	// 2. 暂停隧道 (/api/clients/{id}/tunnels/{name}/pause)
 	pauseReq := []byte(`{}`)
 	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/pause", clientID), pauseReq)
@@ -1608,10 +1654,20 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	if tunnel.Status != protocol.ProxyStatusPaused {
 		t.Errorf("隧道暂停后，状态应为 paused，得到 %s", tunnel.Status)
 	}
+	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var closeMsg protocol.Message
+	if err := wsConn.ReadJSON(&closeMsg); err != nil {
+		t.Fatalf("读取 pause 后的 proxy_close 失败: %v", err)
+	}
+	wsConn.SetReadDeadline(time.Time{})
+	if closeMsg.Type != protocol.MsgTypeProxyClose {
+		t.Fatalf("暂停后期望收到 %s，得到 %s", protocol.MsgTypeProxyClose, closeMsg.Type)
+	}
 
 	// 3. 恢复隧道 (/api/clients/{id}/tunnels/{name}/resume)
 	resumeReq := []byte(`{}`)
-	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/resume", clientID), resumeReq)
+	result = runPendingAction(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/resume", clientID), resumeReq, "test-tunnel")
+	code = result.code
 	if code != http.StatusOK {
 		t.Errorf("恢复隧道期望 200，得到 %d", code)
 	}
@@ -1650,6 +1706,381 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	}
 }
 
+func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+	var err error
+	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+
+	wsConn, authResp := connectAndAuth(t, ts, "timeout-client")
+	defer wsConn.Close()
+
+	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 Admin Token 失败: %v", err)
+	}
+
+	type apiResult struct {
+		code int
+		body map[string]any
+	}
+	resultCh := make(chan apiResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		req, _ := http.NewRequest(
+			http.MethodPost,
+			ts.URL+fmt.Sprintf("/api/clients/%s/tunnels", authResp.ClientID),
+			bytes.NewReader([]byte(`{"name":"timeout-tunnel","type":"tcp","local_ip":"127.0.0.1","local_port":8080,"remote_port":18081}`)),
+		)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("User-Agent", "test")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer resp.Body.Close()
+
+		var body map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		resultCh <- apiResult{code: resp.StatusCode, body: body}
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("create tunnel 请求失败: %v", err)
+	case result := <-resultCh:
+		if result.code != http.StatusGatewayTimeout {
+			t.Fatalf("create 超时期望 504，得到 %d, body=%v", result.code, result.body)
+		}
+	case <-time.After(7 * time.Second):
+		t.Fatal("等待 create timeout 响应超时")
+	}
+
+	if _, exists := s.store.GetTunnel(authResp.ClientID, "timeout-tunnel"); exists {
+		t.Fatal("create timeout 后不应写入 Store")
+	}
+
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("client %s 应仍在线", authResp.ClientID)
+	}
+	client := value.(*ClientConn)
+	client.proxyMu.RLock()
+	_, exists := client.proxies["timeout-tunnel"]
+	client.proxyMu.RUnlock()
+	if exists {
+		t.Fatal("create timeout 后 runtime pending tunnel 应被清理")
+	}
+}
+
+func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	var err error
+	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+
+	wsConn, authResp := connectAndAuth(t, ts, "resume-post-ack-fail")
+	defer wsConn.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		value, ok := s.clients.Load(authResp.ClientID)
+		if ok && value.(*ClientConn).getState() == clientStateLive {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "resume-test-agent")
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 Admin Token 失败: %v", err)
+	}
+	doRequest := func(method, path string, body []byte) (int, map[string]any) {
+		t.Helper()
+		req, _ := http.NewRequest(method, ts.URL+path, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("User-Agent", "resume-test-agent")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("HTTP 请求失败 %s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+
+		var payload map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&payload)
+		return resp.StatusCode, payload
+	}
+
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("client %s 不存在", authResp.ClientID)
+	}
+	client := value.(*ClientConn)
+	client.proxyMu.Lock()
+	client.proxies["resume-rollback"] = &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:      "resume-rollback",
+			Type:      "tcp",
+			LocalIP:   "127.0.0.1",
+			LocalPort: 8080,
+			ClientID:  authResp.ClientID,
+			Status:    protocol.ProxyStatusPaused,
+		},
+		done: make(chan struct{}),
+	}
+	client.proxyMu.Unlock()
+	mustAddStableTunnel(t, s.store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name:      "resume-rollback",
+			Type:      "tcp",
+			LocalIP:   "127.0.0.1",
+			LocalPort: 8080,
+		},
+		Status:   protocol.ProxyStatusPaused,
+		ClientID: authResp.ClientID,
+		Hostname: "resume-post-ack-fail",
+	})
+
+	type apiResult struct {
+		code int
+		body map[string]any
+	}
+	resumeResultCh := make(chan apiResult, 1)
+	go func() {
+		code, body := doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/resume-rollback/resume", authResp.ClientID), []byte(`{}`))
+		resumeResultCh <- apiResult{code: code, body: body}
+	}()
+
+	select {
+	case result := <-resumeResultCh:
+		t.Fatalf("resume 请求在发送 proxy_new 前已返回: code=%d body=%v", result.code, result.body)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var resumeMsg protocol.Message
+	if err := wsConn.ReadJSON(&resumeMsg); err != nil {
+		t.Fatalf("读取 resume 阶段 proxy_new 失败: %v", err)
+	}
+	wsConn.SetReadDeadline(time.Time{})
+	if resumeMsg.Type != protocol.MsgTypeProxyNew {
+		t.Fatalf("resume 阶段期望 %s，得到 %s", protocol.MsgTypeProxyNew, resumeMsg.Type)
+	}
+	var resumeProxyReq protocol.ProxyNewRequest
+	if err := resumeMsg.ParsePayload(&resumeProxyReq); err != nil {
+		t.Fatalf("解析 resume proxy_new 失败: %v", err)
+	}
+
+	s.store.mu.Lock()
+	s.store.failSaveErr = errors.New("injected resume active save failure")
+	s.store.failSaveCount = 1
+	s.store.mu.Unlock()
+
+	ackResume, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+		Name:       resumeProxyReq.Name,
+		Success:    true,
+		Message:    "ok",
+		RemotePort: resumeProxyReq.RemotePort,
+	})
+	if err := wsConn.WriteJSON(ackResume); err != nil {
+		t.Fatalf("发送 resume ack 失败: %v", err)
+	}
+
+	select {
+	case result := <-resumeResultCh:
+		if result.code != http.StatusInternalServerError {
+			t.Fatalf("resume 在 post-ack 持久化失败时期望 500，得到 %d body=%v", result.code, result.body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("等待 resume API 返回超时")
+	}
+
+	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var rollbackCloseMsg protocol.Message
+	if err := wsConn.ReadJSON(&rollbackCloseMsg); err != nil {
+		t.Fatalf("读取 rollback proxy_close 失败: %v", err)
+	}
+	wsConn.SetReadDeadline(time.Time{})
+	if rollbackCloseMsg.Type != protocol.MsgTypeProxyClose {
+		t.Fatalf("rollback 后期望 %s，得到 %s", protocol.MsgTypeProxyClose, rollbackCloseMsg.Type)
+	}
+	var closePayload protocol.ProxyCloseRequest
+	if err := rollbackCloseMsg.ParsePayload(&closePayload); err != nil {
+		t.Fatalf("解析 rollback proxy_close 失败: %v", err)
+	}
+	if closePayload.Name != "resume-rollback" {
+		t.Fatalf("rollback proxy_close name 期望 resume-rollback，得到 %s", closePayload.Name)
+	}
+	if closePayload.Reason != "provision_failed" {
+		t.Fatalf("rollback proxy_close reason 期望 provision_failed，得到 %s", closePayload.Reason)
+	}
+
+	value, ok = s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("client %s 应仍在线", authResp.ClientID)
+	}
+	client = value.(*ClientConn)
+	client.proxyMu.RLock()
+	runtimeTunnel := client.proxies["resume-rollback"]
+	client.proxyMu.RUnlock()
+	if runtimeTunnel == nil {
+		t.Fatal("resume rollback 后 runtime tunnel 不应丢失")
+	}
+	if runtimeTunnel.Config.Status != protocol.ProxyStatusPaused {
+		t.Fatalf("resume rollback 后 runtime 状态期望 paused，得到 %s", runtimeTunnel.Config.Status)
+	}
+	if runtimeTunnel.Config.Error != "" {
+		t.Fatalf("resume rollback 后 runtime error 应为空，得到 %q", runtimeTunnel.Config.Error)
+	}
+
+	storedTunnel, exists := s.store.GetTunnel(authResp.ClientID, "resume-rollback")
+	if !exists {
+		t.Fatal("resume rollback 后 store tunnel 不应丢失")
+	}
+	if storedTunnel.Status != protocol.ProxyStatusPaused {
+		t.Fatalf("resume rollback 后 store 状态期望 paused，得到 %s", storedTunnel.Status)
+	}
+	if storedTunnel.Error != "" {
+		t.Fatalf("resume rollback 后 store error 应为空，得到 %q", storedTunnel.Error)
+	}
+}
+
+func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	var err error
+	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+
+	record, err := s.adminStore.GetOrCreateClient(
+		"install-restore-post-ack-fail",
+		protocol.ClientInfo{Hostname: "restore-post-ack-fail"},
+		"127.0.0.1:12345",
+	)
+	if err != nil {
+		t.Fatalf("预注册 client 失败: %v", err)
+	}
+	mustAddStableTunnel(t, s.store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name:       "restore-fail-tunnel",
+			Type:       "tcp",
+			LocalIP:    "127.0.0.1",
+			LocalPort:  8080,
+			RemotePort: 19082,
+		},
+		Status:   protocol.ProxyStatusActive,
+		ClientID: record.ID,
+		Hostname: "restore-post-ack-fail",
+	})
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	controlConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("控制通道连接失败: %v", err)
+	}
+	defer controlConn.Close()
+
+	authResp := doAuthWithInstallID(t, controlConn, "restore-post-ack-fail", "install-restore-post-ack-fail", "test-key")
+	if !authResp.Success {
+		t.Fatalf("认证失败: %s", authResp.Message)
+	}
+	if authResp.ClientID != record.ID {
+		t.Fatalf("预注册 client_id=%s，应与认证返回一致，得到 %s", record.ID, authResp.ClientID)
+	}
+
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
+
+	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var restoreMsg protocol.Message
+	if err := controlConn.ReadJSON(&restoreMsg); err != nil {
+		t.Fatalf("读取 restore 阶段 proxy_new 失败: %v", err)
+	}
+	controlConn.SetReadDeadline(time.Time{})
+	if restoreMsg.Type != protocol.MsgTypeProxyNew {
+		t.Fatalf("restore 阶段期望 %s，得到 %s", protocol.MsgTypeProxyNew, restoreMsg.Type)
+	}
+	var restoreReq protocol.ProxyNewRequest
+	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
+		t.Fatalf("解析 restore proxy_new 失败: %v", err)
+	}
+	if restoreReq.Name != "restore-fail-tunnel" {
+		t.Fatalf("restore tunnel name 期望 restore-fail-tunnel，得到 %s", restoreReq.Name)
+	}
+
+	s.store.mu.Lock()
+	s.store.failSaveErr = errors.New("injected restore active save failure")
+	s.store.failSaveCount = 1
+	s.store.mu.Unlock()
+
+	restoreAck, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+		Name:       restoreReq.Name,
+		Success:    true,
+		Message:    "ok",
+		RemotePort: restoreReq.RemotePort,
+	})
+	if err := controlConn.WriteJSON(restoreAck); err != nil {
+		t.Fatalf("发送 restore ack 失败: %v", err)
+	}
+
+	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var closeMsg protocol.Message
+	if err := controlConn.ReadJSON(&closeMsg); err != nil {
+		t.Fatalf("读取 restore 失败后的 proxy_close 失败: %v", err)
+	}
+	controlConn.SetReadDeadline(time.Time{})
+	if closeMsg.Type != protocol.MsgTypeProxyClose {
+		t.Fatalf("restore 失败后期望 %s，得到 %s", protocol.MsgTypeProxyClose, closeMsg.Type)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		value, ok := s.clients.Load(authResp.ClientID)
+		if !ok {
+			t.Fatalf("client %s 不应丢失", authResp.ClientID)
+		}
+		client := value.(*ClientConn)
+		client.proxyMu.RLock()
+		tunnel := client.proxies["restore-fail-tunnel"]
+		client.proxyMu.RUnlock()
+		if tunnel != nil && tunnel.Config.Status == protocol.ProxyStatusError {
+			if tunnel.Config.Error == "" {
+				t.Fatal("runtime error 隧道应携带失败原因")
+			}
+			stored, exists := s.store.GetTunnel(authResp.ClientID, "restore-fail-tunnel")
+			if !exists {
+				t.Fatal("store 中应保留 restore-fail-tunnel")
+			}
+			if stored.Status != protocol.ProxyStatusError {
+				t.Fatalf("store 状态期望 error，得到 %s", stored.Status)
+			}
+			if stored.Error == "" {
+				t.Fatal("store error 隧道应持久化失败原因")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("等待 restore 失败降级到 error 超时")
+}
+
 func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	tmpDir, _ := os.MkdirTemp("", "tunnel_restore_test_*")
 	defer os.RemoveAll(tmpDir)
@@ -1682,9 +2113,11 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	s.store = tStore // 会由 s.initStore(tStore) 被自动绑定在真实环境中，这里手动绑定
 
 	client := &ClientConn{
-		ID:      "client-1",
-		Info:    protocol.ClientInfo{Hostname: "restore-host"},
-		proxies: make(map[string]*ProxyTunnel),
+		ID:         "client-1",
+		Info:       protocol.ClientInfo{Hostname: "restore-host"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
 	}
 	s.clients.Store("client-1", client)
 
@@ -1749,10 +2182,13 @@ func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
 	})
 
 	client := &ClientConn{
-		ID:      "client-restore",
-		Info:    protocol.ClientInfo{Hostname: "restore-host"},
-		proxies: make(map[string]*ProxyTunnel),
+		ID:         "client-restore",
+		Info:       protocol.ClientInfo{Hostname: "restore-host"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
 	}
+	s.clients.Store(client.ID, client)
 
 	start := time.Now()
 	s.restoreTunnels(client)

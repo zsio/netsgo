@@ -1,0 +1,82 @@
+x-netsgo-image: &netsgo-image
+  image: netsgo-e2e:local
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: e2e
+
+services:
+  server:
+    <<: *netsgo-image
+    hostname: compose-server
+    command:
+      - server
+      - --port
+      - "8080"
+      - --tls-mode
+      - off
+      - --trusted-proxies
+      - 127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      - --setup-token
+      - ${NETSGO_SETUP_TOKEN:-compose-setup-token}
+    ports:
+      - "${UPSTREAM_PORT:-19081}:8080"
+      - "${TUNNEL_REMOTE_PORT:-19082}:${TUNNEL_REMOTE_PORT:-19082}"
+    volumes:
+      - netsgo-server-data:/root/.netsgo
+
+  backend:
+    image: hashicorp/http-echo:1.0.0
+    command:
+      - -text=compose backend response
+      - -listen=:18083
+
+  bootstrap:
+    image: netsgo-e2e:local
+    hostname: compose-bootstrap
+    entrypoint:
+      - /bin/sh
+      - /opt/netsgo-e2e/bootstrap.sh
+    environment:
+      NETSGO_BOOTSTRAP_BASE_URL: http://proxy
+      NETSGO_SETUP_TOKEN: ${NETSGO_SETUP_TOKEN:-compose-setup-token}
+      NETSGO_ADMIN_USER: ${NETSGO_ADMIN_USER:-admin}
+      NETSGO_ADMIN_PASS: ${NETSGO_ADMIN_PASS:-password123}
+      NETSGO_SERVER_ADDR: ${NETSGO_SERVER_ADDR:-compose.local}
+      NETSGO_CLIENT_HOSTNAME: ${NETSGO_CLIENT_HOSTNAME:-compose-client}
+      NETSGO_CLIENT_KEY_FILE: /shared/client.key
+      NETSGO_ADMIN_TOKEN_FILE: /shared/admin.token
+      NETSGO_READY_FILE: /shared/bootstrap.ready
+      NETSGO_TUNNEL_NAME: ${NETSGO_TUNNEL_NAME:-compose-tunnel}
+      NETSGO_TUNNEL_REMOTE_PORT: ${TUNNEL_REMOTE_PORT:-19082}
+      NETSGO_TUNNEL_LOCAL_IP: backend
+      NETSGO_TUNNEL_LOCAL_PORT: "18083"
+      NETSGO_BOOTSTRAP_WAIT_TIMEOUT: ${NETSGO_BOOTSTRAP_WAIT_TIMEOUT:-180}
+    volumes:
+      - netsgo-shared:/shared
+    depends_on:
+      - server
+      - backend
+
+  client:
+    image: netsgo-e2e:local
+    hostname: ${NETSGO_CLIENT_HOSTNAME:-compose-client}
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - /opt/netsgo-e2e/run-client.sh
+    environment:
+      NETSGO_SERVER: ${NETSGO_CLIENT_SERVER:-http://proxy}
+      NETSGO_CLIENT_KEY_FILE: /shared/client.key
+      NETSGO_CLIENT_KEY_WAIT_TIMEOUT: ${NETSGO_CLIENT_KEY_WAIT_TIMEOUT:-180}
+    volumes:
+      - netsgo-client-data:/root/.netsgo
+      - netsgo-shared:/shared
+    depends_on:
+      - backend
+      - bootstrap
+
+volumes:
+  netsgo-client-data:
+  netsgo-server-data:
+  netsgo-shared:

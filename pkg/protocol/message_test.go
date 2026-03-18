@@ -383,7 +383,7 @@ func TestUnicodeFields(t *testing.T) {
 }
 
 func TestOmitemptyBehavior(t *testing.T) {
-	// AuthResponse 中 Message 和 ClientID 有 omitempty
+	// AuthResponse 中可选字段都有 omitempty
 	resp := AuthResponse{Success: true}
 	data, _ := json.Marshal(resp)
 	jsonStr := string(data)
@@ -395,9 +395,18 @@ func TestOmitemptyBehavior(t *testing.T) {
 	if strings.Contains(jsonStr, `"client_id"`) {
 		t.Errorf("空 ClientID 字段不应出现在 JSON 中: %s", jsonStr)
 	}
+	if strings.Contains(jsonStr, `"code"`) {
+		t.Errorf("空 Code 字段不应出现在 JSON 中: %s", jsonStr)
+	}
+	if strings.Contains(jsonStr, `"retryable"`) {
+		t.Errorf("空 Retryable 字段不应出现在 JSON 中: %s", jsonStr)
+	}
+	if strings.Contains(jsonStr, `"clear_token"`) {
+		t.Errorf("空 ClearToken 字段不应出现在 JSON 中: %s", jsonStr)
+	}
 
 	// 有值时应出现
-	resp2 := AuthResponse{Success: true, Message: "ok", ClientID: "a1"}
+	resp2 := AuthResponse{Success: false, Message: "ok", ClientID: "a1", Code: "invalid_token", Retryable: true, ClearToken: true}
 	data2, _ := json.Marshal(resp2)
 	jsonStr2 := string(data2)
 
@@ -406,6 +415,15 @@ func TestOmitemptyBehavior(t *testing.T) {
 	}
 	if !strings.Contains(jsonStr2, `"client_id"`) {
 		t.Errorf("非空 ClientID 应出现在 JSON 中: %s", jsonStr2)
+	}
+	if !strings.Contains(jsonStr2, `"code"`) {
+		t.Errorf("非空 Code 应出现在 JSON 中: %s", jsonStr2)
+	}
+	if !strings.Contains(jsonStr2, `"retryable"`) {
+		t.Errorf("Retryable=true 应出现在 JSON 中: %s", jsonStr2)
+	}
+	if !strings.Contains(jsonStr2, `"clear_token"`) {
+		t.Errorf("ClearToken=true 应出现在 JSON 中: %s", jsonStr2)
 	}
 }
 

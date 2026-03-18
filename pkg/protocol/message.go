@@ -10,8 +10,18 @@ const (
 	MsgTypePong         = "pong"           // Server → Client: 心跳回复
 	MsgTypeProbeReport  = "probe_report"   // Client → Server: 探针数据上报
 	MsgTypeProxyNew     = "proxy_new"      // Client/Server: 请求创建代理隧道
-	MsgTypeProxyNewResp = "proxy_new_resp" // Server → Client: 创建代理响应
+	MsgTypeProxyNewResp = "proxy_new_resp" // Client/Server: 代理创建/ready 响应
 	MsgTypeProxyClose   = "proxy_close"    // 双向: 关闭某条代理隧道
+)
+
+const (
+	AuthCodeOK                  = "ok"
+	AuthCodeInvalidToken        = "invalid_token"
+	AuthCodeRevokedToken        = "revoked_token"
+	AuthCodeInvalidKey          = "invalid_key"
+	AuthCodeConcurrentSession   = "concurrent_session"
+	AuthCodeRateLimited         = "rate_limited"
+	AuthCodeServerUninitialized = "server_uninitialized"
 )
 
 // Message 是控制通道上传输的统一消息结构
@@ -51,11 +61,14 @@ type AuthRequest struct {
 
 // AuthResponse Server 返回的认证结果
 type AuthResponse struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message,omitempty"`
-	ClientID  string `json:"client_id,omitempty"` // Server 分配的唯一 ID
-	Token     string `json:"token,omitempty"`     // 服务端下发的新 Token（仅兑换时）
-	DataToken string `json:"data_token,omitempty"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message,omitempty"`
+	ClientID   string `json:"client_id,omitempty"` // Server 分配的唯一 ID
+	Token      string `json:"token,omitempty"`     // 服务端下发的新 Token（仅兑换时）
+	DataToken  string `json:"data_token,omitempty"`
+	Code       string `json:"code,omitempty"`
+	Retryable  bool   `json:"retryable,omitempty"`
+	ClearToken bool   `json:"clear_token,omitempty"`
 }
 
 // ProxyNewRequest 请求创建一条新的代理隧道
@@ -70,6 +83,7 @@ type ProxyNewRequest struct {
 
 // ProxyNewResponse 代理隧道创建结果
 type ProxyNewResponse struct {
+	Name       string `json:"name,omitempty"`
 	Success    bool   `json:"success"`
 	Message    string `json:"message,omitempty"`
 	RemotePort int    `json:"remote_port,omitempty"` // 实际分配的公网端口

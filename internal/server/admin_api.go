@@ -200,7 +200,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		s.loginLimiter.ResetFailures(ip)
 	}
 
-	s.setSessionCookie(w, token, int(sessionDefaultTTL.Seconds()))
+	s.setSessionCookie(w, r, token, int(sessionDefaultTTL.Seconds()))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -228,7 +228,7 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 	s.adminStore.DeleteSession(info.SessionID)
 	s.adminStore.AddSystemLog("INFO", "Admin user logged out: "+info.Username, "auth")
 
-	s.clearSessionCookie(w)
+	s.clearSessionCookie(w, r)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"success": true})

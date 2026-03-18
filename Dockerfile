@@ -48,3 +48,19 @@ ENV NETSGO_PORT=8080
 
 ENTRYPOINT ["/usr/local/bin/netsgo"]
 CMD ["server"]
+
+FROM alpine:3.21 AS e2e
+
+RUN apk add --no-cache ca-certificates curl jq
+
+WORKDIR /app
+
+COPY --from=builder /out/netsgo /usr/local/bin/netsgo
+COPY test/e2e/scripts /opt/netsgo-e2e
+
+RUN chmod +x /opt/netsgo-e2e/*.sh
+
+ENV NETSGO_PORT=8080
+
+ENTRYPOINT ["/usr/local/bin/netsgo"]
+CMD ["server"]

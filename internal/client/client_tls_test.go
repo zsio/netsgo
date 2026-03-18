@@ -449,7 +449,8 @@ func TestScenario_TLS_ConnectAndAuth(t *testing.T) {
 	ms := newMockServer(true)
 
 	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/ws/control", ms.handler)
+	httpMux.HandleFunc("/ws/control", ms.controlHandler)
+	httpMux.HandleFunc("/ws/data", ms.dataHandler)
 
 	ts := httptest.NewUnstartedServer(httpMux)
 	ts.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
@@ -490,7 +491,8 @@ func TestScenario_TLS_ConnectAndAuth(t *testing.T) {
 func TestScenario_PlainWS_NoTLSUsed(t *testing.T) {
 	ms := newMockServer(true)
 	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/ws/control", ms.handler)
+	httpMux.HandleFunc("/ws/control", ms.controlHandler)
+	httpMux.HandleFunc("/ws/data", ms.dataHandler)
 	ts := httptest.NewServer(httpMux)
 	defer ts.Close()
 
@@ -515,7 +517,8 @@ func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
 	cert, _ := generateTestCert(t)
 	ms := newMockServer(true)
 	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/ws/control", ms.handler)
+	httpMux.HandleFunc("/ws/control", ms.controlHandler)
+	httpMux.HandleFunc("/ws/data", ms.dataHandler)
 
 	ts := httptest.NewUnstartedServer(httpMux)
 	ts.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
@@ -543,31 +546,19 @@ func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
 // 场景：数据通道在 useTLS=true 时使用 TLS
 func TestScenario_TLS_DataChannelUsesTLS(t *testing.T) {
 	cert, _ := generateTestCert(t)
+	ms := newMockServer(true)
+	ms.authResp.ClientID = "tls-data-test"
+	ms.authResp.DataToken = "tls-data-token"
 
-	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
-	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsConfig)
-	if err != nil {
-		t.Fatalf("TLS 监听失败: %v", err)
-	}
-	defer ln.Close()
+	httpMux := http.NewServeMux()
+	httpMux.HandleFunc("/ws/data", ms.dataHandler)
 
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
+	ts := httptest.NewUnstartedServer(httpMux)
+	ts.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	ts.StartTLS()
+	defer ts.Close()
 
-		// 读取完整握手数据
-		buf := make([]byte, 512)
-		conn.Read(buf)
-		// 回复 OK
-		conn.Write([]byte{protocol.DataHandshakeOK})
-		time.Sleep(1 * time.Second)
-	}()
-
-	c := New("wss://"+ln.Addr().String(), "key")
-	c.normalizeServerAddr()
+	c := New("wss"+strings.TrimPrefix(ts.URL, "https"), "key")
 	c.ClientID = "tls-data-test"
 	c.dataToken = "tls-data-token"
 	c.TLSSkipVerify = true
@@ -586,32 +577,30 @@ func TestScenario_TLS_DataChannelUsesTLS(t *testing.T) {
 }
 
 // 场景：数据通道在 useTLS=false 时拒绝 TLS 连接
-func TestScenario_PlainWS_DataChannelUsesPlainTCP(t *testing.T) {
+func TestScenario_PlainWS_DataChannelUsesPlainWS(t *testing.T) {
 	// TLS-only 服务器，客户端用明文连接 → 应失败
 	cert, _ := generateTestCert(t)
-	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
-	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsConfig)
-	if err != nil {
-		t.Fatalf("监听失败: %v", err)
-	}
-	defer ln.Close()
+	ms := newMockServer(true)
+	ms.authResp.ClientID = "plain-data-test"
+	ms.authResp.DataToken = "plain-data-token"
 
-	go func() {
-		conn, _ := ln.Accept()
-		if conn != nil {
-			conn.Close()
-		}
-	}()
+	httpMux := http.NewServeMux()
+	httpMux.HandleFunc("/ws/data", ms.dataHandler)
 
-	c := New("ws://"+ln.Addr().String(), "key")
+	ts := httptest.NewUnstartedServer(httpMux)
+	ts.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	ts.StartTLS()
+	defer ts.Close()
+
+	c := New("ws"+strings.TrimPrefix(ts.URL, "http"), "key")
 	c.normalizeServerAddr() // useTLS = false
 	c.ClientID = "plain-data-test"
 	c.dataToken = "plain-data-token"
 
-	// 明文 TCP 连接 TLS 服务器 → handshake/read 失败
-	err = c.connectDataChannel()
+	// 明文 WS 连接 TLS 服务器 → 握手失败
+	err := c.connectDataChannel()
 	if err == nil {
-		t.Error("明文 TCP 连接 TLS 服务器应失败")
+		t.Error("明文 WS 连接 TLS 服务器应失败")
 	}
 }
 

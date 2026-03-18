@@ -164,27 +164,27 @@ func (s *Server) RequireAuthIfInitialized(next http.HandlerFunc) http.HandlerFun
 
 // setSessionCookie 设置 httpOnly session cookie
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, token string, maxAge int) {
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
 		Path:     "/api",
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   s.tlsEnabled,
+		Secure:   s.isHTTPSRequest(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 }
 
 // clearSessionCookie 清除 session cookie
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/api",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   s.tlsEnabled,
+		Secure:   s.isHTTPSRequest(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 }

@@ -1,0 +1,13 @@
+services:
+  proxy:
+    image: caddy:2.10-alpine
+    hostname: compose-proxy
+    ports:
+      - "${PROXY_PORT:-19080}:80"
+    environment:
+      UPSTREAM_HOST: server
+      UPSTREAM_PORT: "8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - server

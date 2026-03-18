@@ -1,0 +1,12 @@
+services:
+  proxy:
+    image: nginx:1.27-alpine
+    ports:
+      - "${PROXY_PORT:-18080}:80"
+    environment:
+      UPSTREAM_HOST: "${UPSTREAM_HOST:-host.docker.internal}"
+      UPSTREAM_PORT: "${UPSTREAM_PORT:-18081}"
+    volumes:
+      - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

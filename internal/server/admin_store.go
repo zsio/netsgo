@@ -57,6 +57,11 @@ const sessionDefaultTTL = 24 * time.Hour
 var (
 	errJWTSecretUnavailable = errors.New("jwt secret unavailable before setup")
 	errJWTSecretMissing     = errors.New("initialized admin store missing jwt secret")
+
+	ErrClientTokenInvalid         = errors.New("client token invalid")
+	ErrClientTokenRevoked         = errors.New("client token revoked")
+	ErrClientTokenExpired         = errors.New("client token expired")
+	ErrClientTokenInstallMismatch = errors.New("client token install mismatch")
 )
 
 // NewAdminStore 创建一个新的管理存储
@@ -545,7 +550,6 @@ func (s *AdminStore) CleanExpiredSessions() {
 
 // ValidateClientKey 检查 Key 是否存在且处于启用状态并且没有过期
 // 仅做验证，不消耗使用次数（计数在 ExchangeToken 中消耗）
-// 如果没有任何 Key 存在，则开放所有连接
 func (s *AdminStore) ValidateClientKey(key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -555,10 +559,10 @@ func (s *AdminStore) ValidateClientKey(key string) (bool, error) {
 // validateClientKeyLocked 内部方法，调用时需要已持有 mu 锁
 func (s *AdminStore) validateClientKeyLocked(key string) (bool, error) {
 	if len(s.data.APIKeys) == 0 {
-		if s.data.Initialized {
-			return false, fmt.Errorf("未配置可用 API Key")
+		if !s.data.Initialized {
+			return false, fmt.Errorf("服务未初始化，暂不接受 Client 连接")
 		}
-		return true, nil // 向后兼容，未初始化且没有 Key 时开放连接
+		return false, fmt.Errorf("未配置可用 API Key")
 	}
 
 	if key == "" {
@@ -691,7 +695,7 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 // 返回匹配的 ClientToken 记录（如果有效），否则返回 error
 func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken, error) {
 	if token == "" {
-		return nil, fmt.Errorf("Token 为空")
+		return nil, ErrClientTokenInvalid
 	}
 
 	s.mu.Lock()
@@ -703,14 +707,14 @@ func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken,
 		if subtle.ConstantTimeCompare([]byte(t.TokenHash), []byte(tokenHash)) == 1 {
 			// Token hash 匹配
 			if t.IsRevoked {
-				return nil, fmt.Errorf("Token 已被吊销")
+				return nil, ErrClientTokenRevoked
 			}
 			if t.InstallID != installID {
 				log.Printf("⚠️ Token install_id 不匹配: token_install=%s, req_install=%s", t.InstallID, installID)
-				return nil, fmt.Errorf("Token 无效")
+				return nil, ErrClientTokenInstallMismatch
 			}
 			if time.Since(t.LastActiveAt) >= tokenExpiryDuration {
-				return nil, fmt.Errorf("Token 已过期（超过 %d 天未活跃）", int(tokenExpiryDuration.Hours()/24))
+				return nil, ErrClientTokenExpired
 			}
 			// 验证通过，更新最后活跃时间
 			s.data.ClientTokens[i].LastActiveAt = time.Now()
@@ -720,7 +724,7 @@ func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken,
 		}
 	}
 
-	return nil, fmt.Errorf("Token 无效")
+	return nil, ErrClientTokenInvalid
 }
 
 // TouchToken 更新 Token 的最后活跃时间和 IP

@@ -1,0 +1,12 @@
+services:
+  proxy:
+    image: caddy:2.10-alpine
+    ports:
+      - "${PROXY_PORT:-18080}:80"
+    environment:
+      UPSTREAM_HOST: "${UPSTREAM_HOST:-host.docker.internal}"
+      UPSTREAM_PORT: "${UPSTREAM_PORT:-18081}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

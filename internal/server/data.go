@@ -4,152 +4,151 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"log"
 	"net"
+	"net/http"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
 
-// handleDataConn 处理 Client 的数据通道连接。
-// 此时魔数字节 (0x4E) 已被 peek 消费，连接的下一个字节是 ClientID 长度。
-func (s *Server) handleDataConn(conn net.Conn) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("⚠️ 数据通道 panic: %v", r)
-			conn.Close()
-		}
-	}()
-
-	// 设置握手阶段超时（类比 P16 控制通道认证超时），
-	// 防止恶意客户端连接后不发送握手数据占用 goroutine
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-
-	// 1. 读取 ClientID 长度 (2 bytes, big-endian uint16)
-	var lenBuf [2]byte
-	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
-		log.Printf("❌ 数据通道: 读取 ClientID 长度失败: %v", err)
-		conn.Write([]byte{protocol.DataHandshakeFail})
-		conn.Close()
-		return
-	}
-	idLen := binary.BigEndian.Uint16(lenBuf[:])
-	if idLen == 0 || idLen > 1024 {
-		log.Printf("❌ 数据通道: ClientID 长度异常: %d", idLen)
-		conn.Write([]byte{protocol.DataHandshakeFail})
-		conn.Close()
+func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
+	if !websocket.IsWebSocketUpgrade(r) {
+		encodeJSON(w, http.StatusUpgradeRequired, map[string]any{
+			"error": "websocket upgrade required",
+		})
 		return
 	}
 
-	// 2. 读取 ClientID
-	idBuf := make([]byte, idLen)
-	if _, err := io.ReadFull(conn, idBuf); err != nil {
-		log.Printf("❌ 数据通道: 读取 ClientID 失败: %v", err)
-		conn.Write([]byte{protocol.DataHandshakeFail})
-		conn.Close()
+	conn, err := dataUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("❌ 数据通道 WebSocket 升级失败: %v", err)
 		return
 	}
-	clientID := string(idBuf)
+	defer conn.Close()
 
-	// 3. P3: 读取 DataToken 长度 (2 bytes, big-endian uint16)
-	var tokenLenBuf [2]byte
-	if _, err := io.ReadFull(conn, tokenLenBuf[:]); err != nil {
-		log.Printf("❌ 数据通道: 读取 DataToken 长度失败 [%s]: %v", clientID, err)
-		conn.Write([]byte{protocol.DataHandshakeFail})
-		conn.Close()
+	conn.SetReadLimit(wsDataMaxMessageSize)
+	conn.SetReadDeadline(time.Now().Add(s.dataHandshakeTimeout))
+
+	messageType, payload, err := conn.ReadMessage()
+	if err != nil {
+		log.Printf("❌ 数据通道读取握手失败: %v", err)
 		return
 	}
-	tokenLen := binary.BigEndian.Uint16(tokenLenBuf[:])
-	if tokenLen == 0 || tokenLen > 256 {
-		log.Printf("❌ 数据通道: DataToken 长度异常 [%s]: %d", clientID, tokenLen)
-		conn.Write([]byte{protocol.DataHandshakeFail})
-		conn.Close()
+	if messageType != websocket.BinaryMessage {
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "binary handshake required"),
+			time.Now().Add(time.Second),
+		)
 		return
 	}
 
-	// 4. P3: 读取 DataToken
-	tokenBuf := make([]byte, tokenLen)
-	if _, err := io.ReadFull(conn, tokenBuf); err != nil {
-		log.Printf("❌ 数据通道: 读取 DataToken 失败 [%s]: %v", clientID, err)
-		conn.Write([]byte{protocol.DataHandshakeFail})
-		conn.Close()
+	clientID, dataToken, err := protocol.DecodeDataHandshake(payload)
+	if err != nil {
+		log.Printf("❌ 数据通道握手解析失败: %v", err)
+		s.writeDataHandshakeResult(conn, protocol.DataHandshakeFail)
 		return
 	}
-	dataToken := string(tokenBuf)
 
-	// 5. 查找对应的 ClientConn
-	val, ok := s.clients.Load(clientID)
+	value, ok := s.clients.Load(clientID)
 	if !ok {
 		log.Printf("❌ 数据通道: Client [%s] 未注册", clientID)
-		conn.Write([]byte{protocol.DataHandshakeFail})
-		conn.Close()
+		s.writeDataHandshakeResult(conn, protocol.DataHandshakeFail)
 		return
 	}
-	client := val.(*ClientConn)
+	client := value.(*ClientConn)
+	generation := client.generation
 
-	// 6. P3: 校验 DataToken
 	if client.dataToken == "" || subtle.ConstantTimeCompare([]byte(client.dataToken), []byte(dataToken)) != 1 {
 		log.Printf("❌ 数据通道: DataToken 校验失败 [%s]", clientID)
-		conn.Write([]byte{protocol.DataHandshakeAuthFail})
-		conn.Close()
+		s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail)
+		return
+	}
+	if client.getState() == clientStateClosing {
+		log.Printf("❌ 数据通道: 会话已进入 closing [%s]", clientID)
+		s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail)
 		return
 	}
 
-	// 握手校验完成，清除 deadline（yamux 自行管理超时）
-	conn.SetDeadline(time.Time{})
-
-	// 7. 如果 Client 已经有数据通道，关闭旧的
-	client.dataMu.Lock()
-	if client.dataSession != nil && !client.dataSession.IsClosed() {
-		client.dataSession.Close()
-	}
-
-	// 8. 回复握手成功
-	if _, err := conn.Write([]byte{protocol.DataHandshakeOK}); err != nil {
-		log.Printf("❌ 数据通道: 回复握手失败 [%s]: %v", clientID, err)
-		client.dataMu.Unlock()
-		conn.Close()
+	if !s.isCurrentGeneration(clientID, generation) {
+		s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail)
 		return
 	}
 
-	// 9. 在该 TCP 连接上建立 yamux Server Session
-	session, err := mux.NewServerSession(conn, mux.DefaultConfig())
+	if err := s.writeDataHandshakeResult(conn, protocol.DataHandshakeOK); err != nil {
+		log.Printf("❌ 数据通道: 返回握手结果失败 [%s]: %v", clientID, err)
+		return
+	}
+
+	conn.SetReadDeadline(time.Time{})
+	conn.SetWriteDeadline(time.Time{})
+
+	wsConn := mux.NewWSConn(conn)
+	session, err := mux.NewServerSession(wsConn, mux.DefaultConfig())
 	if err != nil {
 		log.Printf("❌ 数据通道: 创建 yamux Session 失败 [%s]: %v", clientID, err)
-		client.dataMu.Unlock()
-		conn.Close()
+		s.invalidateLogicalSessionIfCurrent(clientID, generation, "data_session_start_failed")
 		return
 	}
+
+	if !s.isCurrentGeneration(clientID, generation) {
+		_ = session.Close()
+		return
+	}
+
+	client.dataMu.Lock()
+	oldSession := client.dataSession
 	client.dataSession = session
 	client.dataMu.Unlock()
 
-	log.Printf("🔗 数据通道已建立: Client [%s]", clientID)
+	if oldSession != nil && oldSession != session && !oldSession.IsClosed() {
+		_ = oldSession.Close()
+	}
 
-	// 10. 阻塞等待 session 关闭（保持连接存活）
+	promoted := s.promotePendingToLiveIfCurrent(client)
+	if promoted {
+		log.Printf("🔗 数据通道已建立: Client [%s] generation=%d", clientID, generation)
+		s.events.PublishJSON("client_online", map[string]any{
+			"client_id": client.ID,
+			"info":      client.Info,
+		})
+		go s.restoreTunnels(client)
+	}
+
 	<-session.CloseChan()
-	log.Printf("🔌 数据通道已断开: Client [%s]", clientID)
+
+	client.dataMu.Lock()
+	isCurrentSession := client.dataSession == session
+	if isCurrentSession {
+		client.dataSession = nil
+	}
+	client.dataMu.Unlock()
+
+	if !s.isCurrentGeneration(clientID, generation) || !isCurrentSession {
+		return
+	}
+
+	log.Printf("🔌 数据通道已断开: Client [%s] generation=%d", clientID, generation)
+	s.invalidateLogicalSessionIfCurrent(clientID, generation, "data_session_closed")
 }
 
-// DataHandshakeBytes 构造 Client 侧数据通道握手包
-// 格式: [1B 魔数] [2B ClientID长度 big-endian] [NB ClientID] [2B DataToken长度] [NB DataToken]
-func DataHandshakeBytes(clientID, dataToken string) []byte {
-	idBytes := []byte(clientID)
-	tokenBytes := []byte(dataToken)
-	buf := make([]byte, 1+2+len(idBytes)+2+len(tokenBytes))
-	buf[0] = protocol.DataChannelMagic
-	binary.BigEndian.PutUint16(buf[1:3], uint16(len(idBytes)))
-	copy(buf[3:], idBytes)
-	offset := 3 + len(idBytes)
-	binary.BigEndian.PutUint16(buf[offset:offset+2], uint16(len(tokenBytes)))
-	copy(buf[offset+2:], tokenBytes)
-	return buf
+func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) error {
+	conn.SetWriteDeadline(time.Now().Add(s.dataHandshakeAckTimeout))
+	defer conn.SetWriteDeadline(time.Time{})
+	return conn.WriteMessage(websocket.BinaryMessage, []byte{status})
 }
 
 // openStreamToClient 在 Client 的 yamux Session 上打开一个新 Stream，
 // 并写入 StreamHeader 告知 Client 这个 stream 属于哪条代理。
 func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.Conn, error) {
+	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
+		return nil, fmt.Errorf("Client [%s] 当前不在线", client.ID)
+	}
+
 	client.dataMu.RLock()
 	session := client.dataSession
 	client.dataMu.RUnlock()
