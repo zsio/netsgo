@@ -5,9 +5,49 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+type lockedRecorder struct {
+	rec *httptest.ResponseRecorder
+	mu  sync.Mutex
+}
+
+func newLockedRecorder() *lockedRecorder {
+	return &lockedRecorder{rec: httptest.NewRecorder()}
+}
+
+func (w *lockedRecorder) Header() http.Header {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.rec.Header()
+}
+
+func (w *lockedRecorder) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.rec.Write(b)
+}
+
+func (w *lockedRecorder) WriteHeader(statusCode int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.rec.WriteHeader(statusCode)
+}
+
+func (w *lockedRecorder) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.rec.Flush()
+}
+
+func (w *lockedRecorder) BodyString() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.rec.Body.String()
+}
 
 func TestEventBus_PubSub(t *testing.T) {
 	eb := NewEventBus()
@@ -93,7 +133,7 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 	req = req.WithContext(ctx)
 
 	// 为了拦截 writer，我们手写个 response recorder，支持 closeNotify (虽然 http.ResponseWriter 已经不再推荐，但在测试请求中断时，Cancel / Context Done 是主要方式)
-	w := httptest.NewRecorder()
+	w := newLockedRecorder()
 
 	// 启动 handleSSE 会阻塞，所以放进 goroutine
 	done := make(chan struct{})
@@ -111,22 +151,24 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 		t.Errorf("期望有一个订阅者，得到 %d", subCount)
 	}
 
-	if !strings.Contains(w.Body.String(), "event: ready\ndata: {}\n\n") {
-		t.Fatalf("期望 SSE 连接建立后立即发送 ready 事件，实际 body: %q", w.Body.String())
+	body := w.BodyString()
+	if !strings.Contains(body, "event: ready\ndata: {}\n\n") {
+		t.Fatalf("期望 SSE 连接建立后立即发送 ready 事件，实际 body: %q", body)
 	}
 
-	if !strings.Contains(w.Body.String(), "event: snapshot\n") ||
-		!strings.Contains(w.Body.String(), `"clients":`) ||
-		!strings.Contains(w.Body.String(), `"server_status":`) {
-		t.Fatalf("期望 SSE 连接建立后立即发送完整快照，实际 body: %q", w.Body.String())
+	if !strings.Contains(body, "event: snapshot\n") ||
+		!strings.Contains(body, `"clients":`) ||
+		!strings.Contains(body, `"server_status":`) {
+		t.Fatalf("期望 SSE 连接建立后立即发送完整快照，实际 body: %q", body)
 	}
 
 	// 发送事件
 	s.events.PublishJSON("foo", "bar")
 	time.Sleep(50 * time.Millisecond)
 
-	if !strings.Contains(w.Body.String(), "event: foo\ndata: \"bar\"\n\n") {
-		t.Fatalf("期望收到业务事件，实际 body: %q", w.Body.String())
+	body = w.BodyString()
+	if !strings.Contains(body, "event: foo\ndata: \"bar\"\n\n") {
+		t.Fatalf("期望收到业务事件，实际 body: %q", body)
 	}
 
 	// 模拟客户端断开连接 (Cancel context)

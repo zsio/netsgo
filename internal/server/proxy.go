@@ -154,12 +154,17 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	tunnel.Config.RemotePort = actualPort
 	tunnel.Config.Status = protocol.ProxyStatusActive
 	tunnel.Config.Error = ""
+	listener := tunnel.Listener
+	done := tunnel.done
+	proxyName := tunnel.Config.Name
+	localIP := tunnel.Config.LocalIP
+	localPort := tunnel.Config.LocalPort
 	client.proxyMu.Unlock()
 
 	log.Printf("🚇 代理隧道已创建: %s [:%d → %s:%d] Client [%s]",
-		tunnel.Config.Name, actualPort, tunnel.Config.LocalIP, tunnel.Config.LocalPort, client.ID)
+		proxyName, actualPort, localIP, localPort, client.ID)
 
-	go s.proxyAcceptLoop(client, tunnel)
+	go s.proxyAcceptLoop(client, proxyName, listener, done)
 	return nil
 }
 
@@ -230,23 +235,24 @@ func (s *Server) StartProxy(client *ClientConn, req protocol.ProxyNewRequest) er
 	return nil
 }
 
-// proxyAcceptLoop 持续接受外部连接并通过 yamux 转发
-func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel) {
-	defer tunnel.Listener.Close()
+// proxyAcceptLoop 持续接受外部连接并通过 yamux 转发。
+// 它只持有本次激活对应的 listener/done 快照，避免旧 loop 误操作新一代 runtime。
+func (s *Server) proxyAcceptLoop(client *ClientConn, proxyName string, listener net.Listener, done <-chan struct{}) {
+	defer listener.Close()
 
 	for {
-		extConn, err := tunnel.Listener.Accept()
+		extConn, err := listener.Accept()
 		if err != nil {
 			select {
-			case <-tunnel.done:
+			case <-done:
 				return // 正常关闭
 			default:
-				log.Printf("⚠️ 代理 [%s] Accept 失败: %v", tunnel.Config.Name, err)
+				log.Printf("⚠️ 代理 [%s] Accept 失败: %v", proxyName, err)
 				return
 			}
 		}
 
-		go s.handleProxyConn(client, tunnel, extConn)
+		go s.handleProxyConn(client, proxyName, extConn)
 	}
 }
 
@@ -254,12 +260,12 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel) {
 // 1. 在 yamux Session 上 OpenStream
 // 2. 向 Stream 写入 StreamHeader（proxyName）
 // 3. Relay(stream, extConn) 双向搬运
-func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, extConn net.Conn) {
+func (s *Server) handleProxyConn(client *ClientConn, proxyName string, extConn net.Conn) {
 	defer extConn.Close()
 
-	stream, err := s.openStreamToClient(client, tunnel.Config.Name)
+	stream, err := s.openStreamToClient(client, proxyName)
 	if err != nil {
-		log.Printf("⚠️ 代理 [%s] 打开 Stream 失败: %v", tunnel.Config.Name, err)
+		log.Printf("⚠️ 代理 [%s] 打开 Stream 失败: %v", proxyName, err)
 		return
 	}
 

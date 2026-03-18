@@ -135,26 +135,35 @@ func connectAndAuth(t *testing.T, ts *httptest.Server, hostname string) (*websoc
 
 func connectDataWSForClient(t *testing.T, ts *httptest.Server, authResp protocol.AuthResponse) *websocket.Conn {
 	t.Helper()
+	conn, err := dialDataWSForClient(ts, authResp)
+	if err != nil {
+		t.Fatalf("建立数据通道失败: %v", err)
+	}
+	return conn
+}
+
+func dialDataWSForClient(ts *httptest.Server, authResp protocol.AuthResponse) (*websocket.Conn, error) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/data"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("数据通道 WebSocket 连接失败: %v", err)
+		return nil, fmt.Errorf("数据通道 WebSocket 连接失败: %w", err)
 	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(authResp.ClientID, authResp.DataToken)); err != nil {
 		conn.Close()
-		t.Fatalf("发送数据通道握手失败: %v", err)
+		return nil, fmt.Errorf("发送数据通道握手失败: %w", err)
 	}
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	messageType, payload, err := conn.ReadMessage()
 	if err != nil {
 		conn.Close()
-		t.Fatalf("读取数据通道握手响应失败: %v", err)
+		return nil, fmt.Errorf("读取数据通道握手响应失败: %w", err)
 	}
 	if messageType != websocket.BinaryMessage || len(payload) != 1 || payload[0] != protocol.DataHandshakeOK {
 		conn.Close()
-		t.Fatalf("数据通道握手未成功: type=%d payload=%v", messageType, payload)
+		return nil, fmt.Errorf("数据通道握手未成功: type=%d payload=%v", messageType, payload)
 	}
-	return conn
+	conn.SetReadDeadline(time.Time{})
+	return conn, nil
 }
 
 func connectAndAuthWithInstallID(t *testing.T, ts *httptest.Server, hostname, installID string) (*websocket.Conn, protocol.AuthResponse) {
@@ -168,6 +177,20 @@ func connectAndAuthWithInstallID(t *testing.T, ts *httptest.Server, hostname, in
 	dataConn := connectDataWSForClient(t, ts, authResp)
 	t.Cleanup(func() { dataConn.Close() })
 	return conn, authResp
+}
+
+func reserveTCPPort(t *testing.T) int {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("预留端口失败: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("关闭预留端口 listener 失败: %v", err)
+	}
+	return port
 }
 
 // getAPIJSON 发起 HTTP GET 请求并解析 JSON
@@ -1180,7 +1203,7 @@ func TestLifecycle_Full(t *testing.T) {
 }
 
 func TestMultipleClients_Concurrent(t *testing.T) {
-	_, _, ts, cleanup := setupWSTest(t)
+	_, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
 
 	var wg sync.WaitGroup
@@ -1208,7 +1231,7 @@ func TestMultipleClients_Concurrent(t *testing.T) {
 			conn.WriteJSON(msg)
 
 			var resp protocol.Message
-			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			if err := conn.ReadJSON(&resp); err != nil {
 				errors <- err
 				return
@@ -1221,9 +1244,23 @@ func TestMultipleClients_Concurrent(t *testing.T) {
 				return
 			}
 
+			dataConn, err := dialDataWSForClient(ts, authResp)
+			if err != nil {
+				errors <- err
+				return
+			}
+			defer dataConn.Close()
+
 			ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
-			conn.WriteJSON(ping)
-			conn.ReadJSON(&resp)
+			if err := conn.WriteJSON(ping); err != nil {
+				errors <- err
+				return
+			}
+			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			if err := conn.ReadJSON(&resp); err != nil {
+				errors <- err
+				return
+			}
 		}(i)
 	}
 
@@ -1360,7 +1397,9 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	cPipe, sPipe := net.Pipe()
 	defer cPipe.Close()
 	defer sPipe.Close()
+	client.dataMu.Lock()
 	client.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
+	client.dataMu.Unlock()
 
 	// 测试 MsgTypeProxyNew
 	req := protocol.ProxyNewRequest{
@@ -2124,17 +2163,23 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	// 欺骗有数据通道
 	cPipe, sPipe := net.Pipe()
 	sess, _ := mux.NewServerSession(sPipe, mux.DefaultConfig())
+	client.dataMu.Lock()
 	client.dataSession = sess
+	client.dataMu.Unlock()
 	defer func() {
 		cPipe.Close()
 		sPipe.Close()
 	}()
 
 	// 欺骗有 WebSocket 连接
+	connReady := make(chan struct{})
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err == nil {
+			client.mu.Lock()
 			client.conn = conn
+			client.mu.Unlock()
+			close(connReady)
 		}
 	}))
 	defer wsServer.Close()
@@ -2142,8 +2187,11 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	clientConn, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
 	defer clientConn.Close()
 
-	// 等待 client.conn 被赋值
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-connReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待测试 WebSocket 连接就绪超时")
+	}
 
 	// 测试恢复逻辑
 	s.restoreTunnels(client)
@@ -2322,7 +2370,7 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 func TestServer_GracefulShutdown(t *testing.T) {
 	// 使用真实的 Start() 启动服务器
 	tmpDir := t.TempDir()
-	s := New(0)
+	s := New(reserveTCPPort(t))
 	s.StorePath = filepath.Join(tmpDir, "tunnels.json")
 
 	// 预创建 AdminStore
@@ -2344,10 +2392,6 @@ func TestServer_GracefulShutdown(t *testing.T) {
 		serverErr <- s.Start()
 	}()
 	time.Sleep(200 * time.Millisecond)
-
-	if s.Port == 0 {
-		t.Fatal("Server 未成功启动（Port 仍为 0）")
-	}
 
 	// 连接一个 Client
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws/control", s.Port)

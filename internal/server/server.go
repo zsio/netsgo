@@ -281,12 +281,6 @@ func (s *Server) Start() error {
 		log.Printf("📦 前端资源已嵌入到二进制中")
 	}
 
-	// 启动持久化事件循环
-	go s.persistEventsLoop()
-
-	// 启动服务端状态后台采集
-	go s.serverStatusLoop()
-
 	// 初始化隧道持久化存储
 	if err := s.initStore(); err != nil {
 		return fmt.Errorf("初始化隧道存储失败: %w", err)
@@ -329,7 +323,9 @@ func (s *Server) Start() error {
 	s.listener = ln
 
 	addr := ln.Addr().(*net.TCPAddr)
-	s.Port = addr.Port // 更新为实际端口（当 Port=0 时有用）
+	if s.Port == 0 {
+		s.Port = addr.Port // 更新为实际端口（当 Port=0 时有用）
+	}
 
 	var serveLn net.Listener = ln
 	if s.TLS != nil && s.TLS.IsEnabled() {
@@ -375,6 +371,10 @@ func (s *Server) Start() error {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+
+	// 后台循环依赖 store/adminStore/listen port 等运行时状态，放到启动末尾统一拉起。
+	go s.persistEventsLoop()
+	go s.serverStatusLoop()
 
 	return s.httpServer.Serve(serveLn)
 }
@@ -754,9 +754,16 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 
 // controlLoop 持续处理控制通道上的消息
 func (s *Server) controlLoop(client *ClientConn) {
+	client.mu.Lock()
+	conn := client.conn
+	client.mu.Unlock()
+	if conn == nil {
+		return
+	}
+
 	for {
 		var msg protocol.Message
-		if err := client.conn.ReadJSON(&msg); err != nil {
+		if err := conn.ReadJSON(&msg); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				log.Printf("⚠️ Client [%s] 连接异常: %v", client.ID, err)
 			}
@@ -771,7 +778,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 			// 收到心跳，回复 Pong
 			pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
 			client.mu.Lock()
-			client.conn.WriteJSON(pong)
+			_ = conn.WriteJSON(pong)
 			client.mu.Unlock()
 
 		case protocol.MsgTypeProbeReport:
@@ -851,7 +858,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 			}
 
 			client.mu.Lock()
-			client.conn.WriteJSON(resp)
+			_ = conn.WriteJSON(resp)
 			client.mu.Unlock()
 
 		case protocol.MsgTypeProxyNewResp:

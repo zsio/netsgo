@@ -333,10 +333,12 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 	defer clientPipe.Close()
 	defer serverPipe.Close()
 
+	serverReady := make(chan error, 1)
 	go func() {
 		cc.dataMu.Lock()
 		cc.dataSession, _ = mux.NewServerSession(serverPipe, mux.DefaultConfig())
 		cc.dataMu.Unlock()
+		serverReady <- nil
 	}()
 
 	clientSession, err := mux.NewClientSession(clientPipe, mux.DefaultConfig())
@@ -345,12 +347,23 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 	}
 	defer clientSession.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case err := <-serverReady:
+		if err != nil {
+			t.Fatalf("创建服务端 Yamux Session 失败: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待服务端 Yamux Session 就绪超时")
+	}
 
-	var stream net.Conn
-	var openErr error
+	type openResult struct {
+		stream net.Conn
+		err    error
+	}
+	resultCh := make(chan openResult, 1)
 	go func() {
-		stream, openErr = s.openStreamToClient(cc, "test-tunnel")
+		stream, err := s.openStreamToClient(cc, "test-tunnel")
+		resultCh <- openResult{stream: stream, err: err}
 	}()
 
 	clientStream, err := clientSession.Accept()
@@ -372,14 +385,18 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 		t.Fatalf("proxyName 错误: %q", string(nameBuf))
 	}
 
-	time.Sleep(50 * time.Millisecond)
-	if openErr != nil {
-		t.Fatalf("openStreamToClient 报错: %v", openErr)
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("openStreamToClient 报错: %v", result.err)
+		}
+		if result.stream == nil {
+			t.Fatal("openStreamToClient 应返回有效 conn")
+		}
+		_ = result.stream.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待 openStreamToClient 返回超时")
 	}
-	if stream == nil {
-		t.Fatal("openStreamToClient 应返回有效 conn")
-	}
-	_ = stream.Close()
 }
 
 func TestOpenStreamToClient_NoDataSession(t *testing.T) {
