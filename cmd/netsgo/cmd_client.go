@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"netsgo/internal/client"
+	"netsgo/pkg/logger"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -45,7 +46,10 @@ var clientCmd = &cobra.Command{
   # 使用 ws:// 格式连接（向后兼容）
   netsgo client --server ws://1.2.3.4:8080 --key mykey`,
 	Run: func(cmd *cobra.Command, args []string) {
-		log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+		if err := logger.Init("client"); err != nil {
+			log.Fatalf("❌ 初始化日志失败: %v", err)
+		}
+		defer logger.Close()
 
 		serverAddr := viper.GetString("server")
 		key := viper.GetString("key")

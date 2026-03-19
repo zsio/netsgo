@@ -2,9 +2,8 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
+	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -68,7 +67,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	ip := s.clientIP(r)
 	if s.setupLimiter != nil {
 		if allowed, retryAfter := s.setupLimiter.Allow(ip); !allowed {
-			s.adminStore.AddSystemLog("WARN", "初始化接口被限速: IP="+ip, "security")
+			slog.Warn("初始化接口被限速", "ip", ip, "module", "security")
 			writeRateLimitResponse(w, retryAfter)
 			return
 		}
@@ -102,7 +101,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 			if s.setupLimiter != nil {
 				s.setupLimiter.RecordFailure(ip)
 			}
-			s.adminStore.AddSystemLog("WARN", "Setup Token 验证失败: IP="+ip, "security")
+			slog.Warn("Setup Token 验证失败", "ip", ip, "module", "security")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			json.NewEncoder(w).Encode(map[string]any{
@@ -130,7 +129,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.adminStore.AddSystemLog("INFO", "服务初始化完成，管理员: "+req.Admin.Username, "setup")
+	slog.Info("服务初始化完成", "admin", req.Admin.Username, "module", "setup")
 	s.setupToken = ""
 
 	w.Header().Set("Content-Type", "application/json")
@@ -154,7 +153,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	if s.loginLimiter != nil {
 		if allowed, retryAfter := s.loginLimiter.Allow(ip); !allowed {
 			if s.adminStore != nil {
-				s.adminStore.AddSystemLog("WARN", "登录接口被限速: IP="+ip, "security")
+				slog.Warn("登录接口被限速", "ip", ip, "module", "security")
 			}
 			writeRateLimitResponse(w, retryAfter)
 			return
@@ -195,7 +194,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.adminStore.UpdateAdminLoginTime(user.ID)
-	s.adminStore.AddSystemLog("INFO", "Admin user logged in: "+user.Username, "auth")
+	slog.Info("Admin user logged in", "user", user.Username, "module", "auth")
 	if s.loginLimiter != nil {
 		s.loginLimiter.ResetFailures(ip)
 	}
@@ -226,7 +225,7 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.adminStore.DeleteSession(info.SessionID)
-	s.adminStore.AddSystemLog("INFO", "Admin user logged out: "+info.Username, "auth")
+	slog.Info("Admin user logged out", "user", info.Username, "module", "auth")
 
 	s.clearSessionCookie(w, r)
 
@@ -287,12 +286,12 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 		// 设置 MaxUses
 		if req.MaxUses > 0 {
 			if err := s.adminStore.SetAPIKeyMaxUses(key.ID, req.MaxUses); err != nil {
-				s.adminStore.AddSystemLog("WARN", "Failed to set max_uses for key: "+key.ID, "admin")
+				slog.Warn("Failed to set max_uses for key", "key_id", key.ID, "module", "admin")
 			}
 			key.MaxUses = req.MaxUses
 		}
 
-		s.adminStore.AddSystemLog("INFO", "Created new API Key: "+req.Name, "admin")
+		slog.Info("Created new API Key", "name", req.Name, "module", "admin")
 
 		// 获取 server_addr
 		serverAddr := ""
@@ -345,7 +344,7 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 		if active {
 			actionText = "enabled"
 		}
-		s.adminStore.AddSystemLog("INFO", "API Key "+actionText+": "+keyID, "admin")
+		slog.Info("API Key 状态变更", "action", actionText, "key_id", keyID, "module", "admin")
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"success": true})
@@ -356,7 +355,7 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		s.adminStore.AddSystemLog("INFO", "API Key deleted: "+keyID, "admin")
+		slog.Info("API Key deleted", "key_id", keyID, "module", "admin")
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
@@ -426,14 +425,13 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		if info != nil {
 			adminName = info.Username
 		}
-		s.adminStore.AddSystemLog("INFO", "Server config updated by "+adminName, "admin")
+		slog.Info("Server config updated", "admin", adminName, "module", "admin")
 
 		// 将受影响的运行时隧道标记为 error
 		if len(affected) > 0 {
 			s.markTunnelsPortNotAllowed(affected)
-			s.adminStore.AddSystemLog("WARN",
-				fmt.Sprintf("端口白名单变更导致 %d 条隧道被标记为异常", len(affected)),
-				"admin")
+			slog.Warn("端口白名单变更导致隧道被标记为异常",
+				"affected_count", len(affected), "module", "admin")
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -478,7 +476,7 @@ func (s *Server) handleAPIAdminPolicies(w http.ResponseWriter, r *http.Request) 
 		if info != nil {
 			adminName = info.Username
 		}
-		s.adminStore.AddSystemLog("INFO", "Tunnel policy updated by "+adminName, "admin")
+		slog.Info("Tunnel policy updated", "admin", adminName, "module", "admin")
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -487,56 +485,4 @@ func (s *Server) handleAPIAdminPolicies(w http.ResponseWriter, r *http.Request) 
 	}
 
 	http.Error(w, `{"error":"not allowed"}`, http.StatusMethodNotAllowed)
-}
-
-// ========= Action Logs and Events =========
-
-func (s *Server) handleAPIAdminLogs(w http.ResponseWriter, r *http.Request) {
-	if s.adminStore == nil {
-		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
-		return
-	}
-
-	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
-
-	limitStr := r.URL.Query().Get("limit")
-	limit := 100
-	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-		limit = l
-	}
-
-	logs := s.adminStore.GetSystemLogs(limit)
-	w.Header().Set("Content-Type", "application/json")
-	if logs == nil {
-		logs = []SystemLogEntry{}
-	}
-	json.NewEncoder(w).Encode(logs)
-}
-
-func (s *Server) handleAPIAdminEvents(w http.ResponseWriter, r *http.Request) {
-	if s.adminStore == nil {
-		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
-		return
-	}
-
-	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
-
-	limitStr := r.URL.Query().Get("limit")
-	limit := 100
-	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-		limit = l
-	}
-
-	events := s.adminStore.GetEvents(limit)
-	w.Header().Set("Content-Type", "application/json")
-	if events == nil {
-		events = []EventRecord{}
-	}
-	json.NewEncoder(w).Encode(events)
 }

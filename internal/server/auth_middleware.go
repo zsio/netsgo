@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -111,9 +112,8 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		// 同一浏览器 session 内 UA 不会改变，变化说明 token 可能被盗用
 		if r.UserAgent() != session.UserAgent {
-			s.adminStore.AddSystemLog("WARN",
-				fmt.Sprintf("Session UA 不匹配，疑似 Token 盗用: session_id=%s, user=%s",
-					session.ID, session.Username), "security")
+			slog.Warn("Session UA 不匹配，疑似 Token 盗用",
+				"session_id", session.ID, "user", session.Username, "module", "security")
 			http.Error(w, `{"error":"session environment mismatch"}`, http.StatusUnauthorized)
 			return
 		}

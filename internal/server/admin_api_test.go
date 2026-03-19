@@ -403,45 +403,6 @@ func TestAPI_TunnelPolicies_GetAndUpdate(t *testing.T) {
 	}
 }
 
-func TestAPI_AdminLogs_And_Events(t *testing.T) {
-	s, cleanup := setupTestServerWithDB(t, true)
-	defer cleanup()
-
-	// 产生一些日志和事件
-	s.adminStore.AddSystemLog("INFO", "system started", "test")
-	s.adminStore.AddSystemLog("ERROR", "test error", "test")
-	s.adminStore.AddEvent("user-test", "client connected")
-
-	// 测试获取日志
-	req := httptest.NewRequest(http.MethodGet, "/api/admin/logs?limit=10", nil)
-	w := httptest.NewRecorder()
-	s.handleAPIAdminLogs(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("获取日志期望 200，得到 %d", w.Code)
-	}
-
-	var logs []map[string]any
-	json.NewDecoder(w.Body).Decode(&logs)
-	if len(logs) < 2 {
-		t.Errorf("期望至少 2 条日志，得到 %d", len(logs))
-	}
-
-	// 测试获取事件
-	req2 := httptest.NewRequest(http.MethodGet, "/api/admin/events?limit=10", nil)
-	w2 := httptest.NewRecorder()
-	s.handleAPIAdminEvents(w2, req2)
-
-	if w2.Code != http.StatusOK {
-		t.Fatalf("获取事件期望 200，得到 %d", w2.Code)
-	}
-
-	var events []map[string]any
-	json.NewDecoder(w2.Body).Decode(&events)
-	if len(events) != 1 {
-		t.Errorf("期望 1 条事件，得到 %d", len(events))
-	}
-}
 
 func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)

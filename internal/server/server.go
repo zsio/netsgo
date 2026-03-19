@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -373,7 +374,6 @@ func (s *Server) Start() error {
 	}
 
 	// 后台循环依赖 store/adminStore/listen port 等运行时状态，放到启动末尾统一拉起。
-	go s.persistEventsLoop()
 	go s.serverStatusLoop()
 
 	return s.httpServer.Serve(serveLn)
@@ -460,8 +460,6 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/admin/keys/{id}", s.RequireAuth(s.handleAPIAdminKeyItem))
 	mux.HandleFunc("GET /api/admin/policies", s.RequireAuth(s.handleAPIAdminPolicies))
 	mux.HandleFunc("PUT /api/admin/policies", s.RequireAuth(s.handleAPIAdminPolicies))
-	mux.HandleFunc("GET /api/admin/logs", s.RequireAuth(s.handleAPIAdminLogs))
-	mux.HandleFunc("GET /api/admin/events", s.RequireAuth(s.handleAPIAdminEvents))
 	mux.HandleFunc("GET /api/admin/config", s.RequireAuth(s.handleAPIAdminConfig))
 	mux.HandleFunc("PUT /api/admin/config", s.RequireAuth(s.handleAPIAdminConfig))
 
@@ -577,9 +575,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 	if s.clientLimiter != nil {
 		if allowed, retryAfter := s.clientLimiter.Allow(ip); !allowed {
 			log.Printf("🚫 Client 认证被限速 [%s]: 需等待 %v", remoteAddr, retryAfter)
-			if s.adminStore != nil {
-				s.adminStore.AddSystemLog("WARN", "Client 认证被限速: IP="+ip, "security")
-			}
+			slog.Warn("Client 认证被限速", "ip", ip, "module", "security")
 			_ = writeAuthResult(conn, protocol.AuthResponse{
 				Success:   false,
 				Message:   "认证失败",
@@ -622,7 +618,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 	if s.adminStore != nil {
 		if !s.adminStore.IsInitialized() {
 			log.Printf("⚠️ 服务未初始化，拒绝 Client 连接 [%s]", remoteAddr)
-			s.adminStore.AddSystemLog("WARN", "服务未初始化时拒绝 Client 连接: IP="+ip, "security")
+			slog.Warn("服务未初始化时拒绝 Client 连接", "ip", ip, "module", "security")
 			if s.clientLimiter != nil {
 				s.clientLimiter.RecordFailure(ip)
 			}
@@ -903,21 +899,6 @@ func writeAuthResult(conn *websocket.Conn, authResp protocol.AuthResponse) error
 		return err
 	}
 	return conn.WriteJSON(message)
-}
-
-// persistEventsLoop 订阅事件总线并将关键事件持久化到 AdminStore
-func (s *Server) persistEventsLoop() {
-	ch := s.events.Subscribe()
-	defer s.events.Unsubscribe(ch)
-
-	for event := range ch {
-		if s.adminStore != nil {
-			// 过滤掉探针数据，避免日志过多
-			if event.Type != "stats_update" {
-				s.adminStore.AddEvent(event.Type, event.Data)
-			}
-		}
-	}
 }
 
 // tokenCleanupLoop 定期清理过期 Token（每 6 小时执行一次）

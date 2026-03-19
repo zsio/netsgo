@@ -85,20 +85,3 @@ type ClientToken struct {
 	LastIP       string    `json:"last_ip"`        // 最后连接 IP
 	IsRevoked    bool      `json:"is_revoked"`     // 是否已被吊销
 }
-
-// EventRecord 审计/系统事件记录（持久化）
-type EventRecord struct {
-	ID        string    `json:"id"`
-	Timestamp time.Time `json:"timestamp"`
-	Type      string    `json:"type"`
-	Data      string    `json:"data"` // JSON 字符串
-}
-
-// SystemLogEntry 系统日志记录（内存 Ring Buffer）
-type SystemLogEntry struct {
-	ID        string    `json:"id"`
-	Timestamp time.Time `json:"timestamp"`
-	Level     string    `json:"level"` // INFO, WARN, ERROR
-	Message   string    `json:"message"`
-	Source    string    `json:"source"`
-}

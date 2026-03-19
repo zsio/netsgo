@@ -166,20 +166,6 @@ export interface TunnelPolicy {
   client_whitelist: string[];
 }
 
-export interface SystemLogEntry {
-  id: string;
-  timestamp: string;
-  level: string;
-  message: string;
-  source: string;
-}
-
-export interface EventRecord {
-  id: string;
-  timestamp: string;
-  type: string;
-  data: string;
-}
 
 export interface LoginResponse {
   token: string;

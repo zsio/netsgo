@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"netsgo/internal/server"
+	"netsgo/pkg/logger"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -39,7 +40,10 @@ TLS 模式:
   # 反向代理模式（信任特定代理 IP）
   netsgo server --tls-mode off --trusted-proxies 127.0.0.1/32,10.0.0.0/8`,
 	Run: func(cmd *cobra.Command, args []string) {
-		log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+		if err := logger.Init("server"); err != nil {
+			log.Fatalf("❌ 初始化日志失败: %v", err)
+		}
+		defer logger.Close()
 
 		port := viper.GetInt("port")
 		log.Printf("🚀 NetsGo Server 启动中 (端口: %d)...", port)

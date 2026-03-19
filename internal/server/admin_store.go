@@ -28,7 +28,6 @@ type AdminData struct {
 	Clients      []RegisteredClient `json:"clients"`
 	ClientTokens []ClientToken      `json:"client_tokens"` // 客户端连接密钥
 	TunnelPolicy TunnelPolicy       `json:"tunnel_policy"` // 旧版策略，保留向后兼容
-	Events       []EventRecord      `json:"events"`
 	ServerConfig ServerConfig       `json:"server_config"` // 服务配置（初始化时设置）
 	Initialized  bool               `json:"initialized"`   // 是否已完成初始化
 	JWTSecret    string             `json:"jwt_secret"`    // 随机生成的 JWT 签名密钥
@@ -40,17 +39,8 @@ type AdminStore struct {
 	path string
 	mu   sync.RWMutex
 	data AdminData
-
-	// 日志环形缓冲区 (内存)
-	logMu   sync.RWMutex
-	logs    []SystemLogEntry
-	logHead int
-	logTail int
-	logCnt  int
 }
 
-const maxLogs = 1000
-const maxEvents = 500
 const tokenExpiryDuration = 7 * 24 * time.Hour // Token 不活跃过期时间
 const sessionDefaultTTL = 24 * time.Hour
 
@@ -73,10 +63,8 @@ func NewAdminStore(path string) (*AdminStore, error) {
 			AdminUsers:   []AdminUser{},
 			Clients:      []RegisteredClient{},
 			ClientTokens: []ClientToken{},
-			Events:       []EventRecord{},
 			Sessions:     []AdminSession{},
 		},
-		logs: make([]SystemLogEntry, maxLogs),
 	}
 
 	dir := filepath.Dir(path)
@@ -89,7 +77,7 @@ func NewAdminStore(path string) (*AdminStore, error) {
 		if err := store.load(); err != nil {
 			log.Printf("⚠️ 加载 admin 配置失败，将使用空配置: %v", err)
 			store.data = AdminData{
-				APIKeys: []APIKey{}, AdminUsers: []AdminUser{}, Clients: []RegisteredClient{}, ClientTokens: []ClientToken{}, Events: []EventRecord{}, Sessions: []AdminSession{},
+				APIKeys: []APIKey{}, AdminUsers: []AdminUser{}, Clients: []RegisteredClient{}, ClientTokens: []ClientToken{}, Sessions: []AdminSession{},
 			}
 		}
 	}
@@ -924,81 +912,6 @@ func (s *AdminStore) UpdateTunnelPolicy(policy TunnelPolicy) error {
 	defer s.mu.Unlock()
 	s.data.TunnelPolicy = policy
 	return s.save()
-}
-
-// ========== System Logs ==========
-
-func (s *AdminStore) AddSystemLog(level, message, source string) {
-	s.logMu.Lock()
-	defer s.logMu.Unlock()
-
-	entry := SystemLogEntry{
-		ID:        generateUUID(),
-		Timestamp: time.Now(),
-		Level:     level,
-		Message:   message,
-		Source:    source,
-	}
-
-	s.logs[s.logTail] = entry
-	s.logTail = (s.logTail + 1) % maxLogs
-	if s.logCnt < maxLogs {
-		s.logCnt++
-	} else {
-		s.logHead = (s.logHead + 1) % maxLogs
-	}
-}
-
-func (s *AdminStore) GetSystemLogs(limit int) []SystemLogEntry {
-	s.logMu.RLock()
-	defer s.logMu.RUnlock()
-
-	count := s.logCnt
-	if limit > 0 && limit < count {
-		count = limit
-	}
-
-	result := make([]SystemLogEntry, count)
-	// 从最新的往前取
-	for i := 0; i < count; i++ {
-		idx := (s.logTail - 1 - i + maxLogs) % maxLogs
-		result[i] = s.logs[idx]
-	}
-	return result
-}
-
-// ========== Events ==========
-
-func (s *AdminStore) AddEvent(eventType, data string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	event := EventRecord{
-		ID:        generateUUID(),
-		Timestamp: time.Now(),
-		Type:      eventType,
-		Data:      data,
-	}
-
-	s.data.Events = append([]EventRecord{event}, s.data.Events...) // 插入头部
-	if len(s.data.Events) > maxEvents {
-		s.data.Events = s.data.Events[:maxEvents]
-	}
-
-	s.save()
-}
-
-func (s *AdminStore) GetEvents(limit int) []EventRecord {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	count := len(s.data.Events)
-	if limit > 0 && limit < count {
-		count = limit
-	}
-	result := make([]EventRecord, count)
-	copy(result, s.data.Events[:count])
-	return result
 }
 
 func normalizeKeyPermissions(permissions []string) ([]string, error) {
