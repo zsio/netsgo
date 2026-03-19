@@ -69,6 +69,13 @@ make dev-client   # 终端 2 — 客户端
 make dev-web      # 终端 3 — 前端热更新 (Vite)
 ```
 
+如果后端开发地址不是默认的 `http://127.0.0.1:8080`，启动前端前可先设置代理目标：
+
+```bash
+cd web
+VITE_DEV_PROXY_TARGET=http://127.0.0.1:9090 bun run dev
+```
+
 ## 架构
 
 ### 系统架构
@@ -144,7 +151,7 @@ make dev-web      # 终端 3 — 前端热更新 (Vite)
 
 ```text
 netsgo/
-├── cmd/netsgo/              # CLI 入口 (server / client / benchmark)
+├── cmd/netsgo/              # CLI 入口 (server / client / benchmark / docs)
 ├── pkg/
 │   ├── protocol/            # 双端共享协议 (消息类型、探针结构体)
 │   ├── mux/                 # yamux 流复用 + UDP 帧封装
@@ -155,8 +162,11 @@ netsgo/
 ├── web/                     # 前端 (React + TypeScript + Vite)
 │   └── src/
 │       ├── routes/          # 页面路由
-│       ├── components/      # UI 组件 (shadcn/ui + 业务)
+│       ├── components/
+│       │   ├── custom/      # 业务组件
+│       │   └── ui/          # shadcn/ui 源码层
 │       ├── hooks/           # 自定义 Hooks
+│       ├── lib/             # API、路由、工具函数
 │       ├── stores/          # Zustand 状态管理
 │       └── types/           # 类型定义
 ├── Makefile
@@ -194,9 +204,11 @@ netsgo/
 
 ## 验证入口
 
+推荐优先使用项目内置入口：
+
 ```bash
-go build ./...
-go test ./...
+make build        # 先构建 web/dist，再构建 Go 二进制
+make test         # 运行 go test ./...
 go vet ./...
 
 make bench-data
@@ -206,6 +218,8 @@ make test-compose-stack-nginx
 make test-compose-stack-caddy
 make soak-data STACK_PROXY=nginx
 ```
+
+如果直接执行 `go build ./...` 或 `go test ./...`，请先确保已经有 `web/dist`（例如先运行一次 `make build-web`），否则非 dev 模式下 `go:embed` 可能因找不到前端构建产物而失败。
 
 `test/e2e/` 下的 nginx / Caddy 验证会把 `/ws/control` 和 `/ws/data` 一起经过反向代理，覆盖首连、空闲存活和代理重启后的自动恢复。
 

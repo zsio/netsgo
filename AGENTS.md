@@ -121,3 +121,9 @@
 - Hash Router 意味着前端路由与传统 history 模式不同；不要未经确认改成 path-based 假设。
 - 初始化流程存在 setup 阶段；不要假设系统一启动就已经有管理员账号和完整配置。
 - 旧文档可提供背景，但任何 API、字段、流程最终都必须回到代码和测试确认。
+
+## gstack
+
+- 所有网页浏览一律优先使用 gstack 的 `/browse` skill。
+- 不要使用任何 `mcp__claude-in-chrome__*` 工具。
+- 可用 gstack skills：`/office-hours`、`/plan-ceo-review`、`/plan-eng-review`、`/plan-design-review`、`/design-consultation`、`/review`、`/ship`、`/browse`、`/qa`、`/qa-only`、`/design-review`、`/setup-browser-cookies`、`/retro`、`/debug`、`/document-release`。
