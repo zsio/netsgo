@@ -35,16 +35,14 @@ func TestInit_CreatesSecureDirAndFile(t *testing.T) {
 	}
 	t.Cleanup(Close)
 
-	if _, err := os.Stat(filepath.Join(dir, currentLogName("server"))); err != nil {
-		t.Fatalf("日志文件未创建: %v", err)
-	}
-
-	assertPermissions(t, dir, filepath.Join(dir, currentLogName("server")))
+	logFile := findSingleLogFile(t, dir, "server")
+	assertPermissions(t, dir, logFile)
 }
 
 func TestInit_TightensExistingDirAndFilePermissions(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "logs")
-	existing := filepath.Join(dir, currentLogName("server"))
+	date := currentDate()
+	existing := filepath.Join(dir, currentLogNameForDate("server", date))
 	mustWriteFile(t, existing, []byte("old\n"), 0o644)
 	mustChmod(t, dir, 0o755)
 
@@ -52,46 +50,59 @@ func TestInit_TightensExistingDirAndFilePermissions(t *testing.T) {
 		t.Fatalf("Init 失败: %v", err)
 	}
 	t.Cleanup(Close)
+	skipIfDateChanged(t, date)
 
 	assertPermissions(t, dir, existing)
 }
 
 func TestInit_ReusesExistingFileWhenBelowLimit(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "logs")
-	existing := filepath.Join(dir, currentLogName("server"))
+	date := currentDate()
+	existing := filepath.Join(dir, currentLogNameForDate("server", date))
 	mustWriteFile(t, existing, []byte("old\n"), 0o600)
 
 	if err := Init("server", dir); err != nil {
 		t.Fatalf("Init 失败: %v", err)
 	}
 	t.Cleanup(Close)
+	skipIfDateChanged(t, date)
 
 	log.Print("new")
 
 	assertFileContainsSubstrings(t, existing, "old\n", "new\n")
-	assertPathNotExists(t, filepath.Join(dir, nextSeqLogName("server", 1)))
+	assertPathNotExists(t, filepath.Join(dir, nextSeqLogNameForDate("server", date, 1)))
 }
 
 func TestInit_CreatesNextSeqWhenLatestFileIsFull(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "logs")
-	existing := filepath.Join(dir, currentLogName("server"))
+	date := currentDate()
+	existing := filepath.Join(dir, currentLogNameForDate("server", date))
 	mustWriteFile(t, existing, bytes.Repeat([]byte("a"), int(maxFileSize)), 0o600)
 
 	if err := Init("server", dir); err != nil {
 		t.Fatalf("Init 失败: %v", err)
 	}
 	t.Cleanup(Close)
+	skipIfDateChanged(t, date)
 
 	assertFileSize(t, existing, maxFileSize)
-	assertExistingWritableFile(t, filepath.Join(dir, nextSeqLogName("server", 1)))
+	assertExistingWritableFile(t, filepath.Join(dir, nextSeqLogNameForDate("server", date, 1)))
 }
 
 func currentLogName(role string) string {
-	return nextSeqLogName(role, 0)
+	return currentLogNameForDate(role, currentDate())
 }
 
 func nextSeqLogName(role string, seq int) string {
-	return "netsgo-" + role + "-" + currentDate() + "-" + formatSeq(seq) + ".log"
+	return nextSeqLogNameForDate(role, currentDate(), seq)
+}
+
+func currentLogNameForDate(role string, date string) string {
+	return nextSeqLogNameForDate(role, date, 0)
+}
+
+func nextSeqLogNameForDate(role string, date string, seq int) string {
+	return "netsgo-" + role + "-" + date + "-" + formatSeq(seq) + ".log"
 }
 
 func currentDate() string {
@@ -206,6 +217,28 @@ func assertFileSize(t *testing.T, path string, want int64) {
 	}
 	if info.Size() != want {
 		t.Fatalf("期望文件大小 %d，得到 %d", want, info.Size())
+	}
+}
+
+func findSingleLogFile(t *testing.T, dir string, role string) string {
+	t.Helper()
+
+	matches, err := filepath.Glob(filepath.Join(dir, "netsgo-"+role+"-*.log"))
+	if err != nil {
+		t.Fatalf("匹配日志文件失败: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("期望 1 个日志文件，得到 %d 个: %v", len(matches), matches)
+	}
+
+	return matches[0]
+}
+
+func skipIfDateChanged(t *testing.T, startDate string) {
+	t.Helper()
+
+	if endDate := currentDate(); endDate != startDate {
+		t.Skipf("跨午夜，测试日期从 %s 变为 %s", startDate, endDate)
 	}
 }
 
