@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"log/slog"
@@ -305,13 +306,7 @@ func (s *Server) Start() error {
 				s.setupToken = hex.EncodeToString(buf)
 			}
 		}
-		log.Printf("")
-		log.Printf("┌──────────────────────────────────────────────────────────────────┐")
-		log.Printf("│  ⚠️  服务尚未初始化                                              │")
-		log.Printf("│  请使用以下 Setup Token 完成初始化:                               │")
-		log.Printf("│  SETUP_TOKEN=%s │", s.setupToken)
-		log.Printf("└──────────────────────────────────────────────────────────────────┘")
-		log.Printf("")
+		s.emitSetupTokenBanner(os.Stderr)
 	}
 
 	// 初始化速率限制器
@@ -377,6 +372,16 @@ func (s *Server) Start() error {
 	go s.serverStatusLoop()
 
 	return s.httpServer.Serve(serveLn)
+}
+
+func (s *Server) emitSetupTokenBanner(w io.Writer) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "┌──────────────────────────────────────────────────────────────────┐")
+	fmt.Fprintln(w, "│  ⚠️  服务尚未初始化                                              │")
+	fmt.Fprintln(w, "│  请使用以下 Setup Token 完成初始化:                               │")
+	fmt.Fprintf(w, "│  SETUP_TOKEN=%s │\n", s.setupToken)
+	fmt.Fprintln(w, "└──────────────────────────────────────────────────────────────────┘")
+	fmt.Fprintln(w)
 }
 
 // Shutdown 优雅关闭服务端 (P15)
