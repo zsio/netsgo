@@ -1,8 +1,8 @@
 // Package logger 提供基于 slog 的结构化文件日志。
 //
-// 日志文件按日期和大小（10MB）轮转，写入系统临时目录的 netsgo/ 子目录：
-//   - Unix/macOS: /tmp/netsgo/netsgo-server-2026-03-19-000.log
-//   - Windows:    %TEMP%\netsgo\netsgo-server-2026-03-19-000.log
+// 日志文件按日期和大小（10MB）轮转，默认写入用户目录下的 ~/.netsgo/logs：
+//   - Unix/macOS: ~/.netsgo/logs/netsgo-server-2026-03-19-000.log
+//   - Windows:    %USERPROFILE%\.netsgo\logs\netsgo-server-2026-03-19-000.log
 //
 // 同一日期内序号持续累加，重启进程会从已有最大序号继续。
 //
@@ -41,7 +41,7 @@ type RotatingWriter struct {
 }
 
 func newRotatingWriter(dir, role string) (*RotatingWriter, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("创建日志目录失败: %w", err)
 	}
 
@@ -122,7 +122,7 @@ func (w *RotatingWriter) openFile() error {
 	}
 
 	path := w.filePath(w.seq)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("打开日志文件失败 (%s): %w", path, err)
 	}
@@ -164,11 +164,24 @@ func (w *RotatingWriter) scanMaxSeq() int {
 
 var globalWriter *RotatingWriter
 
+// DefaultDir 返回默认日志目录。
+func DefaultDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("获取用户目录失败: %w", err)
+	}
+
+	return filepath.Join(home, ".netsgo", "logs"), nil
+}
+
 // Init 初始化日志系统。
 // role 用于区分日志来源（"server" 或 "client"）。
+// dir 为日志目录，不能为空。
 // 调用后，所有 log.Printf 和 slog.* 调用都会同时输出到 stderr 和日志文件。
-func Init(role string) error {
-	dir := filepath.Join(os.TempDir(), "netsgo")
+func Init(role, dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return fmt.Errorf("日志目录不能为空")
+	}
 
 	w, err := newRotatingWriter(dir, role)
 	if err != nil {
@@ -194,9 +207,12 @@ func Init(role string) error {
 
 // Close 关闭日志系统，释放文件句柄。
 func Close() {
-	if globalWriter != nil {
-		globalWriter.Close()
+	if globalWriter == nil {
+		return
 	}
+
+	_ = globalWriter.Close()
+	globalWriter = nil
 }
 
 // Dir 返回日志目录路径。
