@@ -1,4 +1,4 @@
-import { createRootRoute, Outlet, useRouterState } from '@tanstack/react-router';
+import { createRootRoute, Outlet } from '@tanstack/react-router';
 import { useEventStream } from '@/hooks/use-event-stream';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
