@@ -21,39 +21,10 @@ type ProxyTunnel struct {
 
 func (s *Server) validateProxyRequest(client *ClientConn, req protocol.ProxyNewRequest) error {
 	if s.adminStore != nil {
-		policy := s.adminStore.GetTunnelPolicy()
-
-		// 校验 Client 白名单
-		if len(policy.ClientWhitelist) > 0 {
-			allowed := false
-			for _, allowHost := range policy.ClientWhitelist {
-				if client.Info.Hostname == allowHost {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				return fmt.Errorf("Client 不在允许创建隧道的白名单中")
-			}
-		}
-
-		// 校验端口白名单（新版 AllowedPorts 优先；为空时回退旧逻辑）
+		// 校验端口白名单
 		if req.RemotePort != 0 {
 			if s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(req.RemotePort) {
 				return fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort)
-			}
-
-			// 旧版策略回退（AllowedPorts 为空时，IsPortAllowed 返回 true，这里不会执行）
-			if policy.MinPort > 0 && req.RemotePort < policy.MinPort {
-				return fmt.Errorf("请求端口 %d 小于允许的最小端口 %d", req.RemotePort, policy.MinPort)
-			}
-			if policy.MaxPort > 0 && req.RemotePort > policy.MaxPort {
-				return fmt.Errorf("请求端口 %d 大于允许的最大端口 %d", req.RemotePort, policy.MaxPort)
-			}
-			for _, blocked := range policy.BlockedPorts {
-				if req.RemotePort == blocked {
-					return fmt.Errorf("请求端口 %d 在黑名单中", req.RemotePort)
-				}
 			}
 		}
 	}

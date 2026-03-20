@@ -159,12 +159,7 @@ export interface AdminUser {
   last_login?: string;
 }
 
-export interface TunnelPolicy {
-  min_port: number;
-  max_port: number;
-  blocked_ports: number[];
-  client_whitelist: string[];
-}
+
 
 
 export interface LoginResponse {

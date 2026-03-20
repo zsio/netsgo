@@ -514,29 +514,6 @@ func TestAdminStore_Session_CleanExpired(t *testing.T) {
 }
 
 
-// --- Tunnel Policy ---
-
-func TestAdminStore_TunnelPolicy(t *testing.T) {
-	store := newTestAdminStore(t)
-
-	policy := TunnelPolicy{
-		MinPort:      1000,
-		MaxPort:      60000,
-		BlockedPorts: []int{22, 80, 443},
-	}
-	if err := store.UpdateTunnelPolicy(policy); err != nil {
-		t.Fatalf("UpdateTunnelPolicy 失败: %v", err)
-	}
-
-	got := store.GetTunnelPolicy()
-	if got.MinPort != 1000 {
-		t.Errorf("MinPort 期望 1000，得到 %d", got.MinPort)
-	}
-	if len(got.BlockedPorts) != 3 {
-		t.Errorf("BlockedPorts 期望 3 个，得到 %d", len(got.BlockedPorts))
-	}
-}
-
 // --- Login Time ---
 
 func TestAdminStore_UpdateAdminLoginTime(t *testing.T) {

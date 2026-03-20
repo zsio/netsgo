@@ -27,14 +27,13 @@ type AdminData struct {
 	AdminUsers   []AdminUser        `json:"admin_users"`
 	Clients      []RegisteredClient `json:"clients"`
 	ClientTokens []ClientToken      `json:"client_tokens"` // 客户端连接密钥
-	TunnelPolicy TunnelPolicy       `json:"tunnel_policy"` // 旧版策略，保留向后兼容
 	ServerConfig ServerConfig       `json:"server_config"` // 服务配置（初始化时设置）
 	Initialized  bool               `json:"initialized"`   // 是否已完成初始化
 	JWTSecret    string             `json:"jwt_secret"`    // 随机生成的 JWT 签名密钥
 	Sessions     []AdminSession     `json:"sessions"`      // 服务端 session 列表
 }
 
-// AdminStore 负责管理员账号、API Key、策略和 Session 的持久化
+// AdminStore 负责管理员账号、API Key 和 Session 的持久化
 type AdminStore struct {
 	path string
 	mu   sync.RWMutex
@@ -899,20 +898,6 @@ func (s *AdminStore) SetAPIKeyMaxUses(id string, maxUses int) error {
 	return fmt.Errorf("API Key %q 不存在", id)
 }
 
-// ========== Tunnel Policy ==========
-
-func (s *AdminStore) GetTunnelPolicy() TunnelPolicy {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.data.TunnelPolicy
-}
-
-func (s *AdminStore) UpdateTunnelPolicy(policy TunnelPolicy) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data.TunnelPolicy = policy
-	return s.save()
-}
 
 func normalizeKeyPermissions(permissions []string) ([]string, error) {
 	if len(permissions) == 0 {

@@ -445,44 +445,4 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ========= Tunnel Policies =========
 
-func (s *Server) handleAPIAdminPolicies(w http.ResponseWriter, r *http.Request) {
-	if s.adminStore == nil {
-		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
-		return
-	}
-
-	if r.Method == http.MethodGet {
-		policy := s.adminStore.GetTunnelPolicy()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(policy)
-		return
-	}
-
-	if r.Method == http.MethodPut {
-		var policy TunnelPolicy
-		if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
-			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
-			return
-		}
-		if err := s.adminStore.UpdateTunnelPolicy(policy); err != nil {
-			http.Error(w, `{"error":"failed to update policy"}`, http.StatusInternalServerError)
-			return
-		}
-
-		info := GetSessionFromContext(r.Context())
-		adminName := "unknown"
-		if info != nil {
-			adminName = info.Username
-		}
-		slog.Info("Tunnel policy updated", "admin", adminName, "module", "admin")
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{"success": true})
-		return
-	}
-
-	http.Error(w, `{"error":"not allowed"}`, http.StatusMethodNotAllowed)
-}

@@ -9,13 +9,12 @@ import { loginRoute } from '@/routes/login';
 import { setupRoute } from '@/routes/setup';
 import { adminRoute } from '@/routes/admin';
 import { adminKeysRoute } from '@/routes/admin/keys';
-import { adminPoliciesRoute } from '@/routes/admin/policies';
+
 import { adminConfigRoute } from '@/routes/admin/config';
 
 const adminRouteTree = adminRoute.addChildren([
   adminConfigRoute,
   adminKeysRoute,
-  adminPoliciesRoute,
 ]);
 
 const dashboardRouteTree = dashboardRoute.addChildren([

@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { motion, useSpring, useTransform } from 'motion/react';
 import {
   Server as ServerIcon, Activity, LayoutDashboard,
-  Settings, Key, Shield,
+  Settings, Key,
   Monitor, Zap
 } from 'lucide-react';
 import { Link, useMatch, useRouterState } from '@tanstack/react-router';
@@ -43,7 +43,6 @@ function AnimatedNumber({ value, className }: { value: number; className?: strin
 const ADMIN_NAV = [
   { path: '/dashboard/admin/config', name: '服务配置', icon: Settings },
   { path: '/dashboard/admin/keys', name: 'Key 管理', icon: Key },
-  { path: '/dashboard/admin/policies', name: '隧道策略', icon: Shield },
 ];
 
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {

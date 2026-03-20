@@ -41,13 +41,6 @@ type RegisteredClient struct {
 	LastIP      string                `json:"last_ip"`
 }
 
-// TunnelPolicy 隧道策略控制（旧版，保留向后兼容）
-type TunnelPolicy struct {
-	MinPort         int      `json:"min_port"`
-	MaxPort         int      `json:"max_port"`
-	BlockedPorts    []int    `json:"blocked_ports"`
-	ClientWhitelist []string `json:"client_whitelist"` // 允许的 client hostname 列表
-}
 
 // ServerConfig 服务端配置（初始化时设置）
 type ServerConfig struct {

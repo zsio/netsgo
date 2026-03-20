@@ -367,41 +367,7 @@ func TestAPI_AdminKeys_CreateAndList(t *testing.T) {
 	}
 }
 
-func TestAPI_TunnelPolicies_GetAndUpdate(t *testing.T) {
-	s, cleanup := setupTestServerWithDB(t, true)
-	defer cleanup()
 
-	// 获取默认策略
-	req := httptest.NewRequest(http.MethodGet, "/api/admin/policies", nil)
-	w := httptest.NewRecorder()
-	s.handleAPIAdminPolicies(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("获取策略期望 200，得到 %d", w.Code)
-	}
-
-	// 更新策略
-	newPolicyBody := []byte(`{"min_port":10000,"max_port":20000}`)
-	req2 := httptest.NewRequest(http.MethodPut, "/api/admin/policies", bytes.NewReader(newPolicyBody))
-	w2 := httptest.NewRecorder()
-	s.handleAPIAdminPolicies(w2, req2)
-
-	if w2.Code != http.StatusOK {
-		t.Fatalf("更新策略期望 200，得到 %d", w2.Code)
-	}
-
-	// 重新获取验证
-	req3 := httptest.NewRequest(http.MethodGet, "/api/admin/policies", nil)
-	w3 := httptest.NewRecorder()
-	s.handleAPIAdminPolicies(w3, req3)
-
-	var policy map[string]any
-	json.NewDecoder(w3.Body).Decode(&policy)
-
-	if val, ok := policy["min_port"].(float64); !ok || val != 10000 {
-		t.Errorf("策略更新失败，min_port 期望 10000，得到 %v", policy["min_port"])
-	}
-}
 
 
 func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {

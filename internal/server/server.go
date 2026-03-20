@@ -458,8 +458,6 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/admin/keys", s.RequireAuth(s.handleAPIAdminKeys))
 	mux.HandleFunc("PUT /api/admin/keys/{id}/{action}", s.RequireAuth(s.handleAPIAdminKeyItem))
 	mux.HandleFunc("DELETE /api/admin/keys/{id}", s.RequireAuth(s.handleAPIAdminKeyItem))
-	mux.HandleFunc("GET /api/admin/policies", s.RequireAuth(s.handleAPIAdminPolicies))
-	mux.HandleFunc("PUT /api/admin/policies", s.RequireAuth(s.handleAPIAdminPolicies))
 	mux.HandleFunc("GET /api/admin/config", s.RequireAuth(s.handleAPIAdminConfig))
 	mux.HandleFunc("PUT /api/admin/config", s.RequireAuth(s.handleAPIAdminConfig))
 
