@@ -40,7 +40,11 @@ TLS 模式:
   # 反向代理模式（信任特定代理 IP）
   netsgo server --tls-mode off --trusted-proxies 127.0.0.1/32,10.0.0.0/8`,
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := logger.Init("server"); err != nil {
+		logDir, err := logger.DefaultDir()
+		if err != nil {
+			log.Fatalf("❌ 获取日志目录失败: %v", err)
+		}
+		if err := logger.Init("server", logDir); err != nil {
 			log.Fatalf("❌ 初始化日志失败: %v", err)
 		}
 		defer logger.Close()

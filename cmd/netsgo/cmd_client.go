@@ -46,7 +46,11 @@ var clientCmd = &cobra.Command{
   # 使用 ws:// 格式连接（向后兼容）
   netsgo client --server ws://1.2.3.4:8080 --key mykey`,
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := logger.Init("client"); err != nil {
+		logDir, err := logger.DefaultDir()
+		if err != nil {
+			log.Fatalf("❌ 获取日志目录失败: %v", err)
+		}
+		if err := logger.Init("client", logDir); err != nil {
 			log.Fatalf("❌ 初始化日志失败: %v", err)
 		}
 		defer logger.Close()
