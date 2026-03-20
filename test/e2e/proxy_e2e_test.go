@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,8 @@ import (
 )
 
 func TestProxyE2E(t *testing.T) {
+	const setupToken = "proxy-e2e-setup-token"
+
 	proxyKind := getenvDefault("NETSGO_E2E_PROXY", "")
 	composeFile := getenvDefault("NETSGO_E2E_COMPOSE_FILE", "")
 	if proxyKind == "" || composeFile == "" {
@@ -51,7 +54,7 @@ func TestProxyE2E(t *testing.T) {
 	tmpDir := t.TempDir()
 	srv := server.New(serverPort)
 	srv.StorePath = filepath.Join(tmpDir, "tunnels.json")
-	srv.SetupToken = "proxy-e2e-setup-token"
+	srv.SetupToken = setupToken
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -63,9 +66,11 @@ func TestProxyE2E(t *testing.T) {
 		_ = srv.Shutdown(ctx)
 	}()
 
-	setupServer(t, "http://127.0.0.1:"+proxyPort, srv.SetupToken)
-	adminToken := waitForAdminToken(t, "http://127.0.0.1:"+proxyPort, 10*time.Second)
-	apiKey := createAPIKey(t, "http://127.0.0.1:"+proxyPort, adminToken)
+	baseURL := "http://127.0.0.1:" + proxyPort
+	waitForSetupReady(t, baseURL, 20*time.Second)
+	setupServer(t, baseURL, setupToken)
+	adminToken := waitForAdminToken(t, baseURL, 10*time.Second)
+	apiKey := createAPIKey(t, baseURL, adminToken)
 
 	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-E2E-Test", "success")
@@ -103,14 +108,14 @@ func TestProxyE2E(t *testing.T) {
 
 	tunnelURL := fmt.Sprintf("http://127.0.0.1:%d", proxyListenPort)
 	waitForTunnel(t, tunnelURL, []byte("proxy e2e backend response"), 40*time.Second)
-	waitForLiveClientCount(t, "http://127.0.0.1:"+proxyPort, adminToken, 1, 20*time.Second)
+	waitForLiveClientCount(t, baseURL, adminToken, 1, 20*time.Second)
 
 	time.Sleep(12 * time.Second)
 	waitForTunnel(t, tunnelURL, []byte("proxy e2e backend response"), 20*time.Second)
 
 	runCompose(t, composeEnv, projectName, composeFile, "restart", "proxy")
 	waitForTunnel(t, tunnelURL, []byte("proxy e2e backend response"), 45*time.Second)
-	waitForLiveClientCount(t, "http://127.0.0.1:"+proxyPort, adminToken, 1, 20*time.Second)
+	waitForLiveClientCount(t, baseURL, adminToken, 1, 20*time.Second)
 
 	select {
 	case err := <-serverErr:
@@ -125,6 +130,28 @@ func TestProxyE2E(t *testing.T) {
 			t.Fatalf("客户端提前退出: %v", err)
 		}
 	default:
+	}
+}
+
+func TestWaitForSetupReady(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/setup/status" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	waitForSetupReady(t, srv.URL, 2*time.Second)
+
+	if attempts < 3 {
+		t.Fatalf("expected retries before ready, got %d attempts", attempts)
 	}
 }
 
@@ -145,6 +172,25 @@ func waitForTunnel(t *testing.T, url string, expected []byte, timeout time.Durat
 		time.Sleep(500 * time.Millisecond)
 	}
 	t.Fatalf("在 %v 内未观察到可用隧道: %s", timeout, url)
+}
+
+func waitForSetupReady(t *testing.T, baseURL string, timeout time.Duration) {
+	t.Helper()
+
+	client := http.Client{Timeout: 3 * time.Second}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(baseURL + "/api/setup/status")
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Fatalf("在 %v 内未观察到 setup ready: %s/api/setup/status", timeout, baseURL)
 }
 
 func waitForLiveClientCount(t *testing.T, baseURL, adminToken string, want int, timeout time.Duration) {
