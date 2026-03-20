@@ -44,6 +44,7 @@ Desktop.ini
 .claude
 .codex
 .cursor
+.worktrees/
 
 # 前端 (web/)
 web/node_modules/
