@@ -8,13 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -53,12 +51,9 @@ func TestProxyE2E(t *testing.T) {
 	tmpDir := t.TempDir()
 	srv := server.New(serverPort)
 	srv.StorePath = filepath.Join(tmpDir, "tunnels.json")
+	srv.SetupToken = "proxy-e2e-setup-token"
 
 	serverErr := make(chan error, 1)
-	var logBuf bytes.Buffer
-	origLogWriter := log.Writer()
-	log.SetOutput(io.MultiWriter(origLogWriter, &logBuf))
-	defer log.SetOutput(origLogWriter)
 	go func() {
 		serverErr <- srv.Start()
 	}()
@@ -68,8 +63,7 @@ func TestProxyE2E(t *testing.T) {
 		_ = srv.Shutdown(ctx)
 	}()
 
-	setupToken := waitForSetupToken(t, &logBuf, 10*time.Second)
-	setupServer(t, "http://127.0.0.1:"+proxyPort, setupToken)
+	setupServer(t, "http://127.0.0.1:"+proxyPort, srv.SetupToken)
 	adminToken := waitForAdminToken(t, "http://127.0.0.1:"+proxyPort, 10*time.Second)
 	apiKey := createAPIKey(t, "http://127.0.0.1:"+proxyPort, adminToken)
 
@@ -208,21 +202,6 @@ func fetchClientCount(baseURL, token string) (int, error) {
 		return 0, err
 	}
 	return len(payload), nil
-}
-
-func waitForSetupToken(t *testing.T, logBuf *bytes.Buffer, timeout time.Duration) string {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	re := regexp.MustCompile(`SETUP_TOKEN=([a-f0-9]+)`)
-	for time.Now().Before(deadline) {
-		if match := re.FindStringSubmatch(logBuf.String()); len(match) == 2 {
-			return match[1]
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	t.Fatalf("在 %v 内未从日志中捕获 setup token", timeout)
-	return ""
 }
 
 func setupServer(t *testing.T, baseURL, setupToken string) {
