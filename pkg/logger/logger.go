@@ -48,6 +48,9 @@ func newRotatingWriter(dir, role string) (*RotatingWriter, error) {
 	if err := securePath(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("收紧日志目录权限失败: %w", err)
 	}
+	if err := secureExistingLogFiles(dir); err != nil {
+		return nil, fmt.Errorf("收紧历史日志文件权限失败: %w", err)
+	}
 
 	w := &RotatingWriter{dir: dir, role: role}
 	w.date = time.Now().Format("2006-01-02")
@@ -160,6 +163,34 @@ func secureFile(file *os.File, perm os.FileMode) error {
 	}
 
 	return file.Chmod(perm)
+}
+
+func secureExistingLogFiles(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+
+		name := entry.Name()
+		if !strings.HasPrefix(name, "netsgo-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+
+		if err := securePath(filepath.Join(dir, name), 0o600); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // scanMaxSeq 扫描当前日期的日志文件，返回最大序号。无文件时返回 -1。

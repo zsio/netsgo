@@ -55,6 +55,32 @@ func TestInit_TightensExistingDirAndFilePermissions(t *testing.T) {
 	assertPermissions(t, dir, existing)
 }
 
+func TestInit_TightensHistoricalLogFilePermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "logs")
+	historical := filepath.Join(dir, currentLogNameForDate("server", "2000-01-01"))
+	mustWriteFile(t, historical, []byte("old\n"), 0o644)
+
+	if err := Init("server", dir); err != nil {
+		t.Fatalf("Init 失败: %v", err)
+	}
+	t.Cleanup(Close)
+
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(historical); err != nil {
+			t.Fatalf("历史日志文件检查失败: %v", err)
+		}
+		return
+	}
+
+	info, err := os.Stat(historical)
+	if err != nil {
+		t.Fatalf("读取历史日志文件权限失败: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("期望历史日志文件权限 0600，得到 %#o", got)
+	}
+}
+
 func TestInit_ReusesExistingFileWhenBelowLimit(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "logs")
 	date := currentDate()
