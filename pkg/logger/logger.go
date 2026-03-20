@@ -8,7 +8,7 @@
 //
 // 用法：
 //
-//	logger.Init("server")          // 初始化，传入角色
+//	logger.Init("server", dir)     // 初始化，传入角色和日志目录
 //	defer logger.Close()
 //	// 之后所有 log.Printf / slog.Info 等调用自动双写到 stderr + 日志文件
 package logger
@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +44,9 @@ type RotatingWriter struct {
 func newRotatingWriter(dir, role string) (*RotatingWriter, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("创建日志目录失败: %w", err)
+	}
+	if err := securePath(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("收紧日志目录权限失败: %w", err)
 	}
 
 	w := &RotatingWriter{dir: dir, role: role}
@@ -118,7 +122,7 @@ func (w *RotatingWriter) filePath(seq int) string {
 
 func (w *RotatingWriter) openFile() error {
 	if w.file != nil {
-		w.file.Close()
+		_ = w.file.Close()
 	}
 
 	path := w.filePath(w.seq)
@@ -126,16 +130,36 @@ func (w *RotatingWriter) openFile() error {
 	if err != nil {
 		return fmt.Errorf("打开日志文件失败 (%s): %w", path, err)
 	}
+	if err := secureFile(f, 0o600); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("收紧日志文件权限失败 (%s): %w", path, err)
+	}
 
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("获取日志文件信息失败: %w", err)
 	}
 
 	w.file = f
 	w.written = info.Size()
 	return nil
+}
+
+func securePath(path string, perm os.FileMode) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+
+	return os.Chmod(path, perm)
+}
+
+func secureFile(file *os.File, perm os.FileMode) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+
+	return file.Chmod(perm)
 }
 
 // scanMaxSeq 扫描当前日期的日志文件，返回最大序号。无文件时返回 -1。
