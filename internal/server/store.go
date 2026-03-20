@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"netsgo/pkg/fileutil"
 	"netsgo/pkg/protocol"
 )
 
@@ -120,7 +121,7 @@ func (s *TunnelStore) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o600)
+	return fileutil.AtomicWriteFile(s.path, data, 0o600)
 }
 
 func cloneStoredTunnels(tunnels []StoredTunnel) []StoredTunnel {

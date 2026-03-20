@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"netsgo/pkg/fileutil"
 	"netsgo/pkg/protocol"
 
 	"golang.org/x/crypto/bcrypt"
@@ -108,7 +109,7 @@ func (s *AdminStore) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0600)
+	return fileutil.AtomicWriteFile(s.path, data, 0600)
 }
 
 func (s *AdminStore) validateLoadedState() error {

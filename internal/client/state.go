@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"netsgo/pkg/fileutil"
 )
 
 type persistedState struct {
@@ -68,7 +70,7 @@ func (c *Client) ensureInstallID() error {
 	if err != nil {
 		return fmt.Errorf("序列化客户端状态失败: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := fileutil.AtomicWriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("写入客户端状态失败: %w", err)
 	}
 
@@ -90,7 +92,7 @@ func (c *Client) saveToken(token string) error {
 	if err != nil {
 		return fmt.Errorf("序列化客户端状态失败: %w", err)
 	}
-	return os.WriteFile(path, data, 0o600)
+	return fileutil.AtomicWriteFile(path, data, 0o600)
 }
 
 // clearToken 清除本地保存的 Token
@@ -124,5 +126,5 @@ func (c *Client) saveTLSFingerprint(fingerprint string) error {
 	if err != nil {
 		return fmt.Errorf("序列化客户端状态失败: %w", err)
 	}
-	return os.WriteFile(path, data, 0o600)
+	return fileutil.AtomicWriteFile(path, data, 0o600)
 }
