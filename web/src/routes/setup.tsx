@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 
 import { api } from '@/lib/api';
 import { fetchSetupStatus } from '@/lib/auth';
+import { getServerAddrInfo, getServerAddrValidationError, normalizeServerAddr, SERVER_ADDR_HELP_TEXT, SERVER_ADDR_PLACEHOLDER } from '@/lib/server-address';
 import type { PortRange } from '@/types';
 import { Globe, Shield, Check, Plus, X, Sparkles, ArrowRight, ArrowLeft, AlertTriangle, User, Lock, Loader2, ShieldCheck, Server, KeyRound } from 'lucide-react';
 import { requireSetupPage } from '@/lib/auth';
@@ -84,17 +85,17 @@ function SetupPage() {
   }, [username, password, confirmPassword, setupToken, setupTokenRequired]);
 
   const validateStep2 = useCallback(() => {
-    if (!serverAddr.trim()) { setAddrError('请填写服务地址'); return false; }
-    try {
-      const url = new URL(serverAddr);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        setAddrError('仅支持 http 或 https 协议');
-        return false;
-      }
-    } catch {
-      setAddrError('请输入有效的完整 URL（需包含 http:// 或 https://）');
+    const error = getServerAddrValidationError(serverAddr);
+    if (error) {
+      setAddrError(error);
       return false;
     }
+    const normalized = normalizeServerAddr(serverAddr);
+    if (!normalized) {
+      setAddrError('请填写有效的 Client 连接地址');
+      return false;
+    }
+    setServerAddr(normalized);
     setAddrError('');
     return true;
   }, [serverAddr]);
@@ -134,12 +135,14 @@ function SetupPage() {
   // Submit
   const handleSubmit = async () => {
     if (ports.length === 0) { setPortError('请至少添加一个端口规则'); return; }
+    const normalizedServerAddr = normalizeServerAddr(serverAddr);
+    if (!normalizedServerAddr) { setAddrError('请填写有效的 Client 连接地址'); setStep(1); return; }
     setLoading(true);
     setSubmitError('');
     try {
       const resp = await api.post<{ success: boolean; message: string }>('/api/setup/init', {
         admin: { username, password },
-        server_addr: serverAddr,
+        server_addr: normalizedServerAddr,
         allowed_ports: ports,
         setup_token: setupToken || undefined,
       });
@@ -337,7 +340,7 @@ function SetupPage() {
                   <form onSubmit={(e) => { e.preventDefault(); if (validateStep2()) setStep(2); }} className="space-y-4">
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <label className="text-sm font-medium text-foreground">公网访问 URL</label>
+                        <label className="text-sm font-medium text-foreground">Client 连接地址</label>
                         {serverAddr !== currentOrigin && (
                           <button type="button" onClick={() => { setServerAddr(currentOrigin); setAddrError(''); }} className="text-[11px] text-primary hover:underline flex items-center gap-1">
                              使用当前地址
@@ -349,25 +352,20 @@ function SetupPage() {
                         <Input
                           value={serverAddr}
                           onChange={(e) => { setServerAddr(e.target.value); setAddrError(''); }}
-                          placeholder="例如: https://tunnel.yourdomain.com"
+                          placeholder={SERVER_ADDR_PLACEHOLDER}
                           className="pl-9 bg-background/50 backdrop-blur-sm font-mono text-sm focus-visible:ring-primary/50"
                         />
                       </div>
+                      <p className="text-xs text-muted-foreground">{SERVER_ADDR_HELP_TEXT}</p>
                     </div>
 
                     {/* Security Status Feedback — based on protocol × host type */}
                     {(() => {
                       if (!serverAddr) return null;
-                      // 不以 http:// 或 https:// 开头的输入，不显示任何安全反馈
-                      if (!/^https?:\/\//.test(serverAddr)) return null;
+                      if (!/^(https?|wss?):\/\//.test(serverAddr.trim())) return null;
 
-                      let isHttps = false;
-                      let hostname = '';
-                      try {
-                        const url = new URL(serverAddr);
-                        isHttps = url.protocol === 'https:';
-                        hostname = url.hostname;
-                      } catch {
+                      const validationError = getServerAddrValidationError(serverAddr);
+                      if (validationError) {
                         // URL 解析失败（如端口超出范围），提示格式错误
                         return (
                           <motion.div key="invalid" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-destructive/20 bg-destructive/5 p-3.5">
@@ -376,7 +374,7 @@ function SetupPage() {
                               <div className="space-y-0.5">
                                 <p className="font-medium text-destructive text-sm">地址格式有误</p>
                                 <p className="text-xs text-muted-foreground leading-relaxed">
-                                  请检查 URL 是否完整且合法，例如端口号需在 0–65535 范围内。
+                                  {validationError}
                                 </p>
                               </div>
                             </div>
@@ -384,15 +382,11 @@ function SetupPage() {
                         );
                       }
 
-                      // 主机类型分类：IP / 合法域名 / 本地主机名
-                      const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith('[');
-                      const isLocalhost = hostname === 'localhost';
-                      // 合法域名：至少包含一个点，且 TLD 至少 2 个字符（如 example.com）
-                      const isDomain = !isIp && !isLocalhost && /\.[a-zA-Z]{2,}$/.test(hostname);
-                      // 其余情况为单标签本地主机名（如 xx, myserver）
+                      const serverAddrInfo = getServerAddrInfo(serverAddr);
+                      if (!serverAddrInfo) return null;
 
                       // Case 1: HTTPS + 合法域名 — 最佳实践 ✅
-                      if (isHttps && isDomain) {
+                      if (serverAddrInfo.isSecure && serverAddrInfo.hostKind === 'domain') {
                         return (
                           <motion.div key="secure" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-green-500/20 bg-green-500/5 p-3.5">
                             <div className="flex items-start gap-2.5">
@@ -400,7 +394,7 @@ function SetupPage() {
                               <div className="space-y-0.5">
                                 <p className="font-medium text-green-700 dark:text-green-400 text-sm">安全连接</p>
                                 <p className="text-xs text-muted-foreground leading-relaxed">
-                                  HTTPS + 域名是生产环境的推荐实践，可有效防止 Client 凭证被窃听。
+                                  TLS + 域名是生产环境的推荐实践，可保护 Client 凭证和控制通道通信。
                                 </p>
                               </div>
                             </div>
@@ -409,7 +403,7 @@ function SetupPage() {
                       }
 
                       // Case 2: HTTPS + IP / localhost / 本地主机名 — 加密正常，建议配域名
-                      if (isHttps) {
+                      if (serverAddrInfo.isSecure) {
                         return (
                           <motion.div key="https-local" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3.5">
                             <div className="flex items-start gap-2.5">
@@ -417,7 +411,7 @@ function SetupPage() {
                               <div className="space-y-0.5">
                                 <p className="font-medium text-blue-700 dark:text-blue-400 text-sm">连接已加密</p>
                                 <p className="text-xs text-muted-foreground leading-relaxed">
-                                  通信已通过 TLS 加密。建议配置公网域名，便于证书管理和外部 Client 接入。
+                                  通信已通过 TLS 加密。若需外部 Client 接入，建议配置公网域名并通过反向代理提供 HTTPS/WSS。
                                 </p>
                               </div>
                             </div>
@@ -433,8 +427,7 @@ function SetupPage() {
                             <div className="space-y-0.5">
                               <p className="font-medium text-amber-700 dark:text-amber-500 text-sm">连接未加密</p>
                               <p className="text-xs text-muted-foreground leading-relaxed">
-                                当前使用 HTTP 明文传输{!isDomain ? '且未使用公网域名' : ''}，Client Key 等敏感信息存在被窃听的风险。
-                                建议通过反向代理配置域名并启用 HTTPS。
+                                当前使用明文连接，Client Key 等敏感信息存在被窃听的风险。建议通过反向代理配置域名并启用 HTTPS/WSS。
                                 <span className="text-muted-foreground/70">（内网或测试环境可忽略）</span>
                               </p>
                             </div>

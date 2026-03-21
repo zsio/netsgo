@@ -1,14 +1,15 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { motion, useSpring, useTransform } from 'motion/react';
 import {
-  Server as ServerIcon, Activity, LayoutDashboard,
+  Server as ServerIcon, LayoutDashboard,
   Settings, Key,
-  Monitor, Zap
+  Monitor, Zap, Plus
 } from 'lucide-react';
 import { Link, useMatch, useRouterState } from '@tanstack/react-router';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { useServerStatus } from '@/hooks/use-server-status';
+import { AddClientDialog } from './AddClientDialog';
 import {
   Sidebar,
   SidebarContent,
@@ -46,6 +47,8 @@ const ADMIN_NAV = [
 ];
 
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
+  const [showAddClient, setShowAddClient] = useState(false);
+
   // 从路由匹配获取当前选中的 clientId
   const clientMatch = useMatch({ from: '/dashboard/clients/$clientId', shouldThrow: false });
   const currentClientId = clientMatch?.params?.clientId;
@@ -170,10 +173,23 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                 ))}
               </div>
             ) : clients.length === 0 ? (
-              <div className="flex flex-col items-center justify-center text-muted-foreground py-12 px-4 text-center">
-                <Activity className="h-10 w-10 mb-3 opacity-20" />
-                <p className="text-sm">暂无 Client</p>
-                <p className="text-xs opacity-60 mt-1">启动 Client 后将自动显示</p>
+              <div className="px-3 py-6 w-full flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShowAddClient(true)}
+                  className="group flex flex-col items-center w-full rounded-xl border border-dashed border-border/80 bg-muted/10 transition-colors hover:border-primary/50 hover:bg-muted/40 p-5 focus:outline-none"
+                >
+                  <div className="h-10 w-10 rounded-full bg-muted/50 flex items-center justify-center mb-3 group-hover:bg-background border border-transparent group-hover:border-border/50 transition-colors">
+                    <Plus className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                  </div>
+                  
+                  <h3 className="text-sm font-medium text-foreground mb-1">
+                    添加节点
+                  </h3>
+                  <p className="text-[11px] text-muted-foreground text-center">
+                    生成连接密钥并查看连接命令
+                  </p>
+                </button>
               </div>
             ) : (
               <SidebarMenu>
@@ -245,6 +261,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
       </SidebarFooter>
 
       <SidebarRail />
+      <AddClientDialog open={showAddClient} onOpenChange={setShowAddClient} />
     </Sidebar>
   );
 }

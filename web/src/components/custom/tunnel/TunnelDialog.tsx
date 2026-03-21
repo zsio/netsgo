@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter, DialogTrigger,
@@ -38,6 +38,45 @@ const typeOptions: { value: ProxyType; label: string }[] = [
   { value: 'http', label: 'HTTP' },
 ];
 
+interface TunnelFormState {
+  name: string;
+  type: ProxyType;
+  localIp: string;
+  localPort: string;
+  remotePort: string;
+}
+
+function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
+  if (props.mode === 'edit' && props.tunnel) {
+    return {
+      name: props.tunnel.name,
+      type: props.tunnel.type,
+      localIp: props.tunnel.local_ip || '127.0.0.1',
+      localPort: String(props.tunnel.local_port || ''),
+      remotePort: String(props.tunnel.remote_port || ''),
+    };
+  }
+
+  return {
+    name: '',
+    type: 'tcp',
+    localIp: '127.0.0.1',
+    localPort: '',
+    remotePort: '',
+  };
+}
+
+function getFormKey(props: TunnelDialogProps, open: boolean) {
+  if (props.mode === 'edit') {
+    const tunnelKey = props.tunnel
+      ? `${props.tunnel.clientId}:${props.tunnel.name}`
+      : 'empty';
+    return `edit:${tunnelKey}:${open ? 'open' : 'closed'}`;
+  }
+
+  return `create:${props.clientId}:${open ? 'open' : 'closed'}`;
+}
+
 export function TunnelDialog(props: TunnelDialogProps) {
   const isEdit = props.mode === 'edit';
 
@@ -48,14 +87,44 @@ export function TunnelDialog(props: TunnelDialogProps) {
     ? props.onOpenChange
     : setInternalOpen;
 
-  // --- 表单状态 ---
-  const [name, setName] = useState('');
-  const [type, setType] = useState<ProxyType>('tcp');
-  const [localIp, setLocalIp] = useState('127.0.0.1');
-  const [localPort, setLocalPort] = useState('');
-  const [remotePort, setRemotePort] = useState('');
+  const formKey = getFormKey(props, open);
 
-  // --- mutations ---
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      {!isEdit && (
+        <DialogTrigger asChild>
+          {(props as TunnelDialogCreateProps).trigger ?? (
+            <Button>添加隧道</Button>
+          )}
+        </DialogTrigger>
+      )}
+      <TunnelDialogForm
+        key={formKey}
+        props={props}
+        open={open}
+        setOpen={setOpen}
+      />
+    </Dialog>
+  );
+}
+
+function TunnelDialogForm({
+  props,
+  open,
+  setOpen,
+}: {
+  props: TunnelDialogProps;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  const isEdit = props.mode === 'edit';
+  const initialForm = getInitialFormState(props);
+  const [name, setName] = useState(initialForm.name);
+  const [type, setType] = useState<ProxyType>(initialForm.type);
+  const [localIp, setLocalIp] = useState(initialForm.localIp);
+  const [localPort, setLocalPort] = useState(initialForm.localPort);
+  const [remotePort, setRemotePort] = useState(initialForm.remotePort);
+
   const createTunnel = useCreateTunnel();
   const updateTunnel = useUpdateTunnel();
   const mutation = isEdit ? updateTunnel : createTunnel;
@@ -66,32 +135,13 @@ export function TunnelDialog(props: TunnelDialogProps) {
     staleTime: 0,
   });
 
-  // 编辑模式：打开时用隧道数据填充表单
-  useEffect(() => {
-    if (isEdit && props.tunnel && open) {
-      setName(props.tunnel.name);
-      setType(props.tunnel.type);
-      setLocalIp(props.tunnel.local_ip || '127.0.0.1');
-      setLocalPort(String(props.tunnel.local_port || ''));
-      setRemotePort(String(props.tunnel.remote_port || ''));
-    }
-  }, [isEdit, isEdit && (props as TunnelDialogEditProps).tunnel, open]);
-
-  const resetForm = () => {
-    setName('');
-    setType('tcp');
-    setLocalIp('127.0.0.1');
-    setLocalPort('');
-    setRemotePort('');
-    mutation.reset();
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (isEdit) {
+    if (props.mode === 'edit') {
       const tunnel = props.tunnel;
       if (!tunnel) return;
+
       updateTunnel.mutate(
         {
           clientId: tunnel.clientId,
@@ -111,41 +161,41 @@ export function TunnelDialog(props: TunnelDialogProps) {
           },
         },
       );
-    } else {
-      createTunnel.mutate(
-        {
-          clientId: props.clientId,
-          name,
-          type,
-          local_ip: localIp,
-          local_port: parseInt(localPort, 10),
-          remote_port: remotePort ? parseInt(remotePort, 10) : 0,
-        },
-        {
-          onSuccess: () => {
-            setOpen(false);
-            resetForm();
-            toast.success(`隧道「${name}」创建成功`);
-          },
-          onError: (err) => {
-            toast.error((err as Error).message);
-          },
-        },
-      );
+      return;
     }
+
+    createTunnel.mutate(
+      {
+        clientId: props.clientId,
+        name,
+        type,
+        local_ip: localIp,
+        local_port: parseInt(localPort, 10),
+        remote_port: remotePort ? parseInt(remotePort, 10) : 0,
+      },
+      {
+        onSuccess: () => {
+          setOpen(false);
+          toast.success(`隧道「${name}」创建成功`);
+        },
+        onError: (err) => {
+          toast.error((err as Error).message);
+        },
+      },
+    );
   };
 
   const isValid = isEdit
     ? localPort && parseInt(localPort, 10) > 0
     : name.trim() && localPort && parseInt(localPort, 10) > 0;
 
-  const dialogContent = (
+  return (
     <DialogContent className="sm:max-w-md">
       <DialogHeader>
         <DialogTitle>{isEdit ? '编辑隧道' : '创建代理隧道'}</DialogTitle>
         <DialogDescription>
-          {isEdit
-            ? `修改隧道「${(props as TunnelDialogEditProps).tunnel?.name}」的映射配置。隧道名称和协议类型不可变更。`
+          {props.mode === 'edit'
+            ? `修改隧道「${props.tunnel?.name}」的映射配置。隧道名称和协议类型不可变更。`
             : '配置内网穿透隧道，将 Client 侧的本地服务暴露到公网端口。'}
         </DialogDescription>
       </DialogHeader>
@@ -259,18 +309,5 @@ export function TunnelDialog(props: TunnelDialogProps) {
         </DialogFooter>
       </form>
     </DialogContent>
-  );
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetForm(); }}>
-      {!isEdit && (
-        <DialogTrigger asChild>
-          {(props as TunnelDialogCreateProps).trigger ?? (
-            <Button>添加隧道</Button>
-          )}
-        </DialogTrigger>
-      )}
-      {dialogContent}
-    </Dialog>
   );
 }

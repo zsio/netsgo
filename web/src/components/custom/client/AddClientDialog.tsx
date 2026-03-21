@@ -9,10 +9,11 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  Key, Copy, Check, RefreshCcw, Terminal, Link2, Loader2,
+  Key, Copy, Check, RefreshCcw, Terminal, Loader2,
 } from 'lucide-react';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
 import { useServerStatus } from '@/hooks/use-server-status';
+import { normalizeServerAddr } from '@/lib/server-address';
 
 /** 过期时间选项 */
 const EXPIRY_OPTIONS = [
@@ -34,7 +35,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   const [expiresIn, setExpiresIn] = useState('0');
   const [generatedKey, setGeneratedKey] = useState('');
   const [serverAddr, setServerAddr] = useState('');
-  const [copied, setCopied] = useState<'key' | 'cmd' | 'link' | null>(null);
+  const [copied, setCopied] = useState<'key' | 'cmd' | null>(null);
 
   const createKey = useCreateAPIKey();
   const { data: status } = useServerStatus({
@@ -69,14 +70,14 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       {
         onSuccess: (data) => {
           setGeneratedKey(data.raw_key);
-          setServerAddr(data.server_addr || status?.server_addr || window.location.origin);
+          setServerAddr(normalizeServerAddr(data.server_addr || status?.server_addr || window.location.origin) || window.location.origin.trim());
           setStep('result');
         },
       },
     );
   }, [createKey, maxUses, expiresIn, status]);
 
-  const copyToClipboard = useCallback(async (text: string, tag: 'key' | 'cmd' | 'link') => {
+  const copyToClipboard = useCallback(async (text: string, tag: 'key' | 'cmd') => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(tag);
@@ -90,10 +91,6 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     ? `netsgo client --server ${serverAddr} --key ${generatedKey}`
     : '';
 
-  const connectLink = generatedKey
-    ? `${serverAddr}/connect?key=${encodeURIComponent(generatedKey)}`
-    : '';
-
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -103,7 +100,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
             添加 Client
           </DialogTitle>
           <DialogDescription>
-            生成临时连接密钥，供新 Client 快速接入
+            生成临时连接密钥，供新 Client 接入
           </DialogDescription>
         </DialogHeader>
 
@@ -233,31 +230,6 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
               </div>
             </div>
 
-            {/* 快速连接链接 */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                <Link2 className="h-3.5 w-3.5" />
-                快速链接
-              </label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 px-3 py-2 text-xs font-mono bg-muted rounded-lg border border-border break-all select-all">
-                  {connectLink}
-                </code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="shrink-0"
-                  onClick={() => copyToClipboard(connectLink, 'link')}
-                >
-                  {copied === 'link' ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-
             {/* 操作按钮 */}
             <div className="flex gap-2 pt-1">
               <Button
@@ -284,7 +256,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
           <p className="text-xs font-medium text-foreground">使用说明</p>
           <ol className="text-[11px] text-muted-foreground space-y-1.5 list-decimal list-inside">
             <li>在目标机器上下载并安装 NetsGo Client</li>
-            <li>使用上方的<strong>连接命令</strong>或<strong>快速链接</strong>启动 Client</li>
+            <li>使用上方的<strong>连接命令</strong>启动 Client</li>
             <li>Client 将自动连接到此服务端并出现在面板中</li>
           </ol>
         </div>
