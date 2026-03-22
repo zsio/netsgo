@@ -426,3 +426,120 @@ func TestUDPProxy_MultipleSessions(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// ============================================================
+// sessionCount 正确性测试
+// ============================================================
+
+// TestRemoveSession_Idempotent 验证 removeSession 重复调用只递减一次计数。
+func TestRemoveSession_Idempotent(t *testing.T) {
+	state := &UDPProxyState{
+		done: make(chan struct{}),
+	}
+
+	key := "127.0.0.1:12345"
+	sess := &UDPSession{done: make(chan struct{})}
+	state.sessions.Store(key, sess)
+	state.sessionCount.Store(1)
+
+	// 第一次调用：应该成功移除并递减
+	if removed := state.removeSession(key); !removed {
+		t.Error("第一次调用 removeSession 应返回 true")
+	}
+	if got := state.sessionCount.Load(); got != 0 {
+		t.Errorf("第一次调用后 sessionCount 应为 0，实际为 %d", got)
+	}
+
+	// 第二次调用：key 已不存在，应该是空操作
+	if removed := state.removeSession(key); removed {
+		t.Error("第二次调用 removeSession 应返回 false（key 已不存在）")
+	}
+	if got := state.sessionCount.Load(); got != 0 {
+		t.Errorf("第二次调用后 sessionCount 应仍为 0，实际为 %d（发生了双重递减）", got)
+	}
+}
+
+// TestUDPProxy_SessionCount_AfterCleanup 验证 Close() 后 sessionCount 不会变为负数。
+func TestUDPProxy_SessionCount_AfterCleanup(t *testing.T) {
+	pipeC, pipeS := net.Pipe()
+	defer pipeC.Close()
+	defer pipeS.Close()
+
+	// 构建一个最小可用的 UDPProxyState（不需要真实 packetConn）
+	state := &UDPProxyState{
+		done: make(chan struct{}),
+	}
+
+	// 手动注入多个已关闭的 stream 会话（模拟活跃会话）
+	const numSessions = 3
+	for i := 0; i < numSessions; i++ {
+		c1, c2 := net.Pipe()
+		key := fmt.Sprintf("127.0.0.1:%d", 10000+i)
+		sess := &UDPSession{
+			srcAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10000 + i},
+			stream:  c1,
+			done:    make(chan struct{}),
+		}
+		sess.Touch()
+		state.sessions.Store(key, sess)
+		state.sessionCount.Add(1)
+		// 启动 reverse goroutine，它持有 c1，当 sess.Close() 时会退出
+		go func(s *UDPSession) {
+			buf := make([]byte, 1024)
+			s.stream.Read(buf) //nolint
+		}(sess)
+		_ = c2
+	}
+
+	if got := state.sessionCount.Load(); got != numSessions {
+		t.Fatalf("初始 sessionCount 应为 %d，实际为 %d", numSessions, got)
+	}
+
+	// 触发 Close()
+	state.Close()
+
+	// 轮询等待 sessionCount 归零（最多 2s），不依赖 goroutine 退出信号
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if state.sessionCount.Load() == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := state.sessionCount.Load(); got < 0 {
+		t.Errorf("Close() 后 sessionCount 不应为负数，实际为 %d", got)
+	}
+}
+
+// TestUDPReaper_NoDoubleDecrement 验证 udpReaper 与 removeSession 并发时 sessionCount 不双减。
+func TestUDPReaper_NoDoubleDecrement(t *testing.T) {
+	state := &UDPProxyState{
+		done: make(chan struct{}),
+	}
+
+	// 创建一对 pipe 作为 stream
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+
+	key := "127.0.0.1:9999"
+	sess := &UDPSession{
+		srcAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9999},
+		stream:  c1,
+		done:    make(chan struct{}),
+	}
+	sess.Touch()
+	state.sessions.Store(key, sess)
+	state.sessionCount.Store(1)
+
+	// 模拟 udpReaper 超时清理
+	sess.Close()
+	state.removeSession(key)
+
+	// 同时模拟 udpSessionReverse defer 也触发 removeSession（竞争场景）
+	state.removeSession(key)
+
+	if got := state.sessionCount.Load(); got != 0 {
+		t.Errorf("并发双次 removeSession 后 sessionCount 应为 0，实际为 %d（发生了双重递减）", got)
+	}
+}

@@ -27,15 +27,27 @@ func (s *UDPProxyState) Close() {
 		if s.packetConn != nil {
 			s.packetConn.Close()
 		}
-		// 关闭所有会话
+		// 关闭所有会话。sess.Close() 会触发 udpSessionReverse 的 ReadUDPFrame 返回错误，
+		// 进而执行其 defer 中的 removeSession。两者竞争同一个 key，
+		// removeSession 内部的 LoadAndDelete 保证只有一方实际递减计数。
 		s.sessions.Range(func(key, value any) bool {
 			sess := value.(*UDPSession)
 			sess.Close()
-			s.sessions.Delete(key)
-			s.sessionCount.Add(-1)
+			s.removeSession(key.(string))
 			return true
 		})
 	})
+}
+
+// removeSession 原子地从 sessions map 中移除会话并递减计数。
+// 返回 true 表示本次调用实际完成了移除（调用方是第一个清理者）。
+// 使用 LoadAndDelete 保证多 goroutine 竞争时只有一个返回 loaded=true。
+func (s *UDPProxyState) removeSession(key string) bool {
+	if _, loaded := s.sessions.LoadAndDelete(key); loaded {
+		s.sessionCount.Add(-1)
+		return true
+	}
+	return false
 }
 
 // UDPSession 一个 UDP 虚拟会话（由外部 srcAddr 标识）
@@ -97,7 +109,8 @@ func (s *Server) startUDPProxy(client *ClientConn, tunnel *ProxyTunnel) error {
 	log.Printf("🚇 UDP 代理隧道已创建: %s [:%d → %s:%d] Client [%s]",
 		tunnel.Config.Name, actualPort, tunnel.Config.LocalIP, tunnel.Config.LocalPort, client.ID)
 
-	// 启动读取入站 UDP 报文的循环
+	// 注意：udpReadLoop 必须是单 goroutine。若改为并发，
+	// sessionCount 的 Load-then-Add 上限检查需改为 CAS 原子操作。
 	go s.udpReadLoop(client, tunnel, state)
 
 	// 启动定时清理过期会话
@@ -133,7 +146,9 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 		// 查找或创建会话
 		val, loaded := state.sessions.Load(key)
 		if !loaded {
-			// 检查会话数量限制（O(1) 原子读取）
+			// 检查会话数量限制（O(1) 原子读取）。
+			// sessionCount.Load() 与后续 Add(1) 之间不是原子的；
+			// 此处安全的前提是：整个函数只在单个 goroutine 中运行（不并发）。
 			if state.sessionCount.Load() >= int64(MaxUDPSessions) {
 				log.Printf("⚠️ UDP 代理 [%s] 会话数达上限 (%d)，丢弃来自 %s 的报文",
 					tunnel.Config.Name, MaxUDPSessions, key)
@@ -175,20 +190,21 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 		if err := mux.WriteUDPFrame(sess.stream, buf[:n]); err != nil {
 			log.Printf("⚠️ UDP 代理 [%s] 写入 Stream 失败 [%s]: %v",
 				tunnel.Config.Name, key, err)
-			// 关闭失败的会话
+			// 关闭失败的会话；removeSession 用 LoadAndDelete 保证原子性，
+			// 即使 udpReaper 或 Close() 已先行清理，此处也只会得到 loaded=false，不会双减。
 			sess.Close()
-			state.sessions.Delete(key)
-			state.sessionCount.Add(-1)
+			state.removeSession(key)
 		}
 	}
 }
 
 // udpSessionReverse 从 yamux stream 读取回复帧，通过 packetConn 回传给外部客户端。
+// 退出机制：goroutine 阻塞于 ReadUDPFrame，由 sess.Close()→stream.Close() 触发退出，
+// 而非通过 select 轮询——这是有意为之，不需要为 ReadUDPFrame 单独设置 ReadDeadline。
 func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, proxyName string) {
 	defer func() {
 		sess.Close()
-		state.sessions.Delete(sess.srcAddr.String())
-		state.sessionCount.Add(-1)
+		state.removeSession(sess.srcAddr.String())
 	}()
 
 	for {
@@ -236,8 +252,7 @@ func (s *Server) udpReaper(state *UDPProxyState) {
 				if sess.IdleDuration() > UDPSessionTimeout {
 					log.Printf("🧹 UDP 会话超时，清理: %s", key)
 					sess.Close()
-					state.sessions.Delete(key)
-					state.sessionCount.Add(-1)
+					state.removeSession(key.(string))
 				}
 				return true
 			})
