@@ -90,6 +90,7 @@ func canonicalHost(addr string) string {
 
 func normalizeHostLiteral(host string) string {
 	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSuffix(host, ".")
 	host = strings.Trim(host, "[]")
 	if host == "" {
 		return ""
@@ -123,6 +124,12 @@ func validateDomain(domain string) error {
 	}
 
 	normalized := strings.ToLower(raw)
+	normalized = strings.TrimSuffix(normalized, ".")
+
+	if len(normalized) > 253 {
+		return fmt.Errorf("domain 长度不能超过 253 个字符")
+	}
+
 	if ip := net.ParseIP(normalized); ip != nil {
 		return fmt.Errorf("domain 不能是 IP 地址")
 	}
@@ -136,12 +143,18 @@ func validateDomain(domain string) error {
 		if label == "" {
 			return fmt.Errorf("domain 标签不能为空")
 		}
+		if len(label) > 63 {
+			return fmt.Errorf("domain 标签长度不能超过 63 个字符")
+		}
 		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
 			return fmt.Errorf("domain 标签不能以连字符开头或结尾")
 		}
 		for _, ch := range label {
 			if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
 				continue
+			}
+			if ch > 127 {
+				return fmt.Errorf("domain 包含非 ASCII 字符，请使用 Punycode 格式 (xn--开头)")
 			}
 			return fmt.Errorf("domain 包含非法字符")
 		}
@@ -394,7 +407,7 @@ func findHTTPDomainConflictNames(domain, excludeName, excludeClientID string, se
 			return
 		}
 		seenTunnels[key] = struct{}{}
-		conflicts = append(conflicts, name)
+		conflicts = append(conflicts, key)
 	}
 
 	server.RangeClients(func(clientID string, client *ClientConn) bool {

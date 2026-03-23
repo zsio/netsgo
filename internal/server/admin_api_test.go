@@ -659,8 +659,8 @@ func TestAdminConfigDryRun(t *testing.T) {
 		if !ok || len(conflicts) != 1 {
 			t.Fatalf("conflicting_http_tunnels 期望返回 1 条冲突，得到 %v", payload["conflicting_http_tunnels"])
 		}
-		if conflicts[0] != "http-app" {
-			t.Fatalf("冲突隧道期望 http-app，得到 %v", conflicts[0])
+		if conflicts[0] != "client-1:http-app" {
+			t.Fatalf("冲突隧道期望 client-1:http-app，得到 %v", conflicts[0])
 		}
 	})
 }
@@ -762,8 +762,8 @@ func TestAdminConfigUpdateRejectsWhenHTTPDomainConflicts(t *testing.T) {
 	if !ok || len(conflicts) != 1 {
 		t.Fatalf("conflicting_http_tunnels 期望返回 1 条冲突，得到 %v", payload["conflicting_http_tunnels"])
 	}
-	if conflicts[0] != "http-app" {
-		t.Fatalf("冲突隧道期望 http-app，得到 %v", conflicts[0])
+	if conflicts[0] != "client-1:http-app" {
+		t.Fatalf("冲突隧道期望 client-1:http-app，得到 %v", conflicts[0])
 	}
 }
 

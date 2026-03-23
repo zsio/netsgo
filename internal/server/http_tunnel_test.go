@@ -29,6 +29,8 @@ func TestCanonicalHost(t *testing.T) {
 		{name: "strip http scheme", input: "http://example.com", want: "example.com"},
 		{name: "strip https scheme path and standard port", input: "https://example.com:443/path", want: "example.com"},
 		{name: "empty", input: "", want: ""},
+		{name: "trailing dot", input: "example.com.", want: "example.com"},
+		{name: "trailing dot with port", input: "example.com.:8080", want: "example.com:8080"},
 		{name: "ipv6 keep non standard port", input: "https://[2001:db8::1]:8443/path", want: "[2001:db8::1]:8443"},
 		{name: "ipv6 strip standard https port", input: "https://[2001:db8::1]:443/path", want: "[2001:db8::1]"},
 	}
@@ -59,6 +61,11 @@ func TestValidateDomain(t *testing.T) {
 		{name: "invalid path", domain: "example.com/path", valid: false},
 		{name: "invalid ipv4", domain: "192.168.1.10", valid: false},
 		{name: "invalid ipv6", domain: "[2001:db8::1]", valid: false},
+		{name: "valid trailing dot", domain: "example.com.", valid: true},
+		{name: "valid punycode", domain: "xn--fiqs8s.com", valid: true},
+		{name: "invalid unicode", domain: "测试.com", valid: false},
+		{name: "invalid label too long", domain: "a.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.com", valid: false},
+		{name: "invalid total length too long", domain: "a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.com", valid: false},
 	}
 
 	for _, tc := range testCases {
@@ -361,6 +368,9 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 		conflicts := findHTTPDomainConflictNames("dup.example.com", "", "", s)
 		if len(conflicts) != 2 {
 			t.Fatalf("不同 client 同名 tunnel 不应被去重，得到 %v", conflicts)
+		}
+		if conflicts[0] != "client-1:shared-name" || conflicts[1] != "client-2:shared-name" {
+			t.Fatalf("冲突名称应包含 clientID 避免歧义，得到 %v", conflicts)
 		}
 	})
 }
