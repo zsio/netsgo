@@ -74,6 +74,12 @@ const (
 	ProxyTypeHTTP = "http"
 )
 
+// WebSocket 子协议常量
+const (
+	WSSubProtocolControl = "netsgo-control.v1"
+	WSSubProtocolData    = "netsgo-data.v1"
+)
+
 // 代理隧道状态常量
 const (
 	ProxyStatusPending = "pending"

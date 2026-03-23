@@ -41,7 +41,6 @@ type RegisteredClient struct {
 	LastIP      string                `json:"last_ip"`
 }
 
-
 // ServerConfig 服务端配置（初始化时设置）
 type ServerConfig struct {
 	ServerAddr   string      `json:"server_addr"`   // 对外服务地址 (如 https://tunnel.example.com)
@@ -77,4 +76,21 @@ type ClientToken struct {
 	LastActiveAt time.Time `json:"last_active_at"` // 最后活跃时间（用于过期判断）
 	LastIP       string    `json:"last_ip"`        // 最后连接 IP
 	IsRevoked    bool      `json:"is_revoked"`     // 是否已被吊销
+}
+
+// adminConfigResponse 是 `/api/admin/config` 的读取响应。
+type adminConfigResponse struct {
+	ServerAddr          string      `json:"server_addr"`
+	AllowedPorts        []PortRange `json:"allowed_ports"`
+	EffectiveServerAddr string      `json:"effective_server_addr"`
+	ServerAddrLocked    bool        `json:"server_addr_locked"`
+}
+
+// adminConfigUpdateResponse 统一承载 dry-run、保存成功和冲突响应。
+type adminConfigUpdateResponse struct {
+	Success                bool             `json:"success,omitempty"`
+	Error                  string           `json:"error,omitempty"`
+	ServerAddrLocked       bool             `json:"server_addr_locked,omitempty"`
+	AffectedTunnels        []affectedTunnel `json:"affected_tunnels"`
+	ConflictingHTTPTunnels []string         `json:"conflicting_http_tunnels"`
 }

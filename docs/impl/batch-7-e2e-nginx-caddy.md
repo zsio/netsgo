@@ -1,6 +1,7 @@
 # Batch 7：nginx / caddy E2E 验证
 
 > 状态：待实现
+> 所属阶段：阶段 5（Client + E2E）
 > 前置条件：Batch 6 完成
 > 估计影响文件：`test/e2e/` 目录下的测试配置和脚本
 
@@ -19,22 +20,22 @@
 
 本批次验证这些场景，确认部署路径可用。
 
+> 实现原则：优先复用现有的
+> [proxy_e2e_test.go](/Users/dyy/projects/code/netsgo/test/e2e/proxy_e2e_test.go)
+> 和
+> [compose_stack_e2e_test.go](/Users/dyy/projects/code/netsgo/test/e2e/compose_stack_e2e_test.go)，
+> 不要另起一套平行的 E2E 方案。
+
 ## 需要验证的场景
 
-### 场景 1：直连（无前置代理）
+### 场景 1：直连（补充基线）
 
-基线验证，确认没有前置代理时一切正常。
+直连链路不再单独起一套新的 E2E 工程。  
+它可以由阶段 4/5 的 server/client 回归与人工检查覆盖；本批次的自动化验收聚焦：
 
-```
-✓ Client 控制通道连接（子协议正确透传）
-✓ Client 数据通道连接
-✓ TCP 隧道正常工作（回归）
-✓ UDP 隧道正常工作（回归）
-✓ HTTP 域名隧道：普通 HTTP 请求转发
-✓ HTTP 域名隧道：WebSocket 升级透传
-✓ HTTP 域名隧道：SSE 即时推送（无缓冲延迟）
-✓ 管理面访问正常
-```
+- nginx 反代
+- caddy 反代
+- compose stack 下的恢复与重启链路
 
 ### 场景 2：nginx 前置代理
 
@@ -170,7 +171,7 @@ echo "ping" | timeout 3 websocat ws://localhost/ws -H "Host: tunnel.example.com"
 ## 实现步骤
 
 1. 查看 `test/e2e/` 现有结构和 `Makefile` 中相关命令
-2. 根据现有结构扩展或新建 compose stack
+2. 优先复用现有 `proxy_e2e_test.go` 与 `compose_stack_e2e_test.go`；只有现有覆盖明显不足时才补充
 3. 编写 nginx.conf，重点确保 `Sec-WebSocket-Protocol` 透传
 4. 编写 Caddyfile
 5. 实现 `mock-upstream` 服务
@@ -180,27 +181,24 @@ echo "ping" | timeout 3 websocat ws://localhost/ws -H "Host: tunnel.example.com"
 ## 验收标准
 
 ```bash
-# 场景 1：直连
-make e2e-direct
-# 或手动启动后运行脚本
+# 反代 E2E
+make test-e2e-nginx
+make test-e2e-caddy
 
-# 场景 2：nginx
-make e2e-nginx
-
-# 场景 3：caddy
-make e2e-caddy
+# compose stack E2E
+make test-compose-stack-nginx
+make test-compose-stack-caddy
 ```
 
 ### 必须通过的关键检查
 
-| 检查项 | 直连 | nginx | caddy |
-|--------|------|-------|-------|
-| Client 控制通道连接成功 | ✓ | ✓ | ✓ |
-| Client 数据通道连接成功 | ✓ | ✓ | ✓ |
-| HTTP 隧道 Host 头正确 | ✓ | ✓ | ✓ |
-| HTTP 隧道 WebSocket 打通 | ✓ | ✓ | ✓ |
-| HTTP 隧道 SSE 无延迟 | ✓ | ✓ | ✓ |
-| TCP/UDP 隧道回归 | ✓ | ✓ | ✓ |
+自动化验收至少覆盖下面三类结果：
+
+- nginx 反代链路通过
+- caddy 反代链路通过
+- compose stack 下的重启 / 恢复链路通过
+
+直连基线可作为补充人工检查，但不再要求另起一套专用 E2E 目标。
 
 ## 已知注意事项
 

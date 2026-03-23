@@ -91,6 +91,118 @@ func TestStartProxy_NoDataChannel(t *testing.T) {
 	}
 }
 
+func TestPrepareProxyTunnel_PreservesHTTPDomain(t *testing.T) {
+	s := New(0)
+	client := &ClientConn{
+		ID:      "proxy-http-domain",
+		proxies: make(map[string]*ProxyTunnel),
+	}
+
+	clientConn, serverConn := net.Pipe()
+	serverSession, _ := mux.NewServerSession(serverConn, mux.DefaultConfig())
+	client.dataSession = serverSession
+	t.Cleanup(func() {
+		s.StopAllProxies(client)
+		_ = serverSession.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	req := protocol.ProxyNewRequest{
+		Name:      "http-domain-preserve",
+		Type:      protocol.ProxyTypeHTTP,
+		LocalIP:   "127.0.0.1",
+		LocalPort: 3000,
+		Domain:    "app.example.com",
+	}
+
+	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyStatusPending)
+	if err != nil {
+		t.Fatalf("prepareProxyTunnel 失败: %v", err)
+	}
+	if tunnel.Config.Domain != req.Domain {
+		t.Fatalf("Domain 应保留为 %q，得到 %q", req.Domain, tunnel.Config.Domain)
+	}
+}
+
+func TestActivatePreparedTunnel_HTTPDoesNotBindListener(t *testing.T) {
+	s := New(0)
+	client := &ClientConn{
+		ID:      "proxy-http-activate",
+		proxies: make(map[string]*ProxyTunnel),
+	}
+
+	clientConn, serverConn := net.Pipe()
+	serverSession, _ := mux.NewServerSession(serverConn, mux.DefaultConfig())
+	client.dataSession = serverSession
+	t.Cleanup(func() {
+		s.StopAllProxies(client)
+		_ = serverSession.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	req := protocol.ProxyNewRequest{
+		Name:       "http-no-listen",
+		Type:       protocol.ProxyTypeHTTP,
+		LocalIP:    "127.0.0.1",
+		LocalPort:  3000,
+		RemotePort: 18080,
+		Domain:     "svc.example.com",
+	}
+
+	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyStatusPending)
+	if err != nil {
+		t.Fatalf("prepareProxyTunnel 失败: %v", err)
+	}
+
+	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
+		t.Fatalf("activatePreparedTunnel 失败: %v", err)
+	}
+	if tunnel.Listener != nil {
+		t.Fatal("HTTP 隧道不应创建 TCP listener")
+	}
+	if tunnel.Config.Status != protocol.ProxyStatusActive {
+		t.Fatalf("HTTP 隧道激活后状态应为 active，得到 %s", tunnel.Config.Status)
+	}
+}
+
+func TestActivatePreparedTunnel_HTTPDoesNotConflictWithSelf(t *testing.T) {
+	s := New(0)
+	client := &ClientConn{
+		ID:      "proxy-http-self-conflict",
+		proxies: make(map[string]*ProxyTunnel),
+	}
+	s.clients.Store(client.ID, client)
+
+	clientConn, serverConn := net.Pipe()
+	serverSession, _ := mux.NewServerSession(serverConn, mux.DefaultConfig())
+	client.dataSession = serverSession
+	t.Cleanup(func() {
+		s.StopAllProxies(client)
+		_ = serverSession.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	req := protocol.ProxyNewRequest{
+		Name:      "http-self-ok",
+		Type:      protocol.ProxyTypeHTTP,
+		LocalIP:   "127.0.0.1",
+		LocalPort: 3000,
+		Domain:    "self.example.com",
+	}
+
+	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyStatusPending)
+	if err != nil {
+		t.Fatalf("prepareProxyTunnel 失败: %v", err)
+	}
+
+	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
+		t.Fatalf("activatePreparedTunnel 不应因自身域名而冲突: %v", err)
+	}
+}
+
 func TestStartProxy_DuplicateName(t *testing.T) {
 	s := New(0)
 	clientID := "proxy-dup"

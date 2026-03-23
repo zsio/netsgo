@@ -1,8 +1,9 @@
 # Batch 1：修复前置 Bug
 
 > 状态：待实现
+> 所属阶段：阶段 1（前置 Bug 修复）
 > 前置条件：无
-> 估计影响文件：`internal/server/proxy.go`、`internal/server/tunnel_manager.go`
+> 估计影响文件：`internal/server/proxy.go`、`internal/server/server.go`
 
 ## 目标
 
@@ -28,7 +29,7 @@ if tunnel.Config.Type == protocol.ProxyTypeHTTP {
 
 ### Bug 2：`prepareProxyTunnel` —— 构造 `ProxyConfig` 时未复制 `Domain`
 
-**文件**：`internal/server/tunnel_manager.go`
+**文件**：`internal/server/proxy.go`（注意：不是 `tunnel_manager.go`，`prepareProxyTunnel` 函数位于 `proxy.go:45`）
 
 **现状**：`prepareProxyTunnel` 函数在从 `ProxyNewRequest` 构造 `ProxyConfig` 时，没有把 `req.Domain` 赋值进去，导致运行时的 `ProxyTunnel.Config.Domain` 始终为空字符串。此问题同时影响 `restoreManagedTunnel` 和 `resumeManagedTunnel` 所走的路径（它们都经过 `prepareProxyTunnel`）。
 
@@ -50,11 +51,23 @@ Config: protocol.ProxyConfig{
 
 ### Bug 3：`restoreTunnels` —— 占位记录构造时未恢复 `Domain`
 
-**文件**：`internal/server/tunnel_manager.go`
+**文件**：`internal/server/server.go`（注意：不是 `tunnel_manager.go`，`restoreTunnels` 函数位于 `server.go:1583`）
 
 **现状**：`restoreTunnels` 在构造 paused/stopped/error 状态及端口不在白名单的占位 `ProxyConfig` 时，都没有把 `StoredTunnel` 里已持久化的 `st.Domain` 带过去，导致服务端重启后 HTTP 隧道的域名声明丢失（无法正确路由、无法做冲突校验）。
 
-**修复方案**：在两处内联构造里补全 `Domain: st.Domain`：
+**实际需要修复三处**（不是两处）：
+
+1. `server.go` 约 1608 行——端口不在白名单时的 `client.proxies[st.Name]` 内联构造
+2. `server.go` 约 1622 行——同一分支里 `emitTunnelChanged` 的临时 `ProxyConfig` 构造
+3. `server.go` 约 1646 行——paused/stopped/error 状态的 `client.proxies[st.Name]` 内联构造
+
+**修复前建议先定位行号**：
+
+```bash
+grep -n 'ProxyConfig{' internal/server/server.go
+```
+
+**修复方案**：在三处内联构造里补全 `Domain: st.Domain`：
 
 ```go
 // 修复位置一：paused/stopped/error 占位构造
@@ -86,8 +99,8 @@ protocol.ProxyConfig{
 ## 实现步骤
 
 1. 修改 `internal/server/proxy.go`：在 `activatePreparedTunnel` 函数中加 `type=http` early-return
-2. 修改 `internal/server/tunnel_manager.go`：在 `prepareProxyTunnel` 中补全 `Domain: req.Domain`
-3. 修改 `internal/server/tunnel_manager.go`：在 `restoreTunnels` 两处占位构造中补全 `Domain: st.Domain`
+2. 修改 `internal/server/proxy.go`：在 `prepareProxyTunnel`（`proxy.go:62`）的 `ProxyConfig` 构造中补全 `Domain: req.Domain`
+3. 修改 `internal/server/server.go`：在 `restoreTunnels` 三处内联 `ProxyConfig` 构造中补全 `Domain: st.Domain`（端口白名单 error 占位一处、`emitTunnelChanged` 临时构造一处、paused/stopped/error 占位一处）
 
 ## 验收标准
 
@@ -107,12 +120,15 @@ go test ./pkg/... -v
    grep -n 'ProxyTypeHTTP' internal/server/proxy.go
    ```
 
-2. **Bug 2 验证**：grep 确认 `prepareProxyTunnel` 里 `Domain: req.Domain` 已出现
+2. **Bug 2 验证**：grep 确认 `prepareProxyTunnel`（`proxy.go`）里 `Domain: req.Domain` 已出现
    ```bash
-   grep -n 'Domain:' internal/server/tunnel_manager.go
+   grep -n 'Domain:' internal/server/proxy.go
    ```
 
-3. **Bug 3 验证**：`restoreTunnels` 函数里所有 `ProxyConfig` 构造都带 `Domain` 字段
+3. **Bug 3 验证**：`restoreTunnels`（`server.go`）函数里所有三处 `ProxyConfig` 构造都带 `Domain` 字段
+   ```bash
+   grep -n 'Domain:' internal/server/server.go
+   ```
 
 ### 不引入的改动
 

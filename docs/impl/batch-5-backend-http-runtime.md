@@ -1,242 +1,180 @@
-# Batch 5：后端 HTTP 域名隧道最小闭环实现
+# Batch 5：入口分发与 HTTP 运行时闭环
 
-> 状态：待实现
-> 前置条件：Batch 1、2、3、4 完成
-> 估计影响文件：`internal/server/server.go`、`internal/server/http_tunnel.go`（扩展）、`internal/server/proxy.go`（扩展）
+> 状态：待实现  
+> 所属阶段：阶段 4（入口分发与运行时）  
+> 前置条件：阶段 3 完成，且 Batch 4 的测试已落地  
+> 估计影响文件：`internal/server/server.go`、`internal/server/http_tunnel.go`（扩展）、`internal/server/data.go`、`internal/server/server_test.go`
 
 ## 目标
 
-实现后端 HTTP 域名隧道的完整运行时闭环：
+把 HTTP 域名隧道真正接到最终入口上，形成最小可工作的运行时闭环：
 
-1. `hostDispatchHandler`：按正确优先级分发所有 HTTP 请求
-2. `httpTunnelProxy`：把命中 HTTP 隧道的请求通过 yamux stream 反向代理到 Client
-3. `StartHTTPOnly()` 接口变更：返回类型从 `*http.ServeMux` 改为 `http.Handler`
-4. `EffectiveServerAddr` 字段写入并参与冲突校验
+1. 最终 handler 按固定顺序分发请求
+2. 命中 HTTP 隧道时能代理普通 HTTP、业务 WebSocket、SSE
+3. 只有合法的 NetsGo 内部 WS 握手才进入控制 / 数据通道
+4. `StartHTTPOnly()` 返回最终 handler，而不是旧的内部 mux
 
-## 实现细节
+## 本批次负责的边界
 
-### 1. `hostDispatchHandler`
+### 负责
 
-**文件**：`internal/server/server.go` 或 `internal/server/http_tunnel.go`
+- `hostDispatchHandler`
+- `404 / 503 / 502` 的请求级行为
+- HTTP 反向代理
+- 业务 WebSocket relay
+- SSE flush
+- 服务端内部 WS 子协议协商与回写
 
-分发优先级（严格按顺序）：
+### 不负责
 
-```
-1. isNetsgoControlRequest(r) -> controlHandler
-2. isNetsgoDataRequest(r)    -> dataHandler
-3. Host 命中 HTTP 隧道域名  -> httpTunnelHandler(tunnel)
-4. 系统未初始化             -> setupHandler（只放行 /api/setup/* 和静态资源）
-5. Host == effectiveManagementHost -> managementMux（现有管理面）
-6. 其余                     -> 404
-```
+- 离线 HTTP 隧道的 store-first 管理动作
+- Client 侧主动发送子协议
+- nginx / caddy E2E
+- 前端
 
-关键约束：
+## 关键约束
 
-- 步骤 1/2 的识别必须同时满足 path 和 subprotocol 两个条件，缺一不可
-- 步骤 3 在 Host 命中后不再看 path，一律转发
-- 步骤 4 只在 `s.isSetupComplete() == false` 时生效
-- 步骤 5 仅当 Host 精确等于 `effectiveManagementHost` 时才进入管理面
-- `securityHeadersHandler` 只包裹步骤 5（管理面），不包裹步骤 3（HTTP 隧道）
+### 1. 分发顺序固定
 
-伪代码结构：
-
-```go
-func (s *Server) hostDispatchHandler(w http.ResponseWriter, r *http.Request) {
-    // 1. 内部 WS 通道优先
-    if isNetsgoControlRequest(r) {
-        s.handleControlWS(w, r)
-        return
-    }
-    if isNetsgoDataRequest(r) {
-        s.handleDataWS(w, r)
-        return
-    }
-
-    // 2. HTTP 隧道域名路由
-    host := canonicalHost(r.Host)
-    if tunnel, ok := s.findHTTPTunnel(host); ok {
-        s.serveHTTPTunnel(tunnel, w, r)
-        return
-    }
-
-    // 3. Setup 阶段例外
-    if !s.isSetupComplete() {
-        s.managementMux.ServeHTTP(w, r)
-        return
-    }
-
-    // 4. 生效管理 Host
-    if host == s.effectiveManagementHost() {
-        s.securityHeadersHandler(s.managementMux).ServeHTTP(w, r)
-        return
-    }
-
-    // 5. 其余 404
-    http.NotFound(w, r)
-}
+```text
+1. 合法 control WS 握手
+2. 合法 data WS 握手
+3. Host 命中 HTTP 隧道域名
+4. setup 例外
+5. Host == effectiveManagementHost
+6. 其他 -> 404
 ```
 
-### 2. `findHTTPTunnel(host string) (*ProxyTunnel, bool)`
+### 2. 内部 WS 识别必须是“path + 子协议”
 
-**文件**：`internal/server/http_tunnel.go`
+只靠 path 不行，只靠 header 也不行。  
+缺失或错误子协议时，请求必须被当成普通业务请求继续分发。
 
-查找当前运行时中 host 匹配的 HTTP 隧道（仅匹配 active 的）：
+### 3. 服务端子协议协商属于本批次
 
-```go
-func (s *Server) findHTTPTunnel(host string) (*ProxyTunnel, bool) {
-    // 遍历所有在线 Client 的隧道
-    // 找到 type=http && canonicalHost(tunnel.Config.Domain)==host
-    // 返回找到的隧道
-}
-```
+这里是旧拆解最容易让执行变乱的地方：  
+服务端是否接受并回写 `netsgo-control.v1` / `netsgo-data.v1`，本质上属于入口运行时，不应拖到 Client 批次。
 
-注意：`findHTTPTunnel` 只返回 active 隧道。pending/paused/stopped/error 和 Client 离线时走 `isHTTPDomainDeclared` 判断，返回 503。
+本批次要求：
 
-### 3. `serveHTTPTunnel(tunnel *ProxyTunnel, w, r)`
+- control 路径只接受 control 子协议
+- data 路径只接受 data 子协议
+- 升级成功后回写协商结果
+- 不再按 path 猜测内部通道
 
-**文件**：`internal/server/http_tunnel.go`
+实现方式可以二选一：
 
-**可服务性判定**（必须同时满足）：
+1. control / data 各自使用专用 upgrader
+2. 在各自 handler 中读取声明的 subprotocol，并在 `Upgrade` 时显式回写
 
-- `tunnel.Config.Status == active`
-- 所属 Client 当前在线
+只要满足协商契约即可，不要求提前抽象一层框架。
 
-不满足时返回 503：
+### 4. `securityHeadersHandler` 只包管理面
 
-```go
-if !s.isHTTPTunnelServicable(tunnel) {
-    http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
-    return
-}
-```
+不能把管理面的安全响应头污染到 HTTP 隧道业务响应。
 
-**域名已声明但不可服务（503）**：
+## 实现内容
 
-- pending/paused/stopped/error 的隧道 domain 命中时也要 503
-- 只需检查 `collectDeclaredHTTPDomains` 结果，如果 host 在声明列表中但 `findHTTPTunnel` 找不到 active 隧道，返回 503
+### 一、`hostDispatchHandler`
 
-**实际代理**：
+建议落在 `internal/server/server.go` 或 `internal/server/http_tunnel.go`。
 
-使用 `httputil.ReverseProxy`：
+职责：
 
-```go
-proxy := &httputil.ReverseProxy{
-    Director: func(req *http.Request) {
-        req.URL.Scheme = "http"
-        req.URL.Host = fmt.Sprintf("%s:%d", tunnel.Config.LocalIP, tunnel.Config.LocalPort)
-        // 设置转发头
-        applyForwardedHeaders(req, originalHost, proto, clientIP, isTrustedProxy)
-    },
-    Transport: &yamuxStreamTransport{
-        client: client,
-    },
-    FlushInterval: -1, // 立即 flush，支持 SSE
-    ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-        http.Error(w, "Bad Gateway", http.StatusBadGateway)
-    },
-}
-```
+- 先判断合法内部 WS 握手
+- 再判断 HTTP 隧道域名
+- 再判断 setup 例外
+- 最后判断管理 Host
 
-**WebSocket 处理**：
+### 二、HTTP 隧道可服务性
 
-检测到 `Upgrade: websocket` 时，不使用 `ReverseProxy`，改用 TCP relay：
+命中已声明 domain 时：
 
-```go
-if isWebSocketUpgrade(r) {
-    s.relayWebSocket(tunnel, w, r)
-    return
-}
-```
+- active + client 在线 -> 代理
+- pending / paused / stopped / error -> 503
+- active 但 client 离线 -> 503
 
-### 4. `yamuxStreamTransport`
+注意：
 
-**文件**：`internal/server/http_tunnel.go`
+- “domain 已声明但当前不可服务”应该是 `503`
+- “domain 根本不存在”才是 `404`
 
-实现 `http.RoundTripper` 接口，底层通过 yamux session 打开新 stream，再建立 HTTP/1.1 连接：
+### 三、HTTP 代理
 
-```go
-type yamuxStreamTransport struct {
-    session *yamux.Session
-}
+普通 HTTP 请求：
 
-func (t *yamuxStreamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-    stream, err := t.session.Open()
-    if err != nil {
-        return nil, err
-    }
-    // 通过 stream 发送 HTTP 请求，读取响应
-    return http.ReadResponse(bufio.NewReader(stream), req)
-}
-```
+- 通过 yamux stream 转发
+- 透传原始 `Host`
+- 设置 `X-Forwarded-*`
 
-### 5. `StartHTTPOnly()` 接口变更
+SSE / chunked：
 
-**文件**：`internal/server/server.go`
+- `FlushInterval = -1`
 
-当前返回类型是 `*http.ServeMux`，需要改为 `http.Handler`：
+业务 WebSocket：
 
-```go
-// 变更前
-func (s *Server) StartHTTPOnly() *http.ServeMux
+- 不走 `ReverseProxy`
+- 走专门的 WebSocket / TCP relay
 
-// 变更后
-func (s *Server) StartHTTPOnly() http.Handler
-```
+### 四、`StartHTTPOnly()`
 
-返回的 handler 应是 `hostDispatchHandler`（包裹 TLS 等中间件后的最终 handler）。
+当前 `StartHTTPOnly()` 仍返回旧的 `*http.ServeMux`。  
+本批次改为返回最终 `http.Handler`，让测试真正覆盖最外层入口。
 
-**重要**：这是破坏性接口变更，必须同步更新所有测试中调用 `StartHTTPOnly()` 的地方。
+这里要按生产规则处理，不为旧测试保留错误入口：
 
-涉及文件需要先用 grep 确认：
+- 生产 `s.httpServer.Handler` 必须从旧的 `s.securityHeadersHandler(s.newHTTPMux())` 切到最终 handler
+- `StartHTTPOnly()` 返回类型必须改为 `http.Handler`
+- 现有直接调用 `s.newHTTPMux()` 且依赖外部 HTTP 入口语义的测试，必须同步更新
+- 不允许为了让旧测试继续通过而保留错误的外层入口
 
-```bash
-grep -rn 'StartHTTPOnly' internal/ cmd/
-```
+需要重点检查的现有测试文件至少包括：
 
-### 6. `EffectiveServerAddr` 字段写入
+- `internal/server/server_test.go`
+- `internal/server/security_fix_test.go`
+- `internal/server/data_test.go`
+- `internal/server/admin_api_test.go`
 
-**文件**：`internal/server/admin_models.go`、`internal/server/admin_api.go`
+### 五、管理地址相关
 
-- `Server` 结构体（或 AdminConfig）加 `EffectiveServerAddr string` 字段
-- 启动时由 `effectiveManagementHost()` 计算并写入
-- 参与 HTTP 隧道 domain 冲突校验
-- `GET /api/admin/config` 返回
+`effective_server_addr` 的计算与冲突语义已经在阶段 2 落地。  
+本批次只负责在最终 handler 中使用这套语义，不新增新的持久化字段。
 
 ## 实现步骤
 
-1. 在 `internal/server/http_tunnel.go` 中实现 `findHTTPTunnel`、`serveHTTPTunnel`、`yamuxStreamTransport`、`relayWebSocket`
-2. 在 `internal/server/server.go` 中实现 `hostDispatchHandler`，替换现有顶层路由注册
-3. 修改 `StartHTTPOnly()` 返回类型，同步更新所有调用点
-4. 补充 `EffectiveServerAddr` 字段并写入
-5. 运行 Batch 4 的集成测试，逐一修复直到全部通过
+1. 先实现 `hostDispatchHandler`
+2. 接入 HTTP 隧道查找与 503/404 分支
+3. 实现 HTTP 请求代理
+4. 实现业务 WebSocket relay
+5. 确保 SSE / chunked 立即 flush
+6. 为 control/data handler 加上服务端子协议协商与回写
+7. 修改生产 `s.httpServer.Handler`，同步切到最终 handler
+8. 修改 `StartHTTPOnly()` 返回最终 handler
+9. 更新受影响的旧测试入口，不再让它们绕过生产外层 handler
+10. 跑 Batch 4 的测试直到全部通过
 
 ## 验收标准
 
 ```bash
-# Batch 2 的单元测试全部通过
-go test ./internal/server/... -run 'TestCanonical|TestValidate|TestEffective|TestDomain|TestIsNetsgo|TestTrustedProxy|TestOffline|TestAdminConfig' -v
-
-# Batch 4 的集成测试全部通过
 go test ./internal/server/... -run TestDispatch -v
-
-# 全量测试无回归
 go test ./internal/server/... -v
 go test ./internal/client/... -v
 go test ./pkg/... -v
-
-# 构建通过
 go build ./...
 ```
 
-### 关键行为验收
+## 关键验收点
 
-1. 使用 curl 模拟请求命中 HTTP 隧道 domain，得到 503（Client 未连接）
-2. 使用 curl 请求管理面 domain，得到管理面响应
-3. 不带子协议的 `/ws/control` 请求不会进入控制通道
-4. 带正确子协议的 `/ws/control` 可以在非管理域名上建立
+1. 非管理 Host + 合法 control 子协议 -> 能进入控制通道
+2. `/ws/control` 缺失子协议 -> 不进入内部通道
+3. 命中 HTTP 域名的 `/api/*` -> 仍走业务代理
+4. 命中 HTTP 域名的 `/ws/*` -> 仍可作为业务 WebSocket
+5. 未知 Host -> 404
+6. 已声明但当前不可服务 -> 503
+7. 单次代理失败 -> 502
 
 ## 不引入的改动
 
-- 不改 Client 侧子协议发送（Batch 6 做）
-- 不改 nginx/caddy E2E（Batch 7 做）
-- 不改前端（Batch 8 做）
+- 不改 Client 侧发送逻辑（Batch 6）
+- 不改 nginx/caddy E2E（Batch 7）
+- 不改前端（Batch 8）

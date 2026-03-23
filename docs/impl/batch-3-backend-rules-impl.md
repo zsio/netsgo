@@ -1,22 +1,37 @@
-# Batch 3：后端核心规则实现
+# Batch 3：规则层实现与管理配置保存语义
 
-> 状态：待实现
-> 前置条件：Batch 1、Batch 2 完成
-> 估计影响文件：`internal/server/http_tunnel.go`（新建）、`internal/server/tunnel_manager.go`、`internal/server/admin_api.go`、`internal/server/admin_models.go`
+> 状态：待实现  
+> 所属阶段：阶段 2（规则层）  
+> 前置条件：Batch 1、Batch 2 完成  
+> 估计影响文件：`internal/server/http_tunnel.go`（新建）、`internal/server/proxy.go`、`internal/server/admin_api.go`、`internal/server/admin_models.go`、`pkg/protocol/types.go`
 
 ## 目标
 
-实现 Batch 2 中所有失败测试对应的生产代码，使测试全部通过。本批次不涉及路由层、前端、Client 侧。
+实现 Batch 2 的失败测试，使规则层和 AdminConfig 契约稳定落地。
+
+本批次只解决：
+
+1. 域名与管理 Host 规则
+2. 内部 WS 子协议识别 helper
+3. HTTP 创建时的 domain 校验 / 冲突校验 / `remote_port=0`
+4. 管理配置读取、dry-run、实际保存的锁定 / 冲突语义
+
+本批次**不**处理：
+
+- 离线 HTTP 隧道 `edit / pause / delete`
+- store-first
+- 断线 / 重启下的生命周期一致性
+- 最终入口分发和 HTTP 代理运行时
+
+这些统一放到阶段 3 和阶段 4。
 
 ## 要实现的内容
 
-### 1. 新建 `internal/server/http_tunnel.go`
+### 1. 共享子协议常量
 
-这个文件承载所有 HTTP 域名隧道的纯规则逻辑（不含路由、不含 handler）。
+**文件**：`pkg/protocol/types.go`
 
-#### 1.1 子协议常量（与 `pkg/protocol/` 共享）
-
-在 `pkg/protocol/types.go` 中补充：
+新增：
 
 ```go
 const (
@@ -25,171 +40,217 @@ const (
 )
 ```
 
-#### 1.2 `canonicalHost(addr string) string`
+这里只新增常量，不改消息体结构。
 
-从任意形式的地址提取归一化的 host（小写，去掉标准端口和 scheme）：
+### 2. 新建 `internal/server/http_tunnel.go`
 
-- 输入 `"example.com"` → `"example.com"`
-- 输入 `"example.com:80"` → `"example.com"`
-- 输入 `"example.com:8080"` → `"example.com:8080"`
-- 输入 `"EXAMPLE.COM"` → `"example.com"`
-- 输入 `"http://example.com"` → `"example.com"`
-- 输入 `"https://example.com:443/path"` → `"example.com"`
+承载纯规则 helper，不放路由和代理执行逻辑。
 
-实现要点：先 `url.Parse`，再 `net.SplitHostPort`，最后 `strings.ToLower`，标准端口（80/443）去掉端口后缀。
+建议包含以下函数：
 
-#### 1.3 `validateDomain(domain string) error`
+#### 2.1 `canonicalHost(addr string) string`
 
-校验域名合法性：
+- 去 scheme
+- 去 path
+- 小写化
+- 去除标准端口 80/443
+- 保留非标准端口
 
-- 不允许空字符串
-- 不允许 `*.` 开头（泛域名）
-- 不允许单标签（无点，如 `localhost`）
-- 不允许带 scheme
-- 不允许带路径
+#### 2.2 `validateDomain(domain string) error`
+
+- 不允许空
+- 不允许泛域名
+- 不允许单标签
+- 不允许 scheme / path
 - 不允许纯 IP
-- 允许多级子域名
 
-#### 1.4 `isNetsgoControlRequest(r *http.Request) bool`
+#### 2.3 `containsProtocol(h http.Header, expected string) bool`
 
-判断请求是否是合法的 NetsGo 控制通道握手：
+- 统一解析 `Sec-WebSocket-Protocol`
+- 避免 control/data/helper 各写一套 split 逻辑
 
-```go
-func isNetsgoControlRequest(r *http.Request) bool {
-    return r.URL.Path == "/ws/control" &&
-        containsProtocol(r.Header, protocol.WSSubProtocolControl)
-}
-```
+#### 2.4 `isNetsgoControlRequest(r *http.Request) bool`
 
-#### 1.5 `isNetsgoDataRequest(r *http.Request) bool`
+- `/ws/control` + `netsgo-control.v1`
 
-同上，检查 `/ws/data` + `netsgo-data.v1`。
+#### 2.5 `isNetsgoDataRequest(r *http.Request) bool`
 
-#### 1.6 `effectiveManagementHost(cfg *AdminConfig, listenAddr string) string`
+- `/ws/data` + `netsgo-data.v1`
 
-按优先级推导生效管理 Host：
+#### 2.6 `effectiveManagementHost(cfg *ServerConfig, listenAddr string) string`
 
-1. 环境变量 `NETSGO_SERVER_ADDR`
-2. `cfg.ServerAddr`
-3. 从 `listenAddr` 推导
+优先级：
 
-返回 `canonicalHost` 归一化后的结果。
+1. `NETSGO_SERVER_ADDR`
+2. 持久化 `server_addr`
+3. `listenAddr`
 
-#### 1.7 `isServerAddrLocked() bool`
+#### 2.7 `isServerAddrLocked() bool`
 
-检查 `NETSGO_SERVER_ADDR` 环境变量是否设置了非空值。
+- 判断 `NETSGO_SERVER_ADDR` 是否设置为非空值
 
-#### 1.8 `collectDeclaredHTTPDomains(server *Server) map[string]string`
+#### 2.8 `collectDeclaredHTTPDomains(server *Server) map[string]string`
 
-收集所有已声明的 HTTP 隧道域名（key = domain，value = tunnelName），来源：
+- 扫描 runtime + store
+- 只收 `type=http`
+- 用于全局冲突检查
 
-- 运行时 `server.clients` 中所有在线 client 的 `type=http` 隧道
-- `TunnelStore` 中所有持久化的 `type=http` 隧道（含各种状态）
+#### 2.9 `checkDomainConflict(domain, excludeName, excludeClientID string, server *Server) error`
 
-注意去重（运行时与持久化可能重叠）。
+- 与 `effectiveManagementHost` 冲突 -> `server_addr_conflict`
+- 与其他 HTTP 隧道冲突 -> `http_tunnel_conflict`
 
-#### 1.9 `checkDomainConflict(domain, excludeName, excludeClientID string, server *Server) error`
+#### 2.10 `computeForwardedHeaders(...)`
 
-校验新 domain 是否与已有 HTTP 隧道或生效管理 Host 冲突。
+- 统一计算 `Host`
+- `X-Forwarded-Host`
+- `X-Forwarded-Proto`
+- `X-Forwarded-For`
 
-- 与生效管理 Host 冲突 → `"server_addr_conflict"`
-- 与其他 HTTP 隧道冲突 → `"http_tunnel_conflict"`
-- `excludeName + excludeClientID` 用于 update 时排除自身
+### 3. 创建 HTTP 隧道时的规则收口
 
-#### 1.10 `computeForwardedHeaders(r *http.Request, domain string, isTrustedProxy bool) http.Header`
+**文件**：`internal/server/proxy.go`
 
-计算应写入上游请求的转发头：
+在创建路径里加入 HTTP 专属规则：
 
-- `Host`：原始 domain
-- `X-Forwarded-Host`：原始 domain
-- `X-Forwarded-Proto`：外部 scheme
-- `X-Forwarded-For`：追加当前客户端 IP（可信代理模式），或直接设置（非可信代理模式）
+- `type=http` 时调用 `validateDomain`
+- `type=http` 时调用 `checkDomainConflict`
+- `type=http` 时把 `remote_port` 归零
 
-### 2. 扩展 `internal/server/tunnel_manager.go`
+这里的目标是确保“HTTP 创建语义”稳定，不把它继续带入端口语义。
 
-#### 2.1 创建 HTTP 隧道的校验逻辑
+### 4. `GET /api/admin/config`
 
-在 `CreateTunnel` / `prepareProxyTunnel` 中加入：
+**文件**：`internal/server/admin_api.go`、`internal/server/admin_models.go`
 
-- 对 `type=http` 的请求调用 `validateDomain`
-- 调用 `checkDomainConflict`
-- 若 `type=http` 且请求体带了 `remote_port`，直接覆盖为 `0`
+返回：
 
-#### 2.2 离线 HTTP 隧道的 edit / pause / delete
+- `server_addr`
+- `allowed_ports`
+- `effective_server_addr`
+- `server_addr_locked`
 
-补充当 Client 离线时允许的操作逻辑：
+建议使用单独的 response 结构或 handler 组装的 map，避免把计算值写回持久化结构。
 
-- `edit`（type=http）：更新 store，新 domain 立即持久化
-- `pause`（type=http）：写 store status = paused
-- `delete`（type=http）：从 store 移除
-- `resume` / `stop` 离线时：返回明确错误
+### 5. `PUT /api/admin/config?dry_run=true`
 
-### 3. 扩展 `internal/server/admin_models.go`
+返回：
 
-在 `AdminConfig` 响应结构中补充字段：
+- `affected_tunnels`
+- `conflicting_http_tunnels`
 
-```go
-type AdminConfigResponse struct {
-    // 已有字段...
-    ServerAddr          string `json:"server_addr"`
-    EffectiveServerAddr string `json:"effective_server_addr"`
-    ServerAddrLocked    bool   `json:"server_addr_locked"`
-}
-```
+规则：
 
-在 dry-run 响应结构中补充：
+- 始终 `200 OK`
+- 不做持久化
 
-```go
-type AdminConfigDryRunResponse struct {
-    // 已有字段...
-    ConflictingHTTPTunnels []string `json:"conflicting_http_tunnels"`
-}
-```
+### 6. `PUT /api/admin/config`
 
-### 4. 扩展 `internal/server/admin_api.go`
+实际保存路径必须和 dry-run 使用同一套判断逻辑：
 
-- `GET /api/admin/config`：填充 `EffectiveServerAddr` 和 `ServerAddrLocked`
-- `PUT /api/admin/config?dry_run=true`：返回 `ConflictingHTTPTunnels`
-- `PUT /api/admin/config`（实际保存）：校验 `ConflictingHTTPTunnels`，冲突时返回 `409 Conflict`
+- `server_addr_locked=true` 且请求修改 `server_addr` -> `409 Conflict`
+- `conflicting_http_tunnels` 非空 -> `409 Conflict`
+- 返回结构化冲突信息，而不是单一字符串
 
 ## 实现步骤
 
-1. 在 `pkg/protocol/types.go` 中补充 `WSSubProtocolControl` 和 `WSSubProtocolData` 常量
-2. 新建 `internal/server/http_tunnel.go`，实现上述 1.1-1.10 所有函数
-3. 修改 `internal/server/tunnel_manager.go`，加入 HTTP 隧道的校验和离线操作逻辑
-4. 修改 `internal/server/admin_models.go`，补充新字段
-5. 修改 `internal/server/admin_api.go`，填充新逻辑
-6. 运行测试，使 Batch 2 中的所有测试用例全部通过
+1. 在 `pkg/protocol/types.go` 增加子协议常量
+2. 新建 `internal/server/http_tunnel.go`，实现纯规则 helper
+3. 修改 `internal/server/proxy.go`，收口 HTTP 创建时的校验与 `remote_port=0`
+4. 修改 `internal/server/admin_api.go`，统一 `GET` / `dry_run` / `save` 的返回与冲突逻辑
+5. 如有必要，在 `internal/server/admin_models.go` 补充响应结构
+6. 明确 tunnel mutation 的最小 `409` JSON 契约，并补对应 handler 级测试
+7. 跑 Batch 2 的测试直到通过
+
+## 最小 `409` JSON 契约
+
+### 一、HTTP 隧道 create / update
+
+适用路由：
+
+- `POST /api/clients/{id}/tunnels`
+- `PUT /api/clients/{id}/tunnels/{name}`
+
+发生 HTTP 域名冲突时，返回：
+
+```json
+{
+  "success": false,
+  "error": "human readable message",
+  "error_code": "server_addr_conflict"
+}
+```
+
+或：
+
+```json
+{
+  "success": false,
+  "error": "human readable message",
+  "error_code": "http_tunnel_conflict"
+}
+```
+
+要求：
+
+- HTTP 状态码为 `409 Conflict`
+- `error_code` 至少支持：
+  - `server_addr_conflict`
+  - `http_tunnel_conflict`
+
+### 二、离线 client 上不允许的动作
+
+适用路由：
+
+- `PUT /api/clients/{id}/tunnels/{name}/resume`
+- `PUT /api/clients/{id}/tunnels/{name}/stop`
+
+当目标 client 不在线且动作不允许离线执行时，返回：
+
+```json
+{
+  "error": "human readable message",
+  "error_code": "client_offline_action_not_allowed"
+}
+```
+
+要求：
+
+- HTTP 状态码为 `409 Conflict`
+
+### 三、Admin config 保存冲突
+
+适用路由：
+
+- `PUT /api/admin/config`
+
+当保存的 `server_addr` 与 HTTP 域名冲突时，返回：
+
+```json
+{
+  "error": "human readable message",
+  "conflicting_http_tunnels": ["tunnel-a", "tunnel-b"]
+}
+```
+
+要求：
+
+- HTTP 状态码为 `409 Conflict`
+- `conflicting_http_tunnels` 与 dry-run 保持同字段名
 
 ## 验收标准
 
 ```bash
-# 全部后端单元测试通过（含 Batch 2 写的测试）
-go test ./internal/server/... -v
+go test ./internal/server/... -run 'TestCanonical|TestValidate|TestEffective|TestDomain|TestIsNetsgo|TestTrustedProxy|TestAdminConfig' -v
 go test ./pkg/... -v
-
-# 无编译错误
 go build ./...
 ```
 
-### 关键测试用例必须通过
+## 明确移出本批次的内容
 
-- `TestCanonicalHost`
-- `TestValidateDomain`
-- `TestEffectiveManagementHost`
-- `TestDomainConflictWithManagementHost`
-- `TestDomainConflictBetweenTunnels`
-- `TestIsNetsgoControlRequest`
-- `TestIsNetsgoDataRequest`
-- `TestDomainPreservedInPlaceholder`
-- `TestTrustedProxyHeaders`
-- `TestOfflineTunnelEdit`
-- `TestAdminConfigResponse`
-- `TestAdminConfigDryRun`
-
-## 不引入的改动
-
-- 不改路由层（`server.go` 的路由注册）
-- 不改 Client 侧代码
-- 不改前端
-- 不实现 `hostDispatchHandler`
+- 不改 `readClientFromPath`
+- 不改 `handleUpdateTunnel` / `handlePauseTunnel` / `handleDeleteTunnel` 的离线路径
+- 不做 store-first
+- 不做 `hostDispatchHandler`
+- 不做 HTTP 代理运行时
+- 不做 Client 侧子协议发送

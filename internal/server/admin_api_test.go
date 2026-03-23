@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"netsgo/pkg/protocol"
 )
 
 // setupTestServerWithDB 创建用于 API 测试的 Server
@@ -26,7 +28,7 @@ func setupTestServerWithDB(t *testing.T, initialized bool) (*Server, func()) {
 	}
 
 	if initialized {
-		err = store.Initialize("admin", "password123", "localhost", nil)
+		err = store.Initialize("admin", "password123", "http://localhost", nil)
 		if err != nil {
 			t.Fatalf("初始化 AdminStore 失败: %v", err)
 		}
@@ -111,6 +113,51 @@ func doMuxRequest(t *testing.T, handler http.Handler, method, path, token string
 	return w
 }
 
+func setupTestServerWithStores(t *testing.T, initialized bool) (*Server, http.Handler, string, func()) {
+	t.Helper()
+
+	s, cleanup := setupTestServerWithDB(t, initialized)
+
+	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+	s.store = store
+
+	handler := s.StartHTTPOnly()
+	token := ""
+	if initialized {
+		token = loginAdminTokenLocal(t, handler, "admin", "password123")
+	}
+
+	return s, handler, token, cleanup
+}
+
+func seedStoredTunnel(t *testing.T, s *Server, clientID string, req protocol.ProxyNewRequest, status string) {
+	t.Helper()
+
+	if s.store == nil {
+		t.Fatal("测试前置错误：s.store 不能为空")
+	}
+	if req.LocalIP == "" {
+		req.LocalIP = "127.0.0.1"
+	}
+	if req.LocalPort == 0 {
+		req.LocalPort = 8080
+	}
+
+	err := s.store.AddTunnel(StoredTunnel{
+		ProxyNewRequest: req,
+		Status:          status,
+		ClientID:        clientID,
+		Hostname:        clientID + ".local",
+		Binding:         TunnelBindingClientID,
+	})
+	if err != nil {
+		t.Fatalf("写入测试隧道失败: %v", err)
+	}
+}
+
 func loginAdminTokenLocal(t *testing.T, handler http.Handler, username, password string) string {
 	t.Helper()
 
@@ -172,7 +219,7 @@ func TestAPI_SetupInit_Success(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, false)
 	defer cleanup()
 
-	body := []byte(`{"admin":{"username":"admin2","password":"password123"},"server_addr":"test-server.com","allowed_ports":[]}`)
+	body := []byte(`{"admin":{"username":"admin2","password":"password123"},"server_addr":"https://test-server.com","allowed_ports":[]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -215,7 +262,7 @@ func TestAPI_SetupInit_AlreadyInitialized(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
 
-	body := []byte(`{"admin":{"username":"attacker","password":"password123"},"server_addr":"evil.com","allowed_ports":[]}`)
+	body := []byte(`{"admin":{"username":"attacker","password":"password123"},"server_addr":"https://evil.com","allowed_ports":[]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
@@ -367,9 +414,6 @@ func TestAPI_AdminKeys_CreateAndList(t *testing.T) {
 	}
 }
 
-
-
-
 func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
@@ -385,12 +429,12 @@ func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 
 	var config map[string]any
 	json.NewDecoder(w.Body).Decode(&config)
-	if config["server_addr"] != "localhost" {
-		t.Errorf("初始 server_addr 应为 localhost，得到 %v", config["server_addr"])
+	if config["server_addr"] != "http://localhost" {
+		t.Errorf("初始 server_addr 应为 http://localhost，得到 %v", config["server_addr"])
 	}
 
 	// PUT: 更新配置
-	updateBody := []byte(`{"server_addr":"tunnel.example.com","allowed_ports":[{"start":10000,"end":20000},{"start":30000,"end":30000}]}`)
+	updateBody := []byte(`{"server_addr":"https://tunnel.example.com","allowed_ports":[{"start":10000,"end":20000},{"start":30000,"end":30000}]}`)
 	req2 := httptest.NewRequest(http.MethodPut, "/api/admin/config", bytes.NewReader(updateBody))
 	w2 := httptest.NewRecorder()
 	s.handleAPIAdminConfig(w2, req2)
@@ -406,8 +450,8 @@ func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 
 	var updated map[string]any
 	json.NewDecoder(w3.Body).Decode(&updated)
-	if updated["server_addr"] != "tunnel.example.com" {
-		t.Errorf("更新后 server_addr 应为 tunnel.example.com，得到 %v", updated["server_addr"])
+	if updated["server_addr"] != "https://tunnel.example.com" {
+		t.Errorf("更新后 server_addr 应为 https://tunnel.example.com，得到 %v", updated["server_addr"])
 	}
 	ports, ok := updated["allowed_ports"].([]any)
 	if !ok || len(ports) != 2 {
@@ -422,6 +466,304 @@ func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 
 	if w4.Code != http.StatusBadRequest {
 		t.Fatalf("无效端口范围应返回 400，得到 %d", w4.Code)
+	}
+}
+
+func TestAPI_AdminConfig_ServerAddrValidation(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+
+	body := []byte(`{"server_addr":"ws://example.com","allowed_ports":[]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/admin/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAPIAdminConfig(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("非法 server_addr 应返回 400，得到 %d", w.Code)
+	}
+}
+
+func TestAPI_AdminConfig_ServerAddrNormalization(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+
+	body := []byte(`{"server_addr":"https://example.com/","allowed_ports":[]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/admin/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAPIAdminConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("带根路径的 server_addr 应返回 200，得到 %d, body: %s", w.Code, w.Body.String())
+	}
+
+	if got := s.adminStore.GetServerConfig().ServerAddr; got != "https://example.com" {
+		t.Fatalf("server_addr 应规范化为无尾斜杠，得到 %q", got)
+	}
+}
+
+func TestAPI_AdminConfig_AllowsUpdatingPortsWithLegacyServerAddr(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, false)
+	defer cleanup()
+
+	if err := s.adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
+		t.Fatalf("初始化 legacy server_addr 失败: %v", err)
+	}
+
+	body := []byte(`{"server_addr":"localhost","allowed_ports":[{"start":20000,"end":20010}]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/admin/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAPIAdminConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("legacy server_addr 未修改时应允许仅更新端口，得到 %d, body: %s", w.Code, w.Body.String())
+	}
+
+	if got := s.adminStore.GetServerConfig().ServerAddr; got != "localhost" {
+		t.Fatalf("legacy server_addr 应保持原值，得到 %q", got)
+	}
+}
+
+func TestAPI_SetupInit_ServerAddrValidation(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, false)
+	defer cleanup()
+
+	body := []byte(`{"admin":{"username":"admin2","password":"password123"},"server_addr":"example.com","allowed_ports":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleSetupInit(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("非法 server_addr 应返回 400，得到 %d", w.Code)
+	}
+}
+
+func TestAdminConfigResponse(t *testing.T) {
+	t.Run("无环境变量时返回生效地址与未锁定状态", func(t *testing.T) {
+		_, handler, token, cleanup := setupTestServerWithStores(t, true)
+		defer cleanup()
+
+		resp := doMuxRequest(t, handler, http.MethodGet, "/api/admin/config", token, nil)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("GET /api/admin/config 期望 200，得到 %d", resp.Code)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			t.Fatalf("解析响应失败: %v", err)
+		}
+
+		if payload["server_addr"] != "http://localhost" {
+			t.Fatalf("server_addr 期望 http://localhost，得到 %v", payload["server_addr"])
+		}
+		if payload["effective_server_addr"] != "localhost" {
+			t.Fatalf("effective_server_addr 期望 localhost，得到 %v", payload["effective_server_addr"])
+		}
+		if locked, ok := payload["server_addr_locked"].(bool); !ok || locked {
+			t.Fatalf("server_addr_locked 期望 false，得到 %v", payload["server_addr_locked"])
+		}
+	})
+
+	t.Run("环境变量存在时返回锁定状态与环境生效地址", func(t *testing.T) {
+		t.Setenv("NETSGO_SERVER_ADDR", "https://Locked.EXAMPLE.com:443")
+
+		_, handler, token, cleanup := setupTestServerWithStores(t, true)
+		defer cleanup()
+
+		resp := doMuxRequest(t, handler, http.MethodGet, "/api/admin/config", token, nil)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("GET /api/admin/config 期望 200，得到 %d", resp.Code)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			t.Fatalf("解析响应失败: %v", err)
+		}
+
+		if payload["server_addr"] != "http://localhost" {
+			t.Fatalf("server_addr 应保持持久化值 http://localhost，得到 %v", payload["server_addr"])
+		}
+		if payload["effective_server_addr"] != "locked.example.com" {
+			t.Fatalf("effective_server_addr 期望 locked.example.com，得到 %v", payload["effective_server_addr"])
+		}
+		if locked, ok := payload["server_addr_locked"].(bool); !ok || !locked {
+			t.Fatalf("server_addr_locked 期望 true，得到 %v", payload["server_addr_locked"])
+		}
+	})
+}
+
+func TestAdminConfigDryRun(t *testing.T) {
+	t.Run("无域名冲突时仍返回 affected_tunnels 与空冲突数组", func(t *testing.T) {
+		s, handler, token, cleanup := setupTestServerWithStores(t, true)
+		defer cleanup()
+
+		seedStoredTunnel(t, s, "client-1", protocol.ProxyNewRequest{
+			Name:       "tcp-affected",
+			Type:       protocol.ProxyTypeTCP,
+			RemotePort: 40000,
+		}, protocol.ProxyStatusActive)
+
+		body := []byte(`{"server_addr":"https://mgmt.example.com","allowed_ports":[{"start":30000,"end":30010}]}`)
+		resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/config?dry_run=true", token, body)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("PUT /api/admin/config?dry_run=true 期望 200，得到 %d", resp.Code)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			t.Fatalf("解析响应失败: %v", err)
+		}
+
+		affected, ok := payload["affected_tunnels"].([]any)
+		if !ok || len(affected) != 1 {
+			t.Fatalf("affected_tunnels 期望 1 条，得到 %v", payload["affected_tunnels"])
+		}
+
+		conflicts, ok := payload["conflicting_http_tunnels"].([]any)
+		if !ok || len(conflicts) != 0 {
+			t.Fatalf("conflicting_http_tunnels 期望空数组，得到 %v", payload["conflicting_http_tunnels"])
+		}
+	})
+
+	t.Run("管理地址与 HTTP 域名冲突时返回冲突隧道", func(t *testing.T) {
+		s, handler, token, cleanup := setupTestServerWithStores(t, true)
+		defer cleanup()
+
+		seedStoredTunnel(t, s, "client-1", protocol.ProxyNewRequest{
+			Name:      "http-app",
+			Type:      protocol.ProxyTypeHTTP,
+			Domain:    "App.Example.com",
+			LocalIP:   "127.0.0.1",
+			LocalPort: 8080,
+		}, protocol.ProxyStatusPaused)
+
+		body := []byte(`{"server_addr":"https://app.example.com","allowed_ports":[]}`)
+		resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/config?dry_run=true", token, body)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("PUT /api/admin/config?dry_run=true 期望 200，得到 %d", resp.Code)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			t.Fatalf("解析响应失败: %v", err)
+		}
+
+		conflicts, ok := payload["conflicting_http_tunnels"].([]any)
+		if !ok || len(conflicts) != 1 {
+			t.Fatalf("conflicting_http_tunnels 期望返回 1 条冲突，得到 %v", payload["conflicting_http_tunnels"])
+		}
+		if conflicts[0] != "http-app" {
+			t.Fatalf("冲突隧道期望 http-app，得到 %v", conflicts[0])
+		}
+	})
+}
+
+func TestAdminConfigUpdateRejectsWhenLocked(t *testing.T) {
+	t.Setenv("NETSGO_SERVER_ADDR", "https://locked.example.com")
+
+	_, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	body := []byte(`{"server_addr":"https://new.example.com","allowed_ports":[]}`)
+	resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/config", token, body)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("server_addr 被锁定时期望 409，得到 %d", resp.Code)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	if _, ok := payload["error"].(string); !ok {
+		t.Fatalf("锁定冲突应返回结构化 error，得到 %v", payload)
+	}
+	if locked, ok := payload["server_addr_locked"].(bool); !ok || !locked {
+		t.Fatalf("锁定冲突应返回 server_addr_locked=true，得到 %v", payload["server_addr_locked"])
+	}
+}
+
+func TestAdminConfigUpdateAllowsDefaultPortNormalizationWhenLocked(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, false)
+	defer cleanup()
+
+	if err := s.adminStore.Initialize("admin", "password123", "https://example.com:443", nil); err != nil {
+		t.Fatalf("初始化带默认端口的 server_addr 失败: %v", err)
+	}
+	t.Setenv("NETSGO_SERVER_ADDR", "https://locked.example.com")
+
+	body := []byte(`{"server_addr":"https://example.com","allowed_ports":[{"start":30000,"end":30000}]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/admin/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAPIAdminConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("默认端口规范化后应允许在锁定下保存非 server_addr 变更，得到 %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminConfigResponse_InvalidEnvDoesNotOverrideOrLock(t *testing.T) {
+	t.Setenv("NETSGO_SERVER_ADDR", "ws://locked.example.com")
+
+	_, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	resp := doMuxRequest(t, handler, http.MethodGet, "/api/admin/config", token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("GET /api/admin/config 期望 200，得到 %d", resp.Code)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	if payload["effective_server_addr"] != "localhost" {
+		t.Fatalf("非法环境变量不应覆盖 effective_server_addr，得到 %v", payload["effective_server_addr"])
+	}
+	if locked, ok := payload["server_addr_locked"].(bool); !ok || locked {
+		t.Fatalf("非法环境变量不应锁定 server_addr，得到 %v", payload["server_addr_locked"])
+	}
+}
+
+func TestAdminConfigUpdateRejectsWhenHTTPDomainConflicts(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	seedStoredTunnel(t, s, "client-1", protocol.ProxyNewRequest{
+		Name:      "http-app",
+		Type:      protocol.ProxyTypeHTTP,
+		Domain:    "app.example.com",
+		LocalIP:   "127.0.0.1",
+		LocalPort: 8080,
+	}, protocol.ProxyStatusStopped)
+
+	body := []byte(`{"server_addr":"https://app.example.com","allowed_ports":[]}`)
+	resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/config", token, body)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("server_addr 与 HTTP 域名冲突时期望 409，得到 %d", resp.Code)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	conflicts, ok := payload["conflicting_http_tunnels"].([]any)
+	if !ok || len(conflicts) != 1 {
+		t.Fatalf("conflicting_http_tunnels 期望返回 1 条冲突，得到 %v", payload["conflicting_http_tunnels"])
+	}
+	if conflicts[0] != "http-app" {
+		t.Fatalf("冲突隧道期望 http-app，得到 %v", conflicts[0])
 	}
 }
 

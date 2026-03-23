@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -95,6 +96,17 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"用户名不能为空"}`, http.StatusBadRequest)
 		return
 	}
+
+	normalizedServerAddr, err := validateServerAddr(req.ServerAddr)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": err.Error(),
+		})
+		return
+	}
+	req.ServerAddr = normalizedServerAddr
 
 	if s.setupToken != "" {
 		if req.SetupToken != s.setupToken {
@@ -377,8 +389,12 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		if config.AllowedPorts == nil {
 			config.AllowedPorts = []PortRange{}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(config)
+		encodeJSON(w, http.StatusOK, adminConfigResponse{
+			ServerAddr:          config.ServerAddr,
+			AllowedPorts:        config.AllowedPorts,
+			EffectiveServerAddr: effectiveManagementHost(&config, serverListenAddr(s)),
+			ServerAddrLocked:    isServerAddrLocked(),
+		})
 
 	case http.MethodPut:
 		var config ServerConfig
@@ -386,6 +402,19 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
 			return
 		}
+
+		current := s.adminStore.GetServerConfig()
+
+		normalizedServerAddr, err := normalizeServerAddrForConfigUpdate(config.ServerAddr, current.ServerAddr)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": err.Error(),
+			})
+			return
+		}
+		config.ServerAddr = normalizedServerAddr
 
 		// 校验端口范围合法性
 		for _, pr := range config.AllowedPorts {
@@ -402,14 +431,39 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 			config.AllowedPorts = []PortRange{}
 		}
 
+		currentServerAddr := strings.TrimSpace(current.ServerAddr)
+		if normalizedCurrent, err := validateServerAddr(current.ServerAddr); err == nil {
+			currentServerAddr = normalizedCurrent
+		}
 		// 检查受影响的隧道（当新白名单非空时）
 		affected := s.findTunnelsAffectedByPortChange(config.AllowedPorts)
+		conflicts := conflictingHTTPDomainsForServerAddr(config.ServerAddr, s)
 
 		// dry_run 模式：仅预览受影响的隧道，不保存
 		if r.URL.Query().Get("dry_run") == "true" {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"affected_tunnels": affected,
+			encodeJSON(w, http.StatusOK, adminConfigUpdateResponse{
+				AffectedTunnels:        affected,
+				ConflictingHTTPTunnels: conflicts,
+			})
+			return
+		}
+
+		// 环境变量锁定时，仅允许保存与持久化值一致的 server_addr。
+		if isServerAddrLocked() && config.ServerAddr != currentServerAddr {
+			encodeJSON(w, http.StatusConflict, adminConfigUpdateResponse{
+				Error:                  "server_addr 已被环境变量 NETSGO_SERVER_ADDR 锁定",
+				ServerAddrLocked:       true,
+				AffectedTunnels:        affected,
+				ConflictingHTTPTunnels: conflicts,
+			})
+			return
+		}
+
+		if len(conflicts) > 0 {
+			encodeJSON(w, http.StatusConflict, adminConfigUpdateResponse{
+				Error:                  "server_addr 与现有 HTTP 隧道域名冲突",
+				AffectedTunnels:        affected,
+				ConflictingHTTPTunnels: conflicts,
 			})
 			return
 		}
@@ -434,15 +488,13 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 				"affected_count", len(affected), "module", "admin")
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"success":          true,
-			"affected_tunnels": affected,
+		encodeJSON(w, http.StatusOK, adminConfigUpdateResponse{
+			Success:                true,
+			AffectedTunnels:        affected,
+			ConflictingHTTPTunnels: conflicts,
 		})
 
 	default:
 		http.Error(w, `{"error":"not allowed"}`, http.StatusMethodNotAllowed)
 	}
 }
-
-

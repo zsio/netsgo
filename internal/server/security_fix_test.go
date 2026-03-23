@@ -126,7 +126,7 @@ func TestP8_SetupToken_Required(t *testing.T) {
 	s.setupToken = "test-setup-token-12345"
 
 	// 不携带 setup_token 的初始化请求 → 应该被拒绝
-	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"localhost","allowed_ports":[]}`)
+	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -151,7 +151,7 @@ func TestP8_SetupToken_Wrong(t *testing.T) {
 	s.setupToken = "correct-token"
 
 	// 携带错误的 setup_token → 应该被拒绝
-	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"localhost","allowed_ports":[],"setup_token":"wrong-token"}`)
+	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[],"setup_token":"wrong-token"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -170,7 +170,7 @@ func TestP8_SetupToken_Correct(t *testing.T) {
 	s.setupToken = "correct-token-abc123"
 
 	// 携带正确的 setup_token → 应该成功初始化
-	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"localhost","allowed_ports":[],"setup_token":"correct-token-abc123"}`)
+	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[],"setup_token":"correct-token-abc123"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -199,7 +199,7 @@ func TestP8_SetupToken_NoTokenRequired_Passes(t *testing.T) {
 	// setupToken 为空（模拟没有设置 token 的场景，例如测试中直接调用）
 	// 这种情况下初始化应该正常通过
 
-	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"localhost","allowed_ports":[]}`)
+	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

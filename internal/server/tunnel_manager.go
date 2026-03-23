@@ -251,6 +251,17 @@ func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP st
 
 	wasError := tunnel.Config.Status == protocol.ProxyStatusError
 	tunnelType := tunnel.Config.Type
+	req := protocol.ProxyNewRequest{
+		Name:       name,
+		Type:       tunnelType,
+		LocalIP:    localIP,
+		LocalPort:  localPort,
+		RemotePort: remotePort,
+		Domain:     domain,
+	}
+	if err := s.validateProxyRequestWithExclusions(client, req, name, client.ID); err != nil {
+		return protocol.ProxyConfig{}, err
+	}
 
 	// 更新运行时内存中的隧道配置
 	client.proxyMu.Lock()
@@ -278,14 +289,6 @@ func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP st
 		delete(client.proxies, name)
 		client.proxyMu.Unlock()
 
-		req := protocol.ProxyNewRequest{
-			Name:       name,
-			Type:       tunnelType,
-			LocalIP:    localIP,
-			LocalPort:  localPort,
-			RemotePort: remotePort,
-			Domain:     domain,
-		}
 		config, err := s.createManagedTunnel(client, req, false, "updated")
 		if err != nil {
 			// 启动失败 → 放回 error 状态的占位记录

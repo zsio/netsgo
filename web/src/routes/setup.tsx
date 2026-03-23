@@ -362,7 +362,7 @@ function SetupPage() {
                     {/* Security Status Feedback — based on protocol × host type */}
                     {(() => {
                       if (!serverAddr) return null;
-                      if (!/^(https?|wss?):\/\//.test(serverAddr.trim())) return null;
+                      if (!/^https?:\/\//.test(serverAddr.trim())) return null;
 
                       const validationError = getServerAddrValidationError(serverAddr);
                       if (validationError) {
@@ -411,7 +411,7 @@ function SetupPage() {
                               <div className="space-y-0.5">
                                 <p className="font-medium text-blue-700 dark:text-blue-400 text-sm">连接已加密</p>
                                 <p className="text-xs text-muted-foreground leading-relaxed">
-                                  通信已通过 TLS 加密。若需外部 Client 接入，建议配置公网域名并通过反向代理提供 HTTPS/WSS。
+                                  通信已通过 TLS 加密。若需外部 Client 接入，建议配置公网域名并通过反向代理提供 HTTPS。
                                 </p>
                               </div>
                             </div>
@@ -427,7 +427,7 @@ function SetupPage() {
                             <div className="space-y-0.5">
                               <p className="font-medium text-amber-700 dark:text-amber-500 text-sm">连接未加密</p>
                               <p className="text-xs text-muted-foreground leading-relaxed">
-                                当前使用明文连接，Client Key 等敏感信息存在被窃听的风险。建议通过反向代理配置域名并启用 HTTPS/WSS。
+                                当前使用明文连接，Client Key 等敏感信息存在被窃听的风险。建议通过反向代理配置域名并启用 HTTPS。
                                 <span className="text-muted-foreground/70">（内网或测试环境可忽略）</span>
                               </p>
                             </div>

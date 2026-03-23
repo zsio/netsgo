@@ -19,12 +19,34 @@ type ProxyTunnel struct {
 	once     sync.Once
 }
 
+type proxyRequestValidationError struct {
+	err error
+}
+
+func (e *proxyRequestValidationError) Error() string {
+	return e.err.Error()
+}
+
 func (s *Server) validateProxyRequest(client *ClientConn, req protocol.ProxyNewRequest) error {
+	return s.validateProxyRequestWithExclusions(client, req, "", "")
+}
+
+func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, excludeName, excludeClientID string) error {
+	if req.Type == protocol.ProxyTypeHTTP {
+		if err := validateDomain(req.Domain); err != nil {
+			return &proxyRequestValidationError{err: err}
+		}
+		if err := checkDomainConflict(req.Domain, excludeName, excludeClientID, s); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	if s.adminStore != nil {
 		// 校验端口白名单
 		if req.RemotePort != 0 {
 			if s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(req.RemotePort) {
-				return fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort)
+				return &proxyRequestValidationError{err: fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort)}
 			}
 		}
 	}
@@ -59,6 +81,9 @@ func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewReq
 		client.proxyMu.Unlock()
 		return nil, fmt.Errorf("代理隧道 %q 已存在", req.Name)
 	}
+	if req.Type == protocol.ProxyTypeHTTP {
+		req.RemotePort = 0
+	}
 	tunnel := &ProxyTunnel{
 		Config: protocol.ProxyConfig{
 			Name:       req.Name,
@@ -66,6 +91,7 @@ func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewReq
 			LocalIP:    req.LocalIP,
 			LocalPort:  req.LocalPort,
 			RemotePort: req.RemotePort,
+			Domain:     req.Domain,
 			ClientID:   client.ID,
 			Status:     status,
 		},
@@ -78,11 +104,17 @@ func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewReq
 }
 
 func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel) error {
-	if err := s.validateProxyRequest(client, tunnel.Config.ToProxyNewRequest()); err != nil {
+	if err := s.validateProxyRequestWithExclusions(client, tunnel.Config.ToProxyNewRequest(), tunnel.Config.Name, client.ID); err != nil {
 		return err
 	}
 	if err := s.ensureClientDataReady(client); err != nil {
 		return err
+	}
+
+	if tunnel.Config.Type == protocol.ProxyTypeHTTP {
+		// HTTP 隧道不绑定公网端口，通过 HTTP 路由层分发
+		tunnel.Config.Status = protocol.ProxyStatusActive
+		return nil
 	}
 
 	if tunnel.Config.Type == protocol.ProxyTypeUDP {

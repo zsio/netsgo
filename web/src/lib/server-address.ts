@@ -1,7 +1,7 @@
-const SERVER_ADDR_PROTOCOLS = new Set(['http:', 'https:', 'ws:', 'wss:']);
+const SERVER_ADDR_PROTOCOLS = new Set(['http:', 'https:']);
 
 export const SERVER_ADDR_PLACEHOLDER = '例如: https://tunnel.example.com';
-export const SERVER_ADDR_HELP_TEXT = '支持 http://、https://、ws://、wss://。请输入基础连接地址，不要包含路径、查询参数或锚点。推荐通过 nginx/caddy 等反向代理启用 HTTPS 或 WSS。';
+export const SERVER_ADDR_HELP_TEXT = '仅支持 http://、https://。请输入基础连接地址，不要包含路径、查询参数、锚点或用户信息。推荐通过 nginx/caddy 等反向代理启用 HTTPS。';
 
 type ServerAddrHostKind = 'domain' | 'ip' | 'localhost' | 'local';
 
@@ -31,13 +31,40 @@ function normalizeParsedServerAddr(url: URL) {
   return `${url.protocol}//${url.host}`;
 }
 
-function validateParsedServerAddr(url: URL) {
+function hasUserInfo(raw: string) {
+  return /^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(raw);
+}
+
+function validateParsedServerAddr(raw: string, url: URL) {
   if (!isSupportedServerAddrProtocol(url.protocol)) {
-    return '仅支持 http://、https://、ws://、wss://';
+    return '仅支持 http://、https://';
   }
 
   if ((url.pathname && url.pathname !== '/') || url.search || url.hash) {
     return '请输入基础连接地址，不要包含路径、查询参数或锚点';
+  }
+
+  if (hasUserInfo(raw) || url.username || url.password) {
+    return '请输入基础连接地址，不要包含用户信息';
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  const isLocalhost = hostname === 'localhost';
+  const isIpv4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(hostname);
+  const isIpv6 = hostname.includes(':');
+
+  if (!isLocalhost && !isIpv4 && !isIpv6) {
+    const labels = hostname.split('.');
+    const isFQDN = labels.length >= 2 && labels.every((label) => (
+      label.length > 0 &&
+      !label.startsWith('-') &&
+      !label.endsWith('-') &&
+      /^[a-z0-9-]+$/.test(label)
+    ));
+
+    if (!isFQDN) {
+      return '主机名必须是 FQDN、localhost、IPv4 或 IPv6 字面量';
+    }
   }
 
   return null;
@@ -51,10 +78,10 @@ function parseValidatedServerAddr(value: string) {
 
   const url = parseServerAddr(trimmed);
   if (!url) {
-    return { error: '请输入有效的完整 URL（需包含 http://、https://、ws:// 或 wss://）' as const };
+    return { error: '请输入有效的完整 URL（需包含 http:// 或 https://）' as const };
   }
 
-  const error = validateParsedServerAddr(url);
+  const error = validateParsedServerAddr(trimmed, url);
   if (error) {
     return { error };
   }
@@ -82,12 +109,12 @@ export function getServerAddrInfo(value: string): ServerAddrInfo | null {
   }
 
   const hostname = result.url.hostname;
-  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith('[');
+  const isIp = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(hostname) || hostname.includes(':');
   const isLocalhost = hostname === 'localhost';
   const isDomain = !isIp && !isLocalhost && /\.[a-zA-Z]{2,}$/.test(hostname);
 
   return {
-    isSecure: result.url.protocol === 'https:' || result.url.protocol === 'wss:',
+    isSecure: result.url.protocol === 'https:',
     hostKind: isDomain ? 'domain' : isIp ? 'ip' : isLocalhost ? 'localhost' : 'local',
   };
 }

@@ -66,6 +66,8 @@ function AdminConfigPage() {
 function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
   const updateConfig = useUpdateAdminConfig();
   const [serverAddr, setServerAddr] = useState(initialConfig.server_addr || '');
+  const initialServerAddr = (initialConfig.server_addr || '').trim();
+  const initialServerAddrIsLegacy = initialServerAddr !== '' && getServerAddrValidationError(initialServerAddr) !== null;
   // 为每行分配一个绝对稳定的本地 id 以保证增删、编辑改值时 React 动画不会重组闪烁
   const [portRanges, setPortRanges] = useState<LocalPortRange[]>(() => {
     const ports = initialConfig.allowed_ports || [];
@@ -79,10 +81,39 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
   const [saved, setSaved] = useState(false);
   const [checking, setChecking] = useState(false);
   const [affectedTunnels, setAffectedTunnels] = useState<AffectedTunnel[]>([]);
+  const [pendingServerAddr, setPendingServerAddr] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
 
   const toPayloadPorts = (ranges: LocalPortRange[]): PortRange[] =>
     ranges.map((range) => ({ start: range.start, end: range.end }));
+
+  const resolveServerAddrForSubmit = () => {
+    const trimmedServerAddr = serverAddr.trim();
+    const isUnchangedLegacy = initialServerAddrIsLegacy && trimmedServerAddr === initialServerAddr;
+
+    if (isUnchangedLegacy) {
+      return {
+        value: initialServerAddr,
+        shouldUpdateInput: false,
+      };
+    }
+
+    const addrError = getServerAddrValidationError(serverAddr);
+    if (addrError) {
+      toast.error(addrError);
+      return null;
+    }
+    const normalizedServerAddr = normalizeServerAddr(serverAddr);
+    if (!normalizedServerAddr) {
+      toast.error('请填写有效的 Client 连接地址');
+      return null;
+    }
+
+    return {
+      value: normalizedServerAddr,
+      shouldUpdateInput: normalizedServerAddr !== serverAddr,
+    };
+  };
 
   // --- 端口表单交互逻辑 ---
   const startAdd = () => {
@@ -154,17 +185,13 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
   const checkAndSave = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const addrError = getServerAddrValidationError(serverAddr);
-    if (addrError) {
-      toast.error(addrError);
+    const resolvedServerAddr = resolveServerAddrForSubmit();
+    if (!resolvedServerAddr) {
       return;
     }
-    const normalizedServerAddr = normalizeServerAddr(serverAddr);
-    if (!normalizedServerAddr) {
-      toast.error('请填写有效的 Client 连接地址');
-      return;
+    if (resolvedServerAddr.shouldUpdateInput) {
+      setServerAddr(resolvedServerAddr.value);
     }
-    setServerAddr(normalizedServerAddr);
 
     if (editingIndex !== null) {
       // 防止非键盘交互时触碰外层提交按钮
@@ -178,18 +205,20 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
     try {
       // 调用检查接口时同样要清理内部的 _id 属性
       const cleanPorts = toPayloadPorts(portRanges);
+      setPendingServerAddr(resolvedServerAddr.value);
       const result = await api.put<{ affected_tunnels: AffectedTunnel[] }>(
         '/api/admin/config?dry_run=true',
-        { server_addr: normalizedServerAddr, allowed_ports: cleanPorts },
+        { server_addr: resolvedServerAddr.value, allowed_ports: cleanPorts },
       );
 
       if (result.affected_tunnels && result.affected_tunnels.length > 0) {
         setAffectedTunnels(result.affected_tunnels);
         setShowConfirm(true);
       } else {
-        await doSave();
+        await doSave(resolvedServerAddr.value);
       }
     } catch (error: unknown) {
+      setPendingServerAddr(null);
       const message = error instanceof Error ? error.message : '检查配置失败，请检查网络或服务端日志';
       toast.error(message);
       console.error('检查配置失败', error);
@@ -198,23 +227,25 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
     }
   };
 
-  const doSave = async () => {
+  const doSave = async (serverAddrToSave?: string) => {
     try {
-      const normalizedServerAddr = normalizeServerAddr(serverAddr);
-      if (!normalizedServerAddr) {
-        toast.error('请填写有效的 Client 连接地址');
+      const resolvedServerAddr = serverAddrToSave
+        ? { value: serverAddrToSave, shouldUpdateInput: false }
+        : resolveServerAddrForSubmit();
+      if (!resolvedServerAddr) {
         return;
       }
       // 剔除内部使用的 _id 避免污染通过网络发送的 Payload 
       const cleanPorts = toPayloadPorts(portRanges);
       await updateConfig.mutateAsync({
-        server_addr: normalizedServerAddr,
+        server_addr: resolvedServerAddr.value,
         allowed_ports: cleanPorts,
       });
-      setServerAddr(normalizedServerAddr);
+      setServerAddr(resolvedServerAddr.value);
       setSaved(true);
       setShowConfirm(false);
       setAffectedTunnels([]);
+      setPendingServerAddr(null);
       setTimeout(() => setSaved(false), 2000);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : '保存配置失败，请重试';
@@ -245,7 +276,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
         <div className="grid grid-cols-[280px_1fr] border-b border-border/40">
           <div className="p-6 bg-muted/20">
             <h4 className="font-semibold text-foreground">Client 连接地址</h4>
-            <p className="text-sm text-muted-foreground mt-1">Client 建立控制通道和数据通道时使用的服务端地址，支持 HTTP(S) 与 WS(S)。</p>
+            <p className="text-sm text-muted-foreground mt-1">Client 建立控制通道和数据通道时使用的服务端地址，仅支持 HTTP(S)。</p>
           </div>
           <div className="p-6">
             <div className="max-w-md">
@@ -256,6 +287,11 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
                 className="w-full"
               />
               <p className="text-xs text-muted-foreground mt-2">{SERVER_ADDR_HELP_TEXT}</p>
+              {initialServerAddrIsLegacy && serverAddr.trim() === initialServerAddr && (
+                <p className="text-xs text-amber-600 mt-2">
+                  当前保存值来自旧版本格式。本次可以先仅修改端口规则；如果要修改服务地址，请改成完整的 HTTP(S) URL。
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -403,7 +439,13 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
       </form>
 
       {/* 受影响隧道二次确认弹窗 */}
-      <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
+      <AlertDialog open={showConfirm} onOpenChange={(open) => {
+        setShowConfirm(open);
+        if (!open) {
+          setAffectedTunnels([]);
+          setPendingServerAddr(null);
+        }
+      }}>
         <AlertDialogContent className="!max-w-lg w-[calc(100vw-2rem)]">
           <AlertDialogHeader>
             <AlertDialogMedia className="bg-amber-500/10">
@@ -453,7 +495,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
             <AlertDialogCancel>返回修改</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              onClick={doSave}
+              onClick={() => doSave(pendingServerAddr ?? undefined)}
               disabled={updateConfig.isPending}
             >
               <AlertTriangle className="w-3.5 h-3.5 mr-1.5" />

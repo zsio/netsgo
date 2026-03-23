@@ -1819,6 +1819,135 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	}
 }
 
+func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	var err error
+	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+
+	wsConn, authResp := connectAndAuth(t, ts, "http-conflict-create")
+	defer wsConn.Close()
+
+	seedStoredTunnel(t, s, "client-other", protocol.ProxyNewRequest{
+		Name:      "existing-http",
+		Type:      protocol.ProxyTypeHTTP,
+		Domain:    "app.example.com",
+		LocalIP:   "127.0.0.1",
+		LocalPort: 8080,
+	}, protocol.ProxyStatusPaused)
+
+	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 Admin Token 失败: %v", err)
+	}
+	reqBody := []byte(`{"name":"new-http","type":"http","local_ip":"127.0.0.1","local_port":3000,"domain":"app.example.com"}`)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels", authResp.ClientID), bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "test")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create tunnel 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("HTTP 域名冲突时期望 409，得到 %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if body["error_code"] != httpTunnelErrCodeDomainConflict {
+		t.Fatalf("error_code 期望 %q，得到 %v", httpTunnelErrCodeDomainConflict, body["error_code"])
+	}
+}
+
+func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	var err error
+	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+
+	wsConn, authResp := connectAndAuth(t, ts, "http-conflict-update")
+	defer wsConn.Close()
+
+	seedStoredTunnel(t, s, "client-other", protocol.ProxyNewRequest{
+		Name:      "existing-http",
+		Type:      protocol.ProxyTypeHTTP,
+		Domain:    "app.example.com",
+		LocalIP:   "127.0.0.1",
+		LocalPort: 8080,
+	}, protocol.ProxyStatusStopped)
+	seedStoredTunnel(t, s, authResp.ClientID, protocol.ProxyNewRequest{
+		Name:      "editable-http",
+		Type:      protocol.ProxyTypeHTTP,
+		Domain:    "editable.example.com",
+		LocalIP:   "127.0.0.1",
+		LocalPort: 3000,
+	}, protocol.ProxyStatusPaused)
+
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("client %s 不存在", authResp.ClientID)
+	}
+	client := value.(*ClientConn)
+	client.proxyMu.Lock()
+	client.proxies["editable-http"] = &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:      "editable-http",
+			Type:      protocol.ProxyTypeHTTP,
+			LocalIP:   "127.0.0.1",
+			LocalPort: 3000,
+			Domain:    "editable.example.com",
+			ClientID:  authResp.ClientID,
+			Status:    protocol.ProxyStatusPaused,
+		},
+		done: make(chan struct{}),
+	}
+	client.proxyMu.Unlock()
+
+	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 Admin Token 失败: %v", err)
+	}
+	reqBody := []byte(`{"local_ip":"127.0.0.1","local_port":3000,"remote_port":0,"domain":"app.example.com"}`)
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels/editable-http", authResp.ClientID), bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "test")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("update tunnel 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("HTTP 域名冲突时期望 409，得到 %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if body["error_code"] != httpTunnelErrCodeDomainConflict {
+		t.Fatalf("error_code 期望 %q，得到 %v", httpTunnelErrCodeDomainConflict, body["error_code"])
+	}
+}
+
 func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testing.T) {
 	s, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
@@ -2254,6 +2383,138 @@ func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
 	if tunnel.Config.Status != protocol.ProxyStatusPaused {
 		t.Errorf("恢复后的状态应保持 paused，得到 %s", tunnel.Config.Status)
 	}
+}
+
+func TestRestoreTunnels_PausedHTTPPlaceholderPreservesDomain(t *testing.T) {
+	s := New(0)
+
+	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+	s.store = store
+
+	const domain = "app.example.com"
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name:      "paused-http",
+			Type:      protocol.ProxyTypeHTTP,
+			LocalIP:   "127.0.0.1",
+			LocalPort: 3000,
+			Domain:    domain,
+		},
+		Status:   protocol.ProxyStatusPaused,
+		ClientID: "client-http-domain",
+		Hostname: "restore-host",
+	})
+
+	client := &ClientConn{
+		ID:         "client-http-domain",
+		Info:       protocol.ClientInfo{Hostname: "restore-host"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	s.clients.Store(client.ID, client)
+
+	s.restoreTunnels(client)
+
+	client.proxyMu.RLock()
+	tunnel := client.proxies["paused-http"]
+	client.proxyMu.RUnlock()
+	if tunnel == nil {
+		t.Fatal("paused HTTP 隧道应被恢复到内存态")
+	}
+	if tunnel.Config.Domain != domain {
+		t.Fatalf("恢复后的 paused HTTP 隧道应保留 domain=%q，得到 %q", domain, tunnel.Config.Domain)
+	}
+}
+
+func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
+	s := New(0)
+
+	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.json"))
+	if err != nil {
+		t.Fatalf("创建 AdminStore 失败: %v", err)
+	}
+	if err := adminStore.Initialize("admin", "password123", "localhost", []PortRange{{Start: 20000, End: 20010}}); err != nil {
+		t.Fatalf("初始化 AdminStore 失败: %v", err)
+	}
+	s.adminStore = adminStore
+
+	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+	s.store = store
+
+	const domain = "blocked.example.com"
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name:       "http-port-blocked",
+			Type:       protocol.ProxyTypeHTTP,
+			LocalIP:    "127.0.0.1",
+			LocalPort:  8080,
+			RemotePort: 19090,
+			Domain:     domain,
+		},
+		Status:   protocol.ProxyStatusActive,
+		ClientID: "client-port-blocked",
+		Hostname: "restore-host",
+	})
+
+	client := &ClientConn{
+		ID:         "client-port-blocked",
+		Info:       protocol.ClientInfo{Hostname: "restore-host"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	s.clients.Store(client.ID, client)
+
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+
+	s.restoreTunnels(client)
+
+	client.proxyMu.RLock()
+	runtimeTunnel := client.proxies["http-port-blocked"]
+	client.proxyMu.RUnlock()
+	if runtimeTunnel == nil {
+		t.Fatal("端口不在白名单的隧道应生成 error 占位")
+	}
+	if runtimeTunnel.Config.Domain != domain {
+		t.Fatalf("error 占位应保留 domain=%q，得到 %q", domain, runtimeTunnel.Config.Domain)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case ev := <-ch:
+			if ev.Type != "tunnel_changed" {
+				continue
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(ev.Data), &payload); err != nil {
+				t.Fatalf("解析 tunnel_changed 事件失败: %v", err)
+			}
+			action, _ := payload["action"].(string)
+			if action != "port_not_allowed" {
+				continue
+			}
+			tunnelPayload, ok := payload["tunnel"].(map[string]any)
+			if !ok {
+				t.Fatalf("事件中的 tunnel 字段类型无效: %#v", payload["tunnel"])
+			}
+			if got, _ := tunnelPayload["domain"].(string); got != domain {
+				t.Fatalf("port_not_allowed 事件应保留 domain=%q，得到 %q", domain, got)
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	t.Fatal("未收到 port_not_allowed 的 tunnel_changed 事件")
 }
 
 // ============================================================

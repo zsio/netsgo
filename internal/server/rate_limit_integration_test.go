@@ -220,7 +220,7 @@ func TestSetup_RateLimitBlocksAfterMaxRequests(t *testing.T) {
 	})
 	defer s.setupLimiter.Stop()
 
-	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"localhost","allowed_ports":[]}`)
+	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[]}`)
 
 	// 第 1 次初始化成功
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))

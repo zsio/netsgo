@@ -1,12 +1,16 @@
 # Batch 4：后端入口集成测试（先写测试）
 
 > 状态：待实现
-> 前置条件：Batch 3 完成
-> 估计影响文件：`internal/server/http_dispatch_test.go`（新建）
+> 所属阶段：阶段 4（入口分发与运行时）
+> 前置条件：阶段 3 完成
+> 估计影响文件：`internal/server/http_dispatch_test.go`（新建）或 `internal/server/server_test.go`（扩展）
 
 ## 目标
 
 在实现路由层之前，先用集成测试把入口分发行为（`hostDispatchHandler`）的规则钉死。测试在本批次全部应当失败（因为 `hostDispatchHandler` 尚未实现），Batch 5 完成实现后再回来跑通。
+
+> 本批次只验证“最终 handler 如何分发请求、返回什么结果”。  
+> 离线 HTTP 隧道的 store-first 和生命周期一致性已由阶段 3 负责，不在这里重复展开。
 
 ## 背景
 
@@ -54,7 +58,7 @@ TestDispatch_HTTPTunnel_AnyPath
   - 期望：请求进入 HTTP 隧道代理逻辑
 
 TestDispatch_HTTPTunnel_ManagementAPI_Blocked
-  - Host 命中 HTTP 隧道，path=/api/admin
+  - Host 命中 HTTP 隧道，path=/api/admin/config
   - 期望：进入 HTTP 隧道代理，不进入管理 API
 
 TestDispatch_HTTPTunnel_Pending_Returns503
@@ -92,7 +96,7 @@ TestDispatch_SetupPhase_AllowsStaticAssets
   - 期望：放行
 
 TestDispatch_SetupPhase_BlocksOtherAPIs
-  - 系统尚未初始化，path=/api/admin（非 setup 接口）
+  - 系统尚未初始化，path=/api/admin/config（非 setup 接口）
   - 期望：不放行（或由管理鉴权层处理）
 ```
 
@@ -100,7 +104,7 @@ TestDispatch_SetupPhase_BlocksOtherAPIs
 
 ```
 TestDispatch_ManagementHost_AdminAPI
-  - Host == effectiveManagementHost，path=/api/admin
+  - Host == effectiveManagementHost，path=/api/admin/config
   - 期望：进入管理 API
 
 TestDispatch_ManagementHost_SSE

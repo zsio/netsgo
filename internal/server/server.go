@@ -1375,17 +1375,22 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	config, err := s.createManagedTunnel(client, req, true, "created")
 	if err != nil {
 		status := http.StatusConflict
+		payload := map[string]any{
+			"success": false,
+			"error":   err.Error(),
+		}
+
+		var ruleErr *httpTunnelRuleError
 		var rejected *tunnelReadyRejectedError
 		switch {
 		case errors.Is(err, errTunnelReadyTimeout):
 			status = http.StatusGatewayTimeout
 		case errors.As(err, &rejected):
 			status = http.StatusBadGateway
+		case errors.As(err, &ruleErr):
+			payload["error_code"] = ruleErr.ErrorCode()
 		}
-		encodeJSON(w, status, map[string]any{
-			"success": false,
-			"error":   err.Error(),
-		})
+		encodeJSON(w, status, payload)
 		return
 	}
 
@@ -1574,7 +1579,20 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := s.updateManagedTunnel(client, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain)
 	if err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		status := http.StatusInternalServerError
+		payload := map[string]any{"error": err.Error()}
+
+		var ruleErr *httpTunnelRuleError
+		var validationErr *proxyRequestValidationError
+		switch {
+		case errors.As(err, &ruleErr):
+			status = http.StatusConflict
+			payload["error_code"] = ruleErr.ErrorCode()
+		case errors.As(err, &validationErr):
+			status = http.StatusConflict
+		}
+
+		encodeJSON(w, status, payload)
 		return
 	}
 
@@ -1616,6 +1634,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 					LocalIP:    st.LocalIP,
 					LocalPort:  st.LocalPort,
 					RemotePort: st.RemotePort,
+					Domain:     st.Domain,
 					ClientID:   client.ID,
 					Status:     protocol.ProxyStatusError,
 					Error:      errMsg,
@@ -1628,6 +1647,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 				Name:       st.Name,
 				Type:       st.Type,
 				RemotePort: st.RemotePort,
+				Domain:     st.Domain,
 				ClientID:   client.ID,
 				Status:     protocol.ProxyStatusError,
 				Error:      errMsg,
@@ -1654,6 +1674,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 					LocalIP:    st.LocalIP,
 					LocalPort:  st.LocalPort,
 					RemotePort: st.RemotePort,
+					Domain:     st.Domain,
 					ClientID:   client.ID,
 					Status:     st.Status,
 					Error:      st.Error,
