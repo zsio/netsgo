@@ -196,6 +196,12 @@ netsgo/
 | `NETSGO_SERVER` | `--server` | 服务端地址 |
 | `NETSGO_KEY` | `--key` | Client 认证密钥 |
 
+## 运行说明
+
+- 运行日志默认写入 `~/.netsgo/logs/`。
+- 首次启动时生成的 Setup Token 只输出到 stderr / 控制台，不会写入日志文件。
+- `/api/events` 仍然是实时状态流接口，用于推送在线状态与隧道变更，不是审计接口。
+
 ## CI / CD
 
 - **CI** — Push / PR 时自动运行前端构建 + `go test` + 跨平台构建
