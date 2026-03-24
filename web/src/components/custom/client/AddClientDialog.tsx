@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import {
   Key, Copy, Check, RefreshCcw, Terminal, Loader2,
 } from 'lucide-react';
+import { useAdminConfig } from '@/hooks/use-admin-config';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { normalizeServerAddr } from '@/lib/server-address';
@@ -38,6 +39,11 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   const [copied, setCopied] = useState<'key' | 'cmd' | null>(null);
 
   const createKey = useCreateAPIKey();
+  const { data: adminConfig } = useAdminConfig({
+    enabled: open,
+    refetchOnMount: 'always',
+    staleTime: 0,
+  });
   const { data: status } = useServerStatus({
     enabled: open,
     refetchOnMount: 'always',
@@ -70,12 +76,16 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       {
         onSuccess: (data) => {
           setGeneratedKey(data.raw_key);
-          setServerAddr(normalizeServerAddr(data.server_addr || status?.server_addr || window.location.origin) || window.location.origin.trim());
+          setServerAddr(
+            normalizeServerAddr(
+              adminConfig?.server_addr || data.server_addr || status?.server_addr || window.location.origin,
+            ) || window.location.origin.trim(),
+          );
           setStep('result');
         },
       },
     );
-  }, [createKey, maxUses, expiresIn, status]);
+  }, [adminConfig, createKey, expiresIn, maxUses, status]);
 
   const copyToClipboard = useCallback(async (text: string, tag: 'key' | 'cmd') => {
     try {
@@ -100,7 +110,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
             添加 Client
           </DialogTitle>
           <DialogDescription>
-            生成临时连接密钥，供新 Client 接入
+            生成临时连接密钥，并给出默认推荐的连接命令。Client 也可以改用任意能连到 NetsGo 的入口地址。
           </DialogDescription>
         </DialogHeader>
 
@@ -205,6 +215,27 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
               </p>
             </div>
 
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                默认推荐连接地址
+              </label>
+              <code className="block px-3 py-2 text-xs font-mono bg-muted rounded-lg border border-border break-all select-all">
+                {serverAddr}
+              </code>
+              <p className="text-[11px] text-muted-foreground">
+                这是 `server_addr` 的默认推荐值；如果部署上更合适，也可以把命令里的 `--server` 换成其他可达入口。
+              </p>
+            </div>
+
+            {adminConfig?.server_addr_locked && (
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-[11px] text-muted-foreground">
+                当前管理地址由环境变量 `NETSGO_SERVER_ADDR` 锁定。
+                <div className="mt-1 font-mono text-foreground break-all">
+                  effective_server_addr = {adminConfig.effective_server_addr}
+                </div>
+              </div>
+            )}
+
             {/* 连接命令 */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
@@ -228,6 +259,9 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                   )}
                 </Button>
               </div>
+              <p className="text-[11px] text-muted-foreground">
+                该命令只是默认推荐写法，不代表 Client 只能连接这个管理地址。
+              </p>
             </div>
 
             {/* 操作按钮 */}
@@ -257,7 +291,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
           <ol className="text-[11px] text-muted-foreground space-y-1.5 list-decimal list-inside">
             <li>在目标机器上下载并安装 NetsGo Client</li>
             <li>使用上方的<strong>连接命令</strong>启动 Client</li>
-            <li>Client 将自动连接到此服务端并出现在面板中</li>
+            <li>如有需要，可把命令里的 <code>--server</code> 替换成任意可达的反向代理入口、域名或 IP</li>
+            <li>Client 连接成功后会自动出现在面板中</li>
           </ol>
         </div>
       </DialogContent>

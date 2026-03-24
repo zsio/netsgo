@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import toast from 'react-hot-toast';
 import { useCreateTunnel, useUpdateTunnel } from '@/hooks/use-tunnel-mutations';
+import { getTunnelMutationErrorMessage } from '@/lib/tunnel-model';
 import { useServerStatus } from '@/hooks/use-server-status';
 import type { ProxyType, ProxyConfig } from '@/types';
 
@@ -44,6 +45,7 @@ interface TunnelFormState {
   localIp: string;
   localPort: string;
   remotePort: string;
+  domain: string;
 }
 
 function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
@@ -54,6 +56,7 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
       localIp: props.tunnel.local_ip || '127.0.0.1',
       localPort: String(props.tunnel.local_port || ''),
       remotePort: String(props.tunnel.remote_port || ''),
+      domain: props.tunnel.domain || '',
     };
   }
 
@@ -63,6 +66,7 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
     localIp: '127.0.0.1',
     localPort: '',
     remotePort: '',
+    domain: '',
   };
 }
 
@@ -124,6 +128,9 @@ function TunnelDialogForm({
   const [localIp, setLocalIp] = useState(initialForm.localIp);
   const [localPort, setLocalPort] = useState(initialForm.localPort);
   const [remotePort, setRemotePort] = useState(initialForm.remotePort);
+  const [domain, setDomain] = useState(initialForm.domain);
+
+  const isHttp = type === 'http';
 
   const createTunnel = useCreateTunnel();
   const updateTunnel = useUpdateTunnel();
@@ -137,6 +144,8 @@ function TunnelDialogForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const parsedLocalPort = Number.parseInt(localPort, 10);
+    const parsedRemotePort = remotePort ? Number.parseInt(remotePort, 10) : 0;
 
     if (props.mode === 'edit') {
       const tunnel = props.tunnel;
@@ -146,10 +155,11 @@ function TunnelDialogForm({
         {
           clientId: tunnel.clientId,
           tunnelName: tunnel.name,
+          type: tunnel.type,
           local_ip: localIp,
-          local_port: parseInt(localPort, 10),
-          remote_port: remotePort ? parseInt(remotePort, 10) : 0,
-          domain: tunnel.domain ?? '',
+          local_port: parsedLocalPort,
+          remote_port: parsedRemotePort,
+          domain,
         },
         {
           onSuccess: () => {
@@ -157,7 +167,7 @@ function TunnelDialogForm({
             toast.success(`隧道「${tunnel.name}」已更新`);
           },
           onError: (err) => {
-            toast.error((err as Error).message);
+            toast.error(getTunnelMutationErrorMessage(err));
           },
         },
       );
@@ -170,8 +180,9 @@ function TunnelDialogForm({
         name,
         type,
         local_ip: localIp,
-        local_port: parseInt(localPort, 10),
-        remote_port: remotePort ? parseInt(remotePort, 10) : 0,
+        local_port: parsedLocalPort,
+        remote_port: parsedRemotePort,
+        domain,
       },
       {
         onSuccess: () => {
@@ -179,15 +190,15 @@ function TunnelDialogForm({
           toast.success(`隧道「${name}」创建成功`);
         },
         onError: (err) => {
-          toast.error((err as Error).message);
+          toast.error(getTunnelMutationErrorMessage(err));
         },
       },
     );
   };
 
   const isValid = isEdit
-    ? localPort && parseInt(localPort, 10) > 0
-    : name.trim() && localPort && parseInt(localPort, 10) > 0;
+    ? Boolean(localPort && Number.parseInt(localPort, 10) > 0 && (!isHttp || domain.trim()))
+    : Boolean(name.trim() && localPort && Number.parseInt(localPort, 10) > 0 && (!isHttp || domain.trim()));
 
   return (
     <DialogContent className="sm:max-w-md">
@@ -196,7 +207,7 @@ function TunnelDialogForm({
         <DialogDescription>
           {props.mode === 'edit'
             ? `修改隧道「${props.tunnel?.name}」的映射配置。隧道名称和协议类型不可变更。`
-            : '配置内网穿透隧道，将 Client 侧的本地服务暴露到公网端口。'}
+            : '配置内网穿透隧道。TCP / UDP 通过公网端口映射，HTTP 通过域名分流到 Client 侧服务。'}
         </DialogDescription>
       </DialogHeader>
 
@@ -257,34 +268,50 @@ function TunnelDialogForm({
           </div>
         </div>
 
-        {/* 公网端口 */}
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium">
-            公网端口
-            <span className="text-muted-foreground font-normal ml-1">(0 = 自动分配)</span>
-          </label>
-          <Input
-            type="number"
-            placeholder="0"
-            value={remotePort}
-            onChange={(e) => setRemotePort(e.target.value)}
-            min={0}
-            max={65535}
-          />
-          {status?.allowed_ports && (
+        {isHttp ? (
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">业务域名</label>
+            <Input
+              placeholder="例如 app.example.com"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+            />
             <p className="text-[11px] text-muted-foreground mt-1.5">
-              可用端口范围：
-              {status.allowed_ports.length > 0
-                ? status.allowed_ports.map(p => p.start === p.end ? p.start : `${p.start}-${p.end}`).join(', ')
-                : '1-65535 (无限制)'}
+              HTTP 隧道按域名分流，不再使用公网端口作为用户输入。
             </p>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">
+              公网端口
+              <span className="text-muted-foreground font-normal ml-1">(0 = 自动分配)</span>
+            </label>
+            <Input
+              type="number"
+              placeholder="0"
+              value={remotePort}
+              onChange={(e) => setRemotePort(e.target.value)}
+              min={0}
+              max={65535}
+            />
+            {status?.allowed_ports && (
+              <p className="text-[11px] text-muted-foreground mt-1.5">
+                可用端口范围：
+                {status.allowed_ports.length > 0
+                  ? status.allowed_ports.map(p => p.start === p.end ? p.start : `${p.start}-${p.end}`).join(', ')
+                  : '1-65535 (无限制)'}
+              </p>
+            )}
+          </div>
+        )}
 
         {mutation.isError && (
           <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg mt-2">
             <AlertTriangle className="w-4 h-4 shrink-0" />
-            {(mutation.error as Error).message}
+            {getTunnelMutationErrorMessage(mutation.error)}
           </div>
         )}
 

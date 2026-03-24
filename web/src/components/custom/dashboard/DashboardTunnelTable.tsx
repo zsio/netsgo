@@ -20,6 +20,7 @@ export function DashboardTunnelTable() {
       ...proxy,
       clientId: client.id,
       clientName: getClientDisplayName(client),
+      clientOnline: client.online,
     }))
   ) || [];
 

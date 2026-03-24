@@ -51,7 +51,7 @@ export interface Client {
 // --- Tunnel / Proxy ---
 
 export type ProxyType = "tcp" | "udp" | "http";
-export type ProxyStatus = "active" | "paused" | "stopped" | "error";
+export type ProxyStatus = "pending" | "active" | "paused" | "stopped" | "error";
 
 /** 对齐 protocol.ProxyConfig */
 export interface ProxyConfig {
@@ -181,6 +181,34 @@ export interface PortRange {
 export interface ServerConfig {
   server_addr: string;
   allowed_ports: PortRange[];
+}
+
+export interface AffectedTunnel {
+  client_id: string;
+  hostname: string;
+  display_name?: string;
+  tunnel_name: string;
+  remote_port: number;
+  status: ProxyStatus | string;
+}
+
+export interface AdminConfig extends ServerConfig {
+  effective_server_addr: string;
+  server_addr_locked: boolean;
+}
+
+export interface AdminConfigUpdateResponse {
+  success?: boolean;
+  error?: string;
+  server_addr_locked?: boolean;
+  affected_tunnels: AffectedTunnel[];
+  conflicting_http_tunnels: string[];
+}
+
+export interface TunnelMutationErrorResponse {
+  success?: boolean;
+  error?: string;
+  error_code?: string;
 }
 
 export interface SetupStatus {

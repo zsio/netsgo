@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { CreateTunnelInput } from '@/types';
+import { buildTunnelMutationPayload } from '@/lib/tunnel-model';
+import type { CreateTunnelInput, ProxyType } from '@/types';
 
 export function useCreateTunnel() {
   const queryClient = useQueryClient();
@@ -12,10 +13,7 @@ export function useCreateTunnel() {
         {
           name: data.name,
           type: data.type,
-          local_ip: data.local_ip,
-          local_port: data.local_port,
-          remote_port: data.remote_port ?? 0,
-          domain: data.domain ?? '',
+          ...buildTunnelMutationPayload(data),
         },
       ),
     onSuccess: () => {
@@ -79,6 +77,7 @@ export function useUpdateTunnel() {
     mutationFn: ({
       clientId,
       tunnelName,
+      type,
       local_ip,
       local_port,
       remote_port,
@@ -86,17 +85,19 @@ export function useUpdateTunnel() {
     }: {
       clientId: string;
       tunnelName: string;
+      type: ProxyType;
       local_ip: string;
       local_port: number;
       remote_port: number;
       domain: string;
     }) =>
-      api.put(`/api/clients/${clientId}/tunnels/${tunnelName}`, {
+      api.put(`/api/clients/${clientId}/tunnels/${tunnelName}`, buildTunnelMutationPayload({
+        type,
         local_ip,
         local_port,
         remote_port,
         domain,
-      }),
+      })),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
     },

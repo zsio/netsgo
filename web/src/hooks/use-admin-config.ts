@@ -1,11 +1,20 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { ServerConfig } from '@/types';
+import type { AdminConfig, ServerConfig } from '@/types';
 
-export function useAdminConfig() {
+interface UseAdminConfigOptions {
+  enabled?: boolean;
+  refetchOnMount?: boolean | 'always';
+  staleTime?: number;
+}
+
+export function useAdminConfig(options: UseAdminConfigOptions = {}) {
   return useQuery({
     queryKey: ['admin-config'],
-    queryFn: () => api.get<ServerConfig>('/api/admin/config'),
+    queryFn: () => api.get<AdminConfig>('/api/admin/config'),
+    enabled: options.enabled ?? true,
+    refetchOnMount: options.refetchOnMount,
+    staleTime: options.staleTime ?? Infinity,
   });
 }
 

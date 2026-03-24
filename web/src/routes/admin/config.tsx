@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { createRoute } from '@tanstack/react-router';
 import { adminRoute } from '../admin';
+import { ApiError } from '@/lib/api';
 import { useAdminConfig, useUpdateAdminConfig } from '@/hooks/use-admin-config';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Plus, AlertTriangle, ShieldAlert, Edit2, Check, X, Trash2 } from 'lucide-react';
@@ -16,23 +18,18 @@ import { api } from '@/lib/api';
 import { getServerAddrValidationError, normalizeServerAddr, SERVER_ADDR_HELP_TEXT, SERVER_ADDR_PLACEHOLDER } from '@/lib/server-address';
 import { createLocalId } from '@/lib/utils';
 import toast from 'react-hot-toast';
-import type { ServerConfig, PortRange } from '@/types';
+import type {
+  AdminConfig,
+  AdminConfigUpdateResponse,
+  AffectedTunnel,
+  PortRange,
+} from '@/types';
 
 export const adminConfigRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/config',
   component: AdminConfigPage,
 });
-
-/** 受端口白名单变更影响的隧道 */
-interface AffectedTunnel {
-  client_id: string;
-  hostname: string;
-  display_name?: string;
-  tunnel_name: string;
-  remote_port: number;
-  status: string;
-}
 
 type LocalPortRange = PortRange & { _id: string };
 type DisplayRangeRow = LocalPortRange | { isAdding: true };
@@ -63,11 +60,13 @@ function AdminConfigPage() {
   );
 }
 
-function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
+function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
   const updateConfig = useUpdateAdminConfig();
   const [serverAddr, setServerAddr] = useState(initialConfig.server_addr || '');
   const initialServerAddr = (initialConfig.server_addr || '').trim();
   const initialServerAddrIsLegacy = initialServerAddr !== '' && getServerAddrValidationError(initialServerAddr) !== null;
+  const serverAddrLocked = initialConfig.server_addr_locked;
+  const effectiveServerAddr = initialConfig.effective_server_addr || initialServerAddr;
   // 为每行分配一个绝对稳定的本地 id 以保证增删、编辑改值时 React 动画不会重组闪烁
   const [portRanges, setPortRanges] = useState<LocalPortRange[]>(() => {
     const ports = initialConfig.allowed_ports || [];
@@ -81,6 +80,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
   const [saved, setSaved] = useState(false);
   const [checking, setChecking] = useState(false);
   const [affectedTunnels, setAffectedTunnels] = useState<AffectedTunnel[]>([]);
+  const [conflictingHTTPTunnels, setConflictingHTTPTunnels] = useState<string[]>([]);
   const [pendingServerAddr, setPendingServerAddr] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
 
@@ -206,10 +206,19 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
       // 调用检查接口时同样要清理内部的 _id 属性
       const cleanPorts = toPayloadPorts(portRanges);
       setPendingServerAddr(resolvedServerAddr.value);
-      const result = await api.put<{ affected_tunnels: AffectedTunnel[] }>(
+      const result = await api.put<AdminConfigUpdateResponse>(
         '/api/admin/config?dry_run=true',
         { server_addr: resolvedServerAddr.value, allowed_ports: cleanPorts },
       );
+
+      const conflicts = result.conflicting_http_tunnels ?? [];
+      setConflictingHTTPTunnels(conflicts);
+      if (conflicts.length > 0) {
+        setAffectedTunnels([]);
+        setPendingServerAddr(null);
+        toast.error('当前管理地址与现有 HTTP 隧道域名冲突，保存已阻止');
+        return;
+      }
 
       if (result.affected_tunnels && result.affected_tunnels.length > 0) {
         setAffectedTunnels(result.affected_tunnels);
@@ -219,6 +228,10 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
       }
     } catch (error: unknown) {
       setPendingServerAddr(null);
+      if (error instanceof ApiError) {
+        const body = error.body as AdminConfigUpdateResponse | undefined;
+        setConflictingHTTPTunnels(body?.conflicting_http_tunnels ?? []);
+      }
       const message = error instanceof Error ? error.message : '检查配置失败，请检查网络或服务端日志';
       toast.error(message);
       console.error('检查配置失败', error);
@@ -242,12 +255,17 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
         allowed_ports: cleanPorts,
       });
       setServerAddr(resolvedServerAddr.value);
+      setConflictingHTTPTunnels([]);
       setSaved(true);
       setShowConfirm(false);
       setAffectedTunnels([]);
       setPendingServerAddr(null);
       setTimeout(() => setSaved(false), 2000);
     } catch (error: unknown) {
+      if (error instanceof ApiError) {
+        const body = error.body as AdminConfigUpdateResponse | undefined;
+        setConflictingHTTPTunnels(body?.conflicting_http_tunnels ?? []);
+      }
       const message = error instanceof Error ? error.message : '保存配置失败，请重试';
       toast.error(message);
       console.error('保存配置失败', error);
@@ -275,16 +293,28 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
         {/* 行 1: 服务地址 */}
         <div className="grid grid-cols-[280px_1fr] border-b border-border/40">
           <div className="p-6 bg-muted/20">
-            <h4 className="font-semibold text-foreground">Client 连接地址</h4>
-            <p className="text-sm text-muted-foreground mt-1">Client 建立控制通道和数据通道时使用的服务端地址，仅支持 HTTP(S)。</p>
+            <h4 className="font-semibold text-foreground">默认推荐连接地址</h4>
+            <p className="text-sm text-muted-foreground mt-1">用于配置 `server_addr`。它是 Add Client 默认展示值，不是 Client 唯一允许连接的地址。</p>
           </div>
           <div className="p-6">
             <div className="max-w-md">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-sm font-medium text-foreground">server_addr</span>
+                {serverAddrLocked && (
+                  <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-700">
+                    只读锁定
+                  </Badge>
+                )}
+              </div>
               <Input
                 value={serverAddr}
-                onChange={(e) => setServerAddr(e.target.value)}
+                onChange={(e) => {
+                  setServerAddr(e.target.value);
+                  setConflictingHTTPTunnels([]);
+                }}
                 placeholder={SERVER_ADDR_PLACEHOLDER}
                 className="w-full"
+                disabled={serverAddrLocked}
               />
               <p className="text-xs text-muted-foreground mt-2">{SERVER_ADDR_HELP_TEXT}</p>
               {initialServerAddrIsLegacy && serverAddr.trim() === initialServerAddr && (
@@ -292,6 +322,44 @@ function AdminConfigForm({ initialConfig }: { initialConfig: ServerConfig }) {
                   当前保存值来自旧版本格式。本次可以先仅修改端口规则；如果要修改服务地址，请改成完整的 HTTP(S) URL。
                 </p>
               )}
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">当前保存值</p>
+                  <code className="mt-1 block break-all text-sm text-foreground">{initialServerAddr || '-'}</code>
+                  <p className="mt-1 text-[11px] text-muted-foreground">这是管理配置里持久化保存的默认推荐地址。</p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">当前生效值</p>
+                  <code className="mt-1 block break-all text-sm text-foreground">{effectiveServerAddr || '-'}</code>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    真正用于管理 Host 校验的运行时地址。
+                    {serverAddrLocked ? ' 当前由环境变量 NETSGO_SERVER_ADDR 锁定。' : ''}
+                  </p>
+                </div>
+                {conflictingHTTPTunnels.length > 0 && (
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/8 p-3 text-sm">
+                    <div className="flex items-start gap-2 text-destructive">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div className="flex flex-col gap-1">
+                        <p className="font-medium">保存已阻止：`server_addr` 与现有 HTTP 隧道域名冲突</p>
+                        <p className="text-xs text-destructive/80">
+                          请先调整管理地址或相关 HTTP 隧道域名，再重新提交。
+                        </p>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {conflictingHTTPTunnels.map((tunnel) => (
+                            <code
+                              key={tunnel}
+                              className="rounded bg-background/80 px-2 py-1 text-[11px] text-foreground"
+                            >
+                              {tunnel}
+                            </code>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

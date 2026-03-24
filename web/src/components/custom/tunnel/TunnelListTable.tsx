@@ -3,6 +3,7 @@ import {
   Search, Play, Pause, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft,
 } from 'lucide-react';
 
+import { Badge } from '@/components/ui/badge';
 import {
   Tooltip,
   TooltipContent,
@@ -12,6 +13,8 @@ import {
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
 import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
 import toast from 'react-hot-toast';
+import { buildTunnelViewModel, type TunnelStatusPresentation } from '@/lib/tunnel-model';
+import { cn } from '@/lib/utils';
 import {
   usePauseTunnel, useResumeTunnel, useDeleteTunnel,
 } from '@/hooks/use-tunnel-mutations';
@@ -21,6 +24,7 @@ import type { ProxyConfig } from '@/types';
 export interface TunnelEntry extends ProxyConfig {
   clientId: string;
   clientName?: string;
+  clientOnline: boolean;
 }
 
 interface TunnelListTableProps {
@@ -63,10 +67,17 @@ export function TunnelListTable({
     if (!searchQuery.trim()) return tunnels;
     const q = searchQuery.toLowerCase();
     return tunnels.filter(
-      (t) =>
-        t.name.toLowerCase().includes(q) ||
-        t.type.toLowerCase().includes(q) ||
-        (t.clientName && t.clientName.toLowerCase().includes(q)),
+      (tunnel) => {
+        const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
+
+        return (
+          tunnel.name.toLowerCase().includes(q) ||
+          tunnel.type.toLowerCase().includes(q) ||
+          view.routeLabel.toLowerCase().includes(q) ||
+          view.status.label.toLowerCase().includes(q) ||
+          (tunnel.clientName && tunnel.clientName.toLowerCase().includes(q))
+        );
+      },
     );
   }, [tunnels, searchQuery]);
 
@@ -172,50 +183,14 @@ export function TunnelListTable({
                 </thead>
                 <tbody className="divide-y divide-border/40">
                   {filteredTunnels.map((tunnel) => (
-                    <tr
+                    <TunnelTableRow
                       key={`${tunnel.clientId}-${tunnel.name}`}
-                      className="hover:bg-muted/30 transition-colors group"
-                    >
-                      {/* 隧道名称 */}
-                      <td className="px-6 py-3 font-medium text-foreground">{tunnel.name}</td>
-
-                      {/* 应用 / 类型 */}
-                      <td className="px-6 py-3">
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground border border-border/50 uppercase">
-                          {tunnel.type}
-                        </span>
-                      </td>
-
-                      {/* 映射关系 */}
-                      <td className="px-6 py-3 font-mono text-xs">
-                        <div className="flex items-center gap-2">
-                          <span className="text-primary font-medium">:{tunnel.remote_port}</span>
-                          <ArrowRightLeft className="w-3 h-3 text-muted-foreground" />
-                          <span>{tunnel.local_ip}:{tunnel.local_port}</span>
-                        </div>
-                      </td>
-
-                      {/* 状态 */}
-                      <td className="px-6 py-3">
-                        <TunnelStatusBadge status={tunnel.status} error={tunnel.error} />
-                      </td>
-
-                      {/* 归属节点 */}
-                      {showClient && (
-                        <td className="px-6 py-3 text-muted-foreground">{tunnel.clientName}</td>
-                      )}
-
-                      {/* 操作 */}
-                      {(showActions || renderRowAction) && (
-                        <td className="px-6 py-3 text-right">
-                          {renderRowAction ? (
-                            renderRowAction(tunnel)
-                          ) : showActions ? (
-                            renderActionButtons(tunnel)
-                          ) : null}
-                        </td>
-                      )}
-                    </tr>
+                      tunnel={tunnel}
+                      showClient={showClient}
+                      showActions={showActions}
+                      renderRowAction={renderRowAction}
+                      renderActionButtons={renderActionButtons}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -266,51 +241,106 @@ export function TunnelListTable({
   );
 }
 
-/** 隧道状态徽章，统一的状态展示组件 */
-function TunnelStatusBadge({ status, error }: { status: string; error?: string }) {
-  switch (status) {
-    case 'active':
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-500 text-xs font-medium">
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
-          </span>
-          活跃
+function TunnelTableRow({
+  tunnel,
+  showClient,
+  showActions,
+  renderRowAction,
+  renderActionButtons,
+}: {
+  tunnel: TunnelEntry;
+  showClient: boolean;
+  showActions: boolean;
+  renderRowAction?: (tunnel: TunnelEntry) => React.ReactNode;
+  renderActionButtons: (tunnel: TunnelEntry) => React.ReactNode;
+}) {
+  const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
+
+  return (
+    <tr className="hover:bg-muted/30 transition-colors group">
+      <td className="px-6 py-3 font-medium text-foreground">{tunnel.name}</td>
+
+      <td className="px-6 py-3">
+        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground border border-border/50 uppercase">
+          {tunnel.type}
         </span>
-      );
-    case 'paused':
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-500/10 text-amber-500 text-xs font-medium">
-          <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-          已暂停
-        </span>
-      );
-    case 'stopped':
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted text-muted-foreground text-xs font-medium">
-          <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground" />
-          已停止
-        </span>
-      );
-    case 'error':
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-destructive/10 text-destructive text-xs font-medium">
-          <div className="w-1.5 h-1.5 rounded-full bg-destructive" />
-          异常
-          {error && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <HelpCircle className="h-3.5 w-3.5 opacity-70 hover:opacity-100 cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                <p>{error}</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </span>
-      );
-    default:
-      return null;
-  }
+      </td>
+
+      <td className="px-6 py-3 font-mono text-xs">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-primary font-medium break-all">{view.targetLabel}</span>
+          <ArrowRightLeft className="w-3 h-3 text-muted-foreground" />
+          <span className="break-all">{view.destinationLabel}</span>
+        </div>
+      </td>
+
+      <td className="px-6 py-3">
+        <TunnelStatusBadge status={view.status} error={tunnel.error} />
+      </td>
+
+      {showClient && (
+        <td className="px-6 py-3 text-muted-foreground">{tunnel.clientName}</td>
+      )}
+
+      {(showActions || renderRowAction) && (
+        <td className="px-6 py-3 text-right">
+          {renderRowAction ? (
+            renderRowAction(tunnel)
+          ) : showActions ? (
+            renderActionButtons(tunnel)
+          ) : null}
+        </td>
+      )}
+    </tr>
+  );
+}
+
+function TunnelStatusBadge({
+  status,
+  error,
+}: {
+  status: TunnelStatusPresentation;
+  error?: string;
+}) {
+  const dotClassName = cn(
+    'size-1.5 rounded-full',
+    status.key === 'active' && 'bg-emerald-500',
+    status.key === 'pending' && 'bg-sky-500',
+    status.key === 'unavailable' && 'bg-amber-500',
+    status.key === 'paused' && 'bg-amber-500',
+    status.key === 'stopped' && 'bg-muted-foreground',
+    status.key === 'error' && 'bg-destructive',
+  );
+
+  const badgeClassName = cn(
+    'gap-1.5',
+    status.key === 'active' && 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
+    status.key === 'pending' && 'bg-sky-500/10 text-sky-600 border-sky-500/20',
+    status.key === 'unavailable' && 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+    status.key === 'paused' && 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+    status.key === 'stopped' && 'bg-muted text-muted-foreground border-border/60',
+    status.key === 'error' && 'bg-destructive/10 text-destructive border-destructive/20',
+  );
+
+  return (
+    <div className="flex flex-col gap-1 items-start">
+      <Badge variant="outline" className={badgeClassName}>
+        <span className={dotClassName} />
+        {status.label}
+        {status.key === 'error' && error && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <HelpCircle className="h-3.5 w-3.5 opacity-70 hover:opacity-100 cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p>{error}</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </Badge>
+      {status.description && (status.key !== 'error' || !error) && (
+        <p className="text-[11px] text-muted-foreground">{status.description}</p>
+      )}
+    </div>
+  );
 }

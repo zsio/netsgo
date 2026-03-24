@@ -11,16 +11,19 @@ import { useAuthStore } from '@/stores/auth-store';
 class ApiError extends Error {
   status: number;
   statusText: string;
+  body?: unknown;
 
   constructor(
     status: number,
     statusText: string,
     message?: string,
+    body?: unknown,
   ) {
     super(message || `API Error: ${status} ${statusText}`);
     this.name = "ApiError";
     this.status = status;
     this.statusText = statusText;
+    this.body = body;
   }
 }
 
@@ -47,10 +50,12 @@ async function request<T>(
       }
     }
     const bodyText = await res.text().catch(() => "");
+    let errorBody: unknown;
     let errorMessage = bodyText || undefined;
     try {
       if (bodyText) {
         const json = JSON.parse(bodyText);
+        errorBody = json;
         if (json && typeof json.error === 'string') {
           errorMessage = json.error;
         } else if (json && typeof json.message === 'string') {
@@ -61,7 +66,7 @@ async function request<T>(
       // not JSON, fallback to raw string
     }
 
-    throw new ApiError(res.status, res.statusText, errorMessage);
+    throw new ApiError(res.status, res.statusText, errorMessage, errorBody);
   }
 
   // 204 No Content

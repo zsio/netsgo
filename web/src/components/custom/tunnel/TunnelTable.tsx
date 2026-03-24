@@ -13,6 +13,7 @@ export function TunnelTable({ client }: TunnelTableProps) {
     ...proxy,
     clientId: client.id,
     clientName: getClientDisplayName(client),
+    clientOnline: client.online,
   }));
 
   return (
