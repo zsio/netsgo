@@ -1,6 +1,6 @@
 # Batch 8：前端联调与展示收口
 
-> 状态：待实现  
+> 状态：已完成  
 > 所属阶段：阶段 6（Frontend 收尾）  
 > 前置条件：阶段 4 完成  
 > 估计影响文件：`web/src/types/index.ts`、`web/src/lib/tunnel-model.ts`（新建或同类文件）、`web/src/hooks/use-tunnel-mutations.ts`、`web/src/components/custom/tunnel/`、`web/src/components/custom/dashboard/`、`web/src/routes/dashboard/clients.$clientId.tsx`、`web/src/routes/admin/config.tsx`、`web/src/components/custom/client/AddClientDialog.tsx`
