@@ -73,7 +73,7 @@
   - `make dev-client`
 - 开发模式使用 `-tags dev`，会跳过嵌入前端资源。
 - 非 dev 构建/测试依赖 `web/dist`。fresh clone 下如果没先构建前端，`go build ./...` 或 `go test ./...` 可能因为 `web/embed.go` 找不到 `dist` 而失败。
-- CI 也不是直接跑 Go 测试，而是先构建 `web/dist`，再恢复产物后执行 `go test ./...`；本地排查时要有相同心智模型。
+- CI 也不是直接跑 Go 测试，而是先执行 `bun run lint`，接着构建 `web/dist`，再恢复产物后执行 `go vet ./...` 和多系统（Linux, macOS, Windows）的 `go test ./...`；本地排查时要有相同心智模型。
 - 前端包管理器是 `bun`；不要擅自切换到 npm/yarn/pnpm。
 
 ## 前端约束
