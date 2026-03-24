@@ -1,6 +1,6 @@
 # Batch 6：Client 侧子协议发送与业务回归
 
-> 状态：待实现  
+> 状态：已完成  
 > 所属阶段：阶段 5（Client + E2E）  
 > 前置条件：Batch 5 完成  
 > 估计影响文件：`internal/client/client.go`、`internal/client/client_test.go`

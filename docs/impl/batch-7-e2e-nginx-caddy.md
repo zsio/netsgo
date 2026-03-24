@@ -1,6 +1,6 @@
 # Batch 7：nginx / caddy E2E 验证
 
-> 状态：待实现
+> 状态：已完成
 > 所属阶段：阶段 5（Client + E2E）
 > 前置条件：Batch 6 完成
 > 估计影响文件：`test/e2e/` 目录下的测试配置和脚本
