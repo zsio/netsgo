@@ -1,6 +1,6 @@
 # Batch 4：后端入口集成测试（先写测试）
 
-> 状态：待实现
+> 状态：已完成
 > 所属阶段：阶段 4（入口分发与运行时）
 > 前置条件：阶段 3 完成
 > 估计影响文件：`internal/server/http_dispatch_test.go`（新建）或 `internal/server/server_test.go`（扩展）

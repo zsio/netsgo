@@ -1,6 +1,6 @@
 # Batch 5：入口分发与 HTTP 运行时闭环
 
-> 状态：待实现  
+> 状态：已完成  
 > 所属阶段：阶段 4（入口分发与运行时）  
 > 前置条件：阶段 3 完成，且 Batch 4 的测试已落地  
 > 估计影响文件：`internal/server/server.go`、`internal/server/http_tunnel.go`（扩展）、`internal/server/data.go`、`internal/server/server_test.go`
