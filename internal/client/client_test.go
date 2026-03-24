@@ -27,6 +27,8 @@ type mockServer struct {
 	authResp             protocol.AuthResponse
 	dataStatus           byte
 	closeDataOnHandshake bool
+	controlProtocols     [][]string
+	dataProtocols        [][]string
 	conns                []*websocket.Conn
 	dataConns            []*websocket.Conn
 	dataSessions         []io.Closer
@@ -53,6 +55,11 @@ func newMockServer(authSuccess bool) *mockServer {
 
 func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+
+	ms.mu.Lock()
+	ms.controlProtocols = append(ms.controlProtocols, websocket.Subprotocols(r))
+	ms.mu.Unlock()
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -98,6 +105,11 @@ func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 
 func (ms *mockServer) dataHandler(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+
+	ms.mu.Lock()
+	ms.dataProtocols = append(ms.dataProtocols, websocket.Subprotocols(r))
+	ms.mu.Unlock()
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -179,6 +191,26 @@ func (ms *mockServer) getReceivedMsgs() []protocol.Message {
 	return result
 }
 
+func (ms *mockServer) getControlProtocols() [][]string {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	result := make([][]string, len(ms.controlProtocols))
+	for i := range ms.controlProtocols {
+		result[i] = append([]string(nil), ms.controlProtocols[i]...)
+	}
+	return result
+}
+
+func (ms *mockServer) getDataProtocols() [][]string {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	result := make([][]string, len(ms.dataProtocols))
+	for i := range ms.dataProtocols {
+		result[i] = append([]string(nil), ms.dataProtocols[i]...)
+	}
+	return result
+}
+
 func newMockHTTPServer(ms *mockServer) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/control", ms.controlHandler)
@@ -221,6 +253,32 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 	if msgs[0].Type != protocol.MsgTypeAuth {
 		t.Errorf("第一条消息应为 auth，得到 %s", msgs[0].Type)
 	}
+}
+
+func TestClientControlDial_SendsSubprotocol(t *testing.T) {
+	ms := newMockServer(true)
+	ts := newMockHTTPServer(ms)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	c := New(wsURL, "test-key")
+	c.DisableReconnect = true
+
+	go c.Start()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		protocols := ms.getControlProtocols()
+		if len(protocols) > 0 {
+			if len(protocols[0]) != 1 || protocols[0][0] != protocol.WSSubProtocolControl {
+				t.Fatalf("控制通道应发送子协议 %q，得到 %v", protocol.WSSubProtocolControl, protocols[0])
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatal("未观察到控制通道握手")
 }
 
 func TestClient_HeartbeatSent(t *testing.T) {
@@ -802,6 +860,30 @@ func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "握手被拒绝") {
 		t.Errorf("错误信息应包含'握手被拒绝'，实际得到: %v", err)
+	}
+}
+
+func TestClientDataDial_SendsSubprotocol(t *testing.T) {
+	ms := newMockServer(true)
+	ms.authResp.ClientID = "subprotocol-client"
+	ms.authResp.DataToken = "subprotocol-token"
+	ts := newMockHTTPServer(ms)
+	defer ts.Close()
+
+	c := New("ws"+strings.TrimPrefix(ts.URL, "http"), "key")
+	c.ClientID = ms.authResp.ClientID
+	c.dataToken = ms.authResp.DataToken
+
+	if err := c.connectDataChannel(); err != nil {
+		t.Fatalf("connectDataChannel 应成功: %v", err)
+	}
+
+	protocols := ms.getDataProtocols()
+	if len(protocols) == 0 {
+		t.Fatal("未观察到数据通道握手")
+	}
+	if len(protocols[0]) != 1 || protocols[0][0] != protocol.WSSubProtocolData {
+		t.Fatalf("数据通道应发送子协议 %q，得到 %v", protocol.WSSubProtocolData, protocols[0])
 	}
 }
 

@@ -312,7 +312,13 @@ func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP st
 }
 
 func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) error {
-	tunnel, err := s.prepareProxyTunnel(client, stored.ProxyNewRequest, protocol.ProxyStatusPending)
+	tunnel, err := s.prepareProxyTunnelWithExclusions(
+		client,
+		stored.ProxyNewRequest,
+		protocol.ProxyStatusPending,
+		stored.Name,
+		client.ID,
+	)
 	if err != nil {
 		return err
 	}

@@ -2249,6 +2249,83 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	t.Fatal("等待 restore 失败降级到 error 超时")
 }
 
+func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	var err error
+	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+
+	record, err := s.adminStore.GetOrCreateClient(
+		"install-restore-http",
+		protocol.ClientInfo{Hostname: "restore-http-host"},
+		"127.0.0.1:12345",
+	)
+	if err != nil {
+		t.Fatalf("预注册 client 失败: %v", err)
+	}
+
+	mustAddStableTunnel(t, s.store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name:      "restore-http",
+			Type:      protocol.ProxyTypeHTTP,
+			LocalIP:   "127.0.0.1",
+			LocalPort: 8080,
+			Domain:    "app.example.com",
+		},
+		Status:   protocol.ProxyStatusActive,
+		ClientID: record.ID,
+		Hostname: "restore-http-host",
+	})
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	dialer := websocket.Dialer{Subprotocols: []string{protocol.WSSubProtocolControl}}
+	controlConn, _, err := dialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("控制通道连接失败: %v", err)
+	}
+	defer controlConn.Close()
+
+	authResp := doAuthWithInstallID(t, controlConn, "restore-http-host", "install-restore-http", "test-key")
+	if !authResp.Success {
+		t.Fatalf("认证失败: %s", authResp.Message)
+	}
+	if authResp.ClientID != record.ID {
+		t.Fatalf("预注册 client_id=%s，应与认证返回一致，得到 %s", record.ID, authResp.ClientID)
+	}
+
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
+
+	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var restoreMsg protocol.Message
+	if err := controlConn.ReadJSON(&restoreMsg); err != nil {
+		t.Fatalf("读取 HTTP restore 阶段 proxy_new 失败: %v", err)
+	}
+	controlConn.SetReadDeadline(time.Time{})
+
+	if restoreMsg.Type != protocol.MsgTypeProxyNew {
+		t.Fatalf("HTTP restore 阶段期望 %s，得到 %s", protocol.MsgTypeProxyNew, restoreMsg.Type)
+	}
+
+	var restoreReq protocol.ProxyNewRequest
+	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
+		t.Fatalf("解析 HTTP restore proxy_new 失败: %v", err)
+	}
+	if restoreReq.Name != "restore-http" {
+		t.Fatalf("restore tunnel name 期望 restore-http，得到 %s", restoreReq.Name)
+	}
+	if restoreReq.Type != protocol.ProxyTypeHTTP {
+		t.Fatalf("restore tunnel type 期望 http，得到 %s", restoreReq.Type)
+	}
+	if restoreReq.Domain != "app.example.com" {
+		t.Fatalf("restore tunnel domain 期望 app.example.com，得到 %s", restoreReq.Domain)
+	}
+}
+
 func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	tmpDir, _ := os.MkdirTemp("", "tunnel_restore_test_*")
 	defer os.RemoveAll(tmpDir)

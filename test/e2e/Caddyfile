@@ -1,3 +1,7 @@
 :80 {
-    reverse_proxy {$UPSTREAM_HOST}:{$UPSTREAM_PORT}
+    reverse_proxy {$UPSTREAM_HOST}:{$UPSTREAM_PORT} {
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
 }

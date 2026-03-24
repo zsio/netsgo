@@ -5,16 +5,19 @@ BASE_URL="${NETSGO_BOOTSTRAP_BASE_URL:-http://proxy}"
 SETUP_TOKEN="${NETSGO_SETUP_TOKEN:-}"
 ADMIN_USER="${NETSGO_ADMIN_USER:-admin}"
 ADMIN_PASS="${NETSGO_ADMIN_PASS:-password123}"
-SERVER_ADDR="${NETSGO_SERVER_ADDR:-compose.local}"
+SERVER_ADDR="${NETSGO_SERVER_ADDR:-http://panel.compose.local}"
 CLIENT_HOSTNAME="${NETSGO_CLIENT_HOSTNAME:-compose-client}"
 CLIENT_KEY_FILE="${NETSGO_CLIENT_KEY_FILE:-/shared/client.key}"
 ADMIN_TOKEN_FILE="${NETSGO_ADMIN_TOKEN_FILE:-/shared/admin.token}"
 READY_FILE="${NETSGO_READY_FILE:-/shared/bootstrap.ready}"
 TUNNEL_NAME="${NETSGO_TUNNEL_NAME:-compose-tunnel}"
+TUNNEL_TYPE="${NETSGO_TUNNEL_TYPE:-http}"
+TUNNEL_DOMAIN="${NETSGO_TUNNEL_DOMAIN:-app.compose.local}"
 TUNNEL_REMOTE_PORT="${NETSGO_TUNNEL_REMOTE_PORT:-19082}"
 TUNNEL_LOCAL_IP="${NETSGO_TUNNEL_LOCAL_IP:-backend}"
 TUNNEL_LOCAL_PORT="${NETSGO_TUNNEL_LOCAL_PORT:-18083}"
 WAIT_TIMEOUT="${NETSGO_BOOTSTRAP_WAIT_TIMEOUT:-180}"
+MANAGEMENT_HOST="${NETSGO_MANAGEMENT_HOST:-}"
 
 if [ -z "${SETUP_TOKEN}" ]; then
 	echo "NETSGO_SETUP_TOKEN is required" >&2
@@ -28,6 +31,14 @@ log() {
 	printf '[bootstrap] %s\n' "$*"
 }
 
+derive_management_host() {
+	printf '%s' "$1" | sed -E 's#^[a-zA-Z]+://##; s#/.*$##'
+}
+
+if [ -z "${MANAGEMENT_HOST}" ]; then
+	MANAGEMENT_HOST="$(derive_management_host "${SERVER_ADDR}")"
+fi
+
 deadline() {
 	expr "$(date +%s)" + "${WAIT_TIMEOUT}"
 }
@@ -36,7 +47,7 @@ wait_for_http() {
 	url="$1"
 	end_ts="$(deadline)"
 	while [ "$(date +%s)" -lt "${end_ts}" ]; do
-		if curl -fsS "${url}" >/dev/null 2>&1; then
+		if curl -fsS -H "Host: ${MANAGEMENT_HOST}" "${url}" >/dev/null 2>&1; then
 			return 0
 		fi
 		sleep 1
@@ -70,7 +81,7 @@ login_admin() {
 
 	end_ts="$(deadline)"
 	while [ "$(date +%s)" -lt "${end_ts}" ]; do
-		code="$(http_json POST "${BASE_URL}/api/auth/login" "${login_payload}" "${login_resp}")" || code=""
+		code="$(http_json POST "${BASE_URL}/api/auth/login" "${login_payload}" "${login_resp}" -H "Host: ${MANAGEMENT_HOST}")" || code=""
 		if [ "${code}" = "200" ]; then
 			token="$(jq -r '.token // empty' "${login_resp}")"
 			if [ -n "${token}" ]; then
@@ -89,7 +100,7 @@ wait_for_client() {
 	clients_resp="${tmpdir}/clients.json"
 	end_ts="$(deadline)"
 	while [ "$(date +%s)" -lt "${end_ts}" ]; do
-		code="$(http_json GET "${BASE_URL}/api/clients" "" "${clients_resp}" -H "Authorization: Bearer ${token}")" || code=""
+		code="$(http_json GET "${BASE_URL}/api/clients" "" "${clients_resp}" -H "Host: ${MANAGEMENT_HOST}" -H "Authorization: Bearer ${token}")" || code=""
 		if [ "${code}" = "200" ]; then
 			client_id="$(jq -r --arg hostname "${CLIENT_HOSTNAME}" 'map(select(.info.hostname == $hostname and .online == true))[0].id // empty' "${clients_resp}")"
 			if [ -n "${client_id}" ]; then
@@ -112,7 +123,7 @@ status_resp="${tmpdir}/setup-status.json"
 init_payload="${tmpdir}/setup-init.json"
 init_resp="${tmpdir}/setup-init.resp"
 
-code="$(http_json GET "${BASE_URL}/api/setup/status" "" "${status_resp}")"
+code="$(http_json GET "${BASE_URL}/api/setup/status" "" "${status_resp}" -H "Host: ${MANAGEMENT_HOST}")"
 if [ "${code}" != "200" ]; then
 	log "unexpected setup status response: ${code}"
 	cat "${status_resp}" >&2 || true
@@ -128,12 +139,12 @@ if [ "${initialized}" != "true" ]; then
 		--arg server_addr "${SERVER_ADDR}" \
 		--arg setup_token "${SETUP_TOKEN}" \
 		'{admin:{username:$username,password:$password},server_addr:$server_addr,allowed_ports:[],setup_token:$setup_token}' >"${init_payload}"
-	code="$(http_json POST "${BASE_URL}/api/setup/init" "${init_payload}" "${init_resp}")" || code=""
+	code="$(http_json POST "${BASE_URL}/api/setup/init" "${init_payload}" "${init_resp}" -H "Host: ${MANAGEMENT_HOST}")" || code=""
 	case "${code}" in
 	201)
 		;;
 	403)
-		code="$(http_json GET "${BASE_URL}/api/setup/status" "" "${status_resp}")"
+		code="$(http_json GET "${BASE_URL}/api/setup/status" "" "${status_resp}" -H "Host: ${MANAGEMENT_HOST}")"
 		if [ "${code}" != "200" ] || [ "$(jq -r '.initialized' "${status_resp}")" != "true" ]; then
 			log "server initialization rejected"
 			cat "${init_resp}" >&2 || true
@@ -159,7 +170,7 @@ key_resp="${tmpdir}/api-key.resp"
 jq -n \
 	--arg name "compose-$(date +%s)" \
 	'{name:$name,permissions:["connect"]}' >"${key_payload}"
-code="$(http_json POST "${BASE_URL}/api/admin/keys" "${key_payload}" "${key_resp}" -H "Authorization: Bearer ${admin_token}")" || code=""
+code="$(http_json POST "${BASE_URL}/api/admin/keys" "${key_payload}" "${key_resp}" -H "Host: ${MANAGEMENT_HOST}" -H "Authorization: Bearer ${admin_token}")" || code=""
 if [ "${code}" != "201" ]; then
 	log "failed to create API key"
 	cat "${key_resp}" >&2 || true
@@ -181,7 +192,7 @@ client_id="$(wait_for_client "${admin_token}")" || {
 }
 
 clients_resp="${tmpdir}/clients-post-online.json"
-code="$(http_json GET "${BASE_URL}/api/clients" "" "${clients_resp}" -H "Authorization: Bearer ${admin_token}")"
+code="$(http_json GET "${BASE_URL}/api/clients" "" "${clients_resp}" -H "Host: ${MANAGEMENT_HOST}" -H "Authorization: Bearer ${admin_token}")"
 if [ "${code}" != "200" ]; then
 	log "failed to fetch client list after client became live"
 	exit 1
@@ -191,13 +202,22 @@ existing_tunnel="$(jq -r --arg client_id "${client_id}" --arg tunnel_name "${TUN
 if [ -z "${existing_tunnel}" ]; then
 	tunnel_payload="${tmpdir}/tunnel.json"
 	tunnel_resp="${tmpdir}/tunnel.resp"
-	jq -n \
-		--arg name "${TUNNEL_NAME}" \
-		--arg local_ip "${TUNNEL_LOCAL_IP}" \
-		--argjson local_port "${TUNNEL_LOCAL_PORT}" \
-		--argjson remote_port "${TUNNEL_REMOTE_PORT}" \
-		'{name:$name,type:"tcp",local_ip:$local_ip,local_port:$local_port,remote_port:$remote_port}' >"${tunnel_payload}"
-	code="$(http_json POST "${BASE_URL}/api/clients/${client_id}/tunnels" "${tunnel_payload}" "${tunnel_resp}" -H "Authorization: Bearer ${admin_token}")" || code=""
+	if [ "${TUNNEL_TYPE}" = "http" ]; then
+		jq -n \
+			--arg name "${TUNNEL_NAME}" \
+			--arg local_ip "${TUNNEL_LOCAL_IP}" \
+			--argjson local_port "${TUNNEL_LOCAL_PORT}" \
+			--arg domain "${TUNNEL_DOMAIN}" \
+			'{name:$name,type:"http",local_ip:$local_ip,local_port:$local_port,domain:$domain}' >"${tunnel_payload}"
+	else
+		jq -n \
+			--arg name "${TUNNEL_NAME}" \
+			--arg local_ip "${TUNNEL_LOCAL_IP}" \
+			--argjson local_port "${TUNNEL_LOCAL_PORT}" \
+			--argjson remote_port "${TUNNEL_REMOTE_PORT}" \
+			'{name:$name,type:"tcp",local_ip:$local_ip,local_port:$local_port,remote_port:$remote_port}' >"${tunnel_payload}"
+	fi
+	code="$(http_json POST "${BASE_URL}/api/clients/${client_id}/tunnels" "${tunnel_payload}" "${tunnel_resp}" -H "Host: ${MANAGEMENT_HOST}" -H "Authorization: Bearer ${admin_token}")" || code=""
 	case "${code}" in
 	201)
 		;;
@@ -217,7 +237,8 @@ cat >"${READY_FILE}" <<EOF
 base_url=${BASE_URL}
 client_id=${client_id}
 tunnel_name=${TUNNEL_NAME}
-tunnel_url=http://127.0.0.1:${TUNNEL_REMOTE_PORT}
+management_host=${MANAGEMENT_HOST}
+tunnel_host=${TUNNEL_DOMAIN}
 EOF
 
 log "compose environment is ready"

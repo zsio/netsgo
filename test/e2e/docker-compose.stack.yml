@@ -42,12 +42,14 @@ services:
       NETSGO_SETUP_TOKEN: ${NETSGO_SETUP_TOKEN:-compose-setup-token}
       NETSGO_ADMIN_USER: ${NETSGO_ADMIN_USER:-admin}
       NETSGO_ADMIN_PASS: ${NETSGO_ADMIN_PASS:-password123}
-      NETSGO_SERVER_ADDR: ${NETSGO_SERVER_ADDR:-compose.local}
+      NETSGO_SERVER_ADDR: ${NETSGO_SERVER_ADDR:-http://panel.compose.local}
       NETSGO_CLIENT_HOSTNAME: ${NETSGO_CLIENT_HOSTNAME:-compose-client}
       NETSGO_CLIENT_KEY_FILE: /shared/client.key
       NETSGO_ADMIN_TOKEN_FILE: /shared/admin.token
       NETSGO_READY_FILE: /shared/bootstrap.ready
       NETSGO_TUNNEL_NAME: ${NETSGO_TUNNEL_NAME:-compose-tunnel}
+      NETSGO_TUNNEL_TYPE: ${NETSGO_TUNNEL_TYPE:-http}
+      NETSGO_TUNNEL_DOMAIN: ${NETSGO_TUNNEL_DOMAIN:-app.compose.local}
       NETSGO_TUNNEL_REMOTE_PORT: ${TUNNEL_REMOTE_PORT:-19082}
       NETSGO_TUNNEL_LOCAL_IP: backend
       NETSGO_TUNNEL_LOCAL_PORT: "18083"

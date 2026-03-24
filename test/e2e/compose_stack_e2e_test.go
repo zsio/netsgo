@@ -15,34 +15,38 @@ import (
 
 func TestComposeStackE2E(t *testing.T) {
 	projectName, composeFiles, composeEnv, baseURL, tunnelURL := mustComposeStackConfig(t)
+	managementHost := getenvDefault("NETSGO_E2E_MANAGEMENT_HOST", "panel.compose.local")
+	tunnelHost := getenvDefault("NETSGO_E2E_TUNNEL_HOST", "app.compose.local")
 	registerComposeCleanup(t, composeEnv, projectName, composeFiles)
 
 	runComposeFiles(t, composeEnv, projectName, composeFiles, "up", "-d", "--build", "--remove-orphans")
-	waitForHTTP200(t, baseURL+"/api/setup/status", 90*time.Second)
-	waitForTunnel(t, tunnelURL, []byte("compose backend response"), 2*time.Minute)
+	waitForHTTP200(t, baseURL+"/api/setup/status", managementHost, 90*time.Second)
+	waitForTunnel(t, tunnelURL, tunnelHost, []byte("compose backend response"), 2*time.Minute)
 
 	runComposeFiles(t, composeEnv, projectName, composeFiles, "restart", "proxy")
-	waitForTunnel(t, tunnelURL, []byte("compose backend response"), 2*time.Minute)
+	waitForTunnel(t, tunnelURL, tunnelHost, []byte("compose backend response"), 2*time.Minute)
 }
 
 func TestComposeStackSoak(t *testing.T) {
 	projectName, composeFiles, composeEnv, baseURL, tunnelURL := mustComposeStackConfig(t)
+	managementHost := getenvDefault("NETSGO_E2E_MANAGEMENT_HOST", "panel.compose.local")
+	tunnelHost := getenvDefault("NETSGO_E2E_TUNNEL_HOST", "app.compose.local")
 	registerComposeCleanup(t, composeEnv, projectName, composeFiles)
 
 	runComposeFiles(t, composeEnv, projectName, composeFiles, "up", "-d", "--build", "--remove-orphans")
-	waitForHTTP200(t, baseURL+"/api/setup/status", 90*time.Second)
-	waitForTunnel(t, tunnelURL, []byte("compose backend response"), 2*time.Minute)
+	waitForHTTP200(t, baseURL+"/api/setup/status", managementHost, 90*time.Second)
+	waitForTunnel(t, tunnelURL, tunnelHost, []byte("compose backend response"), 2*time.Minute)
 
-	adminToken := waitForAdminToken(t, baseURL, 45*time.Second)
-	waitForLiveClientCount(t, baseURL, adminToken, 1, 45*time.Second)
+	adminToken := waitForAdminToken(t, baseURL, managementHost, 45*time.Second)
+	waitForLiveClientCount(t, baseURL, managementHost, adminToken, 1, 45*time.Second)
 
 	idleDuration := mustParseDuration(t, getenvDefault("NETSGO_E2E_SOAK_IDLE", "45s"))
 	cycles := mustPositiveInt(t, getenvDefault("NETSGO_E2E_SOAK_CYCLES", "3"))
 
 	for i := 0; i < cycles; i++ {
 		time.Sleep(idleDuration)
-		waitForTunnel(t, tunnelURL, []byte("compose backend response"), 45*time.Second)
-		waitForLiveClientCount(t, baseURL, adminToken, 1, 30*time.Second)
+		waitForTunnel(t, tunnelURL, tunnelHost, []byte("compose backend response"), 45*time.Second)
+		waitForLiveClientCount(t, baseURL, managementHost, adminToken, 1, 30*time.Second)
 
 		switch i {
 		case 0:
@@ -53,8 +57,8 @@ func TestComposeStackSoak(t *testing.T) {
 			continue
 		}
 
-		waitForTunnel(t, tunnelURL, []byte("compose backend response"), 2*time.Minute)
-		waitForLiveClientCount(t, baseURL, adminToken, 1, 45*time.Second)
+		waitForTunnel(t, tunnelURL, tunnelHost, []byte("compose backend response"), 2*time.Minute)
+		waitForLiveClientCount(t, baseURL, managementHost, adminToken, 1, 45*time.Second)
 	}
 }
 
@@ -87,7 +91,7 @@ func mustComposeStackConfig(t *testing.T) (projectName string, composeFiles []st
 	)
 
 	baseURL = fmt.Sprintf("http://127.0.0.1:%s", proxyPort)
-	tunnelURL = fmt.Sprintf("http://127.0.0.1:%s", tunnelPort)
+	tunnelURL = baseURL + "/"
 	return
 }
 
@@ -144,13 +148,12 @@ func mustPositiveInt(t *testing.T, raw string) int {
 	return out
 }
 
-func waitForHTTP200(t *testing.T, url string, timeout time.Duration) {
+func waitForHTTP200(t *testing.T, url, host string, timeout time.Duration) {
 	t.Helper()
 
-	client := &http.Client{Timeout: 3 * time.Second}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(url)
+		resp, err := doRequest(http.MethodGet, url, host, "", nil, "")
 		if err == nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()

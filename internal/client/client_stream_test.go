@@ -118,6 +118,93 @@ func TestClient_HandleStream_Success(t *testing.T) {
 	relayWg.Wait()
 }
 
+func TestClient_HandleStream_HTTPProxy_ReusesTCPPath(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-HTTP-Tunnel", "ok")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("http tunnel backend"))
+	}))
+	defer backend.Close()
+
+	var localPort int
+	fmt.Sscanf(backend.Listener.Addr().String(), "127.0.0.1:%d", &localPort)
+
+	c := New("ws://localhost:8080", "key")
+	proxyName := "http-backend"
+	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		Name:      proxyName,
+		Type:      protocol.ProxyTypeHTTP,
+		LocalIP:   "127.0.0.1",
+		LocalPort: localPort,
+		Domain:    "app.example.com",
+	})
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	clientSession, _ := mux.NewClientSession(clientConn, mux.DefaultConfig())
+	c.dataSession = clientSession
+	defer clientSession.Close()
+
+	serverSession, _ := mux.NewServerSession(serverConn, mux.DefaultConfig())
+	defer serverSession.Close()
+
+	var serverStream net.Conn
+	var streamErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		serverStream, streamErr = serverSession.Open()
+		if streamErr != nil {
+			return
+		}
+
+		nameBytes := []byte(proxyName)
+		var lenBuf [2]byte
+		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
+		_, _ = serverStream.Write(lenBuf[:])
+		_, _ = serverStream.Write(nameBytes)
+		_, _ = serverStream.Write([]byte("GET / HTTP/1.1\r\nHost: app.example.com\r\n\r\n"))
+	}()
+
+	clientStream, err := clientSession.AcceptStream()
+	if err != nil {
+		t.Fatalf("Client AcceptStream 失败: %v", err)
+	}
+
+	var relayWg sync.WaitGroup
+	relayWg.Add(1)
+	go func() {
+		defer relayWg.Done()
+		c.handleStream(clientStream)
+	}()
+
+	wg.Wait()
+	if streamErr != nil {
+		t.Fatalf("Server OpenStream 失败: %v", streamErr)
+	}
+
+	respBuf := make([]byte, 1024)
+	_ = serverStream.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, err := serverStream.Read(respBuf)
+	if err != nil && err != io.EOF {
+		t.Fatalf("读取 HTTP 隧道返回失败: %v", err)
+	}
+	_ = serverStream.Close()
+
+	responseStr := string(respBuf[:n])
+	if !bytes.Contains([]byte(responseStr), []byte("200 OK")) {
+		t.Fatalf("期望得到 HTTP 200 OK，实际得到: %s", responseStr)
+	}
+	if !bytes.Contains([]byte(responseStr), []byte("X-Http-Tunnel: ok")) {
+		t.Fatalf("HTTP 隧道应继续复用 TCP 数据面，实际响应: %s", responseStr)
+	}
+
+	relayWg.Wait()
+}
+
 func TestClient_HandleStream_InvalidHeader(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 

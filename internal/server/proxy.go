@@ -65,7 +65,11 @@ func (s *Server) ensureClientDataReady(client *ClientConn) error {
 }
 
 func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewRequest, status string) (*ProxyTunnel, error) {
-	if err := s.validateProxyRequest(client, req); err != nil {
+	return s.prepareProxyTunnelWithExclusions(client, req, status, "", "")
+}
+
+func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, status, excludeName, excludeClientID string) (*ProxyTunnel, error) {
+	if err := s.validateProxyRequestWithExclusions(client, req, excludeName, excludeClientID); err != nil {
 		return nil, err
 	}
 	if err := s.ensureClientDataReady(client); err != nil {
