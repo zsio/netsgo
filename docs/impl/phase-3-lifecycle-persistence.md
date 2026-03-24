@@ -1,6 +1,6 @@
 # 阶段 3：生命周期与离线语义
 
-> 状态：待实现  
+> 状态：已完成  
 > 所属阶段：阶段 3  
 > 前置条件：阶段 2 完成  
 > 估计影响文件：`internal/server/server.go`、`internal/server/tunnel_manager.go`、`internal/server/store.go`、`internal/server/server_test.go`、`internal/server/tunnel_manager_test.go`

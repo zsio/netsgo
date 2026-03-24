@@ -13,6 +13,17 @@ import (
 	"netsgo/pkg/protocol"
 )
 
+func defaultTestRequestHost() string {
+	if env := os.Getenv("NETSGO_SERVER_ADDR"); env != "" {
+		if normalized, err := validateServerAddr(env); err == nil {
+			if host := canonicalHost(normalized); host != "" {
+				return host
+			}
+		}
+	}
+	return "localhost"
+}
+
 // setupTestServerWithDB 创建用于 API 测试的 Server
 func setupTestServerWithDB(t *testing.T, initialized bool) (*Server, func()) {
 	t.Helper()
@@ -101,6 +112,7 @@ func doMuxRequest(t *testing.T, handler http.Handler, method, path, token string
 	t.Helper()
 
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req.Host = defaultTestRequestHost()
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}

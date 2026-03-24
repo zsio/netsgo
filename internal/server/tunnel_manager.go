@@ -10,6 +10,11 @@ import (
 	"netsgo/pkg/protocol"
 )
 
+var (
+	errManagedTunnelClientNotFound = errors.New("managed tunnel client not found")
+	errManagedTunnelNotFound       = errors.New("managed tunnel not found")
+)
+
 func tunnelProvisionErrorMessage(err error) string {
 	var rejected *tunnelReadyRejectedError
 	switch {
@@ -440,6 +445,20 @@ func (s *Server) failRestoredTunnelAfterReady(client *ClientConn, stored StoredT
 	s.emitTunnelChanged(client.ID, config, "error")
 }
 
+func storedTunnelToProxyConfig(stored StoredTunnel) protocol.ProxyConfig {
+	return protocol.ProxyConfig{
+		Name:       stored.Name,
+		Type:       stored.Type,
+		LocalIP:    stored.LocalIP,
+		LocalPort:  stored.LocalPort,
+		RemotePort: stored.RemotePort,
+		Domain:     stored.Domain,
+		ClientID:   stored.ClientID,
+		Status:     stored.Status,
+		Error:      stored.Error,
+	}
+}
+
 func storedTunnelFromRuntime(client *ClientConn, tunnel *ProxyTunnel) StoredTunnel {
 	return StoredTunnel{
 		ProxyNewRequest: tunnel.Config.ToProxyNewRequest(),
@@ -449,6 +468,103 @@ func storedTunnelFromRuntime(client *ClientConn, tunnel *ProxyTunnel) StoredTunn
 		Hostname:        client.Info.Hostname,
 		Binding:         TunnelBindingClientID,
 	}
+}
+
+func (s *Server) loadOfflineHTTPTunnel(clientID, name string) (StoredTunnel, error) {
+	if s.adminStore == nil {
+		return StoredTunnel{}, errManagedTunnelClientNotFound
+	}
+	if _, ok := s.adminStore.GetRegisteredClient(clientID); !ok {
+		return StoredTunnel{}, errManagedTunnelClientNotFound
+	}
+	if s.store == nil {
+		return StoredTunnel{}, errManagedTunnelNotFound
+	}
+
+	stored, exists := s.store.GetTunnel(clientID, name)
+	if !exists {
+		return StoredTunnel{}, errManagedTunnelNotFound
+	}
+	if stored.Type != protocol.ProxyTypeHTTP {
+		return StoredTunnel{}, errManagedTunnelClientNotFound
+	}
+
+	return stored, nil
+}
+
+func (s *Server) updateOfflineHTTPTunnel(clientID, name, localIP string, localPort, remotePort int, domain string) (protocol.ProxyConfig, error) {
+	stored, err := s.loadOfflineHTTPTunnel(clientID, name)
+	if err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+
+	req := protocol.ProxyNewRequest{
+		Name:       name,
+		Type:       stored.Type,
+		LocalIP:    localIP,
+		LocalPort:  localPort,
+		RemotePort: remotePort,
+		Domain:     domain,
+	}
+	if req.Type == protocol.ProxyTypeHTTP {
+		req.RemotePort = 0
+	}
+	if err := s.validateProxyRequestWithExclusions(nil, req, name, clientID); err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+	if err := s.store.UpdateTunnel(clientID, name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain); err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+
+	updated, exists := s.store.GetTunnel(clientID, name)
+	if !exists {
+		return protocol.ProxyConfig{}, fmt.Errorf("隧道 %q 不存在", name)
+	}
+
+	config := storedTunnelToProxyConfig(updated)
+	s.emitTunnelChanged(clientID, config, "updated")
+	return config, nil
+}
+
+func (s *Server) pauseOfflineHTTPTunnel(clientID, name string) (protocol.ProxyConfig, error) {
+	stored, err := s.loadOfflineHTTPTunnel(clientID, name)
+	if err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+	if stored.Status != protocol.ProxyStatusActive {
+		return protocol.ProxyConfig{}, fmt.Errorf("只有 active 状态的隧道才能暂停")
+	}
+	if err := s.store.UpdateState(clientID, name, protocol.ProxyStatusPaused, ""); err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+
+	updated, exists := s.store.GetTunnel(clientID, name)
+	if !exists {
+		return protocol.ProxyConfig{}, fmt.Errorf("隧道 %q 不存在", name)
+	}
+
+	config := storedTunnelToProxyConfig(updated)
+	s.emitTunnelChanged(clientID, config, "paused")
+	return config, nil
+}
+
+func (s *Server) deleteOfflineHTTPTunnel(clientID, name string) error {
+	stored, err := s.loadOfflineHTTPTunnel(clientID, name)
+	if err != nil {
+		return err
+	}
+	if err := s.store.RemoveTunnel(clientID, name); err != nil {
+		return err
+	}
+
+	s.emitTunnelChanged(clientID, protocol.ProxyConfig{
+		Name:     stored.Name,
+		Type:     stored.Type,
+		Domain:   stored.Domain,
+		ClientID: clientID,
+		Status:   protocol.ProxyStatusStopped,
+	}, "deleted")
+	return nil
 }
 
 func (s *Server) notifyClientProxyNew(client *ClientConn, req protocol.ProxyNewRequest) error {

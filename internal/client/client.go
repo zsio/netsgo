@@ -427,12 +427,14 @@ func (c *Client) connectAndRun() error {
 	controlURL := c.deriveControlURL()
 	log.Printf("🔌 正在连接 Server: %s", controlURL)
 
-	dialer := *websocket.DefaultDialer
-	if c.useTLS {
-		u, _ := url.Parse(c.ServerAddr)
-		dialer.TLSClientConfig = c.buildTLSConfig(u.Hostname())
+	u, err := url.Parse(c.ServerAddr)
+	if err != nil {
+		c.clearCurrentRuntime(rt)
+		return fmt.Errorf("解析 ServerAddr 失败: %w", err)
 	}
 
+	dialer := c.newWSDialer(u.Hostname())
+	dialer.Subprotocols = []string{protocol.WSSubProtocolControl}
 	conn, _, err := dialer.Dial(controlURL, nil)
 	if err != nil {
 		c.clearCurrentRuntime(rt)
@@ -662,6 +664,7 @@ func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
 
 	dataURL := c.deriveDataURL()
 	dialer := c.newWSDialer(u.Hostname())
+	dialer.Subprotocols = []string{protocol.WSSubProtocolData}
 	wsConn, _, err := dialer.Dial(dataURL, nil)
 	if err != nil {
 		return fmt.Errorf("建立数据通道 WebSocket 失败: %w", err)

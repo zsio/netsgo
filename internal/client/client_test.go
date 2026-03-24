@@ -428,16 +428,22 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 	// 断开连接
 	ms.closeConns()
 
-	// 等待重连（3s 间隔 + 连接时间）
-	time.Sleep(5 * time.Second)
+	// 轮询等待重连成功，避免固定 sleep 导致测试偶发抖动。
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		authMu.Lock()
+		finalAuth := authCount
+		authMu.Unlock()
+		if finalAuth > firstAuth {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 
-	// 验证重连成功（认证次数增加）
 	authMu.Lock()
 	finalAuth := authCount
 	authMu.Unlock()
-	if finalAuth <= firstAuth {
-		t.Errorf("重连后认证次数应增加，首次: %d, 当前: %d", firstAuth, finalAuth)
-	}
+	t.Errorf("重连后认证次数应增加，首次: %d, 当前: %d", firstAuth, finalAuth)
 }
 
 func TestClient_RetryInterval(t *testing.T) {

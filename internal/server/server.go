@@ -363,7 +363,7 @@ func (s *Server) Start() error {
 	// 注意：不设置 ReadTimeout / WriteTimeout，因为 WebSocket 和 SSE 是长连接
 	// ReadHeaderTimeout 足以防御 Slowloris 攻击（限制请求头读取时间）
 	s.httpServer = &http.Server{
-		Handler:           s.securityHeadersHandler(s.newHTTPMux()),
+		Handler:           s.newHTTPHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -429,15 +429,30 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// StartHTTPOnly 仅返回 HTTP 路由（用于测试）
-func (s *Server) StartHTTPOnly() *http.ServeMux {
-	return s.newHTTPMux()
+// StartHTTPOnly 仅返回最终 HTTP 入口（用于测试）
+func (s *Server) StartHTTPOnly() http.Handler {
+	return s.newHTTPHandler()
 }
 
-// newHTTPMux 创建 HTTP 路由
-func (s *Server) newHTTPMux() *http.ServeMux {
-	mux := http.NewServeMux()
+func (s *Server) newHTTPHandler() http.Handler {
+	return s.hostDispatchHandler(s.securityHeadersHandler(s.newManagementMux()))
+}
 
+// newManagementMux 创建管理面 HTTP 路由。
+func (s *Server) newManagementMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	s.registerManagementRoutes(mux)
+	return mux
+}
+
+// newHTTPMux 创建旧式组合路由，保留给需要直接测试内部 handler 的场景。
+func (s *Server) newHTTPMux() *http.ServeMux {
+	mux := s.newManagementMux()
+	s.registerInternalWSRoutes(mux)
+	return mux
+}
+
+func (s *Server) registerManagementRoutes(mux *http.ServeMux) {
 	// Web 面板 — 静态文件（go:embed）
 	mux.HandleFunc("/", s.handleWeb)
 
@@ -468,14 +483,14 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 
 	// SSE 实时事件流
 	mux.HandleFunc("GET /api/events", s.RequireAuth(s.handleSSE))
+}
 
+func (s *Server) registerInternalWSRoutes(mux *http.ServeMux) {
 	// 控制通道 WebSocket
 	mux.HandleFunc("/ws/control", s.handleControlWS)
 
 	// 数据通道 WebSocket
 	mux.HandleFunc("/ws/data", s.handleDataWS)
-
-	return mux
 }
 
 // --- WebSocket 升级器 ---
@@ -499,8 +514,9 @@ func checkWSOrigin(r *http.Request) bool {
 }
 
 // 无 Origin 头（Go 客户端）→ 放行；有 Origin 头 → 严格校验 host 是否匹配
-var upgrader = websocket.Upgrader{
-	CheckOrigin: checkWSOrigin,
+var controlUpgrader = websocket.Upgrader{
+	CheckOrigin:  checkWSOrigin,
+	Subprotocols: []string{protocol.WSSubProtocolControl},
 }
 
 var dataUpgrader = websocket.Upgrader{
@@ -509,6 +525,7 @@ var dataUpgrader = websocket.Upgrader{
 	WriteBufferSize:   32 * 1024,
 	CheckOrigin:       checkWSOrigin,
 	EnableCompression: false,
+	Subprotocols:      []string{protocol.WSSubProtocolData},
 }
 
 // securityHeadersHandler 统一注入安全响应头（P10）
@@ -532,7 +549,7 @@ func (s *Server) securityHeadersHandler(next http.Handler) http.Handler {
 // --- 控制通道处理 ---
 
 func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := controlUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("❌ WebSocket 升级失败: %v", err)
 		return
@@ -1402,11 +1419,29 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
-	client, ok := s.readClientFromPath(w, r)
+	clientID := r.PathValue("id")
+	tunnelName := r.PathValue("name")
+
+	client, ok := s.loadLiveClient(clientID)
 	if !ok {
+		_, err := s.pauseOfflineHTTPTunnel(clientID, tunnelName)
+		if err != nil {
+			switch {
+			case errors.Is(err, errManagedTunnelClientNotFound):
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+			case errors.Is(err, errManagedTunnelNotFound):
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
+			case err.Error() == "只有 active 状态的隧道才能暂停":
+				encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			default:
+				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			}
+			return
+		}
+
+		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已暂停"})
 		return
 	}
-	tunnelName := r.PathValue("name")
 
 	// 检查隧道是否存在且为 active 状态
 	client.proxyMu.RLock()
@@ -1434,11 +1469,26 @@ func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
-	client, ok := s.readClientFromPath(w, r)
+	clientID := r.PathValue("id")
+	tunnelName := r.PathValue("name")
+
+	client, ok := s.loadLiveClient(clientID)
 	if !ok {
+		if _, err := s.loadOfflineHTTPTunnel(clientID, tunnelName); err != nil {
+			switch {
+			case errors.Is(err, errManagedTunnelClientNotFound):
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+			case errors.Is(err, errManagedTunnelNotFound):
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
+			default:
+				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			}
+			return
+		}
+
+		encodeJSON(w, http.StatusConflict, map[string]any{"error": "离线 HTTP 隧道不支持恢复，请等待 client 上线"})
 		return
 	}
-	tunnelName := r.PathValue("name")
 
 	// 检查隧道是否为 paused 或 stopped 状态
 	client.proxyMu.RLock()
@@ -1476,11 +1526,26 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
-	client, ok := s.readClientFromPath(w, r)
+	clientID := r.PathValue("id")
+	tunnelName := r.PathValue("name")
+
+	client, ok := s.loadLiveClient(clientID)
 	if !ok {
+		if _, err := s.loadOfflineHTTPTunnel(clientID, tunnelName); err != nil {
+			switch {
+			case errors.Is(err, errManagedTunnelClientNotFound):
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+			case errors.Is(err, errManagedTunnelNotFound):
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
+			default:
+				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			}
+			return
+		}
+
+		encodeJSON(w, http.StatusConflict, map[string]any{"error": "离线 HTTP 隧道不支持停止，请等待 client 上线"})
 		return
 	}
-	tunnelName := r.PathValue("name")
 
 	client.proxyMu.RLock()
 	_, exists := client.proxies[tunnelName]
@@ -1501,11 +1566,26 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
-	client, ok := s.readClientFromPath(w, r)
+	clientID := r.PathValue("id")
+	tunnelName := r.PathValue("name")
+
+	client, ok := s.loadLiveClient(clientID)
 	if !ok {
+		if err := s.deleteOfflineHTTPTunnel(clientID, tunnelName); err != nil {
+			switch {
+			case errors.Is(err, errManagedTunnelClientNotFound):
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+			case errors.Is(err, errManagedTunnelNotFound):
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
+			default:
+				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			}
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	tunnelName := r.PathValue("name")
 
 	// 检查隧道是否存在
 	client.proxyMu.RLock()
@@ -1540,11 +1620,54 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
-	client, ok := s.readClientFromPath(w, r)
-	if !ok {
+	clientID := r.PathValue("id")
+	tunnelName := r.PathValue("name")
+
+	var req struct {
+		LocalIP    string `json:"local_ip"`
+		LocalPort  int    `json:"local_port"`
+		RemotePort int    `json:"remote_port"`
+		Domain     string `json:"domain"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体无效"})
 		return
 	}
-	tunnelName := r.PathValue("name")
+
+	client, ok := s.loadLiveClient(clientID)
+	if !ok {
+		updated, err := s.updateOfflineHTTPTunnel(clientID, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain)
+		if err != nil {
+			status := http.StatusInternalServerError
+			payload := map[string]any{"error": err.Error()}
+
+			var ruleErr *httpTunnelRuleError
+			var validationErr *proxyRequestValidationError
+			switch {
+			case errors.Is(err, errManagedTunnelClientNotFound):
+				status = http.StatusNotFound
+				payload = map[string]any{"error": "client not found"}
+			case errors.Is(err, errManagedTunnelNotFound):
+				status = http.StatusNotFound
+				payload = map[string]any{"error": "隧道不存在"}
+			case errors.As(err, &ruleErr):
+				status = http.StatusConflict
+				payload["error_code"] = ruleErr.ErrorCode()
+			case errors.As(err, &validationErr):
+				status = http.StatusConflict
+			}
+
+			encodeJSON(w, status, payload)
+			return
+		}
+
+		encodeJSON(w, http.StatusOK, map[string]any{
+			"success": true,
+			"message": "隧道配置已更新",
+			"tunnel":  updated,
+		})
+		return
+	}
 
 	// 检查隧道是否存在
 	client.proxyMu.RLock()
@@ -1563,17 +1686,6 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		encodeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": fmt.Sprintf("隧道当前状态为 %q，只有暂停、已停止或异常状态才能编辑", tunnel.Config.Status),
 		})
-		return
-	}
-
-	var req struct {
-		LocalIP    string `json:"local_ip"`
-		LocalPort  int    `json:"local_port"`
-		RemotePort int    `json:"remote_port"`
-		Domain     string `json:"domain"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体无效"})
 		return
 	}
 

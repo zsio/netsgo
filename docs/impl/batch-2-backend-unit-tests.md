@@ -1,6 +1,6 @@
 # Batch 2：规则层与管理配置契约测试（TDD 先行）
 
-> 状态：待实现  
+> 状态：已完成  
 > 所属阶段：阶段 2（规则层）  
 > 前置条件：Batch 1 完成  
 > 估计影响文件：`internal/server/http_tunnel_test.go`（新建）、`internal/server/admin_api_test.go`（扩展）

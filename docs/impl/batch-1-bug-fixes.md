@@ -1,6 +1,6 @@
 # Batch 1：修复前置 Bug
 
-> 状态：待实现
+> 状态：已完成
 > 所属阶段：阶段 1（前置 Bug 修复）
 > 前置条件：无
 > 估计影响文件：`internal/server/proxy.go`、`internal/server/server.go`

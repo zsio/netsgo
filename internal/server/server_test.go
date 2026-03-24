@@ -2656,7 +2656,9 @@ func TestServer_GracefulShutdown(t *testing.T) {
 
 	// 连接一个 Client
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws/control", s.Port)
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	dialer := *websocket.DefaultDialer
+	dialer.Subprotocols = []string{protocol.WSSubProtocolControl}
+	conn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("WebSocket 连接失败: %v", err)
 	}
