@@ -69,11 +69,18 @@ func TestUDPFrame_MultipleFrames(t *testing.T) {
 	}
 }
 
-func TestWriteUDPFrame_EmptyPayload(t *testing.T) {
+func TestUDPFrame_EmptyPayloadRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
-	err := WriteUDPFrame(&buf, []byte{})
-	if err == nil {
-		t.Error("空 payload 应返回错误")
+	if err := WriteUDPFrame(&buf, []byte{}); err != nil {
+		t.Fatalf("空 payload 写入失败: %v", err)
+	}
+
+	got, err := ReadUDPFrame(&buf)
+	if err != nil {
+		t.Fatalf("空 payload 读取失败: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("空 payload 往返后长度期望 0，得到 %d", len(got))
 	}
 }
 
@@ -117,14 +124,13 @@ func TestReadUDPFrame_EOF(t *testing.T) {
 }
 
 func TestReadUDPFrame_InvalidLength(t *testing.T) {
-	// 写入长度为 0 的帧（非法）
+	// 写入超过上限的长度（非法）
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint16(0))
-	buf.Write([]byte("some data"))
+	binary.Write(&buf, binary.BigEndian, uint16(MaxUDPPayload+1))
 
 	_, err := ReadUDPFrame(&buf)
 	if err == nil {
-		t.Error("长度为 0 的帧应返回错误")
+		t.Error("超过上限的帧长度应返回错误")
 	}
 }
 

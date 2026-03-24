@@ -81,22 +81,35 @@ func (s *Server) isManagementHost(host string) bool {
 	if managementHost == "" {
 		return false
 	}
-	
+
 	reqCanonical := canonicalHost(host)
 	if reqCanonical == managementHost {
 		return true
 	}
 
-	// 允许通过本地回环地址访问管理面，既方便开发调试，也作为防失联的后门兜底
-	h := reqCanonical
-	if hostPart, _, err := net.SplitHostPort(reqCanonical); err == nil {
-		h = hostPart
-	}
-	if h == "localhost" || h == "127.0.0.1" || h == "::1" {
-		return true
+	if !s.AllowLoopbackManagementHost {
+		return false
 	}
 
-	return false
+	return isLoopbackHost(reqCanonical)
+}
+
+func isLoopbackHost(host string) bool {
+	canonical := canonicalHost(host)
+	if canonical == "" {
+		return false
+	}
+
+	if hostPart, _, err := net.SplitHostPort(canonical); err == nil {
+		canonical = hostPart
+	}
+
+	switch strings.Trim(canonical, "[]") {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool) {
@@ -169,10 +182,10 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 	}
 
 	transport := &http.Transport{
-		Proxy:               nil,
-		ForceAttemptHTTP2:   false,
-		DisableKeepAlives:   true,
-		DisableCompression:  false,
+		Proxy:                 nil,
+		ForceAttemptHTTP2:     false,
+		DisableKeepAlives:     true,
+		DisableCompression:    false,
 		ResponseHeaderTimeout: 0,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return s.openStreamToClient(route.client, route.config.Name)

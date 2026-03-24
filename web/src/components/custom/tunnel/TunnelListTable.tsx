@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import {
-  Search, Play, Pause, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft,
+  Search, Play, Pause, Square, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -13,10 +13,14 @@ import {
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
 import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
 import toast from 'react-hot-toast';
-import { buildTunnelViewModel, type TunnelStatusPresentation } from '@/lib/tunnel-model';
+import {
+  buildTunnelViewModel,
+  getTunnelActionAvailability,
+  type TunnelStatusPresentation,
+} from '@/lib/tunnel-model';
 import { cn } from '@/lib/utils';
 import {
-  usePauseTunnel, useResumeTunnel, useDeleteTunnel,
+  usePauseTunnel, useResumeTunnel, useStopTunnel, useDeleteTunnel,
 } from '@/hooks/use-tunnel-mutations';
 import type { ProxyConfig } from '@/types';
 
@@ -58,6 +62,7 @@ export function TunnelListTable({
 }: TunnelListTableProps) {
   const pauseTunnel = usePauseTunnel();
   const resumeTunnel = useResumeTunnel();
+  const stopTunnel = useStopTunnel();
   const deleteTunnel = useDeleteTunnel();
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<{ name: string; clientId: string } | null>(null);
@@ -85,10 +90,13 @@ export function TunnelListTable({
 
   /** 根据隧道状态渲染操作按钮 */
   const renderActionButtons = (tunnel: TunnelEntry) => {
-    const canPause = tunnel.status === 'active';
-    const canResume = tunnel.status === 'paused' || tunnel.status === 'stopped';
-    const canEdit = tunnel.status === 'paused' || tunnel.status === 'stopped' || tunnel.status === 'error';
-    const canDelete = tunnel.status === 'paused' || tunnel.status === 'stopped' || tunnel.status === 'error';
+    const {
+      canPause,
+      canResume,
+      canStop,
+      canEdit,
+      canDelete,
+    } = getTunnelActionAvailability(tunnel, tunnel.clientOnline);
 
     return (
       <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -114,6 +122,18 @@ export function TunnelListTable({
             })}
           >
             <Play className="h-4 w-4" />
+          </button>
+        )}
+        {canStop && (
+          <button
+            className="p-1.5 hover:bg-slate-500/10 rounded text-slate-500"
+            title="停止"
+            onClick={() => stopTunnel.mutate(args(tunnel.clientId, tunnel.name), {
+              onSuccess: () => toast.success(`隧道「${tunnel.name}」已停止`),
+              onError: (err) => toast.error((err as Error).message),
+            })}
+          >
+            <Square className="h-4 w-4" />
           </button>
         )}
         {canEdit && (
@@ -304,9 +324,9 @@ function TunnelStatusBadge({
 }) {
   const dotClassName = cn(
     'size-1.5 rounded-full',
-    status.key === 'active' && 'bg-emerald-500',
+    status.key === 'exposed' && 'bg-emerald-500',
     status.key === 'pending' && 'bg-sky-500',
-    status.key === 'unavailable' && 'bg-amber-500',
+    status.key === 'offline' && 'bg-amber-500',
     status.key === 'paused' && 'bg-amber-500',
     status.key === 'stopped' && 'bg-muted-foreground',
     status.key === 'error' && 'bg-destructive',
@@ -314,9 +334,9 @@ function TunnelStatusBadge({
 
   const badgeClassName = cn(
     'gap-1.5',
-    status.key === 'active' && 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
+    status.key === 'exposed' && 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
     status.key === 'pending' && 'bg-sky-500/10 text-sky-600 border-sky-500/20',
-    status.key === 'unavailable' && 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+    status.key === 'offline' && 'bg-amber-500/10 text-amber-600 border-amber-500/20',
     status.key === 'paused' && 'bg-amber-500/10 text-amber-600 border-amber-500/20',
     status.key === 'stopped' && 'bg-muted text-muted-foreground border-border/60',
     status.key === 'error' && 'bg-destructive/10 text-destructive border-destructive/20',

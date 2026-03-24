@@ -85,6 +85,63 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 	}
 }
 
+func TestTunnelStore_LoadExistingLegacyStatusMigratesDesiredAndRuntimeState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tunnels.json")
+
+	store1, err := NewTunnelStore(path)
+	if err != nil {
+		t.Fatalf("NewTunnelStore 失败: %v", err)
+	}
+	mustAddStableTunnel(t, store1, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name: "legacy-active", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 80, RemotePort: 8080,
+		},
+		Status:   protocol.ProxyStatusActive,
+		ClientID: "client-1",
+		Hostname: "host-1",
+	})
+	mustAddStableTunnel(t, store1, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name: "legacy-error", Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: 53, RemotePort: 8053,
+		},
+		Status:   protocol.ProxyStatusError,
+		Error:    "restore failed",
+		ClientID: "client-1",
+		Hostname: "host-1",
+	})
+
+	store2, err := NewTunnelStore(path)
+	if err != nil {
+		t.Fatalf("重新加载失败: %v", err)
+	}
+
+	active, ok := store2.GetTunnel("client-1", "legacy-active")
+	if !ok {
+		t.Fatal("应找到 legacy-active")
+	}
+	if active.DesiredState != protocol.ProxyDesiredStateRunning {
+		t.Fatalf("legacy active desired_state 期望 running，得到 %s", active.DesiredState)
+	}
+	if active.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("legacy active runtime_state 期望 exposed，得到 %s", active.RuntimeState)
+	}
+
+	errored, ok := store2.GetTunnel("client-1", "legacy-error")
+	if !ok {
+		t.Fatal("应找到 legacy-error")
+	}
+	if errored.DesiredState != protocol.ProxyDesiredStateRunning {
+		t.Fatalf("legacy error desired_state 期望 running，得到 %s", errored.DesiredState)
+	}
+	if errored.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("legacy error runtime_state 期望 error，得到 %s", errored.RuntimeState)
+	}
+	if errored.Error != "restore failed" {
+		t.Fatalf("legacy error 错误原因期望保留 restore failed，得到 %q", errored.Error)
+	}
+}
+
 func TestTunnelStore_CorruptedFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tunnels.json")

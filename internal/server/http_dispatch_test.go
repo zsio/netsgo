@@ -381,6 +381,72 @@ func TestDispatch_ManagementHost_AdminAPI_WithSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestDispatch_ExplicitLoopbackManagementHosts_AllowManagementAPI(t *testing.T) {
+	testCases := []struct {
+		name       string
+		serverAddr string
+		host       string
+	}{
+		{name: "localhost", serverAddr: "http://localhost", host: "localhost"},
+		{name: "ipv4 loopback", serverAddr: "http://127.0.0.1", host: "127.0.0.1"},
+		{name: "ipv6 loopback", serverAddr: "http://[::1]", host: "[::1]"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newDispatchTestServer(t, true, tc.serverAddr)
+
+			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", tc.host, nil)
+			w := httptest.NewRecorder()
+
+			s.StartHTTPOnly().ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("显式配置 loopback 管理地址时应允许访问，得到 %d", w.Code)
+			}
+		})
+	}
+}
+
+func TestDispatch_LoopbackHostsDoNotBypassManagementHostByDefault(t *testing.T) {
+	testCases := []string{"localhost", "127.0.0.1", "[::1]"}
+
+	for _, host := range testCases {
+		t.Run(host, func(t *testing.T) {
+			s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
+
+			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", host, nil)
+			w := httptest.NewRecorder()
+
+			s.StartHTTPOnly().ServeHTTP(w, req)
+
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("非 loopback 管理地址下，%s 不应再作为隐含入口，得到 %d", host, w.Code)
+			}
+		})
+	}
+}
+
+func TestDispatch_AllowLoopbackManagementHostFallbackFlag(t *testing.T) {
+	testCases := []string{"localhost", "127.0.0.1", "[::1]"}
+
+	for _, host := range testCases {
+		t.Run(host, func(t *testing.T) {
+			s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
+			s.AllowLoopbackManagementHost = true
+
+			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", host, nil)
+			w := httptest.NewRecorder()
+
+			s.StartHTTPOnly().ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("显式开启 loopback Host 兜底后应允许访问，得到 %d", w.Code)
+			}
+		})
+	}
+}
+
 func TestDispatch_NonManagementHost_NoTunnel_Returns404(t *testing.T) {
 	s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
 

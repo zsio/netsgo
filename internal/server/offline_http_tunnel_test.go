@@ -145,7 +145,7 @@ func TestOfflineHTTPTunnel_Delete_StoreFirst(t *testing.T) {
 	}
 }
 
-func TestOfflineHTTPTunnel_Resume_Rejected(t *testing.T) {
+func TestOfflineHTTPTunnel_Resume_StoreFirst(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
@@ -159,28 +159,23 @@ func TestOfflineHTTPTunnel_Resume_Rejected(t *testing.T) {
 	}, protocol.ProxyStatusPaused)
 
 	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-http/resume", clientID), token, []byte(`{}`))
-	if resp.Code != http.StatusConflict {
-		t.Fatalf("离线 HTTP resume 期望 409，得到 %d, body=%s", resp.Code, resp.Body.String())
-	}
-
-	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("解析 resume 响应失败: %v", err)
-	}
-	if _, ok := payload["error"].(string); !ok {
-		t.Fatalf("离线 resume 应返回结构化错误，得到 %v", payload)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("离线 HTTP resume 期望 200，得到 %d, body=%s", resp.Code, resp.Body.String())
 	}
 
 	stored, exists := s.store.GetTunnel(clientID, "offline-http")
 	if !exists {
-		t.Fatal("离线 resume 被拒绝后 store 记录不应丢失")
+		t.Fatal("离线 resume 后 store 记录不应丢失")
 	}
-	if stored.Status != protocol.ProxyStatusPaused {
-		t.Fatalf("离线 resume 被拒绝后状态应保持 paused，得到 %s", stored.Status)
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning {
+		t.Fatalf("离线 resume 后 desired_state 期望 running，得到 %s", stored.DesiredState)
+	}
+	if stored.RuntimeState != protocol.ProxyRuntimeStateOffline {
+		t.Fatalf("离线 resume 后 runtime_state 期望 offline，得到 %s", stored.RuntimeState)
 	}
 }
 
-func TestOfflineHTTPTunnel_Stop_Rejected(t *testing.T) {
+func TestOfflineHTTPTunnel_Stop_StoreFirst(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
@@ -194,16 +189,19 @@ func TestOfflineHTTPTunnel_Stop_Rejected(t *testing.T) {
 	}, protocol.ProxyStatusActive)
 
 	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-http/stop", clientID), token, []byte(`{}`))
-	if resp.Code != http.StatusConflict {
-		t.Fatalf("离线 HTTP stop 期望 409，得到 %d, body=%s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("离线 HTTP stop 期望 200，得到 %d, body=%s", resp.Code, resp.Body.String())
 	}
 
 	stored, exists := s.store.GetTunnel(clientID, "offline-http")
 	if !exists {
-		t.Fatal("离线 stop 被拒绝后 store 记录不应丢失")
+		t.Fatal("离线 stop 后 store 记录不应丢失")
 	}
-	if stored.Status != protocol.ProxyStatusActive {
-		t.Fatalf("离线 stop 被拒绝后状态应保持 active，得到 %s", stored.Status)
+	if stored.DesiredState != protocol.ProxyDesiredStateStopped {
+		t.Fatalf("离线 stop 后 desired_state 期望 stopped，得到 %s", stored.DesiredState)
+	}
+	if stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Fatalf("离线 stop 后 runtime_state 期望 idle，得到 %s", stored.RuntimeState)
 	}
 }
 

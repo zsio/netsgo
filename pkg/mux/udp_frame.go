@@ -17,9 +17,6 @@ const MaxUDPPayload = 65507
 // WriteUDPFrame 将一个 UDP 报文帧化写入 writer。
 // 格式: [2B payload_len big-endian] [NB payload]
 func WriteUDPFrame(w io.Writer, payload []byte) error {
-	if len(payload) == 0 {
-		return fmt.Errorf("empty UDP payload")
-	}
 	if len(payload) > MaxUDPPayload {
 		return fmt.Errorf("UDP payload too large: %d > %d", len(payload), MaxUDPPayload)
 	}
@@ -41,7 +38,7 @@ func ReadUDPFrame(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	payloadLen := binary.BigEndian.Uint16(lenBuf[:])
-	if payloadLen == 0 || int(payloadLen) > MaxUDPPayload {
+	if int(payloadLen) > MaxUDPPayload {
 		return nil, fmt.Errorf("invalid UDP frame length: %d", payloadLen)
 	}
 	payload := make([]byte, payloadLen)

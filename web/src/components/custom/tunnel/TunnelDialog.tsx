@@ -196,9 +196,10 @@ function TunnelDialogForm({
     );
   };
 
+  const parsedRemotePort = Number.parseInt(remotePort, 10);
   const isValid = isEdit
-    ? Boolean(localPort && Number.parseInt(localPort, 10) > 0 && (!isHttp || domain.trim()))
-    : Boolean(name.trim() && localPort && Number.parseInt(localPort, 10) > 0 && (!isHttp || domain.trim()));
+    ? Boolean(localPort && Number.parseInt(localPort, 10) > 0 && (isHttp ? domain.trim() : parsedRemotePort > 0))
+    : Boolean(name.trim() && localPort && Number.parseInt(localPort, 10) > 0 && (isHttp ? domain.trim() : parsedRemotePort > 0));
 
   return (
     <DialogContent className="sm:max-w-md">
@@ -285,16 +286,13 @@ function TunnelDialogForm({
           </div>
         ) : (
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">
-              公网端口
-              <span className="text-muted-foreground font-normal ml-1">(0 = 自动分配)</span>
-            </label>
+            <label className="text-sm font-medium">公网端口</label>
             <Input
               type="number"
-              placeholder="0"
+              placeholder="例如 18080"
               value={remotePort}
               onChange={(e) => setRemotePort(e.target.value)}
-              min={0}
+              min={1}
               max={65535}
             />
             {status?.allowed_ports && (

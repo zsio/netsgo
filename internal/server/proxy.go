@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 
 	"netsgo/pkg/mux"
@@ -42,16 +43,93 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 		return nil
 	}
 
+	if req.RemotePort <= 0 {
+		return &proxyRequestValidationError{err: fmt.Errorf("TCP/UDP 隧道必须填写明确的公网端口")}
+	}
+	if req.RemotePort == 80 || req.RemotePort == 443 {
+		return &proxyRequestValidationError{err: fmt.Errorf("TCP/UDP 隧道不能使用保留端口 %d", req.RemotePort)}
+	}
+	if listenPort := serverListenPort(s); listenPort > 0 && req.RemotePort == listenPort {
+		return &proxyRequestValidationError{err: fmt.Errorf("端口 %d 与 NetsGo 管理服务监听端口冲突", req.RemotePort)}
+	}
+
 	if s.adminStore != nil {
 		// 校验端口白名单
-		if req.RemotePort != 0 {
-			if s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(req.RemotePort) {
-				return &proxyRequestValidationError{err: fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort)}
-			}
+		if s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(req.RemotePort) {
+			return &proxyRequestValidationError{err: fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort)}
 		}
 	}
 
+	if conflicts := findTCPUDPPortConflictNames(req.RemotePort, excludeName, excludeClientID, s); len(conflicts) > 0 {
+		return &proxyRequestValidationError{err: fmt.Errorf("端口 %d 已被隧道占用", req.RemotePort)}
+	}
+
 	return nil
+}
+
+func serverListenPort(s *Server) int {
+	if s == nil {
+		return 0
+	}
+	if s.listener != nil {
+		switch addr := s.listener.Addr().(type) {
+		case *net.TCPAddr:
+			return addr.Port
+		default:
+			_, port, err := net.SplitHostPort(addr.String())
+			if err == nil {
+				value, _ := strconv.Atoi(port)
+				return value
+			}
+		}
+	}
+	if s.Port > 0 {
+		return s.Port
+	}
+	return 0
+}
+
+func findTCPUDPPortConflictNames(port int, excludeName, excludeClientID string, server *Server) []string {
+	if port <= 0 || server == nil {
+		return []string{}
+	}
+
+	conflicts := []string{}
+	seen := map[string]struct{}{}
+	matchAndAppend := func(clientID, name, tunnelType string, remotePort int) {
+		if tunnelType != protocol.ProxyTypeTCP && tunnelType != protocol.ProxyTypeUDP {
+			return
+		}
+		if excludeName != "" && excludeClientID != "" && name == excludeName && clientID == excludeClientID {
+			return
+		}
+		if remotePort != port {
+			return
+		}
+
+		key := clientID + ":" + name
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		conflicts = append(conflicts, key)
+	}
+
+	server.RangeClients(func(clientID string, client *ClientConn) bool {
+		client.RangeProxies(func(name string, tunnel *ProxyTunnel) bool {
+			matchAndAppend(clientID, name, tunnel.Config.Type, tunnel.Config.RemotePort)
+			return true
+		})
+		return true
+	})
+
+	if server.store != nil {
+		for _, tunnel := range server.store.GetAllTunnels() {
+			matchAndAppend(tunnel.ClientID, tunnel.Name, tunnel.Type, tunnel.RemotePort)
+		}
+	}
+
+	return conflicts
 }
 
 func (s *Server) ensureClientDataReady(client *ClientConn) error {
@@ -97,10 +175,10 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 			RemotePort: req.RemotePort,
 			Domain:     req.Domain,
 			ClientID:   client.ID,
-			Status:     status,
 		},
 		done: make(chan struct{}),
 	}
+	setProxyConfigLegacyStatus(&tunnel.Config, status, "")
 
 	client.proxies[req.Name] = tunnel
 	client.proxyMu.Unlock()
@@ -117,7 +195,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 
 	if tunnel.Config.Type == protocol.ProxyTypeHTTP {
 		// HTTP 隧道不绑定公网端口，通过 HTTP 路由层分发
-		tunnel.Config.Status = protocol.ProxyStatusActive
+		setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusActive, "")
 		return nil
 	}
 
@@ -128,11 +206,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 		if err := s.startUDPProxy(client, tunnel); err != nil {
 			return err
 		}
-		if tunnel.Config.RemotePort != 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
-			s.removeTunnelRuntime(client, tunnel.Config.Name)
-			return fmt.Errorf("自动分配的端口 %d 不在允许范围内", tunnel.Config.RemotePort)
-		}
-		tunnel.Config.Status = protocol.ProxyStatusActive
+		setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusActive, "")
 		return nil
 	}
 
@@ -143,10 +217,6 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	}
 
 	actualPort := ln.Addr().(*net.TCPAddr).Port
-	if tunnel.Config.RemotePort == 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(actualPort) {
-		ln.Close()
-		return fmt.Errorf("自动分配的端口 %d 不在允许范围内", actualPort)
-	}
 
 	client.proxyMu.Lock()
 	current, exists := client.proxies[tunnel.Config.Name]
@@ -159,8 +229,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	tunnel.done = make(chan struct{})
 	tunnel.once = sync.Once{}
 	tunnel.Config.RemotePort = actualPort
-	tunnel.Config.Status = protocol.ProxyStatusActive
-	tunnel.Config.Error = ""
+	setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusActive, "")
 	listener := tunnel.Listener
 	done := tunnel.done
 	proxyName := tunnel.Config.Name
@@ -209,8 +278,7 @@ func (s *Server) stageTunnelPending(client *ClientConn, name string) (protocol.P
 	if !exists {
 		return protocol.ProxyConfig{}, fmt.Errorf("代理隧道 %q 不存在", name)
 	}
-	tunnel.Config.Status = protocol.ProxyStatusPending
-	tunnel.Config.Error = ""
+	setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusPending, "")
 	return tunnel.Config, nil
 }
 
@@ -222,8 +290,7 @@ func (s *Server) setTunnelError(client *ClientConn, name, message string) (proto
 	if !exists {
 		return protocol.ProxyConfig{}, false
 	}
-	tunnel.Config.Status = protocol.ProxyStatusError
-	tunnel.Config.Error = message
+	setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusError, message)
 	return tunnel.Config, true
 }
 
@@ -333,7 +400,7 @@ func (s *Server) PauseProxy(client *ClientConn, name string) error {
 			tunnel.Listener.Close()
 		}
 	})
-	tunnel.Config.Status = protocol.ProxyStatusPaused
+	setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusPaused, "")
 	client.proxyMu.Unlock()
 
 	log.Printf("⏸️ 代理隧道已暂停: %s", name)
@@ -379,7 +446,7 @@ func (s *Server) PauseAllProxies(client *ClientConn) {
 					tunnel.Listener.Close()
 				}
 			})
-			tunnel.Config.Status = protocol.ProxyStatusPaused
+			setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusPaused, "")
 		}
 	}
 }

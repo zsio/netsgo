@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"netsgo/pkg/mux"
+	"netsgo/pkg/protocol"
 )
 
 // UDPProxyState Server 端 UDP 代理的运行时状态
@@ -16,6 +17,8 @@ type UDPProxyState struct {
 	packetConn   net.PacketConn // 公网 UDP 监听
 	sessions     sync.Map       // srcAddr(string) → *UDPSession
 	sessionCount atomic.Int64   // 当前活跃会话数（O(1) 计数）
+	sessionIPMu  sync.Mutex
+	sessionIPs   map[string]int // src IP → 活跃会话数
 	done         chan struct{}  // 关闭信号
 	closeOnce    sync.Once
 }
@@ -43,16 +46,62 @@ func (s *UDPProxyState) Close() {
 // 返回 true 表示本次调用实际完成了移除（调用方是第一个清理者）。
 // 使用 LoadAndDelete 保证多 goroutine 竞争时只有一个返回 loaded=true。
 func (s *UDPProxyState) removeSession(key string) bool {
-	if _, loaded := s.sessions.LoadAndDelete(key); loaded {
+	if value, loaded := s.sessions.LoadAndDelete(key); loaded {
 		s.sessionCount.Add(-1)
+		if sess, ok := value.(*UDPSession); ok && sess.ipKey != "" {
+			s.sessionIPMu.Lock()
+			if count := s.sessionIPs[sess.ipKey]; count <= 1 {
+				delete(s.sessionIPs, sess.ipKey)
+			} else {
+				s.sessionIPs[sess.ipKey] = count - 1
+			}
+			s.sessionIPMu.Unlock()
+		}
 		return true
 	}
 	return false
 }
 
+func (s *UDPProxyState) storeSession(key string, sess *UDPSession) (*UDPSession, bool) {
+	actual, loaded := s.sessions.LoadOrStore(key, sess)
+	if loaded {
+		return actual.(*UDPSession), false
+	}
+
+	s.sessionCount.Add(1)
+	if sess.ipKey != "" {
+		s.sessionIPMu.Lock()
+		if s.sessionIPs == nil {
+			s.sessionIPs = make(map[string]int)
+		}
+		s.sessionIPs[sess.ipKey]++
+		s.sessionIPMu.Unlock()
+	}
+
+	return sess, true
+}
+
+func (s *UDPProxyState) sessionCountForIP(ipKey string) int {
+	if ipKey == "" {
+		return 0
+	}
+
+	s.sessionIPMu.Lock()
+	defer s.sessionIPMu.Unlock()
+	return s.sessionIPs[ipKey]
+}
+
+func (s *UDPProxyState) canCreateSessionForIP(ipKey string) bool {
+	if s.sessionCount.Load() >= int64(MaxUDPSessions) {
+		return false
+	}
+	return s.sessionCountForIP(ipKey) < MaxUDPSessionsPerIP
+}
+
 // UDPSession 一个 UDP 虚拟会话（由外部 srcAddr 标识）
 type UDPSession struct {
 	srcAddr    net.Addr     // 外部来源地址
+	ipKey      string       // 来源 IP（不含端口），用于单 IP 配额
 	stream     net.Conn     // yamux stream（帧化传输）
 	lastActive atomic.Int64 // 最后活跃时间戳（UnixNano）
 	done       chan struct{}
@@ -82,10 +131,27 @@ func (s *UDPSession) IdleDuration() time.Duration {
 
 // UDP 会话管理常量
 const (
-	UDPSessionTimeout = 60 * time.Second // 会话超时时间
-	UDPReaperInterval = 10 * time.Second // 清理器扫描间隔
-	MaxUDPSessions    = 1024             // 每个 UDP 代理最大并发会话数
+	UDPSessionTimeout   = 60 * time.Second // 会话超时时间
+	UDPReaperInterval   = 10 * time.Second // 清理器扫描间隔
+	MaxUDPSessions      = 1024             // 每个 UDP 代理最大并发会话数
+	MaxUDPSessionsPerIP = 128              // 每个源 IP 最大并发会话数
 )
+
+func udpSourceIPKey(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	if udpAddr, ok := addr.(*net.UDPAddr); ok {
+		if udpAddr.IP != nil {
+			return udpAddr.IP.String()
+		}
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err == nil {
+		return host
+	}
+	return addr.String()
+}
 
 // startUDPProxy 启动一条 UDP 代理隧道。
 // 在 RemotePort 上监听 UDP，每收到新 srcAddr 的报文就通过 yamux 创建新会话转发给 Client。
@@ -96,12 +162,12 @@ func (s *Server) startUDPProxy(client *ClientConn, tunnel *ProxyTunnel) error {
 		return fmt.Errorf("监听 UDP 端口 %d 失败: %w", tunnel.Config.RemotePort, err)
 	}
 
-	// 获取实际分配的端口（如果 RemotePort 为 0）
 	actualPort := packetConn.LocalAddr().(*net.UDPAddr).Port
 	tunnel.Config.RemotePort = actualPort
 
 	state := &UDPProxyState{
 		packetConn: packetConn,
+		sessionIPs: make(map[string]int),
 		done:       make(chan struct{}),
 	}
 	tunnel.UDPState = state
@@ -117,6 +183,38 @@ func (s *Server) startUDPProxy(client *ClientConn, tunnel *ProxyTunnel) error {
 	go s.udpReaper(state)
 
 	return nil
+}
+
+func (s *Server) markUDPProxyRuntimeErrorIfCurrent(
+	client *ClientConn,
+	tunnel *ProxyTunnel,
+	state *UDPProxyState,
+	message string,
+) {
+	if state != nil {
+		state.Close()
+	}
+
+	client.proxyMu.Lock()
+	current, exists := client.proxies[tunnel.Config.Name]
+	if !exists ||
+		current != tunnel ||
+		current.UDPState != state ||
+		current.Config.Status != protocol.ProxyStatusActive {
+		client.proxyMu.Unlock()
+		return
+	}
+	setProxyConfigLegacyStatus(&current.Config, protocol.ProxyStatusError, message)
+	config := current.Config
+	client.proxyMu.Unlock()
+
+	if err := s.persistTunnelState(client.ID, tunnel.Config.Name, protocol.ProxyStatusError, message); err != nil {
+		log.Printf("⚠️ UDP 代理 [%s] 持久化 error 状态失败: %v", tunnel.Config.Name, err)
+	}
+	s.emitTunnelChanged(client.ID, config, "error")
+	if err := s.notifyClientProxyClose(client, tunnel.Config.Name, "runtime_error"); err != nil {
+		log.Printf("⚠️ UDP 代理 [%s] 通知 client 关闭失败: %v", tunnel.Config.Name, err)
+	}
 }
 
 // udpReadLoop 从 packetConn 接收外部 UDP 报文，按 srcAddr 分发到对应的 yamux stream。
@@ -137,21 +235,33 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 				return // 正常关闭
 			default:
 				log.Printf("⚠️ UDP 代理 [%s] ReadFrom 失败: %v", tunnel.Config.Name, err)
+				s.markUDPProxyRuntimeErrorIfCurrent(
+					client,
+					tunnel,
+					state,
+					fmt.Sprintf("UDP 代理读包失败: %v", err),
+				)
 				return
 			}
 		}
 
 		key := srcAddr.String()
+		ipKey := udpSourceIPKey(srcAddr)
 
 		// 查找或创建会话
 		val, loaded := state.sessions.Load(key)
 		if !loaded {
-			// 检查会话数量限制（O(1) 原子读取）。
+			// 检查会话数量限制。
 			// sessionCount.Load() 与后续 Add(1) 之间不是原子的；
 			// 此处安全的前提是：整个函数只在单个 goroutine 中运行（不并发）。
 			if state.sessionCount.Load() >= int64(MaxUDPSessions) {
 				log.Printf("⚠️ UDP 代理 [%s] 会话数达上限 (%d)，丢弃来自 %s 的报文",
 					tunnel.Config.Name, MaxUDPSessions, key)
+				continue
+			}
+			if !state.canCreateSessionForIP(ipKey) {
+				log.Printf("⚠️ UDP 代理 [%s] 单 IP 会话数达上限 (%d)，丢弃来自 %s 的报文",
+					tunnel.Config.Name, MaxUDPSessionsPerIP, key)
 				continue
 			}
 
@@ -164,19 +274,19 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 
 			sess := &UDPSession{
 				srcAddr: srcAddr,
+				ipKey:   ipKey,
 				stream:  stream,
 				done:    make(chan struct{}),
 			}
 			sess.Touch()
 
-			// 尝试存入；有可能并发创建，用 LoadOrStore 处理竞争
-			actual, alreadyExists := state.sessions.LoadOrStore(key, sess)
-			if alreadyExists {
+			// 尝试存入；有可能并发创建，用 storeSession 处理竞争并维护计数。
+			actual, added := state.storeSession(key, sess)
+			if !added {
 				// 另一个 goroutine 已经创建了，关闭我们的
 				stream.Close()
 				val = actual
 			} else {
-				state.sessionCount.Add(1)
 				val = sess
 				// 启动反向读取循环：stream → 回复给 srcAddr
 				go s.udpSessionReverse(state, sess, tunnel.Config.Name)

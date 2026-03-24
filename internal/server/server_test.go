@@ -439,6 +439,198 @@ func TestAPI_Clients_WithStats(t *testing.T) {
 	}
 }
 
+func TestAPI_Clients_OfflineLegacyRunningTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	clientID := registerOfflineHTTPTestClient(t, s, "offline-state-running")
+	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
+		Name:       "offline-tcp",
+		Type:       protocol.ProxyTypeTCP,
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8080,
+		RemotePort: 18080,
+	}, protocol.ProxyStatusActive)
+
+	resp := doMuxRequest(t, handler, http.MethodGet, "/api/clients", token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("获取 clients 期望 200，得到 %d", resp.Code)
+	}
+
+	var clients []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
+		t.Fatalf("解析 clients 响应失败: %v", err)
+	}
+
+	for _, client := range clients {
+		if client["id"] != clientID {
+			continue
+		}
+		proxies, _ := client["proxies"].([]any)
+		if len(proxies) != 1 {
+			t.Fatalf("离线 client 期望 1 条隧道，得到 %v", client["proxies"])
+		}
+		proxy := proxies[0].(map[string]any)
+		if proxy["desired_state"] != "running" {
+			t.Fatalf("desired_state 期望 running，得到 %v", proxy["desired_state"])
+		}
+		if proxy["runtime_state"] != "offline" {
+			t.Fatalf("runtime_state 期望 offline，得到 %v", proxy["runtime_state"])
+		}
+		return
+	}
+
+	t.Fatalf("未找到 client %s", clientID)
+}
+
+func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	clientID := registerOfflineHTTPTestClient(t, s, "offline-state-error")
+	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
+		Name:       "offline-udp",
+		Type:       protocol.ProxyTypeUDP,
+		LocalIP:    "127.0.0.1",
+		LocalPort:  5353,
+		RemotePort: 19053,
+	}, protocol.ProxyStatusError)
+	if err := s.store.UpdateState(clientID, "offline-udp", protocol.ProxyStatusError, "restore failed"); err != nil {
+		t.Fatalf("设置 legacy error 状态失败: %v", err)
+	}
+
+	resp := doMuxRequest(t, handler, http.MethodGet, "/api/clients", token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("获取 clients 期望 200，得到 %d", resp.Code)
+	}
+
+	var clients []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
+		t.Fatalf("解析 clients 响应失败: %v", err)
+	}
+
+	for _, client := range clients {
+		if client["id"] != clientID {
+			continue
+		}
+		proxies, _ := client["proxies"].([]any)
+		if len(proxies) != 1 {
+			t.Fatalf("离线 client 期望 1 条隧道，得到 %v", client["proxies"])
+		}
+		proxy := proxies[0].(map[string]any)
+		if proxy["desired_state"] != "running" {
+			t.Fatalf("desired_state 期望 running，得到 %v", proxy["desired_state"])
+		}
+		if proxy["runtime_state"] != "error" {
+			t.Fatalf("runtime_state 期望 error，得到 %v", proxy["runtime_state"])
+		}
+		if proxy["error"] != "restore failed" {
+			t.Fatalf("error 期望保留 restore failed，得到 %v", proxy["error"])
+		}
+		return
+	}
+
+	t.Fatalf("未找到 client %s", clientID)
+}
+
+func TestAPI_Clients_LiveTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	wsConn, authResp := connectAndAuth(t, ts, "live-state-host")
+	defer wsConn.Close()
+
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("client %s 不存在", authResp.ClientID)
+	}
+	client := value.(*ClientConn)
+	client.proxyMu.Lock()
+	client.proxies["live-http"] = &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:      "live-http",
+			Type:      protocol.ProxyTypeHTTP,
+			LocalIP:   "127.0.0.1",
+			LocalPort: 3000,
+			Domain:    "live.example.com",
+			ClientID:  authResp.ClientID,
+			Status:    protocol.ProxyStatusActive,
+		},
+		done: make(chan struct{}),
+	}
+	client.proxyMu.Unlock()
+
+	reqClients, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/clients", nil)
+	reqClients.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
+	reqClients.Header.Set("User-Agent", "Go-http-client/1.1")
+	respClients, err := http.DefaultClient.Do(reqClients)
+	if err != nil {
+		t.Fatalf("请求 clients 失败: %v", err)
+	}
+	defer respClients.Body.Close()
+
+	var clientViews []map[string]any
+	if err := json.NewDecoder(respClients.Body).Decode(&clientViews); err != nil {
+		t.Fatalf("解析 clients 响应失败: %v", err)
+	}
+
+	for _, client := range clientViews {
+		if client["id"] != authResp.ClientID {
+			continue
+		}
+		proxies, _ := client["proxies"].([]any)
+		for _, item := range proxies {
+			proxy := item.(map[string]any)
+			if proxy["name"] != "live-http" {
+				continue
+			}
+			if proxy["desired_state"] != "running" {
+				t.Fatalf("desired_state 期望 running，得到 %v", proxy["desired_state"])
+			}
+			if proxy["runtime_state"] != "exposed" {
+				t.Fatalf("runtime_state 期望 exposed，得到 %v", proxy["runtime_state"])
+			}
+			return
+		}
+	}
+
+	t.Fatalf("未找到 client %s 的 live-http 隧道", authResp.ClientID)
+}
+
+func TestEmitTunnelChanged_NormalizesDesiredAndRuntimeStates(t *testing.T) {
+	s := New(0)
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+
+	s.emitTunnelChanged("client-1", protocol.ProxyConfig{
+		Name:     "paused-http",
+		Type:     protocol.ProxyTypeHTTP,
+		ClientID: "client-1",
+		Status:   protocol.ProxyStatusPaused,
+	}, "paused")
+
+	select {
+	case event := <-ch:
+		if event.Type != "tunnel_changed" {
+			t.Fatalf("事件类型期望 tunnel_changed，得到 %s", event.Type)
+		}
+
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+			t.Fatalf("解析事件 payload 失败: %v", err)
+		}
+		tunnel, _ := payload["tunnel"].(map[string]any)
+		if tunnel["desired_state"] != "paused" {
+			t.Fatalf("desired_state 期望 paused，得到 %v", tunnel["desired_state"])
+		}
+		if tunnel["runtime_state"] != "idle" {
+			t.Fatalf("runtime_state 期望 idle，得到 %v", tunnel["runtime_state"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("等待 tunnel_changed 事件超时")
+	}
+}
+
 func TestAPI_Clients_StatsUpdated(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
@@ -1404,7 +1596,8 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	// 测试 MsgTypeProxyNew
 	req := protocol.ProxyNewRequest{
 		Name:       "ws-tunnel-1",
-		RemotePort: 0,
+		Type:       protocol.ProxyTypeTCP,
+		RemotePort: reserveTCPPort(t),
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, req)
 	conn.WriteJSON(msg)
@@ -1997,26 +2190,29 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	if !ok {
 		t.Fatalf("client %s 不存在", authResp.ClientID)
 	}
+	resumePort := reserveTCPPort(t)
 	client := value.(*ClientConn)
 	client.proxyMu.Lock()
 	client.proxies["resume-rollback"] = &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:      "resume-rollback",
-			Type:      "tcp",
-			LocalIP:   "127.0.0.1",
-			LocalPort: 8080,
-			ClientID:  authResp.ClientID,
-			Status:    protocol.ProxyStatusPaused,
+			Name:       "resume-rollback",
+			Type:       "tcp",
+			LocalIP:    "127.0.0.1",
+			LocalPort:  8080,
+			RemotePort: resumePort,
+			ClientID:   authResp.ClientID,
+			Status:     protocol.ProxyStatusPaused,
 		},
 		done: make(chan struct{}),
 	}
 	client.proxyMu.Unlock()
 	mustAddStableTunnel(t, s.store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
-			Name:      "resume-rollback",
-			Type:      "tcp",
-			LocalIP:   "127.0.0.1",
-			LocalPort: 8080,
+			Name:       "resume-rollback",
+			Type:       "tcp",
+			LocalIP:    "127.0.0.1",
+			LocalPort:  8080,
+			RemotePort: resumePort,
 		},
 		Status:   protocol.ProxyStatusPaused,
 		ClientID: authResp.ClientID,

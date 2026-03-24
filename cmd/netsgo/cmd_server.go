@@ -54,6 +54,12 @@ TLS 模式:
 
 		s := server.New(port)
 		s.SetupToken = viper.GetString("setup-token")
+		s.AllowLoopbackManagementHost = viper.GetBool("allow-loopback-management-host")
+
+		// 将 server-addr 同步回环境变量，以便 internal/server 包中的 isServerAddrLocked() 等函数读取
+		if addr := viper.GetString("server-addr"); addr != "" {
+			os.Setenv("NETSGO_SERVER_ADDR", addr)
+		}
 
 		tlsMode := viper.GetString("tls-mode")
 		if tlsMode != "" {
@@ -117,6 +123,8 @@ func init() {
 	serverCmd.Flags().String("tls-auto-dir", "", "自签证书存储目录 (auto 模式, 默认 ~/.netsgo/tls)")
 	serverCmd.Flags().String("trusted-proxies", "", "受信任代理 CIDR 列表, 逗号分隔 (off 模式)")
 	serverCmd.Flags().String("setup-token", "", "显式指定初始化 Setup Token（用于自动化部署/测试）")
+	serverCmd.Flags().String("server-addr", "", "强制配置服务端的外网访问地址或域名")
+	serverCmd.Flags().Bool("allow-loopback-management-host", false, "显式允许 localhost / 127.0.0.1 / ::1 作为管理面兜底 Host")
 
 	// 绑定 viper (支持环境变量)
 	viper.BindPFlag("port", serverCmd.Flags().Lookup("port"))
@@ -126,7 +134,8 @@ func init() {
 	viper.BindPFlag("tls-auto-dir", serverCmd.Flags().Lookup("tls-auto-dir"))
 	viper.BindPFlag("trusted-proxies", serverCmd.Flags().Lookup("trusted-proxies"))
 	viper.BindPFlag("setup-token", serverCmd.Flags().Lookup("setup-token"))
-
+	viper.BindPFlag("server-addr", serverCmd.Flags().Lookup("server-addr"))
+	viper.BindPFlag("allow-loopback-management-host", serverCmd.Flags().Lookup("allow-loopback-management-host"))
 	// 注册到根命令
 	rootCmd.AddCommand(serverCmd)
 }

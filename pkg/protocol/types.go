@@ -44,15 +44,17 @@ type SystemStats struct {
 
 // ProxyConfig 代理隧道的完整配置
 type ProxyConfig struct {
-	Name       string `json:"name"`            // 隧道名称（唯一标识）
-	Type       string `json:"type"`            // 隧道类型: tcp, udp, http
-	LocalIP    string `json:"local_ip"`        // 内网目标服务 IP
-	LocalPort  int    `json:"local_port"`      // 内网目标服务端口
-	RemotePort int    `json:"remote_port"`     // 公网暴露端口
-	Domain     string `json:"domain"`          // HTTP 类型时的域名
-	ClientID   string `json:"client_id"`       // 所属 Client ID
-	Status     string `json:"status"`          // 状态: pending, active, paused, stopped, error
-	Error      string `json:"error,omitempty"` // 错误状态时的具体原因
+	Name         string `json:"name"`            // 隧道名称（唯一标识）
+	Type         string `json:"type"`            // 隧道类型: tcp, udp, http
+	LocalIP      string `json:"local_ip"`        // 内网目标服务 IP
+	LocalPort    int    `json:"local_port"`      // 内网目标服务端口
+	RemotePort   int    `json:"remote_port"`     // 公网暴露端口
+	Domain       string `json:"domain"`          // HTTP 类型时的域名
+	ClientID     string `json:"client_id"`       // 所属 Client ID
+	DesiredState string `json:"desired_state"`   // 用户目标状态: running, paused, stopped
+	RuntimeState string `json:"runtime_state"`   // 实际运行状态: pending, exposed, offline, idle, error
+	Status       string `json:"status"`          // 兼容旧接口的派生状态: pending, active, paused, stopped, error
+	Error        string `json:"error,omitempty"` // 错误状态时的具体原因
 }
 
 // ToProxyNewRequest 将 ProxyConfig 转换为 ProxyNewRequest（用于发送给 Client）
@@ -88,6 +90,117 @@ const (
 	ProxyStatusStopped = "stopped"
 	ProxyStatusError   = "error"
 )
+
+// 隧道目标状态常量
+const (
+	ProxyDesiredStateRunning = "running"
+	ProxyDesiredStatePaused  = "paused"
+	ProxyDesiredStateStopped = "stopped"
+)
+
+// 隧道运行状态常量
+const (
+	ProxyRuntimeStatePending = "pending"
+	ProxyRuntimeStateExposed = "exposed"
+	ProxyRuntimeStateOffline = "offline"
+	ProxyRuntimeStateIdle    = "idle"
+	ProxyRuntimeStateError   = "error"
+)
+
+// NormalizeProxyStates 将 legacy status 与双状态字段归一化。
+func NormalizeProxyStates(status, desiredState, runtimeState string) (string, string) {
+	if desiredState != "" && runtimeState != "" {
+		return desiredState, runtimeState
+	}
+
+	switch status {
+	case ProxyStatusPending:
+		if desiredState == "" {
+			desiredState = ProxyDesiredStateRunning
+		}
+		if runtimeState == "" {
+			runtimeState = ProxyRuntimeStatePending
+		}
+	case ProxyStatusActive:
+		if desiredState == "" {
+			desiredState = ProxyDesiredStateRunning
+		}
+		if runtimeState == "" {
+			runtimeState = ProxyRuntimeStateExposed
+		}
+	case ProxyStatusPaused:
+		if desiredState == "" {
+			desiredState = ProxyDesiredStatePaused
+		}
+		if runtimeState == "" {
+			runtimeState = ProxyRuntimeStateIdle
+		}
+	case ProxyStatusStopped:
+		if desiredState == "" {
+			desiredState = ProxyDesiredStateStopped
+		}
+		if runtimeState == "" {
+			runtimeState = ProxyRuntimeStateIdle
+		}
+	case ProxyStatusError:
+		if desiredState == "" {
+			desiredState = ProxyDesiredStateRunning
+		}
+		if runtimeState == "" {
+			runtimeState = ProxyRuntimeStateError
+		}
+	}
+
+	if desiredState == "" {
+		switch runtimeState {
+		case ProxyRuntimeStatePending, ProxyRuntimeStateExposed, ProxyRuntimeStateOffline, ProxyRuntimeStateError:
+			desiredState = ProxyDesiredStateRunning
+		case ProxyRuntimeStateIdle:
+			desiredState = ProxyDesiredStateStopped
+		}
+	}
+
+	if runtimeState == "" {
+		switch desiredState {
+		case ProxyDesiredStateRunning:
+			runtimeState = ProxyRuntimeStatePending
+		case ProxyDesiredStatePaused, ProxyDesiredStateStopped:
+			runtimeState = ProxyRuntimeStateIdle
+		}
+	}
+
+	return desiredState, runtimeState
+}
+
+// LegacyProxyStatusFromStates 将双状态映射回兼容旧接口的单状态。
+func LegacyProxyStatusFromStates(desiredState, runtimeState string) string {
+	switch runtimeState {
+	case ProxyRuntimeStatePending:
+		return ProxyStatusPending
+	case ProxyRuntimeStateError:
+		return ProxyStatusError
+	case ProxyRuntimeStateExposed, ProxyRuntimeStateOffline:
+		return ProxyStatusActive
+	case ProxyRuntimeStateIdle:
+		switch desiredState {
+		case ProxyDesiredStatePaused:
+			return ProxyStatusPaused
+		case ProxyDesiredStateStopped:
+			return ProxyStatusStopped
+		default:
+			return ProxyStatusStopped
+		}
+	default:
+		switch desiredState {
+		case ProxyDesiredStatePaused:
+			return ProxyStatusPaused
+		case ProxyDesiredStateStopped:
+			return ProxyStatusStopped
+		default:
+			return ProxyStatusActive
+		}
+	}
+}
 
 // StreamHeader 每个 yamux stream 开头发送的头部
 // Server 打开 stream 后写入此头部，告诉 Client 这个 stream 属于哪条代理隧道

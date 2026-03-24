@@ -20,11 +20,13 @@ const (
 // StoredTunnel 持久化存储的隧道配置
 type StoredTunnel struct {
 	protocol.ProxyNewRequest
-	Status   string `json:"status"`              // active, paused, stopped
-	Error    string `json:"error,omitempty"`     // error 状态时的具体原因
-	ClientID string `json:"client_id,omitempty"` // 所属稳定 Client ID
-	Hostname string `json:"hostname,omitempty"`  // 当前主机名（展示用）
-	Binding  string `json:"binding,omitempty"`   // client_id | legacy_hostname
+	DesiredState string `json:"desired_state,omitempty"` // 用户目标状态
+	RuntimeState string `json:"runtime_state,omitempty"` // 实际运行状态
+	Status       string `json:"status"`                  // 兼容旧字段
+	Error        string `json:"error,omitempty"`         // error 状态时的具体原因
+	ClientID     string `json:"client_id,omitempty"`     // 所属稳定 Client ID
+	Hostname     string `json:"hostname,omitempty"`      // 当前主机名（展示用）
+	Binding      string `json:"binding,omitempty"`       // client_id | legacy_hostname
 }
 
 func (t *StoredTunnel) normalize() {
@@ -39,7 +41,7 @@ func (t *StoredTunnel) normalize() {
 		t.Binding = TunnelBindingLegacyHostname
 		t.ClientID = ""
 	}
-	t.Error = storedTunnelErrorForStatus(t.Status, t.Error)
+	normalizeStoredTunnelState(t)
 }
 
 func (t StoredTunnel) matchesClient(clientID, name string) bool {
@@ -131,10 +133,8 @@ func cloneStoredTunnels(tunnels []StoredTunnel) []StoredTunnel {
 }
 
 func storedTunnelErrorForStatus(status, errMsg string) string {
-	if status == protocol.ProxyStatusError {
-		return errMsg
-	}
-	return ""
+	_, runtimeState := protocol.NormalizeProxyStates(status, "", "")
+	return tunnelErrorForRuntimeState(runtimeState, errMsg)
 }
 
 // AddTunnel 添加一条隧道配置并持久化
@@ -200,8 +200,26 @@ func (s *TunnelStore) UpdateState(clientID, name, status, errMsg string) error {
 	for i, tunnel := range s.tunnels {
 		if tunnel.matchesIdentifier(clientID, name) {
 			previous := s.tunnels[i]
-			s.tunnels[i].Status = status
-			s.tunnels[i].Error = storedTunnelErrorForStatus(status, errMsg)
+			setStoredTunnelLegacyStatus(&s.tunnels[i], status, errMsg)
+			if err := s.save(); err != nil {
+				s.tunnels[i] = previous
+				return err
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
+}
+
+// UpdateStates 直接更新双状态字段并持久化。
+func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, errMsg string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, tunnel := range s.tunnels {
+		if tunnel.matchesIdentifier(clientID, name) {
+			previous := s.tunnels[i]
+			setStoredTunnelStates(&s.tunnels[i], desiredState, runtimeState, errMsg)
 			if err := s.save(); err != nil {
 				s.tunnels[i] = previous
 				return err

@@ -41,35 +41,36 @@ import (
 
 // Server 是服务端的核心结构体
 type Server struct {
-	Port           int
-	StorePath      string // 隧道配置文件路径（空则使用默认）
-	SetupToken     string // 显式配置初始化 Token（空则启动时随机生成）
-	TLS            *TLSConfig
-	TLSFingerprint string
-	clients        sync.Map          // stable clientID -> *ClientConn
-	events         *EventBus         // SSE 事件总线
-	store          *TunnelStore      // 隧道持久化存储
-	startTime      time.Time         // 服务器启动时间
-	adminStore     *AdminStore       // 系统管理后台数据存储
-	webFS          fs.FS             // 嵌入的前端静态资源 (nil 表示开发模式)
-	webHandler     http.Handler      // 缓存的 FileServer (nil 表示开发模式)
-	cachedStatus   *serverStatusView // 后台采集的最新服务端状态
-	cachedStatusMu sync.RWMutex      // 保护 cachedStatus
-	loginLimiter   *RateLimiter      // 管理员登录速率限制
-	clientLimiter  *RateLimiter      // Client 认证速率限制
-	setupLimiter   *RateLimiter      // 初始化接口速率限制
-	authTimeout    time.Duration     // WebSocket 认证阶段读超时（0 使用默认 30s）
-	httpServer     *http.Server
-	listener       net.Listener
-	done           chan struct{}
-	setupToken     string
-	tlsEnabled     bool
-	publicIPv4     string       // 缓存的公网 IPv4
-	publicIPv6     string       // 缓存的公网 IPv6
-	publicIPMu     sync.RWMutex // 保护公网 IP 缓存
-	nextGeneration atomic.Uint64
-	pendingReadyMu sync.Mutex
-	pendingReady   map[pendingTunnelReadyKey]chan protocol.ProxyNewResponse
+	Port                        int
+	StorePath                   string // 隧道配置文件路径（空则使用默认）
+	SetupToken                  string // 显式配置初始化 Token（空则启动时随机生成）
+	AllowLoopbackManagementHost bool
+	TLS                         *TLSConfig
+	TLSFingerprint              string
+	clients                     sync.Map          // stable clientID -> *ClientConn
+	events                      *EventBus         // SSE 事件总线
+	store                       *TunnelStore      // 隧道持久化存储
+	startTime                   time.Time         // 服务器启动时间
+	adminStore                  *AdminStore       // 系统管理后台数据存储
+	webFS                       fs.FS             // 嵌入的前端静态资源 (nil 表示开发模式)
+	webHandler                  http.Handler      // 缓存的 FileServer (nil 表示开发模式)
+	cachedStatus                *serverStatusView // 后台采集的最新服务端状态
+	cachedStatusMu              sync.RWMutex      // 保护 cachedStatus
+	loginLimiter                *RateLimiter      // 管理员登录速率限制
+	clientLimiter               *RateLimiter      // Client 认证速率限制
+	setupLimiter                *RateLimiter      // 初始化接口速率限制
+	authTimeout                 time.Duration     // WebSocket 认证阶段读超时（0 使用默认 30s）
+	httpServer                  *http.Server
+	listener                    net.Listener
+	done                        chan struct{}
+	setupToken                  string
+	tlsEnabled                  bool
+	publicIPv4                  string       // 缓存的公网 IPv4
+	publicIPv6                  string       // 缓存的公网 IPv6
+	publicIPMu                  sync.RWMutex // 保护公网 IP 缓存
+	nextGeneration              atomic.Uint64
+	pendingReadyMu              sync.Mutex
+	pendingReady                map[pendingTunnelReadyKey]chan protocol.ProxyNewResponse
 
 	pendingDataTimeout      time.Duration
 	dataHandshakeTimeout    time.Duration
@@ -1026,16 +1027,7 @@ func (s *Server) collectClientViews() []clientView {
 				stored := s.store.GetTunnelsByClientID(registered.ID)
 				view.Proxies = make([]protocol.ProxyConfig, 0, len(stored))
 				for _, tunnel := range stored {
-					view.Proxies = append(view.Proxies, protocol.ProxyConfig{
-						Name:       tunnel.Name,
-						Type:       tunnel.Type,
-						LocalIP:    tunnel.LocalIP,
-						LocalPort:  tunnel.LocalPort,
-						RemotePort: tunnel.RemotePort,
-						Domain:     tunnel.Domain,
-						ClientID:   registered.ID,
-						Status:     tunnel.Status,
-					})
+					view.Proxies = append(view.Proxies, proxyConfigForClientView(storedTunnelToProxyConfig(tunnel), false))
 				}
 			}
 			views[registered.ID] = view
@@ -1049,7 +1041,7 @@ func (s *Server) collectClientViews() []clientView {
 		}
 		proxies := make([]protocol.ProxyConfig, 0)
 		client.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
-			proxies = append(proxies, tunnel.Config)
+			proxies = append(proxies, proxyConfigForClientView(tunnel.Config, true))
 			return true
 		})
 		sort.Slice(proxies, func(i, j int) bool { return proxies[i].Name < proxies[j].Name })
@@ -1378,10 +1370,7 @@ func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request)
 // --- 隧道 CRUD API ---
 
 func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
-	client, ok := s.readClientFromPath(w, r)
-	if !ok {
-		return
-	}
+	clientID := r.PathValue("id")
 
 	var req protocol.ProxyNewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1389,7 +1378,15 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config, err := s.createManagedTunnel(client, req, true, "created")
+	var (
+		config protocol.ProxyConfig
+		err    error
+	)
+	if client, ok := s.loadLiveClient(clientID); ok {
+		config, err = s.createManagedTunnel(client, req, true, "created")
+	} else {
+		config, err = s.createOfflineManagedTunnel(clientID, req)
+	}
 	if err != nil {
 		status := http.StatusConflict
 		payload := map[string]any{
@@ -1398,14 +1395,20 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var ruleErr *httpTunnelRuleError
+		var validationErr *proxyRequestValidationError
 		var rejected *tunnelReadyRejectedError
 		switch {
+		case errors.Is(err, errManagedTunnelClientNotFound):
+			status = http.StatusNotFound
+			payload["error"] = "client not found"
 		case errors.Is(err, errTunnelReadyTimeout):
 			status = http.StatusGatewayTimeout
 		case errors.As(err, &rejected):
 			status = http.StatusBadGateway
 		case errors.As(err, &ruleErr):
 			payload["error_code"] = ruleErr.ErrorCode()
+		case errors.As(err, &validationErr):
+			status = http.StatusConflict
 		}
 		encodeJSON(w, status, payload)
 		return
@@ -1424,7 +1427,7 @@ func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		_, err := s.pauseOfflineHTTPTunnel(clientID, tunnelName)
+		_, err := s.pauseOfflineManagedTunnel(clientID, tunnelName)
 		if err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
@@ -1474,19 +1477,21 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		if _, err := s.loadOfflineHTTPTunnel(clientID, tunnelName); err != nil {
+		if _, err := s.resumeOfflineManagedTunnel(clientID, tunnelName); err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
 			case errors.Is(err, errManagedTunnelNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
+			case err.Error() == "只有 paused、stopped 或 error 状态的隧道才能恢复":
+				encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			default:
 				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			}
 			return
 		}
 
-		encodeJSON(w, http.StatusConflict, map[string]any{"error": "离线 HTTP 隧道不支持恢复，请等待 client 上线"})
+		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已恢复"})
 		return
 	}
 
@@ -1531,7 +1536,7 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		if _, err := s.loadOfflineHTTPTunnel(clientID, tunnelName); err != nil {
+		if _, err := s.stopOfflineManagedTunnel(clientID, tunnelName); err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
@@ -1543,7 +1548,7 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		encodeJSON(w, http.StatusConflict, map[string]any{"error": "离线 HTTP 隧道不支持停止，请等待 client 上线"})
+		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已停止"})
 		return
 	}
 
@@ -1571,7 +1576,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		if err := s.deleteOfflineHTTPTunnel(clientID, tunnelName); err != nil {
+		if err := s.deleteOfflineManagedTunnel(clientID, tunnelName); err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
@@ -1636,7 +1641,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		updated, err := s.updateOfflineHTTPTunnel(clientID, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain)
+		updated, err := s.updateOfflineManagedTunnel(clientID, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain)
 		if err != nil {
 			status := http.StatusInternalServerError
 			payload := map[string]any{"error": err.Error()}
@@ -1696,7 +1701,12 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 
 		var ruleErr *httpTunnelRuleError
 		var validationErr *proxyRequestValidationError
+		var rejected *tunnelReadyRejectedError
 		switch {
+		case errors.Is(err, errTunnelReadyTimeout):
+			status = http.StatusGatewayTimeout
+		case errors.As(err, &rejected):
+			status = http.StatusBadGateway
 		case errors.As(err, &ruleErr):
 			status = http.StatusConflict
 			payload["error_code"] = ruleErr.ErrorCode()
@@ -1739,31 +1749,31 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			log.Printf("⚠️ 隧道 %s 端口 %d 不在当前允许范围内，标记为 error", st.Name, st.RemotePort)
 			errMsg := fmt.Sprintf("端口 %d 不在允许范围内", st.RemotePort)
 			client.proxyMu.Lock()
+			config := protocol.ProxyConfig{
+				Name:       st.Name,
+				Type:       st.Type,
+				LocalIP:    st.LocalIP,
+				LocalPort:  st.LocalPort,
+				RemotePort: st.RemotePort,
+				Domain:     st.Domain,
+				ClientID:   client.ID,
+			}
+			setProxyConfigLegacyStatus(&config, protocol.ProxyStatusError, errMsg)
 			client.proxies[st.Name] = &ProxyTunnel{
-				Config: protocol.ProxyConfig{
-					Name:       st.Name,
-					Type:       st.Type,
-					LocalIP:    st.LocalIP,
-					LocalPort:  st.LocalPort,
-					RemotePort: st.RemotePort,
-					Domain:     st.Domain,
-					ClientID:   client.ID,
-					Status:     protocol.ProxyStatusError,
-					Error:      errMsg,
-				},
-				done: make(chan struct{}),
+				Config: config,
+				done:   make(chan struct{}),
 			}
 			client.proxyMu.Unlock()
 			_ = s.persistTunnelState(client.ID, st.Name, protocol.ProxyStatusError, errMsg)
-			s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
+			eventConfig := protocol.ProxyConfig{
 				Name:       st.Name,
 				Type:       st.Type,
 				RemotePort: st.RemotePort,
 				Domain:     st.Domain,
 				ClientID:   client.ID,
-				Status:     protocol.ProxyStatusError,
-				Error:      errMsg,
-			}, "port_not_allowed")
+			}
+			setProxyConfigLegacyStatus(&eventConfig, protocol.ProxyStatusError, errMsg)
+			s.emitTunnelChanged(client.ID, eventConfig, "port_not_allowed")
 			restoredCount++
 			continue
 		}
@@ -1778,20 +1788,24 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			restoredCount++
 
 		case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped, protocol.ProxyStatusError:
+			config := protocol.ProxyConfig{
+				Name:         st.Name,
+				Type:         st.Type,
+				LocalIP:      st.LocalIP,
+				LocalPort:    st.LocalPort,
+				RemotePort:   st.RemotePort,
+				Domain:       st.Domain,
+				ClientID:     client.ID,
+				DesiredState: st.DesiredState,
+				RuntimeState: st.RuntimeState,
+				Status:       st.Status,
+				Error:        st.Error,
+			}
+			normalizeProxyConfigState(&config)
 			client.proxyMu.Lock()
 			client.proxies[st.Name] = &ProxyTunnel{
-				Config: protocol.ProxyConfig{
-					Name:       st.Name,
-					Type:       st.Type,
-					LocalIP:    st.LocalIP,
-					LocalPort:  st.LocalPort,
-					RemotePort: st.RemotePort,
-					Domain:     st.Domain,
-					ClientID:   client.ID,
-					Status:     st.Status,
-					Error:      st.Error,
-				},
-				done: make(chan struct{}),
+				Config: config,
+				done:   make(chan struct{}),
 			}
 			client.proxyMu.Unlock()
 			restoredCount++

@@ -39,7 +39,7 @@ func TestStartProxy_Success(t *testing.T) {
 		Type:       protocol.ProxyTypeTCP,
 		LocalIP:    "127.0.0.1",
 		LocalPort:  8080,
-		RemotePort: 0, // 0表示系统随机分配
+		RemotePort: reserveTCPPort(t),
 	}
 
 	if err := s.StartProxy(client, req); err != nil {
@@ -217,7 +217,7 @@ func TestStartProxy_DuplicateName(t *testing.T) {
 
 	req := protocol.ProxyNewRequest{
 		Name:       "dup-tunnel",
-		RemotePort: 0,
+		RemotePort: reserveTCPPort(t),
 	}
 
 	if err := s.StartProxy(client, req); err != nil {
@@ -245,7 +245,7 @@ func TestStopProxy(t *testing.T) {
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
 	client.dataSession = sSession
 
-	req := protocol.ProxyNewRequest{Name: "to-be-stopped", RemotePort: 0}
+	req := protocol.ProxyNewRequest{Name: "to-be-stopped", RemotePort: reserveTCPPort(t)}
 	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("StartProxy 失败: %v", err)
 	}
@@ -284,10 +284,10 @@ func TestStopAllProxies(t *testing.T) {
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
 	client.dataSession = sSession
 
-	if err := s.StartProxy(client, protocol.ProxyNewRequest{Name: "t1", RemotePort: 0}); err != nil {
+	if err := s.StartProxy(client, protocol.ProxyNewRequest{Name: "t1", RemotePort: reserveTCPPort(t)}); err != nil {
 		t.Fatalf("启动 t1 失败: %v", err)
 	}
-	if err := s.StartProxy(client, protocol.ProxyNewRequest{Name: "t2", RemotePort: 0}); err != nil {
+	if err := s.StartProxy(client, protocol.ProxyNewRequest{Name: "t2", RemotePort: reserveTCPPort(t)}); err != nil {
 		t.Fatalf("启动 t2 失败: %v", err)
 	}
 
@@ -345,12 +345,12 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	defer serverSession.Close()
 	defer clientSession.Close()
 
-	// 2. 启动代理监听 (系统随机分配端口)
+	// 2. 启动代理监听
 	tunnelName := "echo-http-tunnel"
 	req := protocol.ProxyNewRequest{
 		Name:       tunnelName,
 		Type:       protocol.ProxyTypeTCP,
-		RemotePort: 0,
+		RemotePort: reserveTCPPort(t),
 	}
 
 	err := s.StartProxy(cc, req)

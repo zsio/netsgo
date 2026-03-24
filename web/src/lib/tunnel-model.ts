@@ -1,12 +1,14 @@
 import { ApiError } from '@/lib/api';
 import type {
   ProxyConfig,
+  ProxyDesiredState,
+  ProxyRuntimeState,
   ProxyStatus,
   ProxyType,
   TunnelMutationErrorResponse,
 } from '@/types';
 
-type TunnelStatusKey = ProxyStatus | 'unavailable';
+type TunnelStatusKey = 'pending' | 'exposed' | 'offline' | 'paused' | 'stopped' | 'error';
 
 export interface TunnelStatusPresentation {
   key: TunnelStatusKey;
@@ -22,11 +24,19 @@ export interface TunnelViewModel extends Omit<ProxyConfig, 'status'> {
   status: TunnelStatusPresentation;
 }
 
+export interface TunnelActionAvailability {
+  canPause: boolean;
+  canResume: boolean;
+  canStop: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+}
+
 interface TunnelMutationPayloadInput {
   type: ProxyType;
   local_ip: string;
   local_port: number;
-  remote_port?: number;
+  remote_port: number;
   domain?: string;
 }
 
@@ -34,10 +44,14 @@ export function buildTunnelMutationPayload(input: TunnelMutationPayloadInput) {
   const localIP = input.local_ip.trim();
   const domain = (input.domain ?? '').trim();
 
+  if (input.type !== 'http' && (!Number.isInteger(input.remote_port) || input.remote_port < 1 || input.remote_port > 65535)) {
+    throw new Error('TCP/UDP 隧道必须填写明确的公网端口');
+  }
+
   return {
     local_ip: localIP,
     local_port: input.local_port,
-    remote_port: input.type === 'http' ? 0 : input.remote_port ?? 0,
+    remote_port: input.type === 'http' ? 0 : input.remote_port,
     domain: input.type === 'http' ? domain : '',
   };
 }
@@ -81,28 +95,52 @@ export function getTunnelMutationErrorMessage(error: unknown) {
   return '提交失败，请稍后重试';
 }
 
+export function getTunnelActionAvailability(
+  tunnel: ProxyConfig,
+  clientOnline: boolean,
+): TunnelActionAvailability {
+  const isOffline = !clientOnline;
+  const status = tunnel.status;
+
+  return {
+    canPause: status === 'active',
+    canResume: status === 'paused' || status === 'stopped' || status === 'error',
+    canStop: status !== 'stopped',
+    canEdit: isOffline || status === 'paused' || status === 'stopped' || status === 'error',
+    canDelete: isOffline || status === 'paused' || status === 'stopped' || status === 'error',
+  };
+}
+
 function resolveTunnelStatus(
   tunnel: ProxyConfig,
   clientOnline: boolean,
 ): TunnelStatusPresentation {
+  if (tunnel.desired_state && tunnel.runtime_state) {
+    return resolveTunnelStatusFromStates(
+      tunnel.desired_state,
+      tunnel.runtime_state,
+      tunnel.error,
+    );
+  }
+
   switch (tunnel.status) {
     case 'pending':
       return {
         key: 'pending',
-        label: '等待就绪',
-        description: '等待 Client 接受新配置',
+        label: '等待建立',
+        description: '等待 Client 建立公网入口',
       };
     case 'active':
       if (!clientOnline) {
         return {
-          key: 'unavailable',
-          label: '不可服务',
-          description: 'Client 离线，当前无法接收请求',
+          key: 'offline',
+          label: '客户端离线',
+          description: '配置已保存，等待 Client 上线后恢复',
         };
       }
       return {
-        key: 'active',
-        label: '运行中',
+        key: 'exposed',
+        label: '已建立',
       };
     case 'paused':
       return {
@@ -125,6 +163,55 @@ function resolveTunnelStatus(
         key: 'error',
         label: tunnel.status,
         description: tunnel.error,
+      };
+  }
+}
+
+function resolveTunnelStatusFromStates(
+  desiredState: ProxyDesiredState,
+  runtimeState: ProxyRuntimeState,
+  error?: string,
+): TunnelStatusPresentation {
+  switch (runtimeState) {
+    case 'pending':
+      return {
+        key: 'pending',
+        label: '等待建立',
+        description: '等待 Client 建立公网入口',
+      };
+    case 'exposed':
+      return {
+        key: 'exposed',
+        label: '已建立',
+      };
+    case 'offline':
+      return {
+        key: 'offline',
+        label: '客户端离线',
+        description: '配置已保存，等待 Client 上线后恢复',
+      };
+    case 'idle':
+      if (desiredState === 'paused') {
+        return {
+          key: 'paused',
+          label: '已暂停',
+        };
+      }
+      return {
+        key: 'stopped',
+        label: '已停止',
+      };
+    case 'error':
+      return {
+        key: 'error',
+        label: '异常',
+        description: error || '隧道运行异常',
+      };
+    default:
+      return {
+        key: 'error',
+        label: runtimeState,
+        description: error,
       };
   }
 }
