@@ -81,7 +81,22 @@ func (s *Server) isManagementHost(host string) bool {
 	if managementHost == "" {
 		return false
 	}
-	return canonicalHost(host) == managementHost
+	
+	reqCanonical := canonicalHost(host)
+	if reqCanonical == managementHost {
+		return true
+	}
+
+	// 允许通过本地回环地址访问管理面，既方便开发调试，也作为防失联的后门兜底
+	h := reqCanonical
+	if hostPart, _, err := net.SplitHostPort(reqCanonical); err == nil {
+		h = hostPart
+	}
+	if h == "localhost" || h == "127.0.0.1" || h == "::1" {
+		return true
+	}
+
+	return false
 }
 
 func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool) {
