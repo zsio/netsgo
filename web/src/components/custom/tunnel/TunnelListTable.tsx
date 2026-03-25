@@ -96,7 +96,7 @@ export function TunnelListTable({
       canStop,
       canEdit,
       canDelete,
-    } = getTunnelActionAvailability(tunnel, tunnel.clientOnline);
+    } = getTunnelActionAvailability(tunnel);
 
     return (
       <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">

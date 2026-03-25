@@ -4,6 +4,7 @@ import type {
   ProxyDesiredState,
   ProxyRuntimeState,
   ProxyType,
+  TunnelCapabilities,
   TunnelMutationErrorResponse,
 } from '@/types';
 
@@ -29,6 +30,14 @@ export interface TunnelActionAvailability {
   canEdit: boolean;
   canDelete: boolean;
 }
+
+const requiredTunnelCapabilities = [
+  'can_pause',
+  'can_resume',
+  'can_stop',
+  'can_edit',
+  'can_delete',
+] as const;
 
 interface TunnelMutationPayloadInput {
   type: ProxyType;
@@ -93,21 +102,16 @@ export function getTunnelMutationErrorMessage(error: unknown) {
 }
 
 export function getTunnelActionAvailability(
-  tunnel: ProxyConfig,
-  clientOnline: boolean,
+  tunnel: Pick<ProxyConfig, 'capabilities'>,
 ): TunnelActionAvailability {
-  const isRunningExposed = tunnel.desired_state === 'running' && tunnel.runtime_state === 'exposed';
-  const isRunningOffline = tunnel.desired_state === 'running' && tunnel.runtime_state === 'offline';
-  const isPausedIdle = tunnel.desired_state === 'paused' && tunnel.runtime_state === 'idle';
-  const isStoppedIdle = tunnel.desired_state === 'stopped' && tunnel.runtime_state === 'idle';
-  const isRunningError = tunnel.desired_state === 'running' && tunnel.runtime_state === 'error';
+  const capabilities = requireTunnelCapabilities(tunnel.capabilities);
 
   return {
-    canPause: isRunningExposed || isRunningOffline,
-    canResume: isPausedIdle || isStoppedIdle || isRunningError,
-    canStop: !isStoppedIdle,
-    canEdit: !clientOnline || isPausedIdle || isStoppedIdle || isRunningError,
-    canDelete: !clientOnline || isPausedIdle || isStoppedIdle || isRunningError,
+    canPause: capabilities.can_pause,
+    canResume: capabilities.can_resume,
+    canStop: capabilities.can_stop,
+    canEdit: capabilities.can_edit,
+    canDelete: capabilities.can_delete,
   };
 }
 
@@ -173,4 +177,20 @@ function resolveTunnelStatusFromStates(
         description: error,
       };
   }
+}
+
+function requireTunnelCapabilities(
+  capabilities: Partial<TunnelCapabilities> | null | undefined,
+): TunnelCapabilities {
+  if (!capabilities || typeof capabilities !== 'object') {
+    throw new Error('Tunnel capabilities are required');
+  }
+
+  for (const key of requiredTunnelCapabilities) {
+    if (typeof capabilities[key] !== 'boolean') {
+      throw new Error(`Tunnel capability "${key}" is required`);
+    }
+  }
+
+  return capabilities as TunnelCapabilities;
 }

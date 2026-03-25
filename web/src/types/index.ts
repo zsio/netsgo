@@ -54,6 +54,14 @@ export type ProxyType = "tcp" | "udp" | "http";
 export type ProxyDesiredState = "running" | "paused" | "stopped";
 export type ProxyRuntimeState = "pending" | "exposed" | "offline" | "idle" | "error";
 
+export interface TunnelCapabilities {
+  can_pause: boolean;
+  can_resume: boolean;
+  can_stop: boolean;
+  can_edit: boolean;
+  can_delete: boolean;
+}
+
 /** 对齐 protocol.ProxyConfig */
 export interface ProxyConfig {
   name: string;
@@ -66,6 +74,7 @@ export interface ProxyConfig {
   desired_state: ProxyDesiredState;
   runtime_state: ProxyRuntimeState;
   error?: string;
+  capabilities: TunnelCapabilities;
 }
 
 /** 创建隧道请求体 */
