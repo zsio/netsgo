@@ -20,7 +20,7 @@ type httpTunnelRoute struct {
 func (r httpTunnelRoute) serviceable() bool {
 	return r.client != nil &&
 		r.client.isLive() &&
-		r.config.Status == protocol.ProxyStatusActive
+		isTunnelExposed(r.config)
 }
 
 func (s *Server) hostDispatchHandler(management http.Handler) http.Handler {

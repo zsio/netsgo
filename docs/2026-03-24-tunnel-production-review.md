@@ -1,5 +1,28 @@
 # 隧道生产可用性审查（2026-03-24）
 
+## 0. 状态更新（2026-03-25）
+
+本轮已完成一组“状态模型收敛”修复，用于关闭审查里“配置真值不统一 / 状态语义分裂”的主问题：
+
+- 已把 tunnel 主模型统一到 `desired_state + runtime_state + error`
+- 已从协议层、store、`GET /api/clients`、`tunnel_changed`、前端隧道展示/动作权限中移除 legacy `status` 依赖
+- 已把运行时资源关闭与业务状态切换分离：`PauseProxy` / UDP runtime close 不再隐式顺手改业务状态
+- 已把端口白名单影响列表 `affected_tunnels` 也改成返回双状态，而不是 tunnel `status`
+
+本轮验证已完成：
+
+- `go test ./internal/server ./pkg/protocol -count=1 -timeout 60s`
+- `go test ./internal/server -run 'TestTunnelStore_.*|TestEmitTunnelChanged_.*' -count=1 -timeout 60s`
+- `cd web && bun test src/lib/tunnel-model.test.ts`
+- `cd web && bun run build`
+
+仍未关闭的问题：
+
+- `Host: localhost / 127.0.0.1 / ::1` 管理面兜底仍保留，属于显式待审风险
+- `ready -> exposed` 仍偏“入口建立成功”，还不是“后端健康已验证”
+- TCP/UDP 的超时治理、错误计数、自愈/退避还没进入这一轮
+- 还没有补端到端/手工冒烟来证明三类 tunnel 的生产闭环
+
 ## 1. 审查结论
 
 结论先给出：

@@ -314,10 +314,11 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	}
 
 	client.proxyMu.RLock()
-	status := client.proxies[req.Name].Config.Status
+	desiredState := client.proxies[req.Name].Config.DesiredState
+	runtimeState := client.proxies[req.Name].Config.RuntimeState
 	client.proxyMu.RUnlock()
-	if status != protocol.ProxyStatusPaused {
-		t.Errorf("暂停后状态期望 paused，得到 %s", status)
+	if desiredState != protocol.ProxyDesiredStateRunning || runtimeState != protocol.ProxyRuntimeStateExposed {
+		t.Errorf("PauseProxy 仅关闭运行时资源，状态应保持 running/exposed，得到 %s/%s", desiredState, runtimeState)
 	}
 
 	// 等待端口释放
@@ -329,12 +330,13 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	}
 
 	client.proxyMu.RLock()
-	status = client.proxies[req.Name].Config.Status
+	desiredState = client.proxies[req.Name].Config.DesiredState
+	runtimeState = client.proxies[req.Name].Config.RuntimeState
 	newPort := client.proxies[req.Name].Config.RemotePort
 	client.proxyMu.RUnlock()
 
-	if status != protocol.ProxyStatusActive {
-		t.Errorf("恢复后状态期望 active，得到 %s", status)
+	if desiredState != protocol.ProxyDesiredStateRunning || runtimeState != protocol.ProxyRuntimeStateExposed {
+		t.Errorf("恢复后状态期望 running/exposed，得到 %s/%s", desiredState, runtimeState)
 	}
 	if newPort != port {
 		t.Errorf("恢复后端口期望 %d，得到 %d", port, newPort)
@@ -602,8 +604,8 @@ func TestUDPReadLoop_UnexpectedReadError_MarksTunnelErrorAndPersistsState(t *tes
 
 	s.udpReadLoop(client, tunnel, state)
 
-	if tunnel.Config.Status != protocol.ProxyStatusError {
-		t.Fatalf("异常退出后状态期望 error，得到 %s", tunnel.Config.Status)
+	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("异常退出后状态期望 running/error，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 	if !strings.Contains(tunnel.Config.Error, "boom") {
 		t.Fatalf("异常退出后 error 期望包含 boom，得到 %q", tunnel.Config.Error)
@@ -613,8 +615,8 @@ func TestUDPReadLoop_UnexpectedReadError_MarksTunnelErrorAndPersistsState(t *tes
 	if !exists {
 		t.Fatal("store 中应保留该 UDP 隧道")
 	}
-	if stored.Status != protocol.ProxyStatusError {
-		t.Fatalf("store 状态期望 error，得到 %s", stored.Status)
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("store 状态期望 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if !strings.Contains(stored.Error, "boom") {
 		t.Fatalf("store error 期望包含 boom，得到 %q", stored.Error)
@@ -654,8 +656,8 @@ func TestUDPReadLoop_StateClose_DoesNotMarkTunnelError(t *testing.T) {
 		t.Fatal("udpReadLoop 在 state.Close() 后未退出")
 	}
 
-	if tunnel.Config.Status != protocol.ProxyStatusActive {
-		t.Fatalf("正常关闭后状态应保持 active，得到 %s", tunnel.Config.Status)
+	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("正常关闭后状态应保持 running/exposed，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 	if tunnel.Config.Error != "" {
 		t.Fatalf("正常关闭后 error 应为空，得到 %q", tunnel.Config.Error)
@@ -665,8 +667,8 @@ func TestUDPReadLoop_StateClose_DoesNotMarkTunnelError(t *testing.T) {
 	if !exists {
 		t.Fatal("store 中应保留该 UDP 隧道")
 	}
-	if stored.Status != protocol.ProxyStatusActive {
-		t.Fatalf("正常关闭后 store 状态应保持 active，得到 %s", stored.Status)
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("正常关闭后 store 状态应保持 running/exposed，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Error != "" {
 		t.Fatalf("正常关闭后 store error 应为空，得到 %q", stored.Error)
@@ -690,8 +692,8 @@ func TestUDPReadLoop_UnexpectedReadError_DoesNotPoisonReplacedRuntime(t *testing
 
 	s.udpReadLoop(client, tunnel, staleState)
 
-	if tunnel.Config.Status != protocol.ProxyStatusActive {
-		t.Fatalf("旧 runtime 异常不应污染当前状态，得到 %s", tunnel.Config.Status)
+	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("旧 runtime 异常不应污染当前状态，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 	if tunnel.Config.Error != "" {
 		t.Fatalf("旧 runtime 异常不应写入 error，得到 %q", tunnel.Config.Error)
@@ -701,8 +703,8 @@ func TestUDPReadLoop_UnexpectedReadError_DoesNotPoisonReplacedRuntime(t *testing
 	if !exists {
 		t.Fatal("store 中应保留该 UDP 隧道")
 	}
-	if stored.Status != protocol.ProxyStatusActive {
-		t.Fatalf("旧 runtime 异常不应污染 store 状态，得到 %s", stored.Status)
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("旧 runtime 异常不应污染 store 状态，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Error != "" {
 		t.Fatalf("旧 runtime 异常不应写入 store error，得到 %q", stored.Error)

@@ -17,6 +17,7 @@ import {
 import { api } from '@/lib/api';
 import { getServerAddrValidationError, normalizeServerAddr, SERVER_ADDR_HELP_TEXT, SERVER_ADDR_PLACEHOLDER } from '@/lib/server-address';
 import { createLocalId } from '@/lib/utils';
+import { resolveTunnelStatus } from '@/lib/tunnel-model';
 import toast from 'react-hot-toast';
 import type {
   AdminConfig,
@@ -272,14 +273,12 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
     }
   };
 
-  const statusLabel = (status: string) => {
-    switch (status) {
-      case 'active': return '运行中';
-      case 'paused': return '已暂停';
-      case 'stopped': return '已停止';
-      default: return status;
-    }
-  };
+  const affectedTunnelStatus = (tunnel: AffectedTunnel) =>
+    resolveTunnelStatus({
+      desired_state: tunnel.desired_state,
+      runtime_state: tunnel.runtime_state,
+      error: tunnel.error,
+    }, tunnel.runtime_state !== 'offline');
 
   // 渲染正在编辑的行还是渲染正在新增的行都会共用一部分逻辑。
   // 为了美观，我们把 `portRanges` 和如果 `editingIndex === length` 的虚拟行拼在一起 map。
@@ -544,13 +543,15 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                     <td className="py-2 px-3 text-right font-mono">{t.remote_port}</td>
                     <td className="py-2 px-3 text-right">
                       <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
-                        t.status === 'active'
+                        affectedTunnelStatus(t).key === 'exposed'
                           ? 'bg-emerald-500/10 text-emerald-600'
-                          : t.status === 'paused'
+                          : affectedTunnelStatus(t).key === 'paused'
                           ? 'bg-amber-500/10 text-amber-600'
+                          : affectedTunnelStatus(t).key === 'error'
+                          ? 'bg-destructive/10 text-destructive'
                           : 'bg-zinc-500/10 text-zinc-500'
                       }`}>
-                        {statusLabel(t.status)}
+                        {affectedTunnelStatus(t).label}
                       </span>
                     </td>
                   </tr>

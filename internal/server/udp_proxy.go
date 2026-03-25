@@ -200,15 +200,15 @@ func (s *Server) markUDPProxyRuntimeErrorIfCurrent(
 	if !exists ||
 		current != tunnel ||
 		current.UDPState != state ||
-		current.Config.Status != protocol.ProxyStatusActive {
+		!isTunnelExposed(current.Config) {
 		client.proxyMu.Unlock()
 		return
 	}
-	setProxyConfigLegacyStatus(&current.Config, protocol.ProxyStatusError, message)
+	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
 	config := current.Config
 	client.proxyMu.Unlock()
 
-	if err := s.persistTunnelState(client.ID, tunnel.Config.Name, protocol.ProxyStatusError, message); err != nil {
+	if err := s.persistTunnelStates(client.ID, tunnel.Config.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message); err != nil {
 		log.Printf("⚠️ UDP 代理 [%s] 持久化 error 状态失败: %v", tunnel.Config.Name, err)
 	}
 	s.emitTunnelChanged(client.ID, config, "error")

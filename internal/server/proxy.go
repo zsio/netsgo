@@ -142,11 +142,11 @@ func (s *Server) ensureClientDataReady(client *ClientConn) error {
 	return nil
 }
 
-func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewRequest, status string) (*ProxyTunnel, error) {
-	return s.prepareProxyTunnelWithExclusions(client, req, status, "", "")
+func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState string) (*ProxyTunnel, error) {
+	return s.prepareProxyTunnelWithExclusions(client, req, desiredState, runtimeState, "", "")
 }
 
-func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, status, excludeName, excludeClientID string) (*ProxyTunnel, error) {
+func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, excludeName, excludeClientID string) (*ProxyTunnel, error) {
 	if err := s.validateProxyRequestWithExclusions(client, req, excludeName, excludeClientID); err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 		},
 		done: make(chan struct{}),
 	}
-	setProxyConfigLegacyStatus(&tunnel.Config, status, "")
+	setProxyConfigStates(&tunnel.Config, desiredState, runtimeState, "")
 
 	client.proxies[req.Name] = tunnel
 	client.proxyMu.Unlock()
@@ -195,7 +195,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 
 	if tunnel.Config.Type == protocol.ProxyTypeHTTP {
 		// HTTP 隧道不绑定公网端口，通过 HTTP 路由层分发
-		setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusActive, "")
+		setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 		return nil
 	}
 
@@ -206,7 +206,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 		if err := s.startUDPProxy(client, tunnel); err != nil {
 			return err
 		}
-		setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusActive, "")
+		setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 		return nil
 	}
 
@@ -229,7 +229,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	tunnel.done = make(chan struct{})
 	tunnel.once = sync.Once{}
 	tunnel.Config.RemotePort = actualPort
-	setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusActive, "")
+	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 	listener := tunnel.Listener
 	done := tunnel.done
 	proxyName := tunnel.Config.Name
@@ -244,6 +244,23 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	return nil
 }
 
+func closeTunnelRuntimeResources(tunnel *ProxyTunnel) {
+	if tunnel == nil {
+		return
+	}
+	tunnel.once.Do(func() {
+		close(tunnel.done)
+		if tunnel.UDPState != nil {
+			tunnel.UDPState.Close()
+		}
+		if tunnel.Listener != nil {
+			tunnel.Listener.Close()
+		}
+	})
+	tunnel.Listener = nil
+	tunnel.UDPState = nil
+}
+
 func (s *Server) removeTunnelRuntime(client *ClientConn, name string) {
 	client.proxyMu.Lock()
 	tunnel, exists := client.proxies[name]
@@ -255,15 +272,7 @@ func (s *Server) removeTunnelRuntime(client *ClientConn, name string) {
 		return
 	}
 
-	tunnel.once.Do(func() {
-		close(tunnel.done)
-		if tunnel.UDPState != nil {
-			tunnel.UDPState.Close()
-		}
-		if tunnel.Listener != nil {
-			tunnel.Listener.Close()
-		}
-	})
+	closeTunnelRuntimeResources(tunnel)
 }
 
 func (s *Server) stageTunnelPending(client *ClientConn, name string) (protocol.ProxyConfig, error) {
@@ -278,7 +287,7 @@ func (s *Server) stageTunnelPending(client *ClientConn, name string) (protocol.P
 	if !exists {
 		return protocol.ProxyConfig{}, fmt.Errorf("代理隧道 %q 不存在", name)
 	}
-	setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusPending, "")
+	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, "")
 	return tunnel.Config, nil
 }
 
@@ -290,14 +299,14 @@ func (s *Server) setTunnelError(client *ClientConn, name, message string) (proto
 	if !exists {
 		return protocol.ProxyConfig{}, false
 	}
-	setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusError, message)
+	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
 	return tunnel.Config, true
 }
 
 // StartProxy 启动一条新的代理隧道。
 // 在 RemotePort 上监听外部连接，每收到一个连接就通过 yamux 转发给 Client。
 func (s *Server) StartProxy(client *ClientConn, req protocol.ProxyNewRequest) error {
-	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyStatusPending)
+	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending)
 	if err != nil {
 		return err
 	}
@@ -369,19 +378,11 @@ func (s *Server) StopAllProxies(client *ClientConn) {
 	client.proxyMu.Unlock()
 
 	for _, tunnel := range proxies {
-		tunnel.once.Do(func() {
-			close(tunnel.done)
-			if tunnel.UDPState != nil {
-				tunnel.UDPState.Close()
-			}
-			if tunnel.Listener != nil {
-				tunnel.Listener.Close()
-			}
-		})
+		closeTunnelRuntimeResources(tunnel)
 	}
 }
 
-// PauseProxy 暂停一条代理隧道（关闭 Listener 但保留配置记录）
+// PauseProxy 暂停一条代理隧道（只关闭运行时资源，业务状态由 manager 层写入）
 func (s *Server) PauseProxy(client *ClientConn, name string) error {
 	client.proxyMu.Lock()
 	tunnel, exists := client.proxies[name]
@@ -389,18 +390,7 @@ func (s *Server) PauseProxy(client *ClientConn, name string) error {
 		client.proxyMu.Unlock()
 		return fmt.Errorf("代理隧道 %q 不存在", name)
 	}
-
-	// 关闭 Listener
-	tunnel.once.Do(func() {
-		close(tunnel.done)
-		if tunnel.UDPState != nil {
-			tunnel.UDPState.Close()
-		}
-		if tunnel.Listener != nil {
-			tunnel.Listener.Close()
-		}
-	})
-	setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusPaused, "")
+	closeTunnelRuntimeResources(tunnel)
 	client.proxyMu.Unlock()
 
 	log.Printf("⏸️ 代理隧道已暂停: %s", name)
@@ -436,17 +426,9 @@ func (s *Server) PauseAllProxies(client *ClientConn) {
 	defer client.proxyMu.Unlock()
 
 	for _, tunnel := range client.proxies {
-		if tunnel.Config.Status == protocol.ProxyStatusActive {
-			tunnel.once.Do(func() {
-				close(tunnel.done)
-				if tunnel.UDPState != nil {
-					tunnel.UDPState.Close()
-				}
-				if tunnel.Listener != nil {
-					tunnel.Listener.Close()
-				}
-			})
-			setProxyConfigLegacyStatus(&tunnel.Config, protocol.ProxyStatusPaused, "")
+		if isTunnelExposed(tunnel.Config) {
+			closeTunnelRuntimeResources(tunnel)
+			setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateOffline, "")
 		}
 	}
 }

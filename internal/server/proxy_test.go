@@ -116,7 +116,7 @@ func TestPrepareProxyTunnel_PreservesHTTPDomain(t *testing.T) {
 		Domain:    "app.example.com",
 	}
 
-	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyStatusPending)
+	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending)
 	if err != nil {
 		t.Fatalf("prepareProxyTunnel 失败: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestActivatePreparedTunnel_HTTPDoesNotBindListener(t *testing.T) {
 		Domain:     "svc.example.com",
 	}
 
-	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyStatusPending)
+	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending)
 	if err != nil {
 		t.Fatalf("prepareProxyTunnel 失败: %v", err)
 	}
@@ -162,8 +162,8 @@ func TestActivatePreparedTunnel_HTTPDoesNotBindListener(t *testing.T) {
 	if tunnel.Listener != nil {
 		t.Fatal("HTTP 隧道不应创建 TCP listener")
 	}
-	if tunnel.Config.Status != protocol.ProxyStatusActive {
-		t.Fatalf("HTTP 隧道激活后状态应为 active，得到 %s", tunnel.Config.Status)
+	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("HTTP 隧道激活后状态应为 running/exposed，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 }
 
@@ -193,7 +193,7 @@ func TestActivatePreparedTunnel_HTTPDoesNotConflictWithSelf(t *testing.T) {
 		Domain:    "self.example.com",
 	}
 
-	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyStatusPending)
+	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending)
 	if err != nil {
 		t.Fatalf("prepareProxyTunnel 失败: %v", err)
 	}

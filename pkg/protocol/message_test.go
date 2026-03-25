@@ -245,14 +245,15 @@ func TestRoundTrip_AuthRequest(t *testing.T) {
 
 func TestRoundTrip_ProxyConfig(t *testing.T) {
 	original := ProxyConfig{
-		Name:       "my-tunnel",
-		Type:       ProxyTypeTCP,
-		LocalIP:    "127.0.0.1",
-		LocalPort:  3306,
-		RemotePort: 13306,
-		Domain:     "",
-		ClientID:   "client_host_1",
-		Status:     ProxyStatusActive,
+		Name:         "my-tunnel",
+		Type:         ProxyTypeTCP,
+		LocalIP:      "127.0.0.1",
+		LocalPort:    3306,
+		RemotePort:   13306,
+		Domain:       "",
+		ClientID:     "client_host_1",
+		DesiredState: ProxyDesiredStateRunning,
+		RuntimeState: ProxyRuntimeStateExposed,
 	}
 
 	data, err := json.Marshal(original)
@@ -470,8 +471,8 @@ func TestAllStructs_JSONTags(t *testing.T) {
 		},
 		{
 			"ProxyConfig",
-			ProxyConfig{Name: "n", Type: "t", LocalIP: "l", LocalPort: 1, RemotePort: 1, Domain: "d", ClientID: "a", Status: "s"},
-			[]string{"name", "type", "local_ip", "local_port", "remote_port", "domain", "client_id", "status"},
+			ProxyConfig{Name: "n", Type: "t", LocalIP: "l", LocalPort: 1, RemotePort: 1, Domain: "d", ClientID: "a", DesiredState: ProxyDesiredStateRunning, RuntimeState: ProxyRuntimeStateExposed},
+			[]string{"name", "type", "local_ip", "local_port", "remote_port", "domain", "client_id", "desired_state", "runtime_state"},
 		},
 		{
 			"ProxyNewRequest",
@@ -528,14 +529,14 @@ func TestConstants(t *testing.T) {
 		t.Errorf("ProxyTypeHTTP 期望 'http'，得到 %q", ProxyTypeHTTP)
 	}
 
-	// 代理状态
-	if ProxyStatusActive != "active" {
-		t.Errorf("ProxyStatusActive 期望 'active'，得到 %q", ProxyStatusActive)
+	// 双状态常量
+	if ProxyDesiredStateRunning != "running" {
+		t.Errorf("ProxyDesiredStateRunning 期望 'running'，得到 %q", ProxyDesiredStateRunning)
 	}
-	if ProxyStatusStopped != "stopped" {
-		t.Errorf("ProxyStatusStopped 期望 'stopped'，得到 %q", ProxyStatusStopped)
+	if ProxyRuntimeStateExposed != "exposed" {
+		t.Errorf("ProxyRuntimeStateExposed 期望 'exposed'，得到 %q", ProxyRuntimeStateExposed)
 	}
-	if ProxyStatusError != "error" {
-		t.Errorf("ProxyStatusError 期望 'error'，得到 %q", ProxyStatusError)
+	if ProxyRuntimeStateError != "error" {
+		t.Errorf("ProxyRuntimeStateError 期望 'error'，得到 %q", ProxyRuntimeStateError)
 	}
 }

@@ -19,7 +19,6 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
     client_id: 'client-1',
     desired_state: 'running',
     runtime_state: 'exposed',
-    status: 'active',
     ...overrides,
   };
 }
@@ -33,7 +32,6 @@ describe('tunnel-model', () => {
         remote_port: 0,
         desired_state: 'running',
         runtime_state: 'pending',
-        status: 'pending',
       }),
       true,
     );
@@ -51,7 +49,6 @@ describe('tunnel-model', () => {
         remote_port: 0,
         desired_state: 'running',
         runtime_state: 'offline',
-        status: 'active',
       }),
       false,
     );
@@ -59,7 +56,6 @@ describe('tunnel-model', () => {
     expect(view.status.key).toBe('offline');
     expect(view.status.label).toBe('客户端离线');
     expect(view.status.description).toContain('等待 Client 上线');
-    expect(view.rawStatus).toBe('active');
   });
 
   test('paused + idle 时展示已暂停', () => {
@@ -67,7 +63,6 @@ describe('tunnel-model', () => {
       createTunnel({
         desired_state: 'paused',
         runtime_state: 'idle',
-        status: 'paused',
       }),
       false,
     );
@@ -79,7 +74,6 @@ describe('tunnel-model', () => {
   test('离线 active 隧道允许 pause/edit/delete', () => {
     const permissions = getTunnelActionAvailability(
       createTunnel({
-        status: 'active',
         desired_state: 'running',
         runtime_state: 'offline',
       }),
@@ -96,7 +90,6 @@ describe('tunnel-model', () => {
   test('error 隧道允许 resume', () => {
     const permissions = getTunnelActionAvailability(
       createTunnel({
-        status: 'error',
         desired_state: 'running',
         runtime_state: 'error',
       }),
@@ -113,7 +106,6 @@ describe('tunnel-model', () => {
   test('stopped 隧道不再显示 stop 动作', () => {
     const permissions = getTunnelActionAvailability(
       createTunnel({
-        status: 'stopped',
         desired_state: 'stopped',
         runtime_state: 'idle',
       }),

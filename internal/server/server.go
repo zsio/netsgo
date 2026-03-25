@@ -902,9 +902,10 @@ func (s *Server) controlLoop(client *ClientConn) {
 				log.Printf("⚠️ 关闭代理失败 [%s]: %v", client.ID, err)
 			} else {
 				s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
-					Name:     req.Name,
-					ClientID: client.ID,
-					Status:   protocol.ProxyStatusStopped,
+					Name:         req.Name,
+					ClientID:     client.ID,
+					DesiredState: protocol.ProxyDesiredStateStopped,
+					RuntimeState: protocol.ProxyRuntimeStateIdle,
 				}, "closed_by_client")
 			}
 
@@ -1148,12 +1149,12 @@ func (s *Server) collectServerStatus() serverStatusView {
 		clientCount++
 		a := value.(*ClientConn)
 		a.RangeProxies(func(_ string, t *ProxyTunnel) bool {
-			switch t.Config.Status {
-			case protocol.ProxyStatusActive:
+			switch {
+			case isTunnelExposed(t.Config):
 				tunnelActive++
-			case protocol.ProxyStatusPaused:
+			case t.Config.DesiredState == protocol.ProxyDesiredStatePaused && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
 				tunnelPaused++
-			case protocol.ProxyStatusStopped:
+			case t.Config.DesiredState == protocol.ProxyDesiredStateStopped && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
 				tunnelStopped++
 			}
 			return true
@@ -1456,10 +1457,10 @@ func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
 		return
 	}
-	if tunnel.Config.Status != protocol.ProxyStatusActive {
+	if !canPauseTunnel(tunnel.Config) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "只有 active 状态的隧道才能暂停"})
+		json.NewEncoder(w).Encode(map[string]any{"error": "只有 running/exposed 状态的隧道才能暂停"})
 		return
 	}
 
@@ -1505,12 +1506,10 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
 		return
 	}
-	if tunnel.Config.Status != protocol.ProxyStatusPaused &&
-		tunnel.Config.Status != protocol.ProxyStatusStopped &&
-		tunnel.Config.Status != protocol.ProxyStatusError {
+	if !canResumeTunnel(tunnel.Config) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "只有 paused、stopped 或 error 状态的隧道才能恢复"})
+		json.NewEncoder(w).Encode(map[string]any{"error": "只有 paused/idle、stopped/idle 或 running/error 状态的隧道才能恢复"})
 		return
 	}
 
@@ -1604,14 +1603,11 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 只有暂停、已停止或异常状态才能删除
-	switch tunnel.Config.Status {
-	case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped, protocol.ProxyStatusError:
-		// 允许删除
-	default:
+	if !canEditOrDeleteLiveTunnel(tunnel.Config) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{
-			"error": fmt.Sprintf("隧道当前状态为 %q，只有暂停、已停止或异常状态才能删除", tunnel.Config.Status),
+			"error": fmt.Sprintf("隧道当前状态为 %s/%s，只有 paused/idle、stopped/idle 或 running/error 状态才能删除", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
 		})
 		return
 	}
@@ -1684,12 +1680,9 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 只有暂停、已停止或异常状态才能编辑
-	switch tunnel.Config.Status {
-	case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped, protocol.ProxyStatusError:
-		// 允许编辑
-	default:
+	if !canEditOrDeleteLiveTunnel(tunnel.Config) {
 		encodeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": fmt.Sprintf("隧道当前状态为 %q，只有暂停、已停止或异常状态才能编辑", tunnel.Config.Status),
+			"error": fmt.Sprintf("隧道当前状态为 %s/%s，只有 paused/idle、stopped/idle 或 running/error 状态才能编辑", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
 		})
 		return
 	}
@@ -1758,13 +1751,13 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 				Domain:     st.Domain,
 				ClientID:   client.ID,
 			}
-			setProxyConfigLegacyStatus(&config, protocol.ProxyStatusError, errMsg)
+			setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 			client.proxies[st.Name] = &ProxyTunnel{
 				Config: config,
 				done:   make(chan struct{}),
 			}
 			client.proxyMu.Unlock()
-			_ = s.persistTunnelState(client.ID, st.Name, protocol.ProxyStatusError, errMsg)
+			_ = s.persistTunnelStates(client.ID, st.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 			eventConfig := protocol.ProxyConfig{
 				Name:       st.Name,
 				Type:       st.Type,
@@ -1772,14 +1765,15 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 				Domain:     st.Domain,
 				ClientID:   client.ID,
 			}
-			setProxyConfigLegacyStatus(&eventConfig, protocol.ProxyStatusError, errMsg)
+			setProxyConfigStates(&eventConfig, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 			s.emitTunnelChanged(client.ID, eventConfig, "port_not_allowed")
 			restoredCount++
 			continue
 		}
 
-		switch st.Status {
-		case protocol.ProxyStatusActive, protocol.ProxyStatusPending:
+		switch {
+		case st.DesiredState == protocol.ProxyDesiredStateRunning &&
+			(st.RuntimeState == protocol.ProxyRuntimeStateExposed || st.RuntimeState == protocol.ProxyRuntimeStatePending || st.RuntimeState == protocol.ProxyRuntimeStateOffline):
 			log.Printf("🔄 恢复隧道: %s (:%d → %s:%d)", st.Name, st.RemotePort, st.LocalIP, st.LocalPort)
 			if err := s.restoreManagedTunnel(client, st); err != nil {
 				log.Printf("⚠️ 恢复隧道失败 [%s]: %v", st.Name, err)
@@ -1787,21 +1781,17 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			}
 			restoredCount++
 
-		case protocol.ProxyStatusPaused, protocol.ProxyStatusStopped, protocol.ProxyStatusError:
+		default:
 			config := protocol.ProxyConfig{
-				Name:         st.Name,
-				Type:         st.Type,
-				LocalIP:      st.LocalIP,
-				LocalPort:    st.LocalPort,
-				RemotePort:   st.RemotePort,
-				Domain:       st.Domain,
-				ClientID:     client.ID,
-				DesiredState: st.DesiredState,
-				RuntimeState: st.RuntimeState,
-				Status:       st.Status,
-				Error:        st.Error,
+				Name:       st.Name,
+				Type:       st.Type,
+				LocalIP:    st.LocalIP,
+				LocalPort:  st.LocalPort,
+				RemotePort: st.RemotePort,
+				Domain:     st.Domain,
+				ClientID:   client.ID,
 			}
-			normalizeProxyConfigState(&config)
+			setProxyConfigStates(&config, st.DesiredState, st.RuntimeState, st.Error)
 			client.proxyMu.Lock()
 			client.proxies[st.Name] = &ProxyTunnel{
 				Config: config,

@@ -3,7 +3,6 @@ import type {
   ProxyConfig,
   ProxyDesiredState,
   ProxyRuntimeState,
-  ProxyStatus,
   ProxyType,
   TunnelMutationErrorResponse,
 } from '@/types';
@@ -16,8 +15,7 @@ export interface TunnelStatusPresentation {
   description?: string;
 }
 
-export interface TunnelViewModel extends Omit<ProxyConfig, 'status'> {
-  rawStatus: ProxyStatus;
+export interface TunnelViewModel extends ProxyConfig {
   targetLabel: string;
   destinationLabel: string;
   routeLabel: string;
@@ -67,7 +65,6 @@ export function buildTunnelViewModel(
 
   return {
     ...tunnel,
-    rawStatus: tunnel.status,
     targetLabel,
     destinationLabel,
     routeLabel: `${targetLabel} -> ${destinationLabel}`,
@@ -99,72 +96,34 @@ export function getTunnelActionAvailability(
   tunnel: ProxyConfig,
   clientOnline: boolean,
 ): TunnelActionAvailability {
-  const isOffline = !clientOnline;
-  const status = tunnel.status;
+  const isRunningExposed = tunnel.desired_state === 'running' && tunnel.runtime_state === 'exposed';
+  const isRunningOffline = tunnel.desired_state === 'running' && tunnel.runtime_state === 'offline';
+  const isPausedIdle = tunnel.desired_state === 'paused' && tunnel.runtime_state === 'idle';
+  const isStoppedIdle = tunnel.desired_state === 'stopped' && tunnel.runtime_state === 'idle';
+  const isRunningError = tunnel.desired_state === 'running' && tunnel.runtime_state === 'error';
 
   return {
-    canPause: status === 'active',
-    canResume: status === 'paused' || status === 'stopped' || status === 'error',
-    canStop: status !== 'stopped',
-    canEdit: isOffline || status === 'paused' || status === 'stopped' || status === 'error',
-    canDelete: isOffline || status === 'paused' || status === 'stopped' || status === 'error',
+    canPause: isRunningExposed || isRunningOffline,
+    canResume: isPausedIdle || isStoppedIdle || isRunningError,
+    canStop: !isStoppedIdle,
+    canEdit: !clientOnline || isPausedIdle || isStoppedIdle || isRunningError,
+    canDelete: !clientOnline || isPausedIdle || isStoppedIdle || isRunningError,
   };
 }
 
-function resolveTunnelStatus(
-  tunnel: ProxyConfig,
+export function resolveTunnelStatus(
+  tunnel: Pick<ProxyConfig, 'desired_state' | 'runtime_state' | 'error'>,
   clientOnline: boolean,
 ): TunnelStatusPresentation {
-  if (tunnel.desired_state && tunnel.runtime_state) {
-    return resolveTunnelStatusFromStates(
-      tunnel.desired_state,
-      tunnel.runtime_state,
-      tunnel.error,
-    );
+  let runtimeState = tunnel.runtime_state;
+  if (!clientOnline && tunnel.desired_state === 'running' && runtimeState !== 'error') {
+    runtimeState = 'offline';
   }
-
-  switch (tunnel.status) {
-    case 'pending':
-      return {
-        key: 'pending',
-        label: '等待建立',
-        description: '等待 Client 建立公网入口',
-      };
-    case 'active':
-      if (!clientOnline) {
-        return {
-          key: 'offline',
-          label: '客户端离线',
-          description: '配置已保存，等待 Client 上线后恢复',
-        };
-      }
-      return {
-        key: 'exposed',
-        label: '已建立',
-      };
-    case 'paused':
-      return {
-        key: 'paused',
-        label: '已暂停',
-      };
-    case 'stopped':
-      return {
-        key: 'stopped',
-        label: '已停止',
-      };
-    case 'error':
-      return {
-        key: 'error',
-        label: '异常',
-        description: tunnel.error || '隧道运行异常',
-      };
-    default:
-      return {
-        key: 'error',
-        label: tunnel.status,
-        description: tunnel.error,
-      };
-  }
+  return resolveTunnelStatusFromStates(
+    tunnel.desired_state,
+    runtimeState,
+    tunnel.error,
+  );
 }
 
 function resolveTunnelStatusFromStates(

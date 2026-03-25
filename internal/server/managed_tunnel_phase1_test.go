@@ -72,14 +72,15 @@ func TestServer_UpdateErrorHTTPTunnel_RestartFailureReturnsError(t *testing.T) {
 	client.proxyMu.Lock()
 	client.proxies["broken-http"] = &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:      "broken-http",
-			Type:      protocol.ProxyTypeHTTP,
-			LocalIP:   "127.0.0.1",
-			LocalPort: 3000,
-			Domain:    "broken.example.com",
-			ClientID:  authResp.ClientID,
-			Status:    protocol.ProxyStatusError,
-			Error:     "original failure",
+			Name:         "broken-http",
+			Type:         protocol.ProxyTypeHTTP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    3000,
+			Domain:       "broken.example.com",
+			ClientID:     authResp.ClientID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateError,
+			Error:        "original failure",
 		},
 		done: make(chan struct{}),
 	}
@@ -123,8 +124,8 @@ func TestServer_UpdateErrorHTTPTunnel_RestartFailureReturnsError(t *testing.T) {
 	if !exists {
 		t.Fatal("自动重启失败后 store 记录不应丢失")
 	}
-	if stored.Status != protocol.ProxyStatusError {
-		t.Fatalf("自动重启失败后 store 状态应保持 error，得到 %s", stored.Status)
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("自动重启失败后 store 状态应保持 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Domain != "fixed.example.com" {
 		t.Fatalf("自动重启失败后应保留新配置，得到 %s", stored.Domain)

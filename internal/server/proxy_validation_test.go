@@ -110,13 +110,14 @@ func TestValidateProxyRequest_RejectsConflictsAcrossRuntimeAndStore(t *testing.T
 	}
 	liveClient.proxies["runtime-error"] = &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:       "runtime-error",
-			Type:       protocol.ProxyTypeUDP,
-			LocalIP:    "127.0.0.1",
-			LocalPort:  5353,
-			RemotePort: 19091,
-			ClientID:   "client-live",
-			Status:     protocol.ProxyStatusError,
+			Name:         "runtime-error",
+			Type:         protocol.ProxyTypeUDP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    5353,
+			RemotePort:   19091,
+			ClientID:     "client-live",
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateError,
 		},
 	}
 	s.clients.Store(liveClient.ID, liveClient)
@@ -157,13 +158,14 @@ func TestValidateProxyRequestWithExclusions_AllowsUpdatingSameTunnelPort(t *test
 	}
 	client.proxies["editable"] = &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:       "editable",
-			Type:       protocol.ProxyTypeTCP,
-			LocalIP:    "127.0.0.1",
-			LocalPort:  8080,
-			RemotePort: 19100,
-			ClientID:   client.ID,
-			Status:     protocol.ProxyStatusPaused,
+			Name:         "editable",
+			Type:         protocol.ProxyTypeTCP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    8080,
+			RemotePort:   19100,
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStatePaused,
+			RuntimeState: protocol.ProxyRuntimeStateIdle,
 		},
 	}
 	s.clients.Store(client.ID, client)
