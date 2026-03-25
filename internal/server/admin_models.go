@@ -94,3 +94,12 @@ type adminConfigUpdateResponse struct {
 	AffectedTunnels        []affectedTunnel `json:"affected_tunnels"`
 	ConflictingHTTPTunnels []string         `json:"conflicting_http_tunnels"`
 }
+
+// tunnelMutationErrorResponse is returned by tunnel create/update HTTP APIs.
+type tunnelMutationErrorResponse struct {
+	Success            bool     `json:"success"`
+	Error              string   `json:"error"`
+	ErrorCode          string   `json:"error_code,omitempty"`
+	Field              string   `json:"field,omitempty"`
+	ConflictingTunnels []string `json:"conflicting_tunnels,omitempty"`
+}

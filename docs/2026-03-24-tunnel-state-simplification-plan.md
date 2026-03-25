@@ -10,6 +10,33 @@
 
 ---
 
+## 实施进度更新（2026-03-25）
+
+### 已完成
+
+- [x] 协议层主链路已删除 tunnel `status` 字段，主读写模型改为 `desired_state + runtime_state + error`
+- [x] `internal/server/tunnel_state.go` 已切换为双状态设置/校验 helper
+- [x] `internal/server/store.go` 已删除 `StoredTunnel.Status`、`UpdateStatus`、`UpdateState`
+- [x] `internal/server/tunnel_manager.go` / `proxy.go` / `udp_proxy.go` / `server.go` / `http_tunnel_proxy.go` 已改为直接读写双状态
+- [x] `/api/clients`、`tunnel_changed`、受端口白名单影响的 `affected_tunnels` 已改成双状态输出
+- [x] 前端 `web/src/types/index.ts`、`web/src/lib/tunnel-model.ts`、`web/src/routes/admin/config.tsx` 已删除 tunnel `status` 依赖
+- [x] 已同步调整 Go/TS 单测，覆盖 store、事件、管理动作和前端展示逻辑
+
+### 已验证
+
+- [x] `go test ./internal/server ./pkg/protocol -count=1 -timeout 60s`
+- [x] `go test ./internal/server -run 'TestTunnelStore_.*|TestEmitTunnelChanged_.*' -count=1 -timeout 60s`
+- [x] `cd web && bun test src/lib/tunnel-model.test.ts`
+- [x] `cd web && bun run build`
+
+### 仍待完成
+
+- [ ] `pkg/mux` / `cmd/netsgo` 全量 Go 回归尚未在本轮一起跑
+- [ ] 干净开发环境下的手工冒烟（HTTP/TCP/UDP create/pause/resume/stop/delete、offline、runtime error）尚未完成
+- [ ] 生产审查里与状态模型无关的后续项仍待单独推进：management host fallback、backend 健康校验、TCP/UDP 连接治理
+
+---
+
 ## 开始前先确认
 
 - 这是**开发阶段破坏性改动**，不做任何兼容迁移。
@@ -445,4 +472,3 @@ git commit -m "refactor: simplify tunnel state model"
 - 不要在前端偷偷保留 `status` fallback
 - 不要顺手把 TCP/UDP/HTTP 其他稳定性改动混进这一轮
 - 不要写自动迁移旧 store 的代码
-

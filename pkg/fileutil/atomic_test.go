@@ -3,6 +3,7 @@ package fileutil
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -23,13 +24,7 @@ func TestAtomicWriteFile_Basic(t *testing.T) {
 		t.Errorf("文件内容不一致: got %q, want %q", got, data)
 	}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("获取文件信息失败: %v", err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("文件权限不正确: got %o, want %o", info.Mode().Perm(), 0o600)
-	}
+	assertAtomicWriteFilePermissions(t, path, 0o600)
 }
 
 func TestAtomicWriteFile_OverwriteExisting(t *testing.T) {
@@ -99,5 +94,27 @@ func TestAtomicWriteFile_EmptyData(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("期望空文件, 实际有 %d 字节", len(got))
+	}
+}
+
+func assertAtomicWriteFilePermissions(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("获取文件信息失败: %v", err)
+	}
+
+	if runtime.GOOS == "windows" {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatalf("Windows 文件可写性检查失败: %v", err)
+		}
+		_ = f.Close()
+		return
+	}
+
+	if info.Mode().Perm() != want {
+		t.Errorf("文件权限不正确: got %o, want %o", info.Mode().Perm(), want)
 	}
 }

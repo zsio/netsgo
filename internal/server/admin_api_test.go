@@ -158,9 +158,29 @@ func seedStoredTunnel(t *testing.T, s *Server, clientID string, req protocol.Pro
 		req.LocalPort = 8080
 	}
 
+	desiredState := protocol.ProxyDesiredStateRunning
+	runtimeState := protocol.ProxyRuntimeStateExposed
+	switch status {
+	case protocol.ProxyStatusPending:
+		runtimeState = protocol.ProxyRuntimeStatePending
+	case protocol.ProxyStatusActive:
+		runtimeState = protocol.ProxyRuntimeStateExposed
+	case protocol.ProxyStatusPaused:
+		desiredState = protocol.ProxyDesiredStatePaused
+		runtimeState = protocol.ProxyRuntimeStateIdle
+	case protocol.ProxyStatusStopped:
+		desiredState = protocol.ProxyDesiredStateStopped
+		runtimeState = protocol.ProxyRuntimeStateIdle
+	case protocol.ProxyStatusError:
+		runtimeState = protocol.ProxyRuntimeStateError
+	default:
+		t.Fatalf("未知测试状态: %s", status)
+	}
+
 	err := s.store.AddTunnel(StoredTunnel{
 		ProxyNewRequest: req,
-		Status:          status,
+		DesiredState:    desiredState,
+		RuntimeState:    runtimeState,
 		ClientID:        clientID,
 		Hostname:        clientID + ".local",
 		Binding:         TunnelBindingClientID,

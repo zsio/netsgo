@@ -14,6 +14,14 @@ const (
 	MsgTypeProxyClose   = "proxy_close"    // 双向: 关闭某条代理隧道
 )
 
+// 旧版控制通道消息类型；仍用于兼容旧 client/server 的主动创建/下发路径。
+const (
+	MsgTypeProxyCreate       = "proxy_create"
+	MsgTypeProxyCreateResp   = "proxy_create_resp"
+	MsgTypeProxyProvision    = "proxy_provision"
+	MsgTypeProxyProvisionAck = "proxy_provision_ack"
+)
+
 const (
 	AuthCodeOK                  = "ok"
 	AuthCodeInvalidToken        = "invalid_token"

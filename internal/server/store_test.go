@@ -28,6 +28,12 @@ func mustAddStableTunnel(t *testing.T, store *TunnelStore, tunnel StoredTunnel) 
 	if tunnel.ClientID == "" {
 		t.Fatal("测试隧道必须提供 ClientID")
 	}
+	if tunnel.DesiredState == "" {
+		tunnel.DesiredState = protocol.ProxyDesiredStateRunning
+	}
+	if tunnel.RuntimeState == "" {
+		tunnel.RuntimeState = protocol.ProxyRuntimeStateExposed
+	}
 	if err := store.AddTunnel(tunnel); err != nil {
 		t.Fatalf("AddTunnel 失败: %v", err)
 	}
@@ -64,9 +70,10 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 		ProxyNewRequest: protocol.ProxyNewRequest{
 			Name: "t1", Type: "tcp", LocalIP: "127.0.0.1", LocalPort: 80, RemotePort: 8080,
 		},
-		Status:   protocol.ProxyStatusActive,
-		ClientID: "client-1",
-		Hostname: "host-1",
+		DesiredState: protocol.ProxyDesiredStateRunning,
+		RuntimeState: protocol.ProxyRuntimeStateExposed,
+		ClientID:     "client-1",
+		Hostname:     "host-1",
 	})
 
 	store2, err := NewTunnelStore(path)
@@ -85,7 +92,7 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 	}
 }
 
-func TestTunnelStore_LoadExistingLegacyStatusMigratesDesiredAndRuntimeState(t *testing.T) {
+func TestTunnelStore_LoadExistingStatesKeepsDesiredAndRuntimeState(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tunnels.json")
 
@@ -97,18 +104,20 @@ func TestTunnelStore_LoadExistingLegacyStatusMigratesDesiredAndRuntimeState(t *t
 		ProxyNewRequest: protocol.ProxyNewRequest{
 			Name: "legacy-active", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 80, RemotePort: 8080,
 		},
-		Status:   protocol.ProxyStatusActive,
-		ClientID: "client-1",
-		Hostname: "host-1",
+		DesiredState: protocol.ProxyDesiredStateRunning,
+		RuntimeState: protocol.ProxyRuntimeStateExposed,
+		ClientID:     "client-1",
+		Hostname:     "host-1",
 	})
 	mustAddStableTunnel(t, store1, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
 			Name: "legacy-error", Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: 53, RemotePort: 8053,
 		},
-		Status:   protocol.ProxyStatusError,
-		Error:    "restore failed",
-		ClientID: "client-1",
-		Hostname: "host-1",
+		DesiredState: protocol.ProxyDesiredStateRunning,
+		RuntimeState: protocol.ProxyRuntimeStateError,
+		Error:        "restore failed",
+		ClientID:     "client-1",
+		Hostname:     "host-1",
 	})
 
 	store2, err := NewTunnelStore(path)
@@ -166,7 +175,8 @@ func TestTunnelStore_AddTunnel_Success(t *testing.T) {
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "web", RemotePort: 8080},
 		ClientID:        "client-1",
 		Hostname:        "myhost",
-		Status:          protocol.ProxyStatusActive,
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateExposed,
 	})
 
 	tunnels := store.GetAllTunnels()
@@ -210,6 +220,8 @@ func TestTunnelStore_AddTunnel_DiffClientSameNameAllowed(t *testing.T) {
 		ClientID:        "client-B",
 		Hostname:        "host-B",
 		Binding:         TunnelBindingClientID,
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateExposed,
 	}); err != nil {
 		t.Errorf("不同 client_id 同 name 应允许: %v", err)
 	}
@@ -242,36 +254,37 @@ func TestTunnelStore_RemoveTunnel_NotFound(t *testing.T) {
 	}
 }
 
-func TestTunnelStore_UpdateStatus(t *testing.T) {
+func TestTunnelStore_UpdateStates(t *testing.T) {
 	store := newTestTunnelStore(t)
 
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t1"},
 		ClientID:        "client-1",
 		Hostname:        "host",
-		Status:          protocol.ProxyStatusActive,
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateExposed,
 	})
 
-	if err := store.UpdateStatus("client-1", "t1", protocol.ProxyStatusPaused); err != nil {
-		t.Fatalf("UpdateStatus 失败: %v", err)
+	if err := store.UpdateStates("client-1", "t1", protocol.ProxyDesiredStatePaused, protocol.ProxyRuntimeStateIdle, ""); err != nil {
+		t.Fatalf("UpdateStates 失败: %v", err)
 	}
 	st, _ := store.GetTunnel("client-1", "t1")
-	if st.Status != protocol.ProxyStatusPaused {
-		t.Errorf("状态期望 paused，得到 %s", st.Status)
+	if st.DesiredState != protocol.ProxyDesiredStatePaused || st.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Errorf("状态期望 paused/idle，得到 %s/%s", st.DesiredState, st.RuntimeState)
 	}
 
-	if err := store.UpdateStatus("client-1", "t1", protocol.ProxyStatusStopped); err != nil {
-		t.Fatalf("UpdateStatus 失败: %v", err)
+	if err := store.UpdateStates("client-1", "t1", protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, ""); err != nil {
+		t.Fatalf("UpdateStates 失败: %v", err)
 	}
 	st2, _ := store.GetTunnel("client-1", "t1")
-	if st2.Status != protocol.ProxyStatusStopped {
-		t.Errorf("状态期望 stopped，得到 %s", st2.Status)
+	if st2.DesiredState != protocol.ProxyDesiredStateStopped || st2.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Errorf("状态期望 stopped/idle，得到 %s/%s", st2.DesiredState, st2.RuntimeState)
 	}
 }
 
-func TestTunnelStore_UpdateStatus_NotFound(t *testing.T) {
+func TestTunnelStore_UpdateStates_NotFound(t *testing.T) {
 	store := newTestTunnelStore(t)
-	if err := store.UpdateStatus("ghost", "no-tunnel", "active"); err == nil {
+	if err := store.UpdateStates("ghost", "no-tunnel", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, ""); err == nil {
 		t.Error("更新不存在的隧道应返回错误")
 	}
 }
@@ -283,26 +296,27 @@ func TestTunnelStore_UpdateState_ErrorRoundTrip(t *testing.T) {
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t-error"},
 		ClientID:        "client-1",
 		Hostname:        "host",
-		Status:          protocol.ProxyStatusActive,
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateExposed,
 	})
 
-	if err := store.UpdateState("client-1", "t-error", protocol.ProxyStatusError, "restore failed"); err != nil {
-		t.Fatalf("UpdateState 设置 error 失败: %v", err)
+	if err := store.UpdateStates("client-1", "t-error", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, "restore failed"); err != nil {
+		t.Fatalf("UpdateStates 设置 error 失败: %v", err)
 	}
 	st, _ := store.GetTunnel("client-1", "t-error")
-	if st.Status != protocol.ProxyStatusError {
-		t.Fatalf("状态期望 error，得到 %s", st.Status)
+	if st.DesiredState != protocol.ProxyDesiredStateRunning || st.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("状态期望 running/error，得到 %s/%s", st.DesiredState, st.RuntimeState)
 	}
 	if st.Error != "restore failed" {
 		t.Fatalf("错误原因期望 %q，得到 %q", "restore failed", st.Error)
 	}
 
-	if err := store.UpdateState("client-1", "t-error", protocol.ProxyStatusPaused, "should-clear"); err != nil {
-		t.Fatalf("UpdateState 清理 error 失败: %v", err)
+	if err := store.UpdateStates("client-1", "t-error", protocol.ProxyDesiredStatePaused, protocol.ProxyRuntimeStateIdle, ""); err != nil {
+		t.Fatalf("UpdateStates 清理 error 失败: %v", err)
 	}
 	st, _ = store.GetTunnel("client-1", "t-error")
-	if st.Status != protocol.ProxyStatusPaused {
-		t.Fatalf("状态期望 paused，得到 %s", st.Status)
+	if st.DesiredState != protocol.ProxyDesiredStatePaused || st.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Fatalf("状态期望 paused/idle，得到 %s/%s", st.DesiredState, st.RuntimeState)
 	}
 	if st.Error != "" {
 		t.Fatalf("paused 状态下错误原因应清空，得到 %q", st.Error)
@@ -316,7 +330,8 @@ func TestTunnelStore_UpdateState_RollbackOnSaveFailure(t *testing.T) {
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "t-rollback"},
 		ClientID:        "client-1",
 		Hostname:        "host",
-		Status:          protocol.ProxyStatusActive,
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateExposed,
 	})
 
 	store.mu.Lock()
@@ -324,24 +339,24 @@ func TestTunnelStore_UpdateState_RollbackOnSaveFailure(t *testing.T) {
 	store.failSaveCount = 1
 	store.mu.Unlock()
 
-	if err := store.UpdateState("client-1", "t-rollback", protocol.ProxyStatusError, "boom"); err == nil {
-		t.Fatal("预期 UpdateState 在注入 save 失败时返回错误")
+	if err := store.UpdateStates("client-1", "t-rollback", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, "boom"); err == nil {
+		t.Fatal("预期 UpdateStates 在注入 save 失败时返回错误")
 	}
 
 	st, _ := store.GetTunnel("client-1", "t-rollback")
-	if st.Status != protocol.ProxyStatusActive {
-		t.Fatalf("save 失败时状态应回滚为 active，得到 %s", st.Status)
+	if st.DesiredState != protocol.ProxyDesiredStateRunning || st.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("save 失败时状态应回滚为 running/exposed，得到 %s/%s", st.DesiredState, st.RuntimeState)
 	}
 	if st.Error != "" {
 		t.Fatalf("save 失败时错误字段应保持为空，得到 %q", st.Error)
 	}
 
-	if err := store.UpdateState("client-1", "t-rollback", protocol.ProxyStatusError, "boom"); err != nil {
-		t.Fatalf("注入失败耗尽后 UpdateState 应成功，得到: %v", err)
+	if err := store.UpdateStates("client-1", "t-rollback", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, "boom"); err != nil {
+		t.Fatalf("注入失败耗尽后 UpdateStates 应成功，得到: %v", err)
 	}
 	st, _ = store.GetTunnel("client-1", "t-rollback")
-	if st.Status != protocol.ProxyStatusError || st.Error != "boom" {
-		t.Fatalf("最终状态应为 error/boom，得到 status=%s error=%q", st.Status, st.Error)
+	if st.DesiredState != protocol.ProxyDesiredStateRunning || st.RuntimeState != protocol.ProxyRuntimeStateError || st.Error != "boom" {
+		t.Fatalf("最终状态应为 running/error + boom，得到 state=%s/%s error=%q", st.DesiredState, st.RuntimeState, st.Error)
 	}
 }
 
@@ -352,13 +367,15 @@ func TestTunnelStore_UpdateClientID(t *testing.T) {
 		StoredTunnel{
 			ProxyNewRequest: protocol.ProxyNewRequest{Name: "t1"},
 			Hostname:        "host",
-			Status:          protocol.ProxyStatusActive,
+			DesiredState:    protocol.ProxyDesiredStateRunning,
+			RuntimeState:    protocol.ProxyRuntimeStateExposed,
 			Binding:         TunnelBindingLegacyHostname,
 		},
 		StoredTunnel{
 			ProxyNewRequest: protocol.ProxyNewRequest{Name: "t2"},
 			Hostname:        "host",
-			Status:          protocol.ProxyStatusPaused,
+			DesiredState:    protocol.ProxyDesiredStatePaused,
+			RuntimeState:    protocol.ProxyRuntimeStateIdle,
 			Binding:         TunnelBindingLegacyHostname,
 		},
 	)
@@ -473,6 +490,8 @@ func TestTunnelStore_ConcurrentAccess(t *testing.T) {
 				ClientID:        clientID,
 				Hostname:        hostname,
 				Binding:         TunnelBindingClientID,
+				DesiredState:    protocol.ProxyDesiredStateRunning,
+				RuntimeState:    protocol.ProxyRuntimeStateExposed,
 			})
 			store.GetAllTunnels()
 			store.GetTunnelsByHostname(hostname)

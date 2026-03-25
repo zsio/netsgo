@@ -19,7 +19,13 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
     client_id: 'client-1',
     desired_state: 'running',
     runtime_state: 'exposed',
-    status: 'active',
+    capabilities: {
+      can_pause: true,
+      can_resume: false,
+      can_stop: true,
+      can_edit: false,
+      can_delete: false,
+    },
     ...overrides,
   };
 }
@@ -33,7 +39,6 @@ describe('tunnel-model', () => {
         remote_port: 0,
         desired_state: 'running',
         runtime_state: 'pending',
-        status: 'pending',
       }),
       true,
     );
@@ -51,7 +56,6 @@ describe('tunnel-model', () => {
         remote_port: 0,
         desired_state: 'running',
         runtime_state: 'offline',
-        status: 'active',
       }),
       false,
     );
@@ -59,7 +63,6 @@ describe('tunnel-model', () => {
     expect(view.status.key).toBe('offline');
     expect(view.status.label).toBe('客户端离线');
     expect(view.status.description).toContain('等待 Client 上线');
-    expect(view.rawStatus).toBe('active');
   });
 
   test('paused + idle 时展示已暂停', () => {
@@ -67,7 +70,6 @@ describe('tunnel-model', () => {
       createTunnel({
         desired_state: 'paused',
         runtime_state: 'idle',
-        status: 'paused',
       }),
       false,
     );
@@ -76,48 +78,19 @@ describe('tunnel-model', () => {
     expect(view.status.label).toBe('已暂停');
   });
 
-  test('离线 active 隧道允许 pause/edit/delete', () => {
+  test('动作能力直接消费 server capability projection', () => {
     const permissions = getTunnelActionAvailability(
       createTunnel({
-        status: 'active',
         desired_state: 'running',
-        runtime_state: 'offline',
+        runtime_state: 'exposed',
+        capabilities: {
+          can_pause: false,
+          can_resume: true,
+          can_stop: false,
+          can_edit: true,
+          can_delete: true,
+        },
       }),
-      false,
-    );
-
-    expect(permissions.canPause).toBe(true);
-    expect(permissions.canResume).toBe(false);
-    expect(permissions.canStop).toBe(true);
-    expect(permissions.canEdit).toBe(true);
-    expect(permissions.canDelete).toBe(true);
-  });
-
-  test('error 隧道允许 resume', () => {
-    const permissions = getTunnelActionAvailability(
-      createTunnel({
-        status: 'error',
-        desired_state: 'running',
-        runtime_state: 'error',
-      }),
-      true,
-    );
-
-    expect(permissions.canPause).toBe(false);
-    expect(permissions.canResume).toBe(true);
-    expect(permissions.canStop).toBe(true);
-    expect(permissions.canEdit).toBe(true);
-    expect(permissions.canDelete).toBe(true);
-  });
-
-  test('stopped 隧道不再显示 stop 动作', () => {
-    const permissions = getTunnelActionAvailability(
-      createTunnel({
-        status: 'stopped',
-        desired_state: 'stopped',
-        runtime_state: 'idle',
-      }),
-      false,
     );
 
     expect(permissions.canPause).toBe(false);
@@ -125,6 +98,22 @@ describe('tunnel-model', () => {
     expect(permissions.canStop).toBe(false);
     expect(permissions.canEdit).toBe(true);
     expect(permissions.canDelete).toBe(true);
+  });
+
+  test('缺失 capability projection 时立即失败，不再回退旧矩阵', () => {
+    expect(() => getTunnelActionAvailability({
+      ...createTunnel(),
+      capabilities: undefined as never,
+    })).toThrow('Tunnel capabilities are required');
+  });
+
+  test('capability projection 缺字段时立即失败', () => {
+    expect(() => getTunnelActionAvailability({
+      ...createTunnel(),
+      capabilities: {
+        can_pause: true,
+      } as never,
+    })).toThrow('Tunnel capability "can_resume" is required');
   });
 
   test('HTTP 隧道展示为 domain 到本地地址', () => {

@@ -98,13 +98,14 @@ func addLiveHTTPDispatchTunnel(t *testing.T, s *Server, clientID, tunnelName, do
 	client.proxyMu.Lock()
 	client.proxies[tunnelName] = &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:      tunnelName,
-			Type:      protocol.ProxyTypeHTTP,
-			LocalIP:   "127.0.0.1",
-			LocalPort: 3000,
-			Domain:    domain,
-			ClientID:  clientID,
-			Status:    protocol.ProxyStatusActive,
+			Name:         tunnelName,
+			Type:         protocol.ProxyTypeHTTP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    3000,
+			Domain:       domain,
+			ClientID:     clientID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateExposed,
 		},
 		done: make(chan struct{}),
 	}

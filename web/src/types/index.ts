@@ -51,9 +51,16 @@ export interface Client {
 // --- Tunnel / Proxy ---
 
 export type ProxyType = "tcp" | "udp" | "http";
-export type ProxyStatus = "pending" | "active" | "paused" | "stopped" | "error";
 export type ProxyDesiredState = "running" | "paused" | "stopped";
 export type ProxyRuntimeState = "pending" | "exposed" | "offline" | "idle" | "error";
+
+export interface TunnelCapabilities {
+  can_pause: boolean;
+  can_resume: boolean;
+  can_stop: boolean;
+  can_edit: boolean;
+  can_delete: boolean;
+}
 
 /** 对齐 protocol.ProxyConfig */
 export interface ProxyConfig {
@@ -64,10 +71,10 @@ export interface ProxyConfig {
   remote_port: number;
   domain: string;
   client_id: string;
-  desired_state?: ProxyDesiredState;
-  runtime_state?: ProxyRuntimeState;
-  status: ProxyStatus;
+  desired_state: ProxyDesiredState;
+  runtime_state: ProxyRuntimeState;
   error?: string;
+  capabilities: TunnelCapabilities;
 }
 
 /** 创建隧道请求体 */
@@ -194,7 +201,9 @@ export interface AffectedTunnel {
   display_name?: string;
   tunnel_name: string;
   remote_port: number;
-  status: ProxyStatus | string;
+  desired_state: ProxyDesiredState;
+  runtime_state: ProxyRuntimeState;
+  error?: string;
 }
 
 export interface AdminConfig extends ServerConfig {

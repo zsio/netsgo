@@ -29,6 +29,16 @@ import (
 
 const wsDataMaxMessageSize = 512 * 1024
 
+type proxyCreateRequest = protocol.ProxyNewRequest
+type proxyCreateResponse = protocol.ProxyNewResponse
+type proxyProvisionRequest = protocol.ProxyNewRequest
+
+type proxyProvisionAck struct {
+	Name     string `json:"name,omitempty"`
+	Accepted bool   `json:"accepted"`
+	Message  string `json:"message,omitempty"`
+}
+
 // Client 是客户端/Client 的核心结构体
 type Client struct {
 	ServerAddr      string // 服务器地址（支持 ws:// wss:// http:// https://，内部统一规范化）
@@ -858,7 +868,7 @@ func (c *Client) requestProxyRuntime(rt *sessionRuntime, cfg protocol.ProxyNewRe
 	// 先注册本地代理配置
 	c.proxies.Store(cfg.Name, cfg)
 
-	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, cfg)
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, proxyCreateRequest(cfg))
 	rt.connMu.Lock()
 	conn := rt.conn
 	rt.connMu.Unlock()
@@ -1000,31 +1010,43 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 		case protocol.MsgTypePong:
 			// 心跳回复，忽略
 
-		case protocol.MsgTypeProxyNew:
-			// 服务端下发: 创建代理隧道
-			var req protocol.ProxyNewRequest
+		case protocol.MsgTypeProxyProvision, protocol.MsgTypeProxyNew:
+			// 服务端下发: 要求 client 接受/provision 代理隧道配置。
+			var req proxyProvisionRequest
 			if err := msg.ParsePayload(&req); err != nil {
 				log.Printf("⚠️ 解析代理指令失败: %v", err)
 				continue
 			}
-			log.Printf("📥 收到服务端代理指令: %s (本地 %s:%d → 公网 :%d)",
+			log.Printf("📥 收到服务端隧道 provisioning 配置: %s (本地 %s:%d → 公网 :%d)",
 				req.Name, req.LocalIP, req.LocalPort, req.RemotePort)
-			c.proxies.Store(req.Name, req)
-			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
-				Name:       req.Name,
-				Success:    true,
-				Message:    "proxy ready",
-				RemotePort: req.RemotePort,
-			})
+
+			var resp *protocol.Message
+			c.proxies.Store(req.Name, protocol.ProxyNewRequest(req))
+			if msg.Type == protocol.MsgTypeProxyNew {
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+					Name:       req.Name,
+					Success:    true,
+					Message:    "provision accepted",
+					RemotePort: req.RemotePort,
+				})
+			} else {
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, proxyProvisionAck{
+					Name:     req.Name,
+					Accepted: true,
+					Message:  "provision accepted",
+				})
+			}
+			log.Printf("✅ 已接受服务端隧道 provisioning 配置 [%s]", req.Name)
+
 			if err := conn.WriteJSON(resp); err != nil {
-				log.Printf("⚠️ 返回代理 ready 失败 [%s]: %v", req.Name, err)
-				c.failRuntime(rt, "proxy_ready_write_failed")
+				log.Printf("⚠️ 返回 provisioning ACK 失败 [%s]: %v", req.Name, err)
+				c.failRuntime(rt, "proxy_provision_ack_write_failed")
 				return
 			}
 
-		case protocol.MsgTypeProxyNewResp:
-			// 代理创建响应（客户端主动请求场景，如 Benchmark）
-			var resp protocol.ProxyNewResponse
+		case protocol.MsgTypeProxyCreateResp, protocol.MsgTypeProxyNewResp:
+			// 代理创建结果（客户端主动请求场景，如 Benchmark）
+			var resp proxyCreateResponse
 			if err := msg.ParsePayload(&resp); err != nil {
 				log.Printf("⚠️ 解析代理响应失败: %v", err)
 				continue
@@ -1049,4 +1071,26 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			log.Printf("📩 收到控制消息: %s", msg.Type)
 		}
 	}
+}
+
+// checkBackendHealth 验证 backend 服务是否可达
+// proxyType: tcp/udp/http
+// backendAddr: 格式为 "ip:port"
+func checkBackendHealth(proxyType, backendAddr string) error {
+	var network string
+	switch proxyType {
+	case protocol.ProxyTypeTCP, protocol.ProxyTypeHTTP:
+		network = "tcp"
+	case protocol.ProxyTypeUDP:
+		network = "udp"
+	default:
+		return fmt.Errorf("unsupported proxy type: %s", proxyType)
+	}
+
+	conn, err := net.DialTimeout(network, backendAddr, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	conn.Close()
+	return nil
 }

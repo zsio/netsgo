@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -61,6 +62,35 @@ func TestValidateProxyRequest_TCPUDPRequireExplicitRemotePort(t *testing.T) {
 	}
 }
 
+func TestValidateProxyRequest_HTTPInvalidDomainReturnsTypedBadRequest(t *testing.T) {
+	s := newProxyValidationTestServer(t, 18080, "https://panel.example.com", nil)
+
+	err := s.validateProxyRequest(nil, protocol.ProxyNewRequest{
+		Name:      "invalid-domain",
+		Type:      protocol.ProxyTypeHTTP,
+		LocalIP:   "127.0.0.1",
+		LocalPort: 8080,
+		Domain:    "https://bad.example.com",
+	})
+	if err == nil {
+		t.Fatal("非法 domain 应返回校验错误")
+	}
+
+	var validationErr *proxyRequestValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("期望 proxyRequestValidationError，得到 %T", err)
+	}
+	if validationErr.ErrorCode() != protocol.TunnelMutationErrorCodeDomainInvalid {
+		t.Fatalf("error_code 期望 %q，得到 %q", protocol.TunnelMutationErrorCodeDomainInvalid, validationErr.ErrorCode())
+	}
+	if validationErr.Field() != protocol.TunnelMutationFieldDomain {
+		t.Fatalf("field 期望 %q，得到 %q", protocol.TunnelMutationFieldDomain, validationErr.Field())
+	}
+	if validationErr.StatusCode() != 400 {
+		t.Fatalf("status 期望 400，得到 %d", validationErr.StatusCode())
+	}
+}
+
 func TestValidateProxyRequest_RejectsReservedAndManagementPorts(t *testing.T) {
 	s := newProxyValidationTestServer(t, 18080, "https://panel.example.com", []PortRange{{Start: 1, End: 65535}})
 
@@ -110,13 +140,14 @@ func TestValidateProxyRequest_RejectsConflictsAcrossRuntimeAndStore(t *testing.T
 	}
 	liveClient.proxies["runtime-error"] = &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:       "runtime-error",
-			Type:       protocol.ProxyTypeUDP,
-			LocalIP:    "127.0.0.1",
-			LocalPort:  5353,
-			RemotePort: 19091,
-			ClientID:   "client-live",
-			Status:     protocol.ProxyStatusError,
+			Name:         "runtime-error",
+			Type:         protocol.ProxyTypeUDP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    5353,
+			RemotePort:   19091,
+			ClientID:     "client-live",
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateError,
 		},
 	}
 	s.clients.Store(liveClient.ID, liveClient)
@@ -157,13 +188,14 @@ func TestValidateProxyRequestWithExclusions_AllowsUpdatingSameTunnelPort(t *test
 	}
 	client.proxies["editable"] = &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:       "editable",
-			Type:       protocol.ProxyTypeTCP,
-			LocalIP:    "127.0.0.1",
-			LocalPort:  8080,
-			RemotePort: 19100,
-			ClientID:   client.ID,
-			Status:     protocol.ProxyStatusPaused,
+			Name:         "editable",
+			Type:         protocol.ProxyTypeTCP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    8080,
+			RemotePort:   19100,
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStatePaused,
+			RuntimeState: protocol.ProxyRuntimeStateIdle,
 		},
 	}
 	s.clients.Store(client.ID, client)

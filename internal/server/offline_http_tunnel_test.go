@@ -77,8 +77,8 @@ func TestOfflineHTTPTunnel_Update_StoreFirst(t *testing.T) {
 	if stored.Domain != "new.example.com" {
 		t.Fatalf("update 后 Domain 期望 new.example.com，得到 %s", stored.Domain)
 	}
-	if stored.Status != protocol.ProxyStatusActive {
-		t.Fatalf("离线 active HTTP 隧道 update 后应保持 active，得到 %s", stored.Status)
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateOffline {
+		t.Fatalf("离线 running HTTP 隧道 update 后应保持 running/offline，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 
 	if err := checkDomainConflict("old.example.com", "", "", s); err != nil {
@@ -111,8 +111,8 @@ func TestOfflineHTTPTunnel_Pause_StoreFirst(t *testing.T) {
 	if !exists {
 		t.Fatal("pause 后 store 中的 HTTP 隧道不应丢失")
 	}
-	if stored.Status != protocol.ProxyStatusPaused {
-		t.Fatalf("pause 后 store 状态期望 paused，得到 %s", stored.Status)
+	if stored.DesiredState != protocol.ProxyDesiredStatePaused || stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Fatalf("pause 后 store 状态期望 paused/idle，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Domain != "pause.example.com" {
 		t.Fatalf("pause 后 Domain 应保留，得到 %s", stored.Domain)
@@ -237,13 +237,14 @@ func TestLifecycle_ClientDisconnect_DoesNotRewriteStoreState(t *testing.T) {
 	liveClient.proxyMu.Lock()
 	liveClient.proxies["active-http"] = &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:      "active-http",
-			Type:      protocol.ProxyTypeHTTP,
-			LocalIP:   "127.0.0.1",
-			LocalPort: 3000,
-			Domain:    "keep-active.example.com",
-			ClientID:  authResp.ClientID,
-			Status:    protocol.ProxyStatusActive,
+			Name:         "active-http",
+			Type:         protocol.ProxyTypeHTTP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    3000,
+			Domain:       "keep-active.example.com",
+			ClientID:     authResp.ClientID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateExposed,
 		},
 		done: make(chan struct{}),
 	}
@@ -257,9 +258,10 @@ func TestLifecycle_ClientDisconnect_DoesNotRewriteStoreState(t *testing.T) {
 			LocalPort: 3000,
 			Domain:    "keep-active.example.com",
 		},
-		Status:   protocol.ProxyStatusActive,
-		ClientID: authResp.ClientID,
-		Hostname: "disconnect-http-store",
+		DesiredState: protocol.ProxyDesiredStateRunning,
+		RuntimeState: protocol.ProxyRuntimeStateExposed,
+		ClientID:     authResp.ClientID,
+		Hostname:     "disconnect-http-store",
 	})
 
 	if !s.invalidateLogicalSessionIfCurrent(authResp.ClientID, liveClient.generation, "test_disconnect") {
@@ -270,8 +272,8 @@ func TestLifecycle_ClientDisconnect_DoesNotRewriteStoreState(t *testing.T) {
 	if !exists {
 		t.Fatal("断连后 store 中的 HTTP 隧道记录不应丢失")
 	}
-	if stored.Status != protocol.ProxyStatusActive {
-		t.Fatalf("client 断连不应把 store 状态写成 paused，得到 %s", stored.Status)
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("client 断连不应改写 store 目标状态，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Domain != "keep-active.example.com" {
 		t.Fatalf("client 断连后 Domain 应保留，得到 %s", stored.Domain)
