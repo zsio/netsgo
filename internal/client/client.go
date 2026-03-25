@@ -1009,13 +1009,31 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			}
 			log.Printf("📥 收到服务端代理指令: %s (本地 %s:%d → 公网 :%d)",
 				req.Name, req.LocalIP, req.LocalPort, req.RemotePort)
-			c.proxies.Store(req.Name, req)
-			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
-				Name:       req.Name,
-				Success:    true,
-				Message:    "proxy ready",
-				RemotePort: req.RemotePort,
-			})
+
+			// 健康检查：验证 backend 是否可达
+			backendAddr := net.JoinHostPort(req.LocalIP, fmt.Sprintf("%d", req.LocalPort))
+			healthCheckErr := checkBackendHealth(req.Type, backendAddr)
+
+			var resp *protocol.Message
+			if healthCheckErr != nil {
+				log.Printf("❌ Backend 健康检查失败 [%s → %s]: %v", req.Name, backendAddr, healthCheckErr)
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+					Name:       req.Name,
+					Success:    false,
+					Message:    fmt.Sprintf("backend unreachable: %v", healthCheckErr),
+					RemotePort: req.RemotePort,
+				})
+			} else {
+				c.proxies.Store(req.Name, req)
+				log.Printf("✅ Backend 健康检查通过 [%s → %s]", req.Name, backendAddr)
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+					Name:       req.Name,
+					Success:    true,
+					Message:    "proxy ready",
+					RemotePort: req.RemotePort,
+				})
+			}
+
 			if err := conn.WriteJSON(resp); err != nil {
 				log.Printf("⚠️ 返回代理 ready 失败 [%s]: %v", req.Name, err)
 				c.failRuntime(rt, "proxy_ready_write_failed")
@@ -1049,4 +1067,26 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			log.Printf("📩 收到控制消息: %s", msg.Type)
 		}
 	}
+}
+
+// checkBackendHealth 验证 backend 服务是否可达
+// proxyType: tcp/udp/http
+// backendAddr: 格式为 "ip:port"
+func checkBackendHealth(proxyType, backendAddr string) error {
+	var network string
+	switch proxyType {
+	case protocol.ProxyTypeTCP, protocol.ProxyTypeHTTP:
+		network = "tcp"
+	case protocol.ProxyTypeUDP:
+		network = "udp"
+	default:
+		return fmt.Errorf("unsupported proxy type: %s", proxyType)
+	}
+
+	conn, err := net.DialTimeout(network, backendAddr, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	conn.Close()
+	return nil
 }
