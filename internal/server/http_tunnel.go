@@ -13,11 +13,6 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-const (
-	httpTunnelErrCodeServerAddrConflict = "server_addr_conflict"
-	httpTunnelErrCodeDomainConflict     = "http_tunnel_conflict"
-)
-
 // httpTunnelRuleError 表示 HTTP 域名规则层返回的结构化冲突。
 type httpTunnelRuleError struct {
 	code               string
@@ -31,6 +26,10 @@ func (e *httpTunnelRuleError) Error() string {
 
 func (e *httpTunnelRuleError) ErrorCode() string {
 	return e.code
+}
+
+func (e *httpTunnelRuleError) Field() string {
+	return protocol.TunnelMutationFieldDomain
 }
 
 func (e *httpTunnelRuleError) ConflictingTunnels() []string {
@@ -367,7 +366,7 @@ func checkDomainConflict(domain, excludeName, excludeClientID string, server *Se
 
 	if managementHost := effectiveManagementHost(cfg, serverListenAddr(server)); managementHost != "" && canonicalDomain == managementHost {
 		return &httpTunnelRuleError{
-			code:    httpTunnelErrCodeServerAddrConflict,
+			code:    protocol.TunnelMutationErrorCodeServerAddrConflict,
 			message: fmt.Sprintf("域名 %q 与当前管理地址冲突", domain),
 		}
 	}
@@ -378,7 +377,7 @@ func checkDomainConflict(domain, excludeName, excludeClientID string, server *Se
 	}
 
 	return &httpTunnelRuleError{
-		code:               httpTunnelErrCodeDomainConflict,
+		code:               protocol.TunnelMutationErrorCodeHTTPTunnelConflict,
 		message:            fmt.Sprintf("域名 %q 已被 HTTP 隧道占用", domain),
 		conflictingTunnels: conflicts,
 	}

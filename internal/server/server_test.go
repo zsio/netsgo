@@ -2064,8 +2064,15 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("解析响应失败: %v", err)
 	}
-	if body["error_code"] != httpTunnelErrCodeDomainConflict {
-		t.Fatalf("error_code 期望 %q，得到 %v", httpTunnelErrCodeDomainConflict, body["error_code"])
+	if body["error_code"] != protocol.TunnelMutationErrorCodeHTTPTunnelConflict {
+		t.Fatalf("error_code 期望 %q，得到 %v", protocol.TunnelMutationErrorCodeHTTPTunnelConflict, body["error_code"])
+	}
+	if body["field"] != protocol.TunnelMutationFieldDomain {
+		t.Fatalf("field 期望 %q，得到 %v", protocol.TunnelMutationFieldDomain, body["field"])
+	}
+	conflicts, ok := body["conflicting_tunnels"].([]any)
+	if !ok || len(conflicts) != 1 || conflicts[0] != "client-other:existing-http" {
+		t.Fatalf("conflicting_tunnels 期望 [client-other:existing-http]，得到 %v", body["conflicting_tunnels"])
 	}
 }
 
@@ -2143,8 +2150,99 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("解析响应失败: %v", err)
 	}
-	if body["error_code"] != httpTunnelErrCodeDomainConflict {
-		t.Fatalf("error_code 期望 %q，得到 %v", httpTunnelErrCodeDomainConflict, body["error_code"])
+	if body["error_code"] != protocol.TunnelMutationErrorCodeHTTPTunnelConflict {
+		t.Fatalf("error_code 期望 %q，得到 %v", protocol.TunnelMutationErrorCodeHTTPTunnelConflict, body["error_code"])
+	}
+	if body["field"] != protocol.TunnelMutationFieldDomain {
+		t.Fatalf("field 期望 %q，得到 %v", protocol.TunnelMutationFieldDomain, body["field"])
+	}
+	conflicts, ok := body["conflicting_tunnels"].([]any)
+	if !ok || len(conflicts) != 1 || conflicts[0] != "client-other:existing-http" {
+		t.Fatalf("conflicting_tunnels 期望 [client-other:existing-http]，得到 %v", body["conflicting_tunnels"])
+	}
+}
+
+func TestServer_CreateTunnelHTTPInvalidDomainReturns400WithTypedError(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	wsConn, authResp := connectAndAuth(t, ts, "http-invalid-domain-create")
+	defer wsConn.Close()
+
+	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 Admin Token 失败: %v", err)
+	}
+
+	reqBody := []byte(`{"name":"new-http","type":"http","local_ip":"127.0.0.1","local_port":3000,"domain":"https://bad.example.com"}`)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels", authResp.ClientID), bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "test")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create tunnel 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("HTTP 非法域名期望 400，得到 %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if body["error_code"] != protocol.TunnelMutationErrorCodeDomainInvalid {
+		t.Fatalf("error_code 期望 %q，得到 %v", protocol.TunnelMutationErrorCodeDomainInvalid, body["error_code"])
+	}
+	if body["field"] != protocol.TunnelMutationFieldDomain {
+		t.Fatalf("field 期望 %q，得到 %v", protocol.TunnelMutationFieldDomain, body["field"])
+	}
+}
+
+func TestServer_CreateTunnelHTTPManagementHostConflictReturnsTypedError(t *testing.T) {
+	t.Setenv("NETSGO_SERVER_ADDR", "https://example.com")
+
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	wsConn, authResp := connectAndAuth(t, ts, "http-server-addr-conflict-create")
+	defer wsConn.Close()
+
+	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("生成 Admin Token 失败: %v", err)
+	}
+
+	reqBody := []byte(`{"name":"new-http","type":"http","local_ip":"127.0.0.1","local_port":3000,"domain":"example.com"}`)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels", authResp.ClientID), bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "test")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create tunnel 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("HTTP 管理域名冲突期望 409，得到 %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if body["error_code"] != protocol.TunnelMutationErrorCodeServerAddrConflict {
+		t.Fatalf("error_code 期望 %q，得到 %v", protocol.TunnelMutationErrorCodeServerAddrConflict, body["error_code"])
+	}
+	if body["field"] != protocol.TunnelMutationFieldDomain {
+		t.Fatalf("field 期望 %q，得到 %v", protocol.TunnelMutationFieldDomain, body["field"])
 	}
 }
 
