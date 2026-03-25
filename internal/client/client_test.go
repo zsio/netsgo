@@ -586,8 +586,8 @@ func TestClient_AcceptStreamLoop_SessionClosed(t *testing.T) {
 func TestClient_RequestProxy(t *testing.T) {
 	ms := newMockServer(true)
 	ms.onMessage = func(msg protocol.Message) *protocol.Message {
-		if msg.Type == protocol.MsgTypeProxyNew {
-			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+		if msg.Type == msgTypeProxyCreate {
+			resp, _ := protocol.NewMessage(msgTypeProxyCreateResp, proxyCreateResponse{
 				Success:    true,
 				Message:    "ok",
 				RemotePort: 18080,
@@ -618,18 +618,18 @@ func TestClient_RequestProxy(t *testing.T) {
 	}
 	c.requestProxy(cfg)
 
-	// 验证 Server 收到了 proxy_new 消息
+	// 验证 Server 收到了 proxy_create 消息
 	time.Sleep(200 * time.Millisecond)
 	msgs := ms.getReceivedMsgs()
 	found := false
 	for _, msg := range msgs {
-		if msg.Type == protocol.MsgTypeProxyNew {
+		if msg.Type == msgTypeProxyCreate {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("Server 应收到 proxy_new 消息")
+		t.Error("Server 应收到 proxy_create 消息")
 	}
 
 	// 验证 proxies sync.Map 已注册
@@ -640,10 +640,10 @@ func TestClient_RequestProxy(t *testing.T) {
 }
 
 // ============================================================
-// controlLoop — ProxyNewResp 处理测试
+// controlLoop — create response 处理测试
 // ============================================================
 
-func TestClient_ControlLoop_ProxyNewResp_Success(t *testing.T) {
+func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 	ms := newMockServer(true)
 	ts := newMockHTTPServer(ms)
 	defer ts.Close()
@@ -655,10 +655,10 @@ func TestClient_ControlLoop_ProxyNewResp_Success(t *testing.T) {
 	go c.Start()
 	time.Sleep(500 * time.Millisecond)
 
-	// Server 主动发送 proxy_new_resp (成功)
+	// Server 主动发送 proxy_create_resp (成功)
 	ms.mu.Lock()
 	if len(ms.conns) > 0 {
-		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+		resp, _ := protocol.NewMessage(msgTypeProxyCreateResp, proxyCreateResponse{
 			Success:    true,
 			Message:    "tunnel created",
 			RemotePort: 19090,
@@ -671,7 +671,7 @@ func TestClient_ControlLoop_ProxyNewResp_Success(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 }
 
-func TestClient_ControlLoop_ProxyNewResp_Failure(t *testing.T) {
+func TestClient_ControlLoop_ProxyCreateResp_Failure(t *testing.T) {
 	ms := newMockServer(true)
 	ts := newMockHTTPServer(ms)
 	defer ts.Close()
@@ -683,10 +683,10 @@ func TestClient_ControlLoop_ProxyNewResp_Failure(t *testing.T) {
 	go c.Start()
 	time.Sleep(500 * time.Millisecond)
 
-	// Server 主动发送 proxy_new_resp (失败)
+	// Server 主动发送 proxy_create_resp (失败)
 	ms.mu.Lock()
 	if len(ms.conns) > 0 {
-		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+		resp, _ := protocol.NewMessage(msgTypeProxyCreateResp, proxyCreateResponse{
 			Success: false,
 			Message: "port conflict",
 		})
@@ -697,20 +697,20 @@ func TestClient_ControlLoop_ProxyNewResp_Failure(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 }
 
-func TestClient_ControlLoop_ServerProxyNewSendsReadyAck(t *testing.T) {
-	readyAck := make(chan protocol.ProxyNewResponse, 1)
+func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
+	provisionAck := make(chan proxyProvisionAck, 1)
 	ackErr := make(chan error, 1)
 	ms := newMockServer(true)
 	ms.onMessage = func(msg protocol.Message) *protocol.Message {
-		if msg.Type != protocol.MsgTypeProxyNewResp {
+		if msg.Type != msgTypeProxyProvisionAck {
 			return nil
 		}
-		var resp protocol.ProxyNewResponse
+		var resp proxyProvisionAck
 		if err := msg.ParsePayload(&resp); err != nil {
 			ackErr <- err
 			return nil
 		}
-		readyAck <- resp
+		provisionAck <- resp
 		return nil
 	}
 	ts := newMockHTTPServer(ms)
@@ -728,7 +728,7 @@ func TestClient_ControlLoop_ServerProxyNewSendsReadyAck(t *testing.T) {
 		ms.mu.Unlock()
 		t.Fatal("客户端控制连接未建立")
 	}
-	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, protocol.ProxyNewRequest{
+	msg, _ := protocol.NewMessage(msgTypeProxyProvision, proxyProvisionRequest{
 		Name:       "server-pushed-proxy",
 		Type:       protocol.ProxyTypeTCP,
 		LocalIP:    "127.0.0.1",
@@ -738,21 +738,84 @@ func TestClient_ControlLoop_ServerProxyNewSendsReadyAck(t *testing.T) {
 	err := ms.conns[len(ms.conns)-1].WriteJSON(msg)
 	ms.mu.Unlock()
 	if err != nil {
-		t.Fatalf("服务端发送 proxy_new 失败: %v", err)
+		t.Fatalf("服务端发送 proxy_provision 失败: %v", err)
 	}
 
 	select {
 	case err := <-ackErr:
-		t.Fatalf("解析 proxy_new_resp 失败: %v", err)
-	case resp := <-readyAck:
+		t.Fatalf("解析 proxy_provision_ack 失败: %v", err)
+	case resp := <-provisionAck:
 		if resp.Name != "server-pushed-proxy" {
-			t.Fatalf("ready ack name 错误: %s", resp.Name)
+			t.Fatalf("provision ack name 错误: %s", resp.Name)
 		}
-		if !resp.Success {
-			t.Fatal("ready ack 应标记为 success")
+		if !resp.Accepted {
+			t.Fatal("provision ack 应标记为 accepted")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("未收到 client 返回的 proxy_new_resp ready ack")
+		t.Fatal("未收到 client 返回的 proxy_provision_ack")
+	}
+}
+
+func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing.T) {
+	ackPayload := make(chan map[string]any, 1)
+	ms := newMockServer(true)
+	ms.onMessage = func(msg protocol.Message) *protocol.Message {
+		if msg.Type != msgTypeProxyProvisionAck {
+			return nil
+		}
+		var payload map[string]any
+		if err := msg.ParsePayload(&payload); err != nil {
+			t.Fatalf("解析 proxy_provision_ack 失败: %v", err)
+		}
+		ackPayload <- payload
+		return nil
+	}
+	ts := newMockHTTPServer(ms)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	c := New(wsURL, "test-key")
+	c.DisableReconnect = true
+
+	go c.Start()
+	time.Sleep(500 * time.Millisecond)
+
+	ms.mu.Lock()
+	if len(ms.conns) == 0 {
+		ms.mu.Unlock()
+		t.Fatal("客户端控制连接未建立")
+	}
+	msg, _ := protocol.NewMessage(msgTypeProxyProvision, proxyProvisionRequest{
+		Name:       "unreachable-backend",
+		Type:       protocol.ProxyTypeTCP,
+		LocalIP:    "127.0.0.1",
+		LocalPort:  1,
+		RemotePort: 19091,
+	})
+	err := ms.conns[len(ms.conns)-1].WriteJSON(msg)
+	ms.mu.Unlock()
+	if err != nil {
+		t.Fatalf("服务端发送 proxy_provision 失败: %v", err)
+	}
+
+	select {
+	case payload := <-ackPayload:
+		if payload["name"] != "unreachable-backend" {
+			t.Fatalf("ack name 错误: %v", payload["name"])
+		}
+		accepted, ok := payload["accepted"].(bool)
+		if !ok || !accepted {
+			t.Fatalf("ack accepted 应为 true，得到 %#v", payload["accepted"])
+		}
+		if _, exists := payload["remote_port"]; exists {
+			t.Fatalf("proxy_provision_ack 不应包含 remote_port: %v", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未收到 client 返回的 proxy_provision_ack")
+	}
+
+	if _, ok := c.proxies.Load("unreachable-backend"); !ok {
+		t.Fatal("provision 成功后应缓存隧道配置")
 	}
 }
 
