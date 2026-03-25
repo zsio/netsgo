@@ -586,8 +586,8 @@ func TestClient_AcceptStreamLoop_SessionClosed(t *testing.T) {
 func TestClient_RequestProxy(t *testing.T) {
 	ms := newMockServer(true)
 	ms.onMessage = func(msg protocol.Message) *protocol.Message {
-		if msg.Type == msgTypeProxyCreate {
-			resp, _ := protocol.NewMessage(msgTypeProxyCreateResp, proxyCreateResponse{
+		if msg.Type == protocol.MsgTypeProxyCreate {
+			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, proxyCreateResponse{
 				Success:    true,
 				Message:    "ok",
 				RemotePort: 18080,
@@ -623,7 +623,7 @@ func TestClient_RequestProxy(t *testing.T) {
 	msgs := ms.getReceivedMsgs()
 	found := false
 	for _, msg := range msgs {
-		if msg.Type == msgTypeProxyCreate {
+		if msg.Type == protocol.MsgTypeProxyCreate {
 			found = true
 			break
 		}
@@ -658,7 +658,7 @@ func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 	// Server 主动发送 proxy_create_resp (成功)
 	ms.mu.Lock()
 	if len(ms.conns) > 0 {
-		resp, _ := protocol.NewMessage(msgTypeProxyCreateResp, proxyCreateResponse{
+		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, proxyCreateResponse{
 			Success:    true,
 			Message:    "tunnel created",
 			RemotePort: 19090,
@@ -686,7 +686,7 @@ func TestClient_ControlLoop_ProxyCreateResp_Failure(t *testing.T) {
 	// Server 主动发送 proxy_create_resp (失败)
 	ms.mu.Lock()
 	if len(ms.conns) > 0 {
-		resp, _ := protocol.NewMessage(msgTypeProxyCreateResp, proxyCreateResponse{
+		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, proxyCreateResponse{
 			Success: false,
 			Message: "port conflict",
 		})
@@ -702,7 +702,7 @@ func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
 	ackErr := make(chan error, 1)
 	ms := newMockServer(true)
 	ms.onMessage = func(msg protocol.Message) *protocol.Message {
-		if msg.Type != msgTypeProxyProvisionAck {
+		if msg.Type != protocol.MsgTypeProxyProvisionAck {
 			return nil
 		}
 		var resp proxyProvisionAck
@@ -728,7 +728,7 @@ func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
 		ms.mu.Unlock()
 		t.Fatal("客户端控制连接未建立")
 	}
-	msg, _ := protocol.NewMessage(msgTypeProxyProvision, proxyProvisionRequest{
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyProvision, proxyProvisionRequest{
 		Name:       "server-pushed-proxy",
 		Type:       protocol.ProxyTypeTCP,
 		LocalIP:    "127.0.0.1",
@@ -760,7 +760,7 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 	ackPayload := make(chan map[string]any, 1)
 	ms := newMockServer(true)
 	ms.onMessage = func(msg protocol.Message) *protocol.Message {
-		if msg.Type != msgTypeProxyProvisionAck {
+		if msg.Type != protocol.MsgTypeProxyProvisionAck {
 			return nil
 		}
 		var payload map[string]any
@@ -785,7 +785,7 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 		ms.mu.Unlock()
 		t.Fatal("客户端控制连接未建立")
 	}
-	msg, _ := protocol.NewMessage(msgTypeProxyProvision, proxyProvisionRequest{
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyProvision, proxyProvisionRequest{
 		Name:       "unreachable-backend",
 		Type:       protocol.ProxyTypeTCP,
 		LocalIP:    "127.0.0.1",
