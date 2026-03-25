@@ -1631,6 +1631,59 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	}
 }
 
+func TestControlLoop_LegacyProxyCreateCompatibility(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	conn, authResp := connectAndAuth(t, ts, "legacy-proxy-create-host")
+	defer conn.Close()
+
+	val, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatal("认证成功后 Client 应已注册到 clients map")
+	}
+	client := val.(*ClientConn)
+	cPipe, sPipe := net.Pipe()
+	defer cPipe.Close()
+	defer sPipe.Close()
+	client.dataMu.Lock()
+	client.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
+	client.dataMu.Unlock()
+
+	req := protocol.ProxyNewRequest{
+		Name:       "legacy-ws-tunnel",
+		Type:       protocol.ProxyTypeTCP,
+		RemotePort: reserveTCPPort(t),
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, req)
+	conn.WriteJSON(msg)
+
+	var resp protocol.Message
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("读取 legacy 创建代理响应失败: %v", err)
+	}
+
+	if resp.Type != protocol.MsgTypeProxyCreateResp {
+		t.Fatalf("期望返回 %s，得到 %s", protocol.MsgTypeProxyCreateResp, resp.Type)
+	}
+
+	var payload protocol.ProxyNewResponse
+	if err := resp.ParsePayload(&payload); err != nil {
+		t.Fatalf("解析 legacy 创建代理响应失败: %v", err)
+	}
+	if !payload.Success {
+		t.Fatalf("legacy 创建代理应成功，得到失败: %s", payload.Message)
+	}
+
+	client.proxyMu.RLock()
+	_, exists := client.proxies[req.Name]
+	client.proxyMu.RUnlock()
+	if !exists {
+		t.Fatalf("legacy 创建代理后隧道应存在: %s", req.Name)
+	}
+}
+
 // ============================================================
 // controlLoop 边缘场景测试 (2)
 // ============================================================

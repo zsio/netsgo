@@ -504,13 +504,17 @@ func TestAllStructs_JSONTags(t *testing.T) {
 func TestConstants(t *testing.T) {
 	// 消息类型
 	msgTypes := map[string]string{
-		"MsgTypeAuth":         MsgTypeAuth,
-		"MsgTypeAuthResp":     MsgTypeAuthResp,
-		"MsgTypePing":         MsgTypePing,
-		"MsgTypePong":         MsgTypePong,
-		"MsgTypeProbeReport":  MsgTypeProbeReport,
-		"MsgTypeProxyNew":     MsgTypeProxyNew,
-		"MsgTypeProxyNewResp": MsgTypeProxyNewResp,
+		"MsgTypeAuth":              MsgTypeAuth,
+		"MsgTypeAuthResp":          MsgTypeAuthResp,
+		"MsgTypePing":              MsgTypePing,
+		"MsgTypePong":              MsgTypePong,
+		"MsgTypeProbeReport":       MsgTypeProbeReport,
+		"MsgTypeProxyNew":          MsgTypeProxyNew,
+		"MsgTypeProxyNewResp":      MsgTypeProxyNewResp,
+		"MsgTypeProxyCreate":       MsgTypeProxyCreate,
+		"MsgTypeProxyCreateResp":   MsgTypeProxyCreateResp,
+		"MsgTypeProxyProvision":    MsgTypeProxyProvision,
+		"MsgTypeProxyProvisionAck": MsgTypeProxyProvisionAck,
 	}
 	for name, val := range msgTypes {
 		if val == "" {
