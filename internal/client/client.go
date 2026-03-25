@@ -29,13 +29,6 @@ import (
 
 const wsDataMaxMessageSize = 512 * 1024
 
-const (
-	msgTypeProxyCreate       = "proxy_create"
-	msgTypeProxyCreateResp   = "proxy_create_resp"
-	msgTypeProxyProvision    = "proxy_provision"
-	msgTypeProxyProvisionAck = "proxy_provision_ack"
-)
-
 type proxyCreateRequest = protocol.ProxyNewRequest
 type proxyCreateResponse = protocol.ProxyNewResponse
 type proxyProvisionRequest = protocol.ProxyNewRequest
@@ -875,7 +868,7 @@ func (c *Client) requestProxyRuntime(rt *sessionRuntime, cfg protocol.ProxyNewRe
 	// 先注册本地代理配置
 	c.proxies.Store(cfg.Name, cfg)
 
-	msg, _ := protocol.NewMessage(msgTypeProxyCreate, proxyCreateRequest(cfg))
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, proxyCreateRequest(cfg))
 	rt.connMu.Lock()
 	conn := rt.conn
 	rt.connMu.Unlock()
@@ -1017,7 +1010,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 		case protocol.MsgTypePong:
 			// 心跳回复，忽略
 
-		case msgTypeProxyProvision, protocol.MsgTypeProxyNew:
+		case protocol.MsgTypeProxyProvision, protocol.MsgTypeProxyNew:
 			// 服务端下发: 要求 client 接受/provision 代理隧道配置。
 			var req proxyProvisionRequest
 			if err := msg.ParsePayload(&req); err != nil {
@@ -1037,7 +1030,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 					RemotePort: req.RemotePort,
 				})
 			} else {
-				resp, _ = protocol.NewMessage(msgTypeProxyProvisionAck, proxyProvisionAck{
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, proxyProvisionAck{
 					Name:     req.Name,
 					Accepted: true,
 					Message:  "provision accepted",
@@ -1051,7 +1044,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				return
 			}
 
-		case msgTypeProxyCreateResp, protocol.MsgTypeProxyNewResp:
+		case protocol.MsgTypeProxyCreateResp, protocol.MsgTypeProxyNewResp:
 			// 代理创建结果（客户端主动请求场景，如 Benchmark）
 			var resp proxyCreateResponse
 			if err := msg.ParsePayload(&resp); err != nil {

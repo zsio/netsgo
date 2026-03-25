@@ -837,7 +837,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 				"stats":     stats,
 			})
 
-		case protocol.MsgTypeProxyNew:
+		case protocol.MsgTypeProxyNew, protocol.MsgTypeProxyCreate:
 			if !s.isCurrentLive(client.ID, client.generation) {
 				continue
 			}
@@ -850,9 +850,13 @@ func (s *Server) controlLoop(client *ClientConn) {
 
 			err := s.StartProxy(client, req)
 			var resp *protocol.Message
+			respType := protocol.MsgTypeProxyNewResp
+			if msg.Type == protocol.MsgTypeProxyCreate {
+				respType = protocol.MsgTypeProxyCreateResp
+			}
 			if err != nil {
 				log.Printf("❌ 创建代理失败 [%s]: %v", client.ID, err)
-				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+				resp, _ = protocol.NewMessage(respType, protocol.ProxyNewResponse{
 					Name:    req.Name,
 					Success: false,
 					Message: err.Error(),
@@ -864,7 +868,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 				config := tunnel.Config
 				client.proxyMu.RUnlock()
 
-				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
+				resp, _ = protocol.NewMessage(respType, protocol.ProxyNewResponse{
 					Name:       req.Name,
 					Success:    true,
 					Message:    "代理隧道创建成功",
