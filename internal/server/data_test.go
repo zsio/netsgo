@@ -1,13 +1,11 @@
 package server
 
 import (
-	"context"
 	"encoding/binary"
-	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -20,48 +18,31 @@ import (
 const testDataToken = "test-data-token-abc123"
 
 type unixDataTestServer struct {
-	socketPath string
-	httpServer *http.Server
-	listener   net.Listener
+	httpServer *httptest.Server
 	httpClient *http.Client
+	wsURL      string
 }
 
 func newUnixDataTestServer(t *testing.T, handler http.Handler) *unixDataTestServer {
 	t.Helper()
 
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("netsgo-data-%d.sock", time.Now().UnixNano()))
-	_ = os.Remove(socketPath)
-	ln, err := net.Listen("unix", socketPath)
+	httpServer := httptest.NewServer(handler)
+
+	wsURL, err := testWebSocketURL(httpServer.URL + "/ws/data")
 	if err != nil {
-		t.Fatalf("创建 unix socket 测试监听器失败: %v", err)
-	}
-
-	srv := &http.Server{Handler: handler}
-	go func() {
-		_ = srv.Serve(ln)
-	}()
-
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketPath)
-		},
+		httpServer.Close()
+		t.Fatalf("构造 data 测试 WebSocket URL 失败: %v", err)
 	}
 
 	return &unixDataTestServer{
-		socketPath: socketPath,
-		httpServer: srv,
-		listener:   ln,
-		httpClient: &http.Client{Transport: transport},
+		httpServer: httpServer,
+		httpClient: httpServer.Client(),
+		wsURL:      wsURL,
 	}
 }
 
 func (ts *unixDataTestServer) Close() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = ts.httpServer.Shutdown(ctx)
-	_ = ts.listener.Close()
-	_ = os.Remove(ts.socketPath)
+	ts.httpServer.Close()
 }
 
 func setupDataWSTest(t *testing.T) (*Server, *unixDataTestServer, func()) {
@@ -73,17 +54,26 @@ func setupDataWSTest(t *testing.T) (*Server, *unixDataTestServer, func()) {
 
 func dialDataWS(t *testing.T, ts *unixDataTestServer) *websocket.Conn {
 	t.Helper()
-	dialer := websocket.Dialer{
-		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", ts.socketPath)
-		},
-	}
-	conn, _, err := dialer.Dial("ws://unix/ws/data", nil)
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.Dial(ts.wsURL, nil)
 	if err != nil {
 		t.Fatalf("连接 /ws/data 失败: %v", err)
 	}
 	return conn
+}
+
+func testWebSocketURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	switch parsed.Scheme {
+	case "http":
+		parsed.Scheme = "ws"
+	case "https":
+		parsed.Scheme = "wss"
+	}
+	return parsed.String(), nil
 }
 
 func readHandshakeStatus(t *testing.T, conn *websocket.Conn) byte {
@@ -307,7 +297,7 @@ func TestDataChannel_NonUpgradeRequestReturns426(t *testing.T) {
 	_, ts, cleanup := setupDataWSTest(t)
 	defer cleanup()
 
-	resp, err := ts.httpClient.Get("http://unix/ws/data")
+	resp, err := ts.httpClient.Get(ts.httpServer.URL + "/ws/data")
 	if err != nil {
 		t.Fatalf("HTTP GET /ws/data 失败: %v", err)
 	}
