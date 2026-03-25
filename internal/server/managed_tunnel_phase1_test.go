@@ -11,7 +11,7 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-func TestServer_CreateTunnel_TCPWithoutRemotePortReturns409(t *testing.T) {
+func TestServer_CreateTunnel_TCPWithoutRemotePortReturns400(t *testing.T) {
 	s, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
 
@@ -30,8 +30,8 @@ func TestServer_CreateTunnel_TCPWithoutRemotePortReturns409(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("缺少 remote_port 时期望 409，得到 %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("缺少 remote_port 时期望 400，得到 %d", resp.StatusCode)
 	}
 
 	var payload map[string]any
@@ -40,6 +40,9 @@ func TestServer_CreateTunnel_TCPWithoutRemotePortReturns409(t *testing.T) {
 	}
 	if success, _ := payload["success"].(bool); success {
 		t.Fatalf("缺少 remote_port 时不应返回 success=true，得到 %v", payload)
+	}
+	if payload["field"] != protocol.TunnelMutationFieldRemotePort {
+		t.Fatalf("缺少 remote_port 时 field 期望 %q，得到 %v", protocol.TunnelMutationFieldRemotePort, payload["field"])
 	}
 }
 

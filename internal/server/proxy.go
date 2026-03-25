@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"strconv"
 	"sync"
 
@@ -21,11 +22,38 @@ type ProxyTunnel struct {
 }
 
 type proxyRequestValidationError struct {
-	err error
+	err    error
+	code   string
+	field  string
+	status int
 }
 
 func (e *proxyRequestValidationError) Error() string {
 	return e.err.Error()
+}
+
+func (e *proxyRequestValidationError) ErrorCode() string {
+	return e.code
+}
+
+func (e *proxyRequestValidationError) Field() string {
+	return e.field
+}
+
+func (e *proxyRequestValidationError) StatusCode() int {
+	if e.status == 0 {
+		return http.StatusConflict
+	}
+	return e.status
+}
+
+func newProxyRequestValidationError(err error, field, code string, status int) *proxyRequestValidationError {
+	return &proxyRequestValidationError{
+		err:    err,
+		code:   code,
+		field:  field,
+		status: status,
+	}
 }
 
 func (s *Server) validateProxyRequest(client *ClientConn, req protocol.ProxyNewRequest) error {
@@ -35,7 +63,7 @@ func (s *Server) validateProxyRequest(client *ClientConn, req protocol.ProxyNewR
 func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, excludeName, excludeClientID string) error {
 	if req.Type == protocol.ProxyTypeHTTP {
 		if err := validateDomain(req.Domain); err != nil {
-			return &proxyRequestValidationError{err: err}
+			return newProxyRequestValidationError(err, protocol.TunnelMutationFieldDomain, protocol.TunnelMutationErrorCodeDomainInvalid, http.StatusBadRequest)
 		}
 		if err := checkDomainConflict(req.Domain, excludeName, excludeClientID, s); err != nil {
 			return err
@@ -44,24 +72,24 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 	}
 
 	if req.RemotePort <= 0 {
-		return &proxyRequestValidationError{err: fmt.Errorf("TCP/UDP 隧道必须填写明确的公网端口")}
+		return newProxyRequestValidationError(fmt.Errorf("TCP/UDP 隧道必须填写明确的公网端口"), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 	}
 	if req.RemotePort == 80 || req.RemotePort == 443 {
-		return &proxyRequestValidationError{err: fmt.Errorf("TCP/UDP 隧道不能使用保留端口 %d", req.RemotePort)}
+		return newProxyRequestValidationError(fmt.Errorf("TCP/UDP 隧道不能使用保留端口 %d", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 	}
 	if listenPort := serverListenPort(s); listenPort > 0 && req.RemotePort == listenPort {
-		return &proxyRequestValidationError{err: fmt.Errorf("端口 %d 与 NetsGo 管理服务监听端口冲突", req.RemotePort)}
+		return newProxyRequestValidationError(fmt.Errorf("端口 %d 与 NetsGo 管理服务监听端口冲突", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
 
 	if s.adminStore != nil {
 		// 校验端口白名单
 		if s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(req.RemotePort) {
-			return &proxyRequestValidationError{err: fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort)}
+			return newProxyRequestValidationError(fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 		}
 	}
 
 	if conflicts := findTCPUDPPortConflictNames(req.RemotePort, excludeName, excludeClientID, s); len(conflicts) > 0 {
-		return &proxyRequestValidationError{err: fmt.Errorf("端口 %d 已被隧道占用", req.RemotePort)}
+		return newProxyRequestValidationError(fmt.Errorf("端口 %d 已被隧道占用", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
 
 	return nil

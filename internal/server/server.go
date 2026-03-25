@@ -1370,6 +1370,41 @@ func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request)
 
 // --- 隧道 CRUD API ---
 
+func tunnelMutationErrorStatusAndBody(err error) (int, tunnelMutationErrorResponse) {
+	status := http.StatusInternalServerError
+	payload := tunnelMutationErrorResponse{
+		Success: false,
+		Error:   err.Error(),
+	}
+
+	var ruleErr *httpTunnelRuleError
+	var validationErr *proxyRequestValidationError
+	var rejected *tunnelReadyRejectedError
+	switch {
+	case errors.Is(err, errManagedTunnelClientNotFound):
+		status = http.StatusNotFound
+		payload.Error = "client not found"
+	case errors.Is(err, errManagedTunnelNotFound):
+		status = http.StatusNotFound
+		payload.Error = "隧道不存在"
+	case errors.Is(err, errTunnelReadyTimeout):
+		status = http.StatusGatewayTimeout
+	case errors.As(err, &rejected):
+		status = http.StatusBadGateway
+	case errors.As(err, &ruleErr):
+		status = http.StatusConflict
+		payload.ErrorCode = ruleErr.ErrorCode()
+		payload.Field = ruleErr.Field()
+		payload.ConflictingTunnels = ruleErr.ConflictingTunnels()
+	case errors.As(err, &validationErr):
+		status = validationErr.StatusCode()
+		payload.ErrorCode = validationErr.ErrorCode()
+		payload.Field = validationErr.Field()
+	}
+
+	return status, payload
+}
+
 func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
 
@@ -1389,28 +1424,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		config, err = s.createOfflineManagedTunnel(clientID, req)
 	}
 	if err != nil {
-		status := http.StatusConflict
-		payload := map[string]any{
-			"success": false,
-			"error":   err.Error(),
-		}
-
-		var ruleErr *httpTunnelRuleError
-		var validationErr *proxyRequestValidationError
-		var rejected *tunnelReadyRejectedError
-		switch {
-		case errors.Is(err, errManagedTunnelClientNotFound):
-			status = http.StatusNotFound
-			payload["error"] = "client not found"
-		case errors.Is(err, errTunnelReadyTimeout):
-			status = http.StatusGatewayTimeout
-		case errors.As(err, &rejected):
-			status = http.StatusBadGateway
-		case errors.As(err, &ruleErr):
-			payload["error_code"] = ruleErr.ErrorCode()
-		case errors.As(err, &validationErr):
-			status = http.StatusConflict
-		}
+		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
@@ -1639,25 +1653,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		updated, err := s.updateOfflineManagedTunnel(clientID, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain)
 		if err != nil {
-			status := http.StatusInternalServerError
-			payload := map[string]any{"error": err.Error()}
-
-			var ruleErr *httpTunnelRuleError
-			var validationErr *proxyRequestValidationError
-			switch {
-			case errors.Is(err, errManagedTunnelClientNotFound):
-				status = http.StatusNotFound
-				payload = map[string]any{"error": "client not found"}
-			case errors.Is(err, errManagedTunnelNotFound):
-				status = http.StatusNotFound
-				payload = map[string]any{"error": "隧道不存在"}
-			case errors.As(err, &ruleErr):
-				status = http.StatusConflict
-				payload["error_code"] = ruleErr.ErrorCode()
-			case errors.As(err, &validationErr):
-				status = http.StatusConflict
-			}
-
+			status, payload := tunnelMutationErrorStatusAndBody(err)
 			encodeJSON(w, status, payload)
 			return
 		}
@@ -1689,24 +1685,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := s.updateManagedTunnel(client, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain)
 	if err != nil {
-		status := http.StatusInternalServerError
-		payload := map[string]any{"error": err.Error()}
-
-		var ruleErr *httpTunnelRuleError
-		var validationErr *proxyRequestValidationError
-		var rejected *tunnelReadyRejectedError
-		switch {
-		case errors.Is(err, errTunnelReadyTimeout):
-			status = http.StatusGatewayTimeout
-		case errors.As(err, &rejected):
-			status = http.StatusBadGateway
-		case errors.As(err, &ruleErr):
-			status = http.StatusConflict
-			payload["error_code"] = ruleErr.ErrorCode()
-		case errors.As(err, &validationErr):
-			status = http.StatusConflict
-		}
-
+		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}

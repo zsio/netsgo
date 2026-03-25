@@ -75,6 +75,19 @@ const (
 	ProxyTypeHTTP = "http"
 )
 
+// Tunnel mutation field constants used by the admin HTTP API.
+const (
+	TunnelMutationFieldDomain     = "domain"
+	TunnelMutationFieldRemotePort = "remote_port"
+)
+
+// Tunnel mutation error code constants used by the admin HTTP API.
+const (
+	TunnelMutationErrorCodeDomainInvalid      = "domain_invalid"
+	TunnelMutationErrorCodeServerAddrConflict = "server_addr_conflict"
+	TunnelMutationErrorCodeHTTPTunnelConflict = "http_tunnel_conflict"
+)
+
 // WebSocket 子协议常量
 const (
 	WSSubProtocolControl = "netsgo-control.v1"
