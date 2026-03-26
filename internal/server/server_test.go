@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -86,6 +87,13 @@ func issueAdminToken(t *testing.T, s *Server) string {
 	return token
 }
 
+func testReadTimeout(base time.Duration) time.Duration {
+	if runtime.GOOS == "windows" {
+		return base * 3
+	}
+	return base
+}
+
 // doAuth 完成认证，返回响应
 func doAuth(t *testing.T, conn *websocket.Conn) protocol.AuthResponse {
 	return doAuthWithInstallID(t, conn, "test-host", "install-test-host", "test-key")
@@ -152,7 +160,7 @@ func dialDataWSForClient(ts *httptest.Server, authResp protocol.AuthResponse) (*
 		conn.Close()
 		return nil, fmt.Errorf("发送数据通道握手失败: %w", err)
 	}
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(testReadTimeout(2 * time.Second)))
 	messageType, payload, err := conn.ReadMessage()
 	if err != nil {
 		conn.Close()
@@ -1156,7 +1164,7 @@ func TestHeartbeat_MultiplePings(t *testing.T) {
 			t.Fatalf("第 %d 次发送 Ping 失败: %v", i, err)
 		}
 
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(testReadTimeout(2 * time.Second)))
 		var resp protocol.Message
 		if err := conn.ReadJSON(&resp); err != nil {
 			t.Fatalf("第 %d 次读取 Pong 失败: %v", i, err)
@@ -1425,7 +1433,7 @@ func TestMultipleClients_Concurrent(t *testing.T) {
 			conn.WriteJSON(msg)
 
 			var resp protocol.Message
-			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(testReadTimeout(10 * time.Second)))
 			if err := conn.ReadJSON(&resp); err != nil {
 				errors <- err
 				return
@@ -1450,7 +1458,7 @@ func TestMultipleClients_Concurrent(t *testing.T) {
 				errors <- err
 				return
 			}
-			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(testReadTimeout(10 * time.Second)))
 			if err := conn.ReadJSON(&resp); err != nil {
 				errors <- err
 				return
@@ -1668,7 +1676,7 @@ func TestControlLoop_LegacyProxyCreateCompatibility(t *testing.T) {
 		t.Fatalf("期望返回 %s，得到 %s", protocol.MsgTypeProxyCreateResp, resp.Type)
 	}
 
-	var payload protocol.ProxyNewResponse
+	var payload protocol.ProxyCreateResponse
 	if err := resp.ParsePayload(&payload); err != nil {
 		t.Fatalf("解析 legacy 创建代理响应失败: %v", err)
 	}

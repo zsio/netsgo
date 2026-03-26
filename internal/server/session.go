@@ -137,7 +137,7 @@ func (s *Server) invalidateLogicalSessionIfCurrent(clientID string, generation u
 	client.stateMu.Unlock()
 
 	s.clients.CompareAndDelete(clientID, client)
-	s.cancelTunnelReadyWaiters(clientID, generation)
+	s.cancelTunnelProvisionAckWaiters(clientID, generation)
 
 	client.mu.Lock()
 	controlConn := client.conn

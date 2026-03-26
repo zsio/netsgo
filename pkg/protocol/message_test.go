@@ -339,7 +339,11 @@ func TestZeroValueStructs(t *testing.T) {
 		AuthRequest{},
 		AuthResponse{},
 		ProxyNewRequest{},
+		ProxyCreateRequest{},
+		ProxyProvisionRequest{},
 		ProxyNewResponse{},
+		ProxyCreateResponse{},
+		ProxyProvisionAck{},
 	}
 
 	for _, s := range structs {
@@ -478,6 +482,11 @@ func TestAllStructs_JSONTags(t *testing.T) {
 			"ProxyNewRequest",
 			ProxyNewRequest{Name: "n", Type: "t", LocalIP: "l", LocalPort: 1, RemotePort: 1, Domain: "d"},
 			[]string{"name", "type", "local_ip", "local_port", "remote_port", "domain"},
+		},
+		{
+			"ProxyProvisionAck",
+			ProxyProvisionAck{Name: "n", Accepted: true, Message: "ok"},
+			[]string{"name", "accepted", "message"},
 		},
 		{
 			"Message",

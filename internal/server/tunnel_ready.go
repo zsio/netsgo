@@ -9,30 +9,30 @@ import (
 )
 
 var (
-	errTunnelReadyTimeout   = errors.New("tunnel ready timeout")
-	errTunnelReadyCancelled = errors.New("tunnel ready cancelled")
+	errTunnelProvisionAckTimeout   = errors.New("tunnel provision ack timeout")
+	errTunnelProvisionAckCancelled = errors.New("tunnel provision ack cancelled")
 )
 
-type tunnelReadyRejectedError struct {
+type tunnelProvisionRejectedError struct {
 	name    string
 	message string
 }
 
-func (e *tunnelReadyRejectedError) Error() string {
+func (e *tunnelProvisionRejectedError) Error() string {
 	if e.message == "" {
 		return fmt.Sprintf("client rejected tunnel %s", e.name)
 	}
 	return fmt.Sprintf("client rejected tunnel %s: %s", e.name, e.message)
 }
 
-type pendingTunnelReadyKey struct {
+type pendingTunnelProvisionAckKey struct {
 	clientID   string
 	generation uint64
 	name       string
 }
 
-func (s *Server) registerTunnelReadyWaiter(client *ClientConn, name string) (<-chan protocol.ProxyNewResponse, error) {
-	key := pendingTunnelReadyKey{
+func (s *Server) registerTunnelProvisionAckWaiter(client *ClientConn, name string) (<-chan protocol.ProxyNewResponse, error) {
+	key := pendingTunnelProvisionAckKey{
 		clientID:   client.ID,
 		generation: client.generation,
 		name:       name,
@@ -42,7 +42,7 @@ func (s *Server) registerTunnelReadyWaiter(client *ClientConn, name string) (<-c
 	defer s.pendingReadyMu.Unlock()
 
 	if _, exists := s.pendingReady[key]; exists {
-		return nil, fmt.Errorf("隧道 %q 已存在未完成的 ready 等待", name)
+		return nil, fmt.Errorf("隧道 %q 已存在未完成的 provisioning ack 等待", name)
 	}
 
 	ch := make(chan protocol.ProxyNewResponse, 1)
@@ -50,8 +50,8 @@ func (s *Server) registerTunnelReadyWaiter(client *ClientConn, name string) (<-c
 	return ch, nil
 }
 
-func (s *Server) unregisterTunnelReadyWaiter(client *ClientConn, name string) {
-	key := pendingTunnelReadyKey{
+func (s *Server) unregisterTunnelProvisionAckWaiter(client *ClientConn, name string) {
+	key := pendingTunnelProvisionAckKey{
 		clientID:   client.ID,
 		generation: client.generation,
 		name:       name,
@@ -62,12 +62,12 @@ func (s *Server) unregisterTunnelReadyWaiter(client *ClientConn, name string) {
 	s.pendingReadyMu.Unlock()
 }
 
-func (s *Server) resolveTunnelReadyWaiter(clientID string, generation uint64, resp protocol.ProxyNewResponse) bool {
+func (s *Server) resolveTunnelProvisionAckWaiter(clientID string, generation uint64, resp protocol.ProxyNewResponse) bool {
 	if resp.Name == "" {
 		return false
 	}
 
-	key := pendingTunnelReadyKey{
+	key := pendingTunnelProvisionAckKey{
 		clientID:   clientID,
 		generation: generation,
 		name:       resp.Name,
@@ -88,7 +88,7 @@ func (s *Server) resolveTunnelReadyWaiter(clientID string, generation uint64, re
 	return true
 }
 
-func (s *Server) cancelTunnelReadyWaiters(clientID string, generation uint64) {
+func (s *Server) cancelTunnelProvisionAckWaiters(clientID string, generation uint64) {
 	s.pendingReadyMu.Lock()
 	defer s.pendingReadyMu.Unlock()
 
@@ -100,14 +100,14 @@ func (s *Server) cancelTunnelReadyWaiters(clientID string, generation uint64) {
 	}
 }
 
-func (s *Server) waitForTunnelReady(client *ClientConn, req protocol.ProxyNewRequest) (protocol.ProxyNewResponse, error) {
-	ch, err := s.registerTunnelReadyWaiter(client, req.Name)
+func (s *Server) waitForTunnelProvisionAck(client *ClientConn, req protocol.ProxyNewRequest) (protocol.ProxyNewResponse, error) {
+	ch, err := s.registerTunnelProvisionAckWaiter(client, req.Name)
 	if err != nil {
 		return protocol.ProxyNewResponse{}, err
 	}
 
 	if err := s.notifyClientProxyNew(client, req); err != nil {
-		s.unregisterTunnelReadyWaiter(client, req.Name)
+		s.unregisterTunnelProvisionAckWaiter(client, req.Name)
 		return protocol.ProxyNewResponse{}, err
 	}
 
@@ -121,14 +121,14 @@ func (s *Server) waitForTunnelReady(client *ClientConn, req protocol.ProxyNewReq
 	select {
 	case resp, ok := <-ch:
 		if !ok {
-			return protocol.ProxyNewResponse{}, errTunnelReadyCancelled
+			return protocol.ProxyNewResponse{}, errTunnelProvisionAckCancelled
 		}
 		if !resp.Success {
-			return resp, &tunnelReadyRejectedError{name: req.Name, message: resp.Message}
+			return resp, &tunnelProvisionRejectedError{name: req.Name, message: resp.Message}
 		}
 		return resp, nil
 	case <-timer.C:
-		s.unregisterTunnelReadyWaiter(client, req.Name)
-		return protocol.ProxyNewResponse{}, errTunnelReadyTimeout
+		s.unregisterTunnelProvisionAckWaiter(client, req.Name)
+		return protocol.ProxyNewResponse{}, errTunnelProvisionAckTimeout
 	}
 }

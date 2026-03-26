@@ -70,7 +70,7 @@ type Server struct {
 	publicIPMu                  sync.RWMutex // 保护公网 IP 缓存
 	nextGeneration              atomic.Uint64
 	pendingReadyMu              sync.Mutex
-	pendingReady                map[pendingTunnelReadyKey]chan protocol.ProxyNewResponse
+	pendingReady                map[pendingTunnelProvisionAckKey]chan protocol.ProxyNewResponse
 
 	pendingDataTimeout      time.Duration
 	dataHandshakeTimeout    time.Duration
@@ -197,7 +197,7 @@ func New(port int) *Server {
 		events:                  NewEventBus(),
 		startTime:               time.Now(),
 		done:                    make(chan struct{}),
-		pendingReady:            make(map[pendingTunnelReadyKey]chan protocol.ProxyNewResponse),
+		pendingReady:            make(map[pendingTunnelProvisionAckKey]chan protocol.ProxyNewResponse),
 		pendingDataTimeout:      15 * time.Second,
 		dataHandshakeTimeout:    10 * time.Second,
 		dataHandshakeAckTimeout: 2 * time.Second,
@@ -888,10 +888,10 @@ func (s *Server) controlLoop(client *ClientConn) {
 				log.Printf("⚠️ 解析代理 ready 响应失败 [%s]: %v", client.ID, err)
 				continue
 			}
-			if s.resolveTunnelReadyWaiter(client.ID, client.generation, resp) {
+			if s.resolveTunnelProvisionAckWaiter(client.ID, client.generation, resp) {
 				continue
 			}
-			log.Printf("📩 收到未匹配的 proxy_new_resp [%s]: name=%s success=%v", client.ID, resp.Name, resp.Success)
+			log.Printf("📩 收到未匹配的 legacy create/provision response [%s]: name=%s success=%v", client.ID, resp.Name, resp.Success)
 
 		case protocol.MsgTypeProxyClose:
 			if !s.isCurrentLive(client.ID, client.generation) {
@@ -1383,7 +1383,7 @@ func tunnelMutationErrorStatusAndBody(err error) (int, tunnelMutationErrorRespon
 
 	var ruleErr *httpTunnelRuleError
 	var validationErr *proxyRequestValidationError
-	var rejected *tunnelReadyRejectedError
+	var rejected *tunnelProvisionRejectedError
 	switch {
 	case errors.Is(err, errManagedTunnelClientNotFound):
 		status = http.StatusNotFound
@@ -1391,7 +1391,7 @@ func tunnelMutationErrorStatusAndBody(err error) (int, tunnelMutationErrorRespon
 	case errors.Is(err, errManagedTunnelNotFound):
 		status = http.StatusNotFound
 		payload.Error = "隧道不存在"
-	case errors.Is(err, errTunnelReadyTimeout):
+	case errors.Is(err, errTunnelProvisionAckTimeout):
 		status = http.StatusGatewayTimeout
 	case errors.As(err, &rejected):
 		status = http.StatusBadGateway
@@ -1533,9 +1533,9 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.resumeManagedTunnel(client, tunnelName); err != nil {
 		status := http.StatusInternalServerError
-		var rejected *tunnelReadyRejectedError
+		var rejected *tunnelProvisionRejectedError
 		switch {
-		case errors.Is(err, errTunnelReadyTimeout):
+		case errors.Is(err, errTunnelProvisionAckTimeout):
 			status = http.StatusGatewayTimeout
 		case errors.As(err, &rejected):
 			status = http.StatusBadGateway

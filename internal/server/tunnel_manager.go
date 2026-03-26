@@ -16,16 +16,16 @@ var (
 )
 
 func tunnelProvisionErrorMessage(err error) string {
-	var rejected *tunnelReadyRejectedError
+	var rejected *tunnelProvisionRejectedError
 	switch {
 	case errors.As(err, &rejected):
 		if rejected.message != "" {
 			return rejected.message
 		}
 		return "client 拒绝隧道初始化"
-	case errors.Is(err, errTunnelReadyTimeout):
-		return "等待 client ready 超时"
-	case errors.Is(err, errTunnelReadyCancelled):
+	case errors.Is(err, errTunnelProvisionAckTimeout):
+		return "等待 client provisioning ack 超时"
+	case errors.Is(err, errTunnelProvisionAckCancelled):
 		return "逻辑会话已失效"
 	default:
 		return err.Error()
@@ -52,7 +52,7 @@ func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRe
 	}
 	s.emitTunnelChanged(client.ID, tunnel.Config, "pending")
 
-	if _, err := s.waitForTunnelReady(client, tunnel.Config.ToProxyNewRequest()); err != nil {
+	if _, err := s.waitForTunnelProvisionAck(client, tunnel.Config.ToProxyNewRequest()); err != nil {
 		if s.isCurrentGeneration(client.ID, client.generation) {
 			s.removeTunnelRuntime(client, req.Name)
 			_ = s.notifyClientProxyClose(client, req.Name, "provision_failed")
@@ -61,7 +61,7 @@ func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRe
 	}
 
 	if !s.isCurrentGeneration(client.ID, client.generation) {
-		return protocol.ProxyConfig{}, errTunnelReadyCancelled
+		return protocol.ProxyConfig{}, errTunnelProvisionAckCancelled
 	}
 
 	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
@@ -181,8 +181,8 @@ func (s *Server) resumeManagedTunnel(client *ClientConn, name string) error {
 	}
 	s.emitTunnelChanged(client.ID, pendingConfig, "pending")
 
-	if _, err := s.waitForTunnelReady(client, pendingConfig.ToProxyNewRequest()); err != nil {
-		if errors.Is(err, errTunnelReadyCancelled) {
+	if _, err := s.waitForTunnelProvisionAck(client, pendingConfig.ToProxyNewRequest()); err != nil {
+		if errors.Is(err, errTunnelProvisionAckCancelled) {
 			return err
 		}
 		s.markPendingTunnelErrorIfCurrent(client, name, tunnelProvisionErrorMessage(err))
@@ -190,7 +190,7 @@ func (s *Server) resumeManagedTunnel(client *ClientConn, name string) error {
 	}
 
 	if !s.isCurrentGeneration(client.ID, client.generation) {
-		return errTunnelReadyCancelled
+		return errTunnelProvisionAckCancelled
 	}
 
 	if err := s.ResumeProxy(client, name); err != nil {
@@ -370,8 +370,8 @@ func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) e
 	}
 	s.emitTunnelChanged(client.ID, tunnel.Config, "pending")
 
-	if _, err := s.waitForTunnelReady(client, tunnel.Config.ToProxyNewRequest()); err != nil {
-		if errors.Is(err, errTunnelReadyCancelled) {
+	if _, err := s.waitForTunnelProvisionAck(client, tunnel.Config.ToProxyNewRequest()); err != nil {
+		if errors.Is(err, errTunnelProvisionAckCancelled) {
 			return err
 		}
 		s.markPendingTunnelErrorIfCurrent(client, stored.Name, tunnelProvisionErrorMessage(err))
@@ -379,7 +379,7 @@ func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) e
 	}
 
 	if !s.isCurrentGeneration(client.ID, client.generation) {
-		return errTunnelReadyCancelled
+		return errTunnelProvisionAckCancelled
 	}
 
 	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
