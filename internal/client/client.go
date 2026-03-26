@@ -29,16 +29,6 @@ import (
 
 const wsDataMaxMessageSize = 512 * 1024
 
-type proxyCreateRequest = protocol.ProxyNewRequest
-type proxyCreateResponse = protocol.ProxyNewResponse
-type proxyProvisionRequest = protocol.ProxyNewRequest
-
-type proxyProvisionAck struct {
-	Name     string `json:"name,omitempty"`
-	Accepted bool   `json:"accepted"`
-	Message  string `json:"message,omitempty"`
-}
-
 // Client 是客户端/Client 的核心结构体
 type Client struct {
 	ServerAddr      string // 服务器地址（支持 ws:// wss:// http:// https://，内部统一规范化）
@@ -868,7 +858,7 @@ func (c *Client) requestProxyRuntime(rt *sessionRuntime, cfg protocol.ProxyNewRe
 	// 先注册本地代理配置
 	c.proxies.Store(cfg.Name, cfg)
 
-	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, proxyCreateRequest(cfg))
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, protocol.ProxyCreateRequest(cfg))
 	rt.connMu.Lock()
 	conn := rt.conn
 	rt.connMu.Unlock()
@@ -1012,7 +1002,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 
 		case protocol.MsgTypeProxyProvision, protocol.MsgTypeProxyNew:
 			// 服务端下发: 要求 client 接受/provision 代理隧道配置。
-			var req proxyProvisionRequest
+			var req protocol.ProxyProvisionRequest
 			if err := msg.ParsePayload(&req); err != nil {
 				log.Printf("⚠️ 解析代理指令失败: %v", err)
 				continue
@@ -1030,7 +1020,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 					RemotePort: req.RemotePort,
 				})
 			} else {
-				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, proxyProvisionAck{
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
 					Name:     req.Name,
 					Accepted: true,
 					Message:  "provision accepted",
@@ -1046,7 +1036,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 
 		case protocol.MsgTypeProxyCreateResp, protocol.MsgTypeProxyNewResp:
 			// 代理创建结果（客户端主动请求场景，如 Benchmark）
-			var resp proxyCreateResponse
+			var resp protocol.ProxyCreateResponse
 			if err := msg.ParsePayload(&resp); err != nil {
 				log.Printf("⚠️ 解析代理响应失败: %v", err)
 				continue

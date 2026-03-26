@@ -1668,7 +1668,7 @@ func TestControlLoop_LegacyProxyCreateCompatibility(t *testing.T) {
 		t.Fatalf("期望返回 %s，得到 %s", protocol.MsgTypeProxyCreateResp, resp.Type)
 	}
 
-	var payload protocol.ProxyNewResponse
+	var payload protocol.ProxyCreateResponse
 	if err := resp.ParsePayload(&payload); err != nil {
 		t.Fatalf("解析 legacy 创建代理响应失败: %v", err)
 	}

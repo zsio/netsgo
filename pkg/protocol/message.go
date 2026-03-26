@@ -9,12 +9,12 @@ const (
 	MsgTypePing         = "ping"           // Client → Server: 心跳
 	MsgTypePong         = "pong"           // Server → Client: 心跳回复
 	MsgTypeProbeReport  = "probe_report"   // Client → Server: 探针数据上报
-	MsgTypeProxyNew     = "proxy_new"      // Client/Server: 请求创建代理隧道
-	MsgTypeProxyNewResp = "proxy_new_resp" // Client/Server: 代理创建/ready 响应
+	MsgTypeProxyNew     = "proxy_new"      // Legacy create/provision request path
+	MsgTypeProxyNewResp = "proxy_new_resp" // Legacy create result / provision ACK path
 	MsgTypeProxyClose   = "proxy_close"    // 双向: 关闭某条代理隧道
 )
 
-// 旧版控制通道消息类型；仍用于兼容旧 client/server 的主动创建/下发路径。
+// 新版 tunnel 控制消息类型。Phase 1 先进入共享协议层，运行时仍保留旧消息兼容路径。
 const (
 	MsgTypeProxyCreate       = "proxy_create"
 	MsgTypeProxyCreateResp   = "proxy_create_resp"
@@ -89,12 +89,28 @@ type ProxyNewRequest struct {
 	Domain     string `json:"domain"`      // 域名（HTTP 类型时使用）
 }
 
-// ProxyNewResponse 代理隧道创建结果
+// ProxyCreateRequest 表示 client 主动请求 server 创建 tunnel 的消息体。
+type ProxyCreateRequest = ProxyNewRequest
+
+// ProxyProvisionRequest 表示 server 下发给 client 的 provisioning 配置消息体。
+type ProxyProvisionRequest = ProxyNewRequest
+
+// ProxyNewResponse 旧版 tunnel create/provision 响应结构。
 type ProxyNewResponse struct {
 	Name       string `json:"name,omitempty"`
 	Success    bool   `json:"success"`
 	Message    string `json:"message,omitempty"`
 	RemotePort int    `json:"remote_port,omitempty"` // 实际分配的公网端口
+}
+
+// ProxyCreateResponse 表示 client 主动创建 tunnel 时 server 返回的结果。
+type ProxyCreateResponse = ProxyNewResponse
+
+// ProxyProvisionAck 表示 client 接收 provisioning 配置后的 ACK。
+type ProxyProvisionAck struct {
+	Name     string `json:"name,omitempty"`
+	Accepted bool   `json:"accepted"`
+	Message  string `json:"message,omitempty"`
 }
 
 // ProxyCloseRequest 关闭某条代理隧道
