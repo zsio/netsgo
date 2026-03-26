@@ -576,11 +576,6 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 			log.Printf("⚠️ 更新隧道展示主机名失败 [%s]: %v", client.ID, err)
 		}
 	}
-	if migrated, err := s.migrateLegacyTunnels(client); err != nil {
-		log.Printf("⚠️ 迁移旧版隧道失败 [%s]: %v", client.ID, err)
-	} else if migrated > 0 {
-		log.Printf("🔄 已迁移 %d 条旧版 hostname 绑定隧道 [%s]", migrated, client.ID)
-	}
 
 	defer s.invalidateLogicalSessionIfCurrent(client.ID, client.generation, "control_loop_exit")
 

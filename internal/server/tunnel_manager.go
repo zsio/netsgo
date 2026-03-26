@@ -726,20 +726,6 @@ func (s *Server) readClientFromPath(w http.ResponseWriter, r *http.Request) (*Cl
 	return client, true
 }
 
-func (s *Server) migrateLegacyTunnels(client *ClientConn) (int, error) {
-	if s.store == nil || s.adminStore == nil {
-		return 0, nil
-	}
-	if s.adminStore.CountClientsByHostname(client.Info.Hostname) != 1 {
-		pending := s.store.GetLegacyTunnelsByHostname(client.Info.Hostname)
-		if len(pending) > 0 {
-			log.Printf("⚠️ 主机名 %s 存在 %d 个注册 Client，跳过 legacy 隧道自动迁移", client.Info.Hostname, len(pending))
-		}
-		return 0, nil
-	}
-	return s.store.MigrateLegacyTunnels(client.Info.Hostname, client.ID)
-}
-
 func (s *Server) forceDisconnectClient(client *ClientConn) {
 	_ = s.invalidateLogicalSessionIfCurrent(client.ID, client.generation, "force_disconnect")
 }

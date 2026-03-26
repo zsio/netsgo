@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	TunnelBindingClientID       = "client_id"
-	TunnelBindingLegacyHostname = "legacy_hostname"
+	TunnelBindingClientID = "client_id"
 )
 
 // StoredTunnel 持久化存储的隧道配置
@@ -25,20 +24,15 @@ type StoredTunnel struct {
 	Error        string `json:"error,omitempty"`         // error 状态时的具体原因
 	ClientID     string `json:"client_id,omitempty"`     // 所属稳定 Client ID
 	Hostname     string `json:"hostname,omitempty"`      // 当前主机名（展示用）
-	Binding      string `json:"binding,omitempty"`       // client_id | legacy_hostname
+	Binding      string `json:"binding,omitempty"`       // 仅允许 client_id
 }
 
 func (t *StoredTunnel) normalize() error {
-	switch t.Binding {
-	case TunnelBindingClientID:
-		if t.ClientID == "" {
-			t.Binding = TunnelBindingLegacyHostname
-		}
-	case TunnelBindingLegacyHostname:
-	default:
-		// 旧版数据默认都按 hostname 绑定处理，避免误信任历史上的临时 client_id
-		t.Binding = TunnelBindingLegacyHostname
-		t.ClientID = ""
+	if t.Binding != TunnelBindingClientID {
+		return fmt.Errorf("隧道 %q 必须使用 %q 绑定", t.Name, TunnelBindingClientID)
+	}
+	if t.ClientID == "" {
+		return fmt.Errorf("隧道 %q 缺少稳定 client_id", t.Name)
 	}
 	if err := validateTunnelStates(t.DesiredState, t.RuntimeState, t.Error); err != nil {
 		return err
@@ -52,17 +46,7 @@ func (t StoredTunnel) matchesClient(clientID, name string) bool {
 }
 
 func (t StoredTunnel) matchesIdentifier(identifier, name string) bool {
-	if t.Name != name {
-		return false
-	}
-	if t.Binding == TunnelBindingClientID {
-		return t.ClientID == identifier
-	}
-	return t.Hostname == identifier
-}
-
-func (t StoredTunnel) matchesLegacyHostname(hostname string) bool {
-	return t.Binding == TunnelBindingLegacyHostname && t.Hostname == hostname
+	return t.Name == name && t.Binding == TunnelBindingClientID && t.ClientID == identifier
 }
 
 // TunnelStore 基于 JSON 文件的隧道配置持久化存储
@@ -253,35 +237,6 @@ func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 	return nil
 }
 
-// MigrateLegacyTunnels 以 hostname 为条件，将旧版记录迁移到稳定 client_id
-func (s *TunnelStore) MigrateLegacyTunnels(hostname, clientID string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	changed := 0
-	previous := cloneStoredTunnels(s.tunnels)
-	for i, tunnel := range s.tunnels {
-		if tunnel.matchesLegacyHostname(hostname) {
-			s.tunnels[i].ClientID = clientID
-			s.tunnels[i].Binding = TunnelBindingClientID
-			changed++
-		}
-	}
-	if changed == 0 {
-		return 0, nil
-	}
-	if err := s.save(); err != nil {
-		s.tunnels = previous
-		return 0, err
-	}
-	return changed, nil
-}
-
-// UpdateClientID 向后兼容旧接口：将 hostname 绑定的旧隧道迁移到稳定 client_id
-func (s *TunnelStore) UpdateClientID(hostname, oldID, newID string) {
-	_, _ = s.MigrateLegacyTunnels(hostname, newID)
-}
-
 // GetTunnelsByClientID 按稳定 client_id 查找所有隧道配置
 func (s *TunnelStore) GetTunnelsByClientID(clientID string) []StoredTunnel {
 	s.mu.RLock()
@@ -296,21 +251,7 @@ func (s *TunnelStore) GetTunnelsByClientID(clientID string) []StoredTunnel {
 	return result
 }
 
-// GetLegacyTunnelsByHostname 获取尚未迁移的 hostname 绑定隧道
-func (s *TunnelStore) GetLegacyTunnelsByHostname(hostname string) []StoredTunnel {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	result := make([]StoredTunnel, 0)
-	for _, tunnel := range s.tunnels {
-		if tunnel.matchesLegacyHostname(hostname) {
-			result = append(result, tunnel)
-		}
-	}
-	return result
-}
-
-// GetTunnelsByHostname 向后兼容旧接口：返回匹配 hostname 的全部隧道
+// GetTunnelsByHostname 返回匹配 hostname 的全部隧道（展示/查询用途）。
 func (s *TunnelStore) GetTunnelsByHostname(hostname string) []StoredTunnel {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
