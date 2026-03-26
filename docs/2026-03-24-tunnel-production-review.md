@@ -1,6 +1,22 @@
 # 隧道生产可用性审查（2026-03-24）
 
-## 0. 状态更新（2026-03-25）
+## 0. 状态更新（2026-03-27）
+
+自本审查文档写下后，主线又关闭了一批当时仍未收口的问题：
+
+- loopback management host fallback 已改为**默认不放行**，只有显式开启 `AllowLoopbackManagementHost` 时才允许 `localhost / 127.0.0.1 / ::1` 作为管理面兜底入口
+- TCP/UDP 已改成**必须填写明确的公网端口**，不再把 `remote_port = 0` 暴露为实际产品能力
+- TCP listener 在 `Accept()` 异常退出时，现已补上运行态下沉链路：会把 tunnel 降级为 `running/error`，而不是只打日志后静默退出
+
+因此，这份文档下面有一部分内容现在应视为**历史问题回顾**，不再是当前主线上的活问题。
+当前仍然真正未闭环的重点主要是：
+
+- `ready -> exposed` 语义仍然只代表“配置被接受 / 入口已建立”，不是“后端已验证可用”
+- client 侧本地 backend dial 失败仍然只打日志，尚未稳定地下沉为 tunnel 运行态
+- TCP/UDP 更完整的连接预算、deadline、错误计数、自愈/退避治理仍未建立
+- 生产可用性证明仍缺更系统的端到端/手工冒烟闭环
+
+## 1. 状态更新（2026-03-25）
 
 本轮已完成一组“状态模型收敛”修复，用于关闭审查里“配置真值不统一 / 状态语义分裂”的主问题：
 
@@ -16,14 +32,14 @@
 - `cd web && bun test src/lib/tunnel-model.test.ts`
 - `cd web && bun run build`
 
-仍未关闭的问题：
+当时仍未关闭的问题（其中部分已于后续主线修复）：
 
-- `Host: localhost / 127.0.0.1 / ::1` 管理面兜底仍保留，属于显式待审风险
+- `Host: localhost / 127.0.0.1 / ::1` 管理面兜底仍保留，属于当时的显式待审风险（**现已于后续主线收口**）
 - `ready -> exposed` 仍偏“入口建立成功”，还不是“后端健康已验证”
 - TCP/UDP 的超时治理、错误计数、自愈/退避还没进入这一轮
 - 还没有补端到端/手工冒烟来证明三类 tunnel 的生产闭环
 
-## 1. 审查结论
+## 2. 审查结论
 
 结论先给出：
 
@@ -39,7 +55,7 @@
 3. 运行时治理不足
 4. 测试覆盖对生产风险证明不够
 
-## 2. 审查范围与方法
+## 3. 审查范围与方法
 
 本次审查主要基于：
 
@@ -62,9 +78,9 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 - 本次没有跑 `-tags=e2e` 的 Docker 用例。
 - 现有 e2e 明显偏向 HTTP 路径，对 TCP / UDP 的生产风险证明不足。
 
-## 3. 总体判断
+## 4. 总体判断
 
-### 3.1 不是“过度设计”，而是“闭环没闭上”
+### 4.1 不是“过度设计”，而是“闭环没闭上”
 
 代码里已经有不少状态与流程，比如：
 
@@ -76,7 +92,7 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 
 换句话说，系统看上去已经有完整管理面，但很多地方仍然是“功能打通态”，不是“生产语义闭环态”。
 
-### 3.2 配置真值是分裂的
+### 4.2 配置真值是分裂的
 
 当前系统没有真正统一到“store 是配置真值、runtime 是执行态”的模型：
 
@@ -86,9 +102,9 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 
 这会让系统在运维、自动化、恢复、审计上都变得难以推理。
 
-## 4. 全局问题
+## 5. 全局问题
 
-### 4.1 管理面存在 Host 级绕过
+### 5.1 管理面 loopback fallback（已于后续主线收口）
 
 相关代码：
 
@@ -97,13 +113,11 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 - `internal/server/http_tunnel_proxy.go:74`
 - `internal/server/http_tunnel_proxy.go:95`
 
-现象：
+历史现象：
 
 - `hostDispatchHandler()` 先按业务 Host 找 HTTP 隧道
 - 如果没命中，再看 `allowSetupRequest()` 或 `isManagementHost()`
-- `isManagementHost()` 中把 `localhost / 127.0.0.1 / ::1` 无条件视为管理 Host
-
-这意味着只要请求没有命中业务域名，带一个 `Host: localhost` 就能被路由进管理面。
+- 旧实现曾把 `localhost / 127.0.0.1 / ::1` 直接视为管理 Host 兜底入口
 
 需要特别说明：
 
@@ -116,13 +130,14 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 - 它不该被默认为“生产安全边界的一部分”
 - 至少应该被显式说明为 trade-off，而不是隐式行为
 
-建议审查方向：
+当前结论：
 
-1. 是否只在 dev 模式或显式开关下启用
-2. 是否应该绑定请求来源地址，而不是仅看 `Host`
-3. 是否应该在文档和界面上明确声明这个兜底行为
+- 这一条在后续主线中已经收口：
+  - 默认不再让 loopback host 成为隐式管理入口
+  - 只有显式开启 `AllowLoopbackManagementHost` 时才允许该兜底路径
+- 因此它不再属于当前主线上的活风险项，但保留在本文档中作为历史问题回顾。
 
-### 4.2 `ready -> active` 的语义失真
+### 5.2 `ready -> active` 的语义失真
 
 相关代码：
 
@@ -153,7 +168,7 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 
 这个问题横跨 `tcp` 和 `http`，本质是全局状态机问题。
 
-### 4.3 数据面故障不会可靠地下沉成隧道状态
+### 5.3 数据面故障不会可靠地下沉成隧道状态
 
 相关代码：
 
@@ -164,25 +179,25 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 - `internal/client/client.go:840`
 - `internal/client/client.go:845`
 
-现象：
+当前状态：
 
-- TCP accept loop 异常退出，只打日志
-- UDP read loop 异常退出，只打日志
-- client 本地 dial backend 失败，只打日志
+- **TCP listener `Accept()` 异常退出** 已在后续主线中补上运行态下沉，不再只是打日志
+- **UDP read loop 异常退出** 已有运行态 error 下沉链路
+- **client 本地 dial backend 失败** 仍然只打日志，这是当前仍未解决的关键缺口
 
-缺失的是：
+仍然缺失的是：
 
 - tunnel 状态降级
 - 错误计数
 - 事件通知
 - 自愈或退避
 
-结果会出现典型的“伪 active”：
+因此当前仍会出现典型的“伪 active”：
 
-- 管理面还显示 `active`
-- 数据面实际已经不可用
+- 控制面/运行态未必能及时反映 client 本地 backend 实际不可达
+- 第一笔真实流量仍可能在 client 侧失败后才暴露问题
 
-### 4.4 端口自动分配与白名单设计不闭合
+### 5.4 端口自动分配与白名单设计（已于后续主线收口）
 
 相关代码：
 
@@ -191,16 +206,19 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 - `internal/server/proxy.go:145`
 - `web/src/components/custom/tunnel/TunnelDialog.tsx:288`
 
-现象：
+历史现象：
 
-- 前端明确把 `remote_port = 0` 暴露为“自动分配”
-- 后端并不会“在白名单范围里选择一个端口”
-- 而是先让 OS 随机分配，再检查是否落在允许范围内
-- 如果不在范围内，创建直接失败
+- 前端曾把 `remote_port = 0` 暴露为“自动分配”
+- 后端不会在白名单范围里主动选择端口，而是依赖 OS 分配后再校验
 
-这在白名单较窄的场景下会变成概率性失败，而不是一个可靠产品能力。
+当前结论：
 
-### 4.5 配置真值与离线语义没有统一
+- 这一条在后续主线中已经收口：
+  - TCP/UDP 现在要求显式 `remote_port`
+  - 前端非 HTTP 隧道也不再暴露“自动分配公网端口”作为产品能力
+- 因此它已不再是当前主线上的活问题。
+
+### 5.5 配置真值与离线语义没有统一
 
 相关代码：
 
@@ -225,9 +243,9 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 
 变得很不清晰。
 
-## 5. TCP 隧道问题
+## 6. TCP 隧道问题
 
-### 5.1 TCP 不应被判定为生产可用
+### 6.1 TCP 不应被判定为生产可用
 
 关键阻断项：
 
@@ -236,7 +254,7 @@ go test ./internal/server ./internal/client ./pkg/mux ./pkg/protocol -timeout 60
 3. 无健康降级
 4. runtime worker 生命周期不够严谨
 
-### 5.2 控制面成功不等于 backend 可用
+### 6.2 控制面成功不等于 backend 可用
 
 相关代码：
 
@@ -253,7 +271,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 这会把“配置被接受”和“隧道可用”混成一个状态。
 
-### 5.3 公网入口没有连接预算和超时治理
+### 6.3 公网入口没有连接预算和超时治理
 
 相关代码：
 
@@ -278,7 +296,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 这类实现对于 demo 够用，但不是生产隧道入口的姿态。
 
-### 5.4 client stream worker 没有完整纳入 runtime 生命周期
+### 6.4 client stream worker 没有完整纳入 runtime 生命周期
 
 相关代码：
 
@@ -295,9 +313,9 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 在抖动、慢关闭、重连切代场景里，旧流量 worker 的收敛语义不够明确。
 
-## 6. UDP 隧道问题
+## 7. UDP 隧道问题
 
-### 6.1 UDP 本质上是 `UDP-over-WebSocket/TCP` (用户确定不需要修改)
+### 7.1 UDP 本质上是 `UDP-over-WebSocket/TCP` (用户确定不需要修改)
 
 相关代码：
 
@@ -312,7 +330,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 - 反而会引入 TCP 的有序阻塞和抖动放大
 - 用户确认过, 不需要修改,因为本项目主要目的是穿透和映射, 而不是提供一个高性能的 UDP 代理
 
-### 6.2 单循环导致全隧道级 HoL 风险
+### 7.2 单循环导致全隧道级 HoL 风险
 
 相关代码：
 
@@ -329,7 +347,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 只要某个 session 背压、建流变慢或 client 卡顿，整个 UDP 隧道都会被拖慢。
 
-### 6.3 会话模型容易被打满
+### 7.3 会话模型容易被打满
 
 相关代码：
 
@@ -347,7 +365,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 这对公网 UDP 入口来说，抗资源耗尽能力不够。
 
-### 6.4 零长度 UDP datagram 被当成非法输入
+### 7.4 零长度 UDP datagram 被当成非法输入
 
 相关代码：
 
@@ -357,9 +375,9 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 零长度 UDP datagram 在语义上是合法的。
 当前实现会把它视为协议错误。
 
-## 7. HTTP 隧道问题
+## 8. HTTP 隧道问题
 
-### 7.1 HTTP 是最接近生产的，但仍不达标
+### 8.1 HTTP 是最接近生产的，但仍不达标
 
 优点：
 
@@ -370,7 +388,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 但阻断项仍然明显。
 
-### 7.2 HTTP 管理路径没有验证本地目标
+### 8.2 HTTP 管理路径没有验证本地目标
 
 相关代码：
 
@@ -391,7 +409,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 因此控制面允许写入明显无效的 HTTP 配置。
 
-### 7.3 `error` 隧道更新失败时 API 仍返回成功
+### 8.3 `error` 隧道更新失败时 API 仍返回成功
 
 相关代码：
 
@@ -409,7 +427,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 这会误导 UI、自动化和审查者。
 
-### 7.4 热路径仍是 O(N) 路由查找
+### 8.4 热路径仍是 O(N) 路由查找
 
 相关代码：
 
@@ -426,7 +444,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 对小规模系统问题不大，但作为生产 HTTP 入口，这个设计迟早要被 host 索引替代。
 
-### 7.5 代理层每请求新建 `Transport/ReverseProxy`
+### 8.5 代理层每请求新建 `Transport/ReverseProxy`
 
 相关代码：
 
@@ -447,7 +465,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 - 慢后端会长期占住 goroutine / stream
 - 代理栈性能和稳定性都偏“功能优先”
 
-### 7.6 offline HTTP 状态机语义混合了“期望态”和“运行态”
+### 8.6 offline HTTP 状态机语义混合了“期望态”和“运行态”
 
 相关代码：
 
@@ -472,23 +490,23 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 
 语义边界不够干净。
 
-## 8. 测试空洞
+## 9. 测试空洞
 
-### 8.1 TCP
+### 9.1 TCP
 
 - 没有真正的 server + real client + real backend 全链路 e2e
 - 没有验证 backend 不可达时 create/resume/restore 应如何呈现
 - 没有并发、慢连接、资源治理测试
 - 现有 e2e 主要是 HTTP，不是 TCP
 
-### 8.2 UDP
+### 9.2 UDP
 
 - 没有真实 client 代码链路 e2e
 - 没有背压 / HoL / session 打满 / DoS 测试
 - 没有零长度 datagram 测试
 - 没有长时间 soak、抖动、丢包测试
 
-### 8.3 HTTP
+### 9.3 HTTP
 
 - 没有测试“假 ready”
 - 没有测试 HTTP create/update 的本地目标非法输入
@@ -496,7 +514,7 @@ TCP 的首要问题不是“能不能建立 listener”，而是：
 - 没有测试 restore 后第一笔真实流量是否真的成功
 - 没有慢后端、长连接、取消、body 上传、并发性能测试
 
-## 9. 建议给二次审查者重点复核的问题
+## 10. 建议给二次审查者重点复核的问题
 
 建议二次审查者重点回答下面几个问题：
 

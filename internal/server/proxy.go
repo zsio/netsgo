@@ -268,7 +268,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	log.Printf("🚇 代理隧道已创建: %s [:%d → %s:%d] Client [%s]",
 		proxyName, actualPort, localIP, localPort, client.ID)
 
-	go s.proxyAcceptLoop(client, proxyName, listener, done)
+	go s.proxyAcceptLoop(client, tunnel, listener, done)
 	return nil
 }
 
@@ -346,9 +346,38 @@ func (s *Server) StartProxy(client *ClientConn, req protocol.ProxyNewRequest) er
 	return nil
 }
 
+func (s *Server) markTCPProxyRuntimeErrorIfCurrent(
+	client *ClientConn,
+	tunnel *ProxyTunnel,
+	listener net.Listener,
+	message string,
+) {
+	client.proxyMu.Lock()
+	current, exists := client.proxies[tunnel.Config.Name]
+	if !exists ||
+		current != tunnel ||
+		current.Listener != listener ||
+		!isTunnelExposed(current.Config) {
+		client.proxyMu.Unlock()
+		return
+	}
+	closeTunnelRuntimeResources(current)
+	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
+	config := current.Config
+	client.proxyMu.Unlock()
+
+	if err := s.persistTunnelStates(client.ID, tunnel.Config.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message); err != nil {
+		log.Printf("⚠️ TCP 代理 [%s] 持久化 error 状态失败: %v", tunnel.Config.Name, err)
+	}
+	s.emitTunnelChanged(client.ID, config, "error")
+	if err := s.notifyClientProxyClose(client, tunnel.Config.Name, "runtime_error"); err != nil {
+		log.Printf("⚠️ TCP 代理 [%s] 通知 client 关闭失败: %v", tunnel.Config.Name, err)
+	}
+}
+
 // proxyAcceptLoop 持续接受外部连接并通过 yamux 转发。
 // 它只持有本次激活对应的 listener/done 快照，避免旧 loop 误操作新一代 runtime。
-func (s *Server) proxyAcceptLoop(client *ClientConn, proxyName string, listener net.Listener, done <-chan struct{}) {
+func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, done <-chan struct{}) {
 	defer listener.Close()
 
 	for {
@@ -358,12 +387,13 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, proxyName string, listener 
 			case <-done:
 				return // 正常关闭
 			default:
-				log.Printf("⚠️ 代理 [%s] Accept 失败: %v", proxyName, err)
+				log.Printf("⚠️ 代理 [%s] Accept 失败: %v", tunnel.Config.Name, err)
+				s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("TCP 代理监听失败: %v", err))
 				return
 			}
 		}
 
-		go s.handleProxyConn(client, proxyName, extConn)
+		go s.handleProxyConn(client, tunnel.Config.Name, extConn)
 	}
 }
 
