@@ -1,5 +1,9 @@
 # Tunnel Protocol Debt Cleanup
 
+> Status update (2026-03-26): this cleanup has been completed.
+> The runtime tunnel handshake now uses only `proxy_create` / `proxy_create_resp` / `proxy_provision` / `proxy_provision_ack`.
+> Legacy `proxy_new` / `proxy_new_resp` runtime paths have been removed. This document remains as historical handoff/context.
+
 ## 这份文档是干什么的
 
 这份文档是写给后续接手同事看的。

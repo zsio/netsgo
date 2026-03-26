@@ -670,8 +670,8 @@ func (s *Server) deleteOfflineManagedTunnel(clientID, name string) error {
 	return nil
 }
 
-func (s *Server) notifyClientProxyNew(client *ClientConn, req protocol.ProxyNewRequest) error {
-	message, err := protocol.NewMessage(protocol.MsgTypeProxyNew, req)
+func (s *Server) notifyClientProxyProvision(client *ClientConn, req protocol.ProxyNewRequest) error {
+	message, err := protocol.NewMessage(protocol.MsgTypeProxyProvision, protocol.ProxyProvisionRequest(req))
 	if err != nil {
 		return err
 	}

@@ -69,8 +69,8 @@ type Server struct {
 	publicIPv6                  string       // 缓存的公网 IPv6
 	publicIPMu                  sync.RWMutex // 保护公网 IP 缓存
 	nextGeneration              atomic.Uint64
-	pendingReadyMu              sync.Mutex
-	pendingReady                map[pendingTunnelProvisionAckKey]chan protocol.ProxyNewResponse
+	pendingProvisionAckMu       sync.Mutex
+	pendingProvisionAcks        map[pendingTunnelProvisionAckKey]chan provisionAckResult
 
 	pendingDataTimeout      time.Duration
 	dataHandshakeTimeout    time.Duration
@@ -197,7 +197,7 @@ func New(port int) *Server {
 		events:                  NewEventBus(),
 		startTime:               time.Now(),
 		done:                    make(chan struct{}),
-		pendingReady:            make(map[pendingTunnelProvisionAckKey]chan protocol.ProxyNewResponse),
+		pendingProvisionAcks:    make(map[pendingTunnelProvisionAckKey]chan provisionAckResult),
 		pendingDataTimeout:      15 * time.Second,
 		dataHandshakeTimeout:    10 * time.Second,
 		dataHandshakeAckTimeout: 2 * time.Second,
@@ -837,7 +837,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 				"stats":     stats,
 			})
 
-		case protocol.MsgTypeProxyNew, protocol.MsgTypeProxyCreate:
+		case protocol.MsgTypeProxyCreate:
 			if !s.isCurrentLive(client.ID, client.generation) {
 				continue
 			}
@@ -850,13 +850,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 
 			err := s.StartProxy(client, req)
 			var resp *protocol.Message
-			respType := protocol.MsgTypeProxyNewResp
-			if msg.Type == protocol.MsgTypeProxyCreate {
-				respType = protocol.MsgTypeProxyCreateResp
-			}
 			if err != nil {
 				log.Printf("❌ 创建代理失败 [%s]: %v", client.ID, err)
-				resp, _ = protocol.NewMessage(respType, protocol.ProxyNewResponse{
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
 					Name:    req.Name,
 					Success: false,
 					Message: err.Error(),
@@ -868,7 +864,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 				config := tunnel.Config
 				client.proxyMu.RUnlock()
 
-				resp, _ = protocol.NewMessage(respType, protocol.ProxyNewResponse{
+				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
 					Name:       req.Name,
 					Success:    true,
 					Message:    "代理隧道创建成功",
@@ -882,16 +878,21 @@ func (s *Server) controlLoop(client *ClientConn) {
 			_ = conn.WriteJSON(resp)
 			client.mu.Unlock()
 
-		case protocol.MsgTypeProxyNewResp:
-			var resp protocol.ProxyNewResponse
-			if err := msg.ParsePayload(&resp); err != nil {
-				log.Printf("⚠️ 解析代理 ready 响应失败 [%s]: %v", client.ID, err)
+		case protocol.MsgTypeProxyProvisionAck:
+			var ack protocol.ProxyProvisionAck
+			if err := msg.ParsePayload(&ack); err != nil {
+				log.Printf("⚠️ 解析 provisioning ack 失败 [%s]: %v", client.ID, err)
 				continue
+			}
+			resp := provisionAckResult{
+				name:     ack.Name,
+				accepted: ack.Accepted,
+				message:  ack.Message,
 			}
 			if s.resolveTunnelProvisionAckWaiter(client.ID, client.generation, resp) {
 				continue
 			}
-			log.Printf("📩 收到未匹配的 legacy create/provision response [%s]: name=%s success=%v", client.ID, resp.Name, resp.Success)
+			log.Printf("📩 收到未匹配的 provisioning ack [%s]: name=%s accepted=%v", client.ID, resp.name, resp.accepted)
 
 		case protocol.MsgTypeProxyClose:
 			if !s.isCurrentLive(client.ID, client.generation) {

@@ -341,7 +341,6 @@ func TestZeroValueStructs(t *testing.T) {
 		ProxyNewRequest{},
 		ProxyCreateRequest{},
 		ProxyProvisionRequest{},
-		ProxyNewResponse{},
 		ProxyCreateResponse{},
 		ProxyProvisionAck{},
 	}
@@ -518,8 +517,6 @@ func TestConstants(t *testing.T) {
 		"MsgTypePing":              MsgTypePing,
 		"MsgTypePong":              MsgTypePong,
 		"MsgTypeProbeReport":       MsgTypeProbeReport,
-		"MsgTypeProxyNew":          MsgTypeProxyNew,
-		"MsgTypeProxyNewResp":      MsgTypeProxyNewResp,
 		"MsgTypeProxyCreate":       MsgTypeProxyCreate,
 		"MsgTypeProxyCreateResp":   MsgTypeProxyCreateResp,
 		"MsgTypeProxyProvision":    MsgTypeProxyProvision,
