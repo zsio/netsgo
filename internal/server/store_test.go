@@ -39,18 +39,6 @@ func mustAddStableTunnel(t *testing.T, store *TunnelStore, tunnel StoredTunnel) 
 	}
 }
 
-func seedLegacyTunnels(t *testing.T, store *TunnelStore, tunnels ...StoredTunnel) {
-	t.Helper()
-
-	store.mu.Lock()
-	store.tunnels = append([]StoredTunnel(nil), tunnels...)
-	store.mu.Unlock()
-
-	if err := store.save(); err != nil {
-		t.Fatalf("保存 legacy tunnels 失败: %v", err)
-	}
-}
-
 func TestTunnelStore_NewEmpty(t *testing.T) {
 	store := newTestTunnelStore(t)
 	if len(store.GetAllTunnels()) != 0 {
@@ -148,6 +136,33 @@ func TestTunnelStore_LoadExistingStatesKeepsDesiredAndRuntimeState(t *testing.T)
 	}
 	if errored.Error != "restore failed" {
 		t.Fatalf("legacy error 错误原因期望保留 restore failed，得到 %q", errored.Error)
+	}
+}
+
+func TestTunnelStore_LoadLegacyHostnameBindingFallsBackToEmptyStore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tunnels.json")
+
+	legacyJSON := `[
+	  {
+	    "name": "legacy-tunnel",
+	    "type": "tcp",
+	    "hostname": "legacy-host",
+	    "binding": "legacy_hostname",
+	    "desired_state": "paused",
+	    "runtime_state": "idle"
+	  }
+	]`
+	if err := os.WriteFile(path, []byte(legacyJSON), 0o644); err != nil {
+		t.Fatalf("写入 legacy store 文件失败: %v", err)
+	}
+
+	store, err := NewTunnelStore(path)
+	if err != nil {
+		t.Fatalf("NewTunnelStore 不应因旧格式文件直接失败: %v", err)
+	}
+	if tunnels := store.GetAllTunnels(); len(tunnels) != 0 {
+		t.Fatalf("旧 legacy 绑定文件应被丢弃为空 store，得到 %d 条记录", len(tunnels))
 	}
 }
 
@@ -357,50 +372,6 @@ func TestTunnelStore_UpdateState_RollbackOnSaveFailure(t *testing.T) {
 	st, _ = store.GetTunnel("client-1", "t-rollback")
 	if st.DesiredState != protocol.ProxyDesiredStateRunning || st.RuntimeState != protocol.ProxyRuntimeStateError || st.Error != "boom" {
 		t.Fatalf("最终状态应为 running/error + boom，得到 state=%s/%s error=%q", st.DesiredState, st.RuntimeState, st.Error)
-	}
-}
-
-func TestTunnelStore_UpdateClientID(t *testing.T) {
-	store := newTestTunnelStore(t)
-
-	seedLegacyTunnels(t, store,
-		StoredTunnel{
-			ProxyNewRequest: protocol.ProxyNewRequest{Name: "t1"},
-			Hostname:        "host",
-			DesiredState:    protocol.ProxyDesiredStateRunning,
-			RuntimeState:    protocol.ProxyRuntimeStateExposed,
-			Binding:         TunnelBindingLegacyHostname,
-		},
-		StoredTunnel{
-			ProxyNewRequest: protocol.ProxyNewRequest{Name: "t2"},
-			Hostname:        "host",
-			DesiredState:    protocol.ProxyDesiredStatePaused,
-			RuntimeState:    protocol.ProxyRuntimeStateIdle,
-			Binding:         TunnelBindingLegacyHostname,
-		},
-	)
-
-	store.UpdateClientID("host", "old-id", "new-id")
-
-	tunnels := store.GetTunnelsByClientID("new-id")
-	if len(tunnels) != 2 {
-		t.Fatalf("期望迁移出 2 条隧道，得到 %d", len(tunnels))
-	}
-	for _, tunnel := range tunnels {
-		if tunnel.Binding != TunnelBindingClientID {
-			t.Errorf("隧道 %s 的 Binding 期望迁移为 %s，得到 %s", tunnel.Name, TunnelBindingClientID, tunnel.Binding)
-		}
-		if tunnel.Hostname != "host" {
-			t.Errorf("隧道 %s 的 Hostname 期望保留 host，得到 %s", tunnel.Name, tunnel.Hostname)
-		}
-	}
-}
-
-func TestTunnelStore_UpdateClientID_NoMatch(t *testing.T) {
-	store := newTestTunnelStore(t)
-	store.UpdateClientID("no-host", "", "new-id")
-	if len(store.GetTunnelsByClientID("new-id")) != 0 {
-		t.Error("无匹配时不应迁移出任何隧道")
 	}
 }
 

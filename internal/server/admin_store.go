@@ -405,19 +405,6 @@ func (s *AdminStore) GetRegisteredClient(clientID string) (RegisteredClient, boo
 	return RegisteredClient{}, false
 }
 
-func (s *AdminStore) CountClientsByHostname(hostname string) int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	count := 0
-	for _, client := range s.data.Clients {
-		if client.Info.Hostname == hostname {
-			count++
-		}
-	}
-	return count
-}
-
 // ========== Display Name ==========
 
 // UpdateClientDisplayName 更新 Client 的自定义展示名
@@ -898,7 +885,6 @@ func (s *AdminStore) SetAPIKeyMaxUses(id string, maxUses int) error {
 	}
 	return fmt.Errorf("API Key %q 不存在", id)
 }
-
 
 func normalizeKeyPermissions(permissions []string) ([]string, error) {
 	if len(permissions) == 0 {
