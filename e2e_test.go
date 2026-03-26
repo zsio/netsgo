@@ -92,13 +92,20 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 	}()
 
 	// 4. 等待完整的握手、数据通道建立、代理创建
-	time.Sleep(2 * time.Second)
-
-	// 5. 进行外网访问模拟: 对准 publicProxyPort 发起 HTTP 请求
 	httpClient := http.Client{Timeout: 3 * time.Second}
-	resp, err := httpClient.Get(fmt.Sprintf("http://127.0.0.1:%d", publicProxyPort))
-	if err != nil {
-		t.Fatalf("请求外网代理端点失败: %v", err)
+	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", publicProxyPort)
+
+	var resp *http.Response
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		resp, err = httpClient.Get(proxyURL)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("请求外网代理端点失败: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	defer resp.Body.Close()
 

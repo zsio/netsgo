@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/go-%3E%3D1.23-00ADD8?logo=go" alt="Go">
   <img src="https://img.shields.io/badge/react-19-61DAFB?logo=react" alt="React">
-  <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-linux-lightgrey" alt="Platform">
 </p>
 
 ---
@@ -35,7 +35,7 @@
 
 ### 方式一：下载预编译程序（推荐）
 
-前往项目的 **[Releases](https://github.com/zsio/netsgo/releases)** 页面，下载对应您操作系统的最新版本二进制文件（支持 Linux / macOS / Windows），解压后即可直接使用。
+前往项目的 **[Releases](https://github.com/zsio/netsgo/releases)** 页面，下载对应 Linux 平台的最新版本二进制文件，解压后即可直接使用。
 
 ### 方式二：使用 Docker
 

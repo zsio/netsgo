@@ -4,17 +4,15 @@ import "encoding/json"
 
 // 消息类型常量 — 控制通道上传输的所有消息类型
 const (
-	MsgTypeAuth         = "auth"           // Client → Server: 认证请求
-	MsgTypeAuthResp     = "auth_resp"      // Server → Client: 认证响应
-	MsgTypePing         = "ping"           // Client → Server: 心跳
-	MsgTypePong         = "pong"           // Server → Client: 心跳回复
-	MsgTypeProbeReport  = "probe_report"   // Client → Server: 探针数据上报
-	MsgTypeProxyNew     = "proxy_new"      // Legacy create/provision request path
-	MsgTypeProxyNewResp = "proxy_new_resp" // Legacy create result / provision ACK path
-	MsgTypeProxyClose   = "proxy_close"    // 双向: 关闭某条代理隧道
+	MsgTypeAuth        = "auth"         // Client → Server: 认证请求
+	MsgTypeAuthResp    = "auth_resp"    // Server → Client: 认证响应
+	MsgTypePing        = "ping"         // Client → Server: 心跳
+	MsgTypePong        = "pong"         // Server → Client: 心跳回复
+	MsgTypeProbeReport = "probe_report" // Client → Server: 探针数据上报
+	MsgTypeProxyClose  = "proxy_close"  // 双向: 关闭某条代理隧道
 )
 
-// 新版 tunnel 控制消息类型。Phase 1 先进入共享协议层，运行时仍保留旧消息兼容路径。
+// Tunnel 控制消息类型。create / provision / ack / close 统一以共享协议层为唯一真相。
 const (
 	MsgTypeProxyCreate       = "proxy_create"
 	MsgTypeProxyCreateResp   = "proxy_create_resp"
@@ -95,16 +93,13 @@ type ProxyCreateRequest = ProxyNewRequest
 // ProxyProvisionRequest 表示 server 下发给 client 的 provisioning 配置消息体。
 type ProxyProvisionRequest = ProxyNewRequest
 
-// ProxyNewResponse 旧版 tunnel create/provision 响应结构。
-type ProxyNewResponse struct {
+// ProxyCreateResponse 表示 client 主动创建 tunnel 时 server 返回的结果。
+type ProxyCreateResponse struct {
 	Name       string `json:"name,omitempty"`
 	Success    bool   `json:"success"`
 	Message    string `json:"message,omitempty"`
 	RemotePort int    `json:"remote_port,omitempty"` // 实际分配的公网端口
 }
-
-// ProxyCreateResponse 表示 client 主动创建 tunnel 时 server 返回的结果。
-type ProxyCreateResponse = ProxyNewResponse
 
 // ProxyProvisionAck 表示 client 接收 provisioning 配置后的 ACK。
 type ProxyProvisionAck struct {

@@ -1605,13 +1605,13 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	client.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
 	client.dataMu.Unlock()
 
-	// 测试 MsgTypeProxyNew
+	// 测试 MsgTypeProxyCreate
 	req := protocol.ProxyNewRequest{
 		Name:       "ws-tunnel-1",
 		Type:       protocol.ProxyTypeTCP,
 		RemotePort: reserveTCPPort(t),
 	}
-	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyNew, req)
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, protocol.ProxyCreateRequest(req))
 	conn.WriteJSON(msg)
 
 	var resp protocol.Message
@@ -1620,8 +1620,8 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 		t.Fatalf("读取创建代理响应失败: %v", err)
 	}
 
-	if resp.Type != protocol.MsgTypeProxyNewResp {
-		t.Errorf("期望返回 %s，得到 %s", protocol.MsgTypeProxyNewResp, resp.Type)
+	if resp.Type != protocol.MsgTypeProxyCreateResp {
+		t.Errorf("期望返回 %s，得到 %s", protocol.MsgTypeProxyCreateResp, resp.Type)
 	}
 
 	// 测试 MsgTypeProxyClose
@@ -1639,7 +1639,7 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	}
 }
 
-func TestControlLoop_LegacyProxyCreateCompatibility(t *testing.T) {
+func TestControlLoop_ProxyCreateResponse(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
@@ -1669,7 +1669,7 @@ func TestControlLoop_LegacyProxyCreateCompatibility(t *testing.T) {
 	var resp protocol.Message
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("读取 legacy 创建代理响应失败: %v", err)
+		t.Fatalf("读取创建代理响应失败: %v", err)
 	}
 
 	if resp.Type != protocol.MsgTypeProxyCreateResp {
@@ -1678,17 +1678,17 @@ func TestControlLoop_LegacyProxyCreateCompatibility(t *testing.T) {
 
 	var payload protocol.ProxyCreateResponse
 	if err := resp.ParsePayload(&payload); err != nil {
-		t.Fatalf("解析 legacy 创建代理响应失败: %v", err)
+		t.Fatalf("解析创建代理响应失败: %v", err)
 	}
 	if !payload.Success {
-		t.Fatalf("legacy 创建代理应成功，得到失败: %s", payload.Message)
+		t.Fatalf("创建代理应成功，得到失败: %s", payload.Message)
 	}
 
 	client.proxyMu.RLock()
 	_, exists := client.proxies[req.Name]
 	client.proxyMu.RUnlock()
 	if !exists {
-		t.Fatalf("legacy 创建代理后隧道应存在: %s", req.Name)
+		t.Fatalf("创建代理后隧道应存在: %s", req.Name)
 	}
 }
 
@@ -1833,19 +1833,19 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		var serverMsg protocol.Message
 		if err := wsConn.ReadJSON(&serverMsg); err != nil {
-			t.Fatalf("读取服务端 proxy_new 失败: %v", err)
+			t.Fatalf("读取服务端 proxy_provision 失败: %v", err)
 		}
 		wsConn.SetReadDeadline(time.Time{})
-		if serverMsg.Type != protocol.MsgTypeProxyNew {
-			t.Fatalf("期望服务端下发 %s，得到 %s", protocol.MsgTypeProxyNew, serverMsg.Type)
+		if serverMsg.Type != protocol.MsgTypeProxyProvision {
+			t.Fatalf("期望服务端下发 %s，得到 %s", protocol.MsgTypeProxyProvision, serverMsg.Type)
 		}
 
-		var proxyReq protocol.ProxyNewRequest
+		var proxyReq protocol.ProxyProvisionRequest
 		if err := serverMsg.ParsePayload(&proxyReq); err != nil {
-			t.Fatalf("解析服务端 proxy_new 失败: %v", err)
+			t.Fatalf("解析服务端 proxy_provision 失败: %v", err)
 		}
 		if proxyReq.Name != expectedName {
-			t.Fatalf("期望 proxy_new.Name=%s，得到 %s", expectedName, proxyReq.Name)
+			t.Fatalf("期望 proxy_provision.Name=%s，得到 %s", expectedName, proxyReq.Name)
 		}
 
 		val, ok := s.clients.Load(clientID)
@@ -1857,10 +1857,10 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		pendingTunnel := liveClient.proxies[expectedName]
 		liveClient.proxyMu.RUnlock()
 		if pendingTunnel == nil {
-			t.Fatalf("收到 proxy_new 时应已有 pending tunnel: %s", expectedName)
+			t.Fatalf("收到 proxy_provision 时应已有 pending tunnel: %s", expectedName)
 		}
 		if pendingTunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || pendingTunnel.Config.RuntimeState != protocol.ProxyRuntimeStatePending {
-			t.Fatalf("proxy_new 下发时 tunnel 状态应为 running/pending，得到 %s/%s", pendingTunnel.Config.DesiredState, pendingTunnel.Config.RuntimeState)
+			t.Fatalf("proxy_provision 下发时 tunnel 状态应为 running/pending，得到 %s/%s", pendingTunnel.Config.DesiredState, pendingTunnel.Config.RuntimeState)
 		}
 		if method == http.MethodPost {
 			if _, exists := s.store.GetTunnel(clientID, expectedName); exists {
@@ -1875,14 +1875,13 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 			}
 		}
 
-		respMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
-			Name:       expectedName,
-			Success:    true,
-			Message:    "ok",
-			RemotePort: proxyReq.RemotePort,
+		respMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
+			Name:     expectedName,
+			Accepted: true,
+			Message:  "ok",
 		})
 		if err := wsConn.WriteJSON(respMsg); err != nil {
-			t.Fatalf("发送 proxy_new_resp 失败: %v", err)
+			t.Fatalf("发送 proxy_provision_ack 失败: %v", err)
 		}
 
 		select {
@@ -2399,22 +2398,22 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 
 	select {
 	case result := <-resumeResultCh:
-		t.Fatalf("resume 请求在发送 proxy_new 前已返回: code=%d body=%v", result.code, result.body)
+		t.Fatalf("resume 请求在发送 proxy_provision 前已返回: code=%d body=%v", result.code, result.body)
 	case <-time.After(200 * time.Millisecond):
 	}
 
 	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var resumeMsg protocol.Message
 	if err := wsConn.ReadJSON(&resumeMsg); err != nil {
-		t.Fatalf("读取 resume 阶段 proxy_new 失败: %v", err)
+		t.Fatalf("读取 resume 阶段 proxy_provision 失败: %v", err)
 	}
 	wsConn.SetReadDeadline(time.Time{})
-	if resumeMsg.Type != protocol.MsgTypeProxyNew {
-		t.Fatalf("resume 阶段期望 %s，得到 %s", protocol.MsgTypeProxyNew, resumeMsg.Type)
+	if resumeMsg.Type != protocol.MsgTypeProxyProvision {
+		t.Fatalf("resume 阶段期望 %s，得到 %s", protocol.MsgTypeProxyProvision, resumeMsg.Type)
 	}
-	var resumeProxyReq protocol.ProxyNewRequest
+	var resumeProxyReq protocol.ProxyProvisionRequest
 	if err := resumeMsg.ParsePayload(&resumeProxyReq); err != nil {
-		t.Fatalf("解析 resume proxy_new 失败: %v", err)
+		t.Fatalf("解析 resume proxy_provision 失败: %v", err)
 	}
 
 	s.store.mu.Lock()
@@ -2422,11 +2421,10 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	s.store.failSaveCount = 1
 	s.store.mu.Unlock()
 
-	ackResume, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
-		Name:       resumeProxyReq.Name,
-		Success:    true,
-		Message:    "ok",
-		RemotePort: resumeProxyReq.RemotePort,
+	ackResume, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
+		Name:     resumeProxyReq.Name,
+		Accepted: true,
+		Message:  "ok",
 	})
 	if err := wsConn.WriteJSON(ackResume); err != nil {
 		t.Fatalf("发送 resume ack 失败: %v", err)
@@ -2544,15 +2542,15 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	var restoreMsg protocol.Message
 	if err := controlConn.ReadJSON(&restoreMsg); err != nil {
-		t.Fatalf("读取 restore 阶段 proxy_new 失败: %v", err)
+		t.Fatalf("读取 restore 阶段 proxy_provision 失败: %v", err)
 	}
 	controlConn.SetReadDeadline(time.Time{})
-	if restoreMsg.Type != protocol.MsgTypeProxyNew {
-		t.Fatalf("restore 阶段期望 %s，得到 %s", protocol.MsgTypeProxyNew, restoreMsg.Type)
+	if restoreMsg.Type != protocol.MsgTypeProxyProvision {
+		t.Fatalf("restore 阶段期望 %s，得到 %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
 	}
-	var restoreReq protocol.ProxyNewRequest
+	var restoreReq protocol.ProxyProvisionRequest
 	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
-		t.Fatalf("解析 restore proxy_new 失败: %v", err)
+		t.Fatalf("解析 restore proxy_provision 失败: %v", err)
 	}
 	if restoreReq.Name != "restore-fail-tunnel" {
 		t.Fatalf("restore tunnel name 期望 restore-fail-tunnel，得到 %s", restoreReq.Name)
@@ -2563,11 +2561,10 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	s.store.failSaveCount = 1
 	s.store.mu.Unlock()
 
-	restoreAck, _ := protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
-		Name:       restoreReq.Name,
-		Success:    true,
-		Message:    "ok",
-		RemotePort: restoreReq.RemotePort,
+	restoreAck, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
+		Name:     restoreReq.Name,
+		Accepted: true,
+		Message:  "ok",
 	})
 	if err := controlConn.WriteJSON(restoreAck); err != nil {
 		t.Fatalf("发送 restore ack 失败: %v", err)
@@ -2671,17 +2668,17 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	var restoreMsg protocol.Message
 	if err := controlConn.ReadJSON(&restoreMsg); err != nil {
-		t.Fatalf("读取 HTTP restore 阶段 proxy_new 失败: %v", err)
+		t.Fatalf("读取 HTTP restore 阶段 proxy_provision 失败: %v", err)
 	}
 	controlConn.SetReadDeadline(time.Time{})
 
-	if restoreMsg.Type != protocol.MsgTypeProxyNew {
-		t.Fatalf("HTTP restore 阶段期望 %s，得到 %s", protocol.MsgTypeProxyNew, restoreMsg.Type)
+	if restoreMsg.Type != protocol.MsgTypeProxyProvision {
+		t.Fatalf("HTTP restore 阶段期望 %s，得到 %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
 	}
 
-	var restoreReq protocol.ProxyNewRequest
+	var restoreReq protocol.ProxyProvisionRequest
 	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
-		t.Fatalf("解析 HTTP restore proxy_new 失败: %v", err)
+		t.Fatalf("解析 HTTP restore proxy_provision 失败: %v", err)
 	}
 	if restoreReq.Name != "restore-http" {
 		t.Fatalf("restore tunnel name 期望 restore-http，得到 %s", restoreReq.Name)

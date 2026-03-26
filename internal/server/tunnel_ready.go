@@ -31,22 +31,28 @@ type pendingTunnelProvisionAckKey struct {
 	name       string
 }
 
-func (s *Server) registerTunnelProvisionAckWaiter(client *ClientConn, name string) (<-chan protocol.ProxyNewResponse, error) {
+type provisionAckResult struct {
+	name     string
+	accepted bool
+	message  string
+}
+
+func (s *Server) registerTunnelProvisionAckWaiter(client *ClientConn, name string) (<-chan provisionAckResult, error) {
 	key := pendingTunnelProvisionAckKey{
 		clientID:   client.ID,
 		generation: client.generation,
 		name:       name,
 	}
 
-	s.pendingReadyMu.Lock()
-	defer s.pendingReadyMu.Unlock()
+	s.pendingProvisionAckMu.Lock()
+	defer s.pendingProvisionAckMu.Unlock()
 
-	if _, exists := s.pendingReady[key]; exists {
+	if _, exists := s.pendingProvisionAcks[key]; exists {
 		return nil, fmt.Errorf("隧道 %q 已存在未完成的 provisioning ack 等待", name)
 	}
 
-	ch := make(chan protocol.ProxyNewResponse, 1)
-	s.pendingReady[key] = ch
+	ch := make(chan provisionAckResult, 1)
+	s.pendingProvisionAcks[key] = ch
 	return ch, nil
 }
 
@@ -57,28 +63,28 @@ func (s *Server) unregisterTunnelProvisionAckWaiter(client *ClientConn, name str
 		name:       name,
 	}
 
-	s.pendingReadyMu.Lock()
-	delete(s.pendingReady, key)
-	s.pendingReadyMu.Unlock()
+	s.pendingProvisionAckMu.Lock()
+	delete(s.pendingProvisionAcks, key)
+	s.pendingProvisionAckMu.Unlock()
 }
 
-func (s *Server) resolveTunnelProvisionAckWaiter(clientID string, generation uint64, resp protocol.ProxyNewResponse) bool {
-	if resp.Name == "" {
+func (s *Server) resolveTunnelProvisionAckWaiter(clientID string, generation uint64, resp provisionAckResult) bool {
+	if resp.name == "" {
 		return false
 	}
 
 	key := pendingTunnelProvisionAckKey{
 		clientID:   clientID,
 		generation: generation,
-		name:       resp.Name,
+		name:       resp.name,
 	}
 
-	s.pendingReadyMu.Lock()
-	ch, ok := s.pendingReady[key]
+	s.pendingProvisionAckMu.Lock()
+	ch, ok := s.pendingProvisionAcks[key]
 	if ok {
-		delete(s.pendingReady, key)
+		delete(s.pendingProvisionAcks, key)
 	}
-	s.pendingReadyMu.Unlock()
+	s.pendingProvisionAckMu.Unlock()
 	if !ok {
 		return false
 	}
@@ -89,26 +95,26 @@ func (s *Server) resolveTunnelProvisionAckWaiter(clientID string, generation uin
 }
 
 func (s *Server) cancelTunnelProvisionAckWaiters(clientID string, generation uint64) {
-	s.pendingReadyMu.Lock()
-	defer s.pendingReadyMu.Unlock()
+	s.pendingProvisionAckMu.Lock()
+	defer s.pendingProvisionAckMu.Unlock()
 
-	for key, ch := range s.pendingReady {
+	for key, ch := range s.pendingProvisionAcks {
 		if key.clientID == clientID && key.generation == generation {
-			delete(s.pendingReady, key)
+			delete(s.pendingProvisionAcks, key)
 			close(ch)
 		}
 	}
 }
 
-func (s *Server) waitForTunnelProvisionAck(client *ClientConn, req protocol.ProxyNewRequest) (protocol.ProxyNewResponse, error) {
+func (s *Server) waitForTunnelProvisionAck(client *ClientConn, req protocol.ProxyNewRequest) (provisionAckResult, error) {
 	ch, err := s.registerTunnelProvisionAckWaiter(client, req.Name)
 	if err != nil {
-		return protocol.ProxyNewResponse{}, err
+		return provisionAckResult{}, err
 	}
 
-	if err := s.notifyClientProxyNew(client, req); err != nil {
+	if err := s.notifyClientProxyProvision(client, req); err != nil {
 		s.unregisterTunnelProvisionAckWaiter(client, req.Name)
-		return protocol.ProxyNewResponse{}, err
+		return provisionAckResult{}, err
 	}
 
 	timeout := s.tunnelReadyTimeout
@@ -121,14 +127,14 @@ func (s *Server) waitForTunnelProvisionAck(client *ClientConn, req protocol.Prox
 	select {
 	case resp, ok := <-ch:
 		if !ok {
-			return protocol.ProxyNewResponse{}, errTunnelProvisionAckCancelled
+			return provisionAckResult{}, errTunnelProvisionAckCancelled
 		}
-		if !resp.Success {
-			return resp, &tunnelProvisionRejectedError{name: req.Name, message: resp.Message}
+		if !resp.accepted {
+			return resp, &tunnelProvisionRejectedError{name: req.Name, message: resp.message}
 		}
 		return resp, nil
 	case <-timer.C:
 		s.unregisterTunnelProvisionAckWaiter(client, req.Name)
-		return protocol.ProxyNewResponse{}, errTunnelProvisionAckTimeout
+		return provisionAckResult{}, errTunnelProvisionAckTimeout
 	}
 }

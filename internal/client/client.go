@@ -1000,7 +1000,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 		case protocol.MsgTypePong:
 			// 心跳回复，忽略
 
-		case protocol.MsgTypeProxyProvision, protocol.MsgTypeProxyNew:
+		case protocol.MsgTypeProxyProvision:
 			// 服务端下发: 要求 client 接受/provision 代理隧道配置。
 			var req protocol.ProxyProvisionRequest
 			if err := msg.ParsePayload(&req); err != nil {
@@ -1010,22 +1010,12 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			log.Printf("📥 收到服务端隧道 provisioning 配置: %s (本地 %s:%d → 公网 :%d)",
 				req.Name, req.LocalIP, req.LocalPort, req.RemotePort)
 
-			var resp *protocol.Message
 			c.proxies.Store(req.Name, protocol.ProxyNewRequest(req))
-			if msg.Type == protocol.MsgTypeProxyNew {
-				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyNewResp, protocol.ProxyNewResponse{
-					Name:       req.Name,
-					Success:    true,
-					Message:    "provision accepted",
-					RemotePort: req.RemotePort,
-				})
-			} else {
-				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-					Name:     req.Name,
-					Accepted: true,
-					Message:  "provision accepted",
-				})
-			}
+			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
+				Name:     req.Name,
+				Accepted: true,
+				Message:  "provision accepted",
+			})
 			log.Printf("✅ 已接受服务端隧道 provisioning 配置 [%s]", req.Name)
 
 			if err := conn.WriteJSON(resp); err != nil {
@@ -1034,7 +1024,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				return
 			}
 
-		case protocol.MsgTypeProxyCreateResp, protocol.MsgTypeProxyNewResp:
+		case protocol.MsgTypeProxyCreateResp:
 			// 代理创建结果（客户端主动请求场景，如 Benchmark）
 			var resp protocol.ProxyCreateResponse
 			if err := msg.ParsePayload(&resp); err != nil {
