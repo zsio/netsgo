@@ -62,7 +62,9 @@ func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRe
 
 	if _, err := s.waitForTunnelProvisionAck(client, tunnel.Config.ToProxyNewRequest()); err != nil {
 		if s.isCurrentGeneration(client.ID, client.generation) {
-			s.emitTunnelFailure(client, tunnel.Config, tunnelProvisionErrorMessage(err))
+			if !errors.Is(err, errTunnelProvisionAckCancelled) {
+				s.emitTunnelFailure(client, tunnel.Config, tunnelProvisionErrorMessage(err))
+			}
 			s.removeTunnelRuntime(client, req.Name)
 			_ = s.notifyClientProxyClose(client, req.Name, "provision_failed")
 		}
