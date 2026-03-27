@@ -505,18 +505,26 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 }
 
 func TestClient_RetryInterval(t *testing.T) {
-	// 测试前 5 分钟的间隔
-	recent := time.Now().Add(-1 * time.Minute) // 1 分钟前
-	interval := retryInterval(recent)
-	if interval != 3*time.Second {
-		t.Errorf("断连 1 分钟内应返回 3s，得到 %v", interval)
+	originalJitter := retryJitterFloat64
+	defer func() { retryJitterFloat64 = originalJitter }()
+
+	recent := time.Now().Add(-1 * time.Minute)
+	old := time.Now().Add(-6 * time.Minute)
+
+	retryJitterFloat64 = func() float64 { return 0 }
+	if interval := retryInterval(recent); interval != retryShortInterval {
+		t.Errorf("断连 1 分钟内最小重试间隔应为 %v，得到 %v", retryShortInterval, interval)
+	}
+	if interval := retryInterval(old); interval != retryLongInterval {
+		t.Errorf("断连超过 5 分钟最小重试间隔应为 %v，得到 %v", retryLongInterval, interval)
 	}
 
-	// 测试 5 分钟后的间隔
-	old := time.Now().Add(-6 * time.Minute) // 6 分钟前
-	interval = retryInterval(old)
-	if interval != 10*time.Second {
-		t.Errorf("断连超过 5 分钟应返回 10s，得到 %v", interval)
+	retryJitterFloat64 = func() float64 { return 1 }
+	if interval := retryInterval(recent); interval != 4500*time.Millisecond {
+		t.Errorf("断连 1 分钟内最大重试间隔应为 4.5s，得到 %v", interval)
+	}
+	if interval := retryInterval(old); interval != 15*time.Second {
+		t.Errorf("断连超过 5 分钟最大重试间隔应为 15s，得到 %v", interval)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/url"
 	"os"
@@ -28,6 +29,15 @@ import (
 )
 
 const wsDataMaxMessageSize = 512 * 1024
+
+const (
+	retryShortInterval     = 3 * time.Second
+	retryLongInterval      = 10 * time.Second
+	retryLongIntervalAfter = 5 * time.Minute
+	retryJitterMultiplier  = 0.5
+)
+
+var retryJitterFloat64 = rand.Float64
 
 // Client 是客户端/Client 的核心结构体
 type Client struct {
@@ -255,14 +265,27 @@ func (c *Client) newWSDialer(host string) *websocket.Dialer {
 	return &dialer
 }
 
-// retryInterval 根据首次断连时间计算重试间隔
-// 前 5 分钟每 3 秒重试，之后每 10 秒重试
+// retryInterval 根据首次断连时间计算重试间隔。
+// 前 5 分钟以 3s 为基准，之后以 10s 为基准，并加入正向抖动，
+// 避免大量 Client 同时断线后按固定节奏一起回连。
 func retryInterval(disconnectTime time.Time) time.Duration {
 	elapsed := time.Since(disconnectTime)
-	if elapsed < 5*time.Minute {
-		return 3 * time.Second
+	base := retryShortInterval
+	if elapsed < retryLongIntervalAfter {
+		base = retryShortInterval
+	} else {
+		base = retryLongInterval
 	}
-	return 10 * time.Second
+
+	jitter := retryJitterFloat64()
+	if jitter < 0 {
+		jitter = 0
+	}
+	if jitter > 1 {
+		jitter = 1
+	}
+
+	return base + time.Duration(float64(base)*retryJitterMultiplier*jitter)
 }
 
 // Start 启动客户端，连接 Server 并开始工作。
