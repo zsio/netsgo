@@ -2,7 +2,7 @@ import {
   Monitor, Network, Clock, Cpu, HardDrive, Database,
   Box, CircleHelp, Globe, ArrowDownCircle, ArrowUpCircle,
 } from 'lucide-react';
-import { formatBytes, formatUptime, formatNetSpeed, formatInstallAge } from '@/lib/format';
+import { formatBytes, formatUptime, formatNetSpeed, formatInstallAge, formatTimestamp, describeFreshness } from '@/lib/format';
 import {
   HoverCard,
   HoverCardContent,
@@ -59,7 +59,18 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
         </div>
         <div className="flex items-center gap-2 text-sm">
           <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500' : 'bg-destructive'}`} />
-          <span className="font-medium text-muted-foreground">{isOnline ? '在线' : '离线'}</span>
+          <div className="flex flex-col items-end leading-tight">
+            <span className="font-medium text-muted-foreground">{isOnline ? '在线' : '离线'}</span>
+            {stats?.updated_at ? (
+              <span className="text-[11px] text-muted-foreground/70" title={formatTimestamp(stats.updated_at)}>
+                {describeFreshness(stats.updated_at, stats.fresh_until)}
+              </span>
+            ) : client.last_seen ? (
+              <span className="text-[11px] text-muted-foreground/70" title={formatTimestamp(client.last_seen)}>
+                最后上报 {formatTimestamp(client.last_seen)}
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
 

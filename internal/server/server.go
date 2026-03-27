@@ -149,12 +149,22 @@ type serverStatusView struct {
 	GoroutineCount int                      `json:"goroutine_count"`
 	PublicIPv4     string                   `json:"public_ipv4,omitempty"`
 	PublicIPv6     string                   `json:"public_ipv6,omitempty"`
+	GeneratedAt    time.Time                `json:"generated_at"`
+	FreshUntil     time.Time                `json:"fresh_until"`
 }
 
 type consoleSnapshot struct {
 	Clients      []clientView     `json:"clients"`
 	ServerStatus serverStatusView `json:"server_status"`
+	GeneratedAt  time.Time        `json:"generated_at"`
+	FreshUntil   time.Time        `json:"fresh_until"`
 }
+
+const (
+	clientStatsFreshnessWindow  = 20 * time.Second
+	serverStatusFreshnessWindow = 20 * time.Second
+	snapshotFreshnessWindow     = 15 * time.Second
+)
 
 // SetStats 安全地更新探针数据
 func (a *ClientConn) SetStats(s *protocol.SystemStats) {
@@ -805,6 +815,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 				log.Printf("⚠️ 解析探针数据失败 [%s]: %v", client.ID, err)
 				continue
 			}
+			now := time.Now()
+			stats.UpdatedAt = now
+			stats.FreshUntil = now.Add(clientStatsFreshnessWindow)
 			// 计算派生指标（网络速率等）
 			client.enrichStats(&stats)
 			client.SetStats(&stats)
@@ -1006,9 +1019,12 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) collectSnapshot() consoleSnapshot {
+	now := time.Now()
 	return consoleSnapshot{
 		Clients:      s.collectClientViews(),
 		ServerStatus: s.getCachedServerStatus(),
+		GeneratedAt:  now,
+		FreshUntil:   now.Add(snapshotFreshnessWindow),
 	}
 }
 
@@ -1144,6 +1160,7 @@ func (s *Server) getCachedServerStatus() serverStatusView {
 }
 
 func (s *Server) collectServerStatus() serverStatusView {
+	now := time.Now()
 	clientCount := 0
 	tunnelActive := 0
 	tunnelPaused := 0
@@ -1309,6 +1326,8 @@ func (s *Server) collectServerStatus() serverStatusView {
 		GoroutineCount: goroutines,
 		PublicIPv4:     pubV4,
 		PublicIPv6:     pubV6,
+		GeneratedAt:    now,
+		FreshUntil:     now.Add(serverStatusFreshnessWindow),
 	}
 }
 

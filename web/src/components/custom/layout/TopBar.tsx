@@ -5,13 +5,13 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useClients } from '@/hooks/use-clients';
-import { useServerStatus } from '@/hooks/use-server-status';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
 import { useNavigate } from '@tanstack/react-router';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { summarizeConsoleClients } from '@/lib/console-summary';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -86,18 +86,15 @@ function TopBarInner() {
   const navigate = useNavigate();
   const [showAddClient, setShowAddClient] = useState(false);
   const { data: clients } = useClients();
-  const { data: status } = useServerStatus();
   const logout = useAuthStore((state) => state.logout);
 
-  const totalClients = clients?.length ?? 0;
-  const onlineClientCount = clients?.filter((client) => client.online).length ?? 0;
-  const offlineClientCount = totalClients - onlineClientCount;
-
-  const activeTunnels = status?.tunnel_active ?? 0;
-  const pausedTunnels = status?.tunnel_paused ?? 0;
-  const stoppedTunnels = status?.tunnel_stopped ?? 0;
-  const totalTunnels = activeTunnels + pausedTunnels + stoppedTunnels;
-  const suspendedTunnels = pausedTunnels + stoppedTunnels;
+  const summary = summarizeConsoleClients(clients);
+  const totalClients = summary.totalClients;
+  const onlineClientCount = summary.onlineClients;
+  const offlineClientCount = summary.offlineClients;
+  const activeTunnels = summary.activeTunnels;
+  const totalTunnels = summary.totalTunnels;
+  const inactiveTunnels = summary.inactiveTunnels;
 
   const handleLogout = async () => {
     try {
@@ -198,23 +195,23 @@ function TopBarInner() {
                     </div>
                   }
                 >
-                  <div className="flex flex-col gap-2.5">
-                    <div className="flex items-center justify-between gap-6 text-sm">
-                      <div className="flex items-center gap-2.5 text-blue-500">
-                        <Zap className="h-4 w-4" />
-                        <span className="font-medium">活跃隧道</span>
+                    <div className="flex flex-col gap-2.5">
+                      <div className="flex items-center justify-between gap-6 text-sm">
+                        <div className="flex items-center gap-2.5 text-blue-500">
+                          <Zap className="h-4 w-4" />
+                          <span className="font-medium">活跃隧道</span>
                       </div>
                       <span className="font-bold font-mono">{activeTunnels}</span>
                     </div>
-                    <div className="flex items-center justify-between gap-6 text-sm">
-                      <div className="flex items-center gap-2.5 text-amber-500">
-                        <Pause className="h-4 w-4" />
-                        <span className="font-medium">挂起隧道</span>
+                      <div className="flex items-center justify-between gap-6 text-sm">
+                        <div className="flex items-center gap-2.5 text-amber-500">
+                          <Pause className="h-4 w-4" />
+                          <span className="font-medium">非活跃隧道</span>
+                        </div>
+                        <span className="font-bold font-mono">{inactiveTunnels}</span>
                       </div>
-                      <span className="font-bold font-mono">{suspendedTunnels}</span>
                     </div>
-                  </div>
-                </DualTriggerCard>
+                  </DualTriggerCard>
               </motion.div>
             )}
           </AnimatePresence>

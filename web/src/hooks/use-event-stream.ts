@@ -12,6 +12,8 @@ function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: s
         const parsed = JSON.parse(data) as {
           clients?: Client[];
           server_status?: ServerStatus;
+          generated_at?: string;
+          fresh_until?: string;
         };
         if (Array.isArray(parsed.clients)) {
           queryClient.setQueryData<Client[]>(['clients'], parsed.clients);
