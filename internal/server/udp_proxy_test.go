@@ -711,6 +711,47 @@ func TestUDPReadLoop_UnexpectedReadError_DoesNotPoisonReplacedRuntime(t *testing
 	}
 }
 
+func TestUDPReadLoop_OpenStreamFailureMarksTunnelErrorAndPersistsState(t *testing.T) {
+	s, client, tunnel, store := setupManagedUDPErrorTestTunnel(t, "udp-open-stream-error")
+
+	firstRead := true
+	state := &UDPProxyState{
+		done: make(chan struct{}),
+		packetConn: &scriptedPacketConn{
+			readFrom: func(buf []byte) (int, net.Addr, error) {
+				if !firstRead {
+					return 0, nil, net.ErrClosed
+				}
+				firstRead = false
+				payload := []byte("ping")
+				copy(buf, payload)
+				return len(payload), &net.UDPAddr{IP: net.ParseIP("203.0.113.40"), Port: 2053}, nil
+			},
+		},
+	}
+	tunnel.UDPState = state
+
+	s.udpReadLoop(client, tunnel, state)
+
+	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("OpenStream 失败后状态期望 running/error，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
+	}
+	if !strings.Contains(tunnel.Config.Error, "数据通道未建立") {
+		t.Fatalf("OpenStream 失败后 error 期望包含数据通道原因，得到 %q", tunnel.Config.Error)
+	}
+
+	stored, exists := store.GetTunnel(client.ID, tunnel.Config.Name)
+	if !exists {
+		t.Fatal("store 中应保留该 UDP 隧道")
+	}
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("store 状态期望 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+	}
+	if !strings.Contains(stored.Error, "数据通道未建立") {
+		t.Fatalf("store error 期望包含数据通道原因，得到 %q", stored.Error)
+	}
+}
+
 func TestUDPProxyState_RemoveSession_DecrementsPerIPCount(t *testing.T) {
 	state := &UDPProxyState{done: make(chan struct{})}
 	key := "203.0.113.10:10001"
