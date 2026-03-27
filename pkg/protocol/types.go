@@ -1,5 +1,7 @@
 package protocol
 
+import "time"
+
 // ClientInfo 描述一个 Client 的基本信息，在认证时发送给 Server
 type ClientInfo struct {
 	Hostname   string `json:"hostname"`              // 主机名
@@ -40,6 +42,8 @@ type SystemStats struct {
 	AppMemSys      uint64          `json:"app_mem_sys"`               // 程序进程占用 (bytes)
 	PublicIPv4     string          `json:"public_ipv4,omitempty"`     // 公网 IPv4（探针附带）
 	PublicIPv6     string          `json:"public_ipv6,omitempty"`     // 公网 IPv6（探针附带）
+	UpdatedAt      time.Time       `json:"updated_at,omitempty"`      // 服务端最近一次接收/整理该状态的时间
+	FreshUntil     time.Time       `json:"fresh_until,omitempty"`     // 页面可将该状态视为“新鲜”的截止时间
 }
 
 // ProxyConfig 代理隧道的完整配置
