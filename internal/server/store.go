@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -75,8 +74,7 @@ func NewTunnelStore(path string) (*TunnelStore, error) {
 
 	if _, err := os.Stat(path); err == nil {
 		if err := store.load(); err != nil {
-			log.Printf("⚠️ 加载隧道配置失败（使用空配置）: %v", err)
-			store.tunnels = []StoredTunnel{}
+			return nil, fmt.Errorf("加载隧道配置失败: %w", err)
 		}
 	}
 

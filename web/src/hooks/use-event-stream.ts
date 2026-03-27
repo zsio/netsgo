@@ -1,24 +1,33 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouterState } from '@tanstack/react-router';
+import { api } from '@/lib/api';
 import { useConnectionStore } from '@/stores/connection-store';
 import { useAuthStore } from '@/stores/auth-store';
-import type { Client, ServerStatus } from '@/types';
+import type { Client, ConsoleSnapshot, ServerStatus } from '@/types';
 
-function applyEvent(queryClient: ReturnType<typeof useQueryClient>, eventType: string, data: string) {
+type EventStreamQueryClient = ReturnType<typeof useQueryClient>;
+
+function applyConsoleSnapshot(queryClient: EventStreamQueryClient, snapshot: ConsoleSnapshot) {
+  if (Array.isArray(snapshot.clients)) {
+    queryClient.setQueryData<Client[]>(['clients'], snapshot.clients);
+  }
+  if (snapshot.server_status) {
+    queryClient.setQueryData<ServerStatus>(['server-status'], snapshot.server_status);
+  }
+}
+
+async function resyncConsoleSnapshot(queryClient: EventStreamQueryClient) {
+  const snapshot = await api.get<ConsoleSnapshot>('/api/console/snapshot');
+  applyConsoleSnapshot(queryClient, snapshot);
+}
+
+function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data: string) {
   switch (eventType) {
     case 'snapshot': {
       try {
-        const parsed = JSON.parse(data) as {
-          clients?: Client[];
-          server_status?: ServerStatus;
-        };
-        if (Array.isArray(parsed.clients)) {
-          queryClient.setQueryData<Client[]>(['clients'], parsed.clients);
-        }
-        if (parsed.server_status) {
-          queryClient.setQueryData<ServerStatus>(['server-status'], parsed.server_status);
-        }
+        const parsed = JSON.parse(data) as ConsoleSnapshot;
+        applyConsoleSnapshot(queryClient, parsed);
       } catch {
         // ignore malformed events
       }
@@ -175,8 +184,8 @@ export function useEventStream() {
         activeController = new AbortController();
 
         try {
+          const isReconnect = hasConnected;
           setStatus(hasConnected ? 'reconnecting' : 'connecting');
-
 
           const response = await fetch('/api/events', {
             method: 'GET',
@@ -196,6 +205,14 @@ export function useEventStream() {
 
           if (!response.ok || !response.body) {
             throw new Error(`event stream failed: ${response.status}`);
+          }
+
+          if (isReconnect) {
+            try {
+              await resyncConsoleSnapshot(queryClient);
+            } catch {
+              // fallback to the periodic SSE snapshot safety net
+            }
           }
 
           hasConnected = true;

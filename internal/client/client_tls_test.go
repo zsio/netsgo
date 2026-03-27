@@ -219,7 +219,7 @@ func TestCheckTLSFingerprint_TOFU_FirstConnect_RecordsFingerprint(t *testing.T) 
 	}
 
 	expectedFP := computeTestFingerprint(x509Cert.Raw)
-	if c.TLSFingerprint != expectedFP {
+	if c.CurrentTLSFingerprint() != expectedFP {
 		t.Errorf("TOFU 应记录指纹:\n期望: %s\n实际: %s", expectedFP, c.TLSFingerprint)
 	}
 }
@@ -371,11 +371,11 @@ func TestEnsureInstallID_LoadsTLSFingerprint(t *testing.T) {
 	if c.InstallID != "saved-install-id" {
 		t.Errorf("InstallID 应加载: 期望 %q，得到 %q", "saved-install-id", c.InstallID)
 	}
-	if c.Token != "saved-token" {
-		t.Errorf("Token 应加载: 期望 %q，得到 %q", "saved-token", c.Token)
+	if c.CurrentToken() != "saved-token" {
+		t.Errorf("Token 应加载: 期望 %q，得到 %q", "saved-token", c.CurrentToken())
 	}
-	if c.TLSFingerprint != "11:22:33:44:55:66" {
-		t.Errorf("TLSFingerprint 应加载: 期望 %q，得到 %q", "11:22:33:44:55:66", c.TLSFingerprint)
+	if c.CurrentTLSFingerprint() != "11:22:33:44:55:66" {
+		t.Errorf("TLSFingerprint 应加载: 期望 %q，得到 %q", "11:22:33:44:55:66", c.CurrentTLSFingerprint())
 	}
 }
 
@@ -401,8 +401,8 @@ func TestEnsureInstallID_DoesNotOverwriteExistingFingerprint(t *testing.T) {
 	}
 
 	// 不应被文件中的旧值覆盖
-	if c.TLSFingerprint != "NEW:FP" {
-		t.Errorf("已存在的 TLSFingerprint 不应被覆盖: 期望 %q，得到 %q", "NEW:FP", c.TLSFingerprint)
+	if c.CurrentTLSFingerprint() != "NEW:FP" {
+		t.Errorf("已存在的 TLSFingerprint 不应被覆盖: 期望 %q，得到 %q", "NEW:FP", c.CurrentTLSFingerprint())
 	}
 }
 
@@ -466,10 +466,10 @@ func TestScenario_TLS_ConnectAndAuth(t *testing.T) {
 	go c.Start()
 	time.Sleep(3 * time.Second)
 
-	if c.ClientID != "mock_client_1" {
-		t.Errorf("TLS 认证后 ClientID 期望 'mock_client_1'，得到 %q", c.ClientID)
+	if c.CurrentClientID() != "mock_client_1" {
+		t.Errorf("TLS 认证后 ClientID 期望 'mock_client_1'，得到 %q", c.CurrentClientID())
 	}
-	if !c.useTLS {
+	if !c.UsesTLS() {
 		t.Error("wss:// 应设置 useTLS = true")
 	}
 
@@ -504,11 +504,11 @@ func TestScenario_PlainWS_NoTLSUsed(t *testing.T) {
 	go c.Start()
 	time.Sleep(2 * time.Second)
 
-	if c.useTLS {
+	if c.UsesTLS() {
 		t.Error("ws:// 不应设置 useTLS")
 	}
-	if c.ClientID != "mock_client_1" {
-		t.Errorf("明文认证后 ClientID 期望 'mock_client_1'，得到 %q", c.ClientID)
+	if c.CurrentClientID() != "mock_client_1" {
+		t.Errorf("明文认证后 ClientID 期望 'mock_client_1'，得到 %q", c.CurrentClientID())
 	}
 }
 
@@ -535,11 +535,11 @@ func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// TLSSkipVerify=true → checkTLSFingerprint 不会被调用 → 指纹不会被记录
-	if c.TLSFingerprint != "" {
-		t.Errorf("TLSSkipVerify=true 时不应记录指纹，得到: %q", c.TLSFingerprint)
+	if c.CurrentTLSFingerprint() != "" {
+		t.Errorf("TLSSkipVerify=true 时不应记录指纹，得到: %q", c.CurrentTLSFingerprint())
 	}
-	if c.ClientID != "mock_client_1" {
-		t.Errorf("认证应成功，ClientID 期望 'mock_client_1'，得到 %q", c.ClientID)
+	if c.CurrentClientID() != "mock_client_1" {
+		t.Errorf("认证应成功，ClientID 期望 'mock_client_1'，得到 %q", c.CurrentClientID())
 	}
 }
 
@@ -664,7 +664,7 @@ func TestScenario_TLS_TOFU_ReconnectSameCert_Passes(t *testing.T) {
 	}
 	conn1.Close()
 
-	fp := c.TLSFingerprint
+	fp := c.CurrentTLSFingerprint()
 	if fp == "" {
 		t.Fatal("首次连接后应已记录指纹")
 	}
@@ -677,7 +677,7 @@ func TestScenario_TLS_TOFU_ReconnectSameCert_Passes(t *testing.T) {
 		t.Errorf("重连同一证书应通过: %v", err)
 	}
 
-	if c.TLSFingerprint != fp {
+	if c.CurrentTLSFingerprint() != fp {
 		t.Error("指纹不应改变")
 	}
 }
@@ -698,7 +698,7 @@ func TestScenario_TLS_TOFU_DetectsCertChange(t *testing.T) {
 	conn1.Close()
 	ts1.Close()
 
-	savedFP := c.TLSFingerprint
+	savedFP := c.CurrentTLSFingerprint()
 	if savedFP == "" {
 		t.Fatal("应已记录指纹")
 	}

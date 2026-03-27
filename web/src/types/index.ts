@@ -34,6 +34,8 @@ export interface SystemStats {
   num_cpu: number;
   app_mem_used: number;   // bytes (Go heap alloc)
   app_mem_sys: number;    // bytes (Go process sys)
+  updated_at?: string;
+  fresh_until?: string;
 }
 
 /** 对齐 /api/clients 响应中的 clientView (server.go handleAPIClients) */
@@ -110,6 +112,13 @@ export interface TunnelChangedEvent {
   tunnel: ProxyConfig;
 }
 
+export interface ConsoleSnapshot {
+  clients?: Client[];
+  server_status?: ServerStatus;
+  generated_at?: string;
+  fresh_until?: string;
+}
+
 // --- API ---
 
 export interface DiskPartition {
@@ -148,6 +157,8 @@ export interface ServerStatus {
   goroutine_count: number;
   public_ipv4?: string;
   public_ipv6?: string;
+  generated_at: string;
+  fresh_until: string;
 }
 
 // --- Admin System ---

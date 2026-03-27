@@ -45,6 +45,14 @@ func (s *Server) markPendingTunnelErrorIfCurrent(client *ClientConn, name, messa
 	_ = s.notifyClientProxyClose(client, name, "provision_failed")
 }
 
+func (s *Server) emitTunnelFailure(client *ClientConn, config protocol.ProxyConfig, message string) {
+	if !s.isCurrentGeneration(client.ID, client.generation) {
+		return
+	}
+	setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
+	s.emitTunnelChanged(client.ID, config, "error")
+}
+
 func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRequest, persist bool, action string) (protocol.ProxyConfig, error) {
 	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending)
 	if err != nil {
@@ -54,6 +62,9 @@ func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRe
 
 	if _, err := s.waitForTunnelProvisionAck(client, tunnel.Config.ToProxyNewRequest()); err != nil {
 		if s.isCurrentGeneration(client.ID, client.generation) {
+			if !errors.Is(err, errTunnelProvisionAckCancelled) {
+				s.emitTunnelFailure(client, tunnel.Config, tunnelProvisionErrorMessage(err))
+			}
 			s.removeTunnelRuntime(client, req.Name)
 			_ = s.notifyClientProxyClose(client, req.Name, "provision_failed")
 		}
@@ -66,6 +77,7 @@ func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRe
 
 	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
 		if s.isCurrentGeneration(client.ID, client.generation) {
+			s.emitTunnelFailure(client, tunnel.Config, err.Error())
 			s.removeTunnelRuntime(client, req.Name)
 			_ = s.notifyClientProxyClose(client, req.Name, "provision_failed")
 		}
@@ -80,6 +92,7 @@ func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRe
 
 	if persist && s.store != nil {
 		if err := s.store.AddTunnel(storedTunnelFromRuntime(client, updated)); err != nil {
+			s.emitTunnelFailure(client, updated.Config, err.Error())
 			s.removeTunnelRuntime(client, req.Name)
 			_ = s.notifyClientProxyClose(client, req.Name, "provision_failed")
 			return protocol.ProxyConfig{}, err
@@ -694,13 +707,7 @@ func (s *Server) writeControlMessage(client *ClientConn, message *protocol.Messa
 		return fmt.Errorf("client %s 当前不处于 live 会话", client.ID)
 	}
 
-	client.mu.Lock()
-	defer client.mu.Unlock()
-
-	if client.conn == nil {
-		return fmt.Errorf("client %s 控制通道不可用", client.ID)
-	}
-	if err := client.conn.WriteJSON(message); err != nil {
+	if err := client.writeJSON(message); err != nil {
 		return fmt.Errorf("写入控制消息失败: %w", err)
 	}
 	return nil

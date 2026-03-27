@@ -17,9 +17,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
-	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,15 +24,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
-	"github.com/shirou/gopsutil/v4/cpu"
-	"github.com/shirou/gopsutil/v4/disk"
-	"github.com/shirou/gopsutil/v4/host"
-	"github.com/shirou/gopsutil/v4/mem"
 
-	"netsgo/pkg/netutil"
 	"netsgo/pkg/protocol"
-	"netsgo/pkg/sysinfo"
-	buildversion "netsgo/pkg/version"
 	"netsgo/web"
 )
 
@@ -68,6 +58,9 @@ type Server struct {
 	publicIPv4                  string       // 缓存的公网 IPv4
 	publicIPv6                  string       // 缓存的公网 IPv6
 	publicIPMu                  sync.RWMutex // 保护公网 IP 缓存
+	managedConnMu               sync.Mutex
+	managedConns                map[*websocket.Conn]struct{}
+	longLivedHandlers           sync.WaitGroup
 	nextGeneration              atomic.Uint64
 	pendingProvisionAckMu       sync.Mutex
 	pendingProvisionAcks        map[pendingTunnelProvisionAckKey]chan provisionAckResult
@@ -101,59 +94,28 @@ type ClientConn struct {
 	proxyMu      sync.RWMutex            // 保护 proxies
 }
 
+func (c *ClientConn) writeJSON(v any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return fmt.Errorf("client %s 控制通道不可用", c.ID)
+	}
+	return c.conn.WriteJSON(v)
+}
+
+func (c *ClientConn) detachControlConn() *websocket.Conn {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	conn := c.conn
+	c.conn = nil
+	return conn
+}
+
 // generateDataToken 生成 32 字节随机 hex 字符串，用作数据通道握手凭证
 func generateDataToken() string {
 	buf := make([]byte, 32)
 	rand.Read(buf)
 	return hex.EncodeToString(buf)
-}
-
-type clientView struct {
-	ID          string                 `json:"id"`
-	DisplayName string                 `json:"display_name,omitempty"`
-	Info        protocol.ClientInfo    `json:"info"`
-	Stats       *protocol.SystemStats  `json:"stats,omitempty"`
-	Proxies     []protocol.ProxyConfig `json:"proxies"`
-	Online      bool                   `json:"online"`
-	LastSeen    *time.Time             `json:"last_seen,omitempty"`
-	LastIP      string                 `json:"last_ip,omitempty"`
-}
-
-type serverStatusView struct {
-	Status         string                   `json:"status"`
-	ClientCount    int                      `json:"client_count"`
-	Version        string                   `json:"version"`
-	ListenPort     int                      `json:"listen_port"`
-	Uptime         int64                    `json:"uptime"`
-	SystemUptime   int64                    `json:"system_uptime"`
-	OSInstallTime  int64                    `json:"os_install_time,omitempty"`
-	StorePath      string                   `json:"store_path"`
-	TunnelActive   int                      `json:"tunnel_active"`
-	TunnelPaused   int                      `json:"tunnel_paused"`
-	TunnelStopped  int                      `json:"tunnel_stopped"`
-	ServerAddr     string                   `json:"server_addr"`
-	AllowedPorts   []PortRange              `json:"allowed_ports"`
-	OSArch         string                   `json:"os_arch"`
-	GoVersion      string                   `json:"go_version"`
-	Hostname       string                   `json:"hostname"`
-	IPAddress      string                   `json:"ip_address"`
-	CPUUsage       float64                  `json:"cpu_usage"`
-	CPUCores       int                      `json:"cpu_cores"`
-	MemUsed        uint64                   `json:"mem_used"`
-	MemTotal       uint64                   `json:"mem_total"`
-	AppMemUsed     uint64                   `json:"app_mem_used"`
-	AppMemSys      uint64                   `json:"app_mem_sys"`
-	DiskUsed       uint64                   `json:"disk_used"`
-	DiskTotal      uint64                   `json:"disk_total"`
-	DiskPartitions []protocol.DiskPartition `json:"disk_partitions"`
-	GoroutineCount int                      `json:"goroutine_count"`
-	PublicIPv4     string                   `json:"public_ipv4,omitempty"`
-	PublicIPv6     string                   `json:"public_ipv6,omitempty"`
-}
-
-type consoleSnapshot struct {
-	Clients      []clientView     `json:"clients"`
-	ServerStatus serverStatusView `json:"server_status"`
 }
 
 // SetStats 安全地更新探针数据
@@ -197,6 +159,7 @@ func New(port int) *Server {
 		events:                  NewEventBus(),
 		startTime:               time.Now(),
 		done:                    make(chan struct{}),
+		managedConns:            make(map[*websocket.Conn]struct{}),
 		pendingProvisionAcks:    make(map[pendingTunnelProvisionAckKey]chan provisionAckResult),
 		pendingDataTimeout:      15 * time.Second,
 		dataHandshakeTimeout:    10 * time.Second,
@@ -267,6 +230,9 @@ func (a *ClientConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool
 func (s *Server) Start() error {
 	s.startTime = time.Now()
 	s.done = make(chan struct{})
+	s.managedConnMu.Lock()
+	s.managedConns = make(map[*websocket.Conn]struct{})
+	s.managedConnMu.Unlock()
 
 	// 初始化嵌入的前端资源
 	webFS, err := web.DistFS()
@@ -291,7 +257,9 @@ func (s *Server) Start() error {
 
 	// 启动时清理过期 Token
 	if s.adminStore != nil {
-		s.adminStore.CleanExpiredTokens()
+		if err := s.adminStore.CleanExpiredTokens(); err != nil {
+			return fmt.Errorf("清理过期 token 失败: %w", err)
+		}
 		go s.tokenCleanupLoop()
 	}
 
@@ -389,7 +357,8 @@ func (s *Server) emitSetupTokenBanner(w io.Writer) {
 // 1. 通知后台 goroutine 退出
 // 2. 关闭事件总线（让 SSE 连接退出）
 // 3. 断开所有 Client 连接（让 WebSocket 连接退出）
-// 4. 关闭 HTTP 服务器（等待活跃请求结束——此时 SSE/WS 已退出，不会阻塞）
+// 4. 等待长连接 handler 退出
+// 5. 关闭 HTTP 服务器（等待活跃请求结束——此时 SSE/WS 已退出，不会阻塞）
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Printf("🛑 开始优雅关闭...")
 
@@ -415,10 +384,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		log.Printf("🔌 已断开 %d 个 Client 连接", clientCount)
 	}
 
-	// 短暂等待，让 SSE/WebSocket handler 有时间处理断开并从 ServeHTTP 返回
-	time.Sleep(200 * time.Millisecond)
+	s.closeManagedConns("server_shutdown")
 
-	// 4. 关闭 HTTP 服务器（此时长连接已断开，Shutdown 应能快速完成）
+	if err := s.waitForLongLivedHandlers(ctx); err != nil {
+		log.Printf("⚠️ 等待长连接处理退出超时: %v", err)
+		return err
+	}
+
+	// 5. 关闭 HTTP 服务器（此时长连接已断开，Shutdown 应能快速完成）
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
 			log.Printf("⚠️ HTTP 服务器关闭出错: %v", err)
@@ -464,6 +437,7 @@ func (s *Server) registerManagementRoutes(mux *http.ServeMux) {
 	// API
 	mux.HandleFunc("GET /api/status", s.RequireAuth(s.handleAPIStatus))
 	mux.HandleFunc("GET /api/clients", s.RequireAuth(s.handleAPIClients))
+	mux.HandleFunc("GET /api/console/snapshot", s.RequireAuth(s.handleAPIConsoleSnapshot))
 	mux.HandleFunc("PUT /api/clients/{id}/display-name", s.RequireAuth(s.handleUpdateDisplayName))
 	mux.HandleFunc("POST /api/clients/{id}/tunnels", s.RequireAuth(s.handleCreateTunnel))
 	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/pause", s.RequireAuth(s.handlePauseTunnel))
@@ -555,6 +529,8 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("❌ WebSocket 升级失败: %v", err)
 		return
 	}
+	release := s.trackManagedConn(conn)
+	defer release()
 	defer conn.Close()
 
 	// 限制单条 WebSocket 消息大小，防止恶意客户端发送超大消息导致 OOM
@@ -789,9 +765,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 			}
 			// 收到心跳，回复 Pong
 			pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
-			client.mu.Lock()
-			_ = conn.WriteJSON(pong)
-			client.mu.Unlock()
+			if err := client.writeJSON(pong); err != nil {
+				log.Printf("⚠️ 发送 Pong 失败 [%s]: %v", client.ID, err)
+			}
 
 		case protocol.MsgTypeProbeReport:
 			if !s.isCurrentLive(client.ID, client.generation) {
@@ -803,6 +779,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 				log.Printf("⚠️ 解析探针数据失败 [%s]: %v", client.ID, err)
 				continue
 			}
+			now := time.Now()
+			stats.UpdatedAt = now
+			stats.FreshUntil = now.Add(clientStatsFreshnessWindow)
 			// 计算派生指标（网络速率等）
 			client.enrichStats(&stats)
 			client.SetStats(&stats)
@@ -869,9 +848,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 				s.emitTunnelChanged(client.ID, config, "created_by_client")
 			}
 
-			client.mu.Lock()
-			_ = conn.WriteJSON(resp)
-			client.mu.Unlock()
+			if err := client.writeJSON(resp); err != nil {
+				log.Printf("⚠️ 发送代理响应失败 [%s]: %v", client.ID, err)
+			}
 
 		case protocol.MsgTypeProxyProvisionAck:
 			var ack protocol.ProxyProvisionAck
@@ -934,7 +913,9 @@ func (s *Server) tokenCleanupLoop() {
 			return
 		case <-ticker.C:
 			if s.adminStore != nil {
-				s.adminStore.CleanExpiredTokens()
+				if err := s.adminStore.CleanExpiredTokens(); err != nil {
+					log.Printf("⚠️ 清理过期 Token 失败: %v", err)
+				}
 			}
 		}
 	}
@@ -992,347 +973,6 @@ func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeContent(w, r, "index.html", stat.ModTime(), rs)
-}
-
-// --- API ---
-
-func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.getCachedServerStatus())
-}
-
-func (s *Server) collectSnapshot() consoleSnapshot {
-	return consoleSnapshot{
-		Clients:      s.collectClientViews(),
-		ServerStatus: s.getCachedServerStatus(),
-	}
-}
-
-func (s *Server) collectClientViews() []clientView {
-	views := make(map[string]clientView)
-
-	if s.adminStore != nil {
-		for _, registered := range s.adminStore.GetRegisteredClients() {
-			lastSeen := registered.LastSeen
-			view := clientView{
-				ID:          registered.ID,
-				DisplayName: registered.DisplayName,
-				Info:        registered.Info,
-				Stats:       registered.Stats,
-				Proxies:     []protocol.ProxyConfig{},
-				Online:      false,
-				LastSeen:    &lastSeen,
-				LastIP:      registered.LastIP,
-			}
-			if s.store != nil {
-				stored := s.store.GetTunnelsByClientID(registered.ID)
-				view.Proxies = make([]protocol.ProxyConfig, 0, len(stored))
-				for _, tunnel := range stored {
-					view.Proxies = append(view.Proxies, proxyConfigForClientView(storedTunnelToProxyConfig(tunnel), false))
-				}
-			}
-			views[registered.ID] = view
-		}
-	}
-
-	s.clients.Range(func(_, value any) bool {
-		client := value.(*ClientConn)
-		if !client.isLive() {
-			return true
-		}
-		proxies := make([]protocol.ProxyConfig, 0)
-		client.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
-			proxies = append(proxies, proxyConfigForClientView(tunnel.Config, true))
-			return true
-		})
-		sort.Slice(proxies, func(i, j int) bool { return proxies[i].Name < proxies[j].Name })
-
-		view, ok := views[client.ID]
-		if !ok {
-			view = clientView{
-				ID:      client.ID,
-				Info:    client.Info,
-				Proxies: []protocol.ProxyConfig{},
-			}
-		}
-		now := time.Now()
-		view.Info = client.Info
-		if liveStats := client.GetStats(); liveStats != nil {
-			view.Stats = liveStats
-		}
-		view.Proxies = proxies
-		view.Online = true
-		view.LastSeen = &now
-		view.LastIP = remoteIP(client.RemoteAddr)
-		views[client.ID] = view
-		return true
-	})
-
-	clients := make([]clientView, 0, len(views))
-	for _, client := range views {
-		if client.Proxies == nil {
-			client.Proxies = []protocol.ProxyConfig{}
-		}
-		clients = append(clients, client)
-	}
-	sort.Slice(clients, func(i, j int) bool { return clients[i].Info.Hostname < clients[j].Info.Hostname })
-
-	return clients
-}
-
-// serverStatusLoop 后台定时采集服务端状态并缓存
-func (s *Server) serverStatusLoop() {
-	// 异步获取公网 IP（不阻塞首次状态采集）
-	go s.refreshPublicIPs()
-
-	// 首次立即采集
-	status := s.collectServerStatus()
-	s.cachedStatusMu.Lock()
-	s.cachedStatus = &status
-	s.cachedStatusMu.Unlock()
-
-	statusTicker := time.NewTicker(10 * time.Second)
-	defer statusTicker.Stop()
-
-	publicIPTicker := time.NewTicker(5 * time.Minute)
-	defer publicIPTicker.Stop()
-
-	for {
-		select {
-		case <-s.done:
-			return
-		case <-statusTicker.C:
-			status := s.collectServerStatus()
-			s.cachedStatusMu.Lock()
-			s.cachedStatus = &status
-			s.cachedStatusMu.Unlock()
-		case <-publicIPTicker.C:
-			s.refreshPublicIPs()
-		}
-	}
-}
-
-// refreshPublicIPs 获取公网 IP 并更新缓存
-func (s *Server) refreshPublicIPs() {
-	ipv4, ipv6 := netutil.FetchPublicIPs()
-	s.publicIPMu.Lock()
-	if ipv4 != "" {
-		s.publicIPv4 = ipv4
-	}
-	if ipv6 != "" {
-		s.publicIPv6 = ipv6
-	}
-	s.publicIPMu.Unlock()
-	if ipv4 != "" || ipv6 != "" {
-		log.Printf("🌐 公网 IP 已刷新: IPv4=%s IPv6=%s", ipv4, ipv6)
-	}
-}
-
-// getCachedServerStatus 返回后台采集的服务端状态缓存
-func (s *Server) getCachedServerStatus() serverStatusView {
-	s.cachedStatusMu.RLock()
-	defer s.cachedStatusMu.RUnlock()
-	if s.cachedStatus != nil {
-		return *s.cachedStatus
-	}
-	// fallback: 如果还没来得及采集，现场采集一次
-	return s.collectServerStatus()
-}
-
-func (s *Server) collectServerStatus() serverStatusView {
-	clientCount := 0
-	tunnelActive := 0
-	tunnelPaused := 0
-	tunnelStopped := 0
-
-	s.clients.Range(func(_, value any) bool {
-		clientCount++
-		a := value.(*ClientConn)
-		a.RangeProxies(func(_ string, t *ProxyTunnel) bool {
-			switch {
-			case isTunnelExposed(t.Config):
-				tunnelActive++
-			case t.Config.DesiredState == protocol.ProxyDesiredStatePaused && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
-				tunnelPaused++
-			case t.Config.DesiredState == protocol.ProxyDesiredStateStopped && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
-				tunnelStopped++
-			}
-			return true
-		})
-		return true
-	})
-
-	serverAddr := ""
-	var allowedPorts []PortRange
-	if s.adminStore != nil {
-		config := s.adminStore.GetServerConfig()
-		serverAddr = config.ServerAddr
-		allowedPorts = config.AllowedPorts
-	}
-	if allowedPorts == nil {
-		allowedPorts = []PortRange{}
-	}
-
-	osArch := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
-	goVersion := runtime.Version()
-	goroutines := runtime.NumGoroutine()
-	hostname, _ := os.Hostname()
-
-	ipAddr := netutil.GetOutboundIP()
-
-	// 读取缓存的公网 IP（由后台 publicIPLoop 定时更新）
-	s.publicIPMu.RLock()
-	pubV4 := s.publicIPv4
-	pubV6 := s.publicIPv6
-	s.publicIPMu.RUnlock()
-
-	cpuPercents, _ := cpu.Percent(0, false)
-	cpuUsage := 0.0
-	if len(cpuPercents) > 0 {
-		cpuUsage = cpuPercents[0]
-	}
-	cpuCores, _ := cpu.Counts(true)
-
-	v, _ := mem.VirtualMemory()
-	memUsed := uint64(0)
-	memTotal := uint64(0)
-	if v != nil {
-		memUsed = v.Used
-		memTotal = v.Total
-	}
-
-	var diskPartitions []protocol.DiskPartition
-	diskUsed := uint64(0)
-	diskTotal := uint64(0)
-
-	partitions, err := disk.Partitions(false)
-	if err == nil {
-		seenDevices := map[string]bool{}
-		for _, p := range partitions {
-			// Filter virtual/pseudo filesystems
-			switch p.Fstype {
-			case "tmpfs", "devtmpfs", "devfs", "squashfs", "overlay", "proc", "sysfs",
-				"cgroup", "cgroup2", "pstore", "securityfs", "debugfs", "tracefs", "autofs":
-				continue
-			}
-			if strings.HasPrefix(p.Fstype, "fuse.") {
-				continue
-			}
-
-			// Determine dedup key:
-			// - APFS (macOS): multiple volumes share one physical disk's capacity,
-			//   so dedup by base disk name (e.g. /dev/disk3s1s1 → "disk3")
-			// - Other FS (Linux ext4/xfs, Windows NTFS): each partition has its own
-			//   real capacity, so dedup by exact device path to avoid double counting
-			//   bind-mounts of the same partition only.
-			dedupKey := p.Device
-			if p.Fstype == "apfs" {
-				dedupKey = baseDiskName(p.Device)
-			}
-			if seenDevices[dedupKey] {
-				continue
-			}
-
-			d, err := disk.Usage(p.Mountpoint)
-			if err == nil && d.Total > 0 {
-				seenDevices[dedupKey] = true
-				diskPartitions = append(diskPartitions, protocol.DiskPartition{
-					Path:  p.Mountpoint,
-					Used:  d.Used,
-					Total: d.Total,
-				})
-				diskUsed += d.Used
-				diskTotal += d.Total
-			}
-		}
-	}
-
-	// Fallback if no valid partitions found
-	if len(diskPartitions) == 0 {
-		d, _ := disk.Usage(filepath.Dir(s.getStorePath()))
-		if d == nil {
-			d, _ = disk.Usage("/")
-		}
-		if d != nil {
-			diskUsed = d.Used
-			diskTotal = d.Total
-			diskPartitions = append(diskPartitions, protocol.DiskPartition{
-				Path:  d.Path,
-				Used:  d.Used,
-				Total: d.Total,
-			})
-		}
-	}
-
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	appMemUsed := m.Alloc
-	appMemSys := m.Sys
-
-	// 服务端系统开机时长
-	sysUptime, _ := host.Uptime()
-
-	// 系统安装时间
-	osInstallTime := int64(sysinfo.GetOSInstallTime())
-
-	return serverStatusView{
-		Status:         "running",
-		ClientCount:    clientCount,
-		Version:        buildversion.Current,
-		ListenPort:     s.Port,
-		Uptime:         int64(time.Since(s.startTime).Seconds()),
-		SystemUptime:   int64(sysUptime),
-		OSInstallTime:  osInstallTime,
-		StorePath:      s.getStorePath(),
-		TunnelActive:   tunnelActive,
-		TunnelPaused:   tunnelPaused,
-		TunnelStopped:  tunnelStopped,
-		ServerAddr:     serverAddr,
-		AllowedPorts:   allowedPorts,
-		OSArch:         osArch,
-		GoVersion:      goVersion,
-		Hostname:       hostname,
-		IPAddress:      ipAddr,
-		CPUUsage:       cpuUsage,
-		CPUCores:       cpuCores,
-		MemUsed:        memUsed,
-		MemTotal:       memTotal,
-		AppMemUsed:     appMemUsed,
-		AppMemSys:      appMemSys,
-		DiskUsed:       diskUsed,
-		DiskTotal:      diskTotal,
-		DiskPartitions: diskPartitions,
-		GoroutineCount: goroutines,
-		PublicIPv4:     pubV4,
-		PublicIPv6:     pubV6,
-	}
-}
-
-// baseDiskName 从设备路径提取物理磁盘基础名，用于去重。
-// macOS APFS: /dev/disk3s1s1, /dev/disk3s5 → "disk3"
-// Linux SCSI: /dev/sda1 → "sda"
-// Linux NVMe: /dev/nvme0n1p1 → "nvme0n1"
-var reDiskBase = regexp.MustCompile(`(disk\d+|sd[a-z]+|nvme\d+n\d+|[A-Z]:)`)
-
-func baseDiskName(device string) string {
-	m := reDiskBase.FindString(device)
-	if m != "" {
-		return m
-	}
-	return device // fallback: 用完整路径
-}
-
-// getStorePath 获取实际的 store 路径
-func (s *Server) getStorePath() string {
-	if s.store != nil {
-		return s.store.path
-	}
-	return s.StorePath
-}
-
-func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.collectClientViews())
 }
 
 // --- Client 展示名 API ---

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -343,6 +344,25 @@ func TestAPI_Login_WrongPassword(t *testing.T) {
 	}
 }
 
+func TestAPI_Login_PersistSessionFailure(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+
+	s.adminStore.failSaveErr = errors.New("save failed")
+	s.adminStore.failSaveCount = 1
+
+	body := []byte(`{"username":"admin","password":"password123"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAPILogin(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("session 持久化失败应返回 500，得到 %d", w.Code)
+	}
+}
+
 func TestAPI_ProtectedRoutes_LoginLogoutAndSingleSession(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
@@ -443,6 +463,24 @@ func TestAPI_AdminKeys_CreateAndList(t *testing.T) {
 		if _, exists := keys[0]["key_hash"]; exists {
 			t.Error("Key 列表不应返回 key_hash")
 		}
+	}
+}
+
+func TestAPI_AdminKeys_CreateFailsWhenPersistFails(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+
+	s.adminStore.failSaveErr = errors.New("save failed")
+	s.adminStore.failSaveCount = 1
+
+	body := []byte(`{"name":"test-key","permissions":["connect"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/keys", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	s.handleAPIAdminKeys(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("Key 持久化失败应返回 400，得到 %d", w.Code)
 	}
 }
 
@@ -850,7 +888,7 @@ func TestAPI_Logout_ClearsCookie(t *testing.T) {
 	defer cleanup()
 
 	// 先登录获取 session
-	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "")
+	session := mustCreateSession(t, s.adminStore, "user-1", "admin", "admin", "127.0.0.1", "")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)

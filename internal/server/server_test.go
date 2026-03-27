@@ -79,7 +79,7 @@ func initTestAdminStore(t *testing.T, s *Server) {
 func issueAdminToken(t *testing.T, s *Server) string {
 	t.Helper()
 
-	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "Go-http-client/1.1")
+	session := mustCreateSession(t, s.adminStore, "user-1", "admin", "admin", "127.0.0.1", "Go-http-client/1.1")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -270,6 +270,57 @@ func TestAPI_Status_ExtendedFields(t *testing.T) {
 	if result["tunnel_active"].(float64) != 0 {
 		t.Errorf("tunnel_active 期望 0，得到 %v", result["tunnel_active"])
 	}
+	generatedAt, ok := result["generated_at"].(string)
+	if !ok || generatedAt == "" {
+		t.Fatalf("generated_at 应返回 RFC3339 时间，得到 %v", result["generated_at"])
+	}
+	freshUntil, ok := result["fresh_until"].(string)
+	if !ok || freshUntil == "" {
+		t.Fatalf("fresh_until 应返回 RFC3339 时间，得到 %v", result["fresh_until"])
+	}
+	generatedTime, err := time.Parse(time.RFC3339Nano, generatedAt)
+	if err != nil {
+		t.Fatalf("generated_at 解析失败: %v", err)
+	}
+	freshUntilTime, err := time.Parse(time.RFC3339Nano, freshUntil)
+	if err != nil {
+		t.Fatalf("fresh_until 解析失败: %v", err)
+	}
+	if !freshUntilTime.After(generatedTime) {
+		t.Fatalf("fresh_until 应晚于 generated_at: %s <= %s", freshUntil, generatedAt)
+	}
+}
+
+func TestAPI_ConsoleSnapshot(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	result := getAPIJSON(t, s, ts, "/api/console/snapshot")
+
+	clients, ok := result["clients"].([]any)
+	if !ok {
+		t.Fatalf("clients 应返回数组，得到 %T", result["clients"])
+	}
+	if len(clients) != 0 {
+		t.Fatalf("初始 clients 应为空，得到 %d", len(clients))
+	}
+
+	serverStatus, ok := result["server_status"].(map[string]any)
+	if !ok {
+		t.Fatalf("server_status 应返回对象，得到 %T", result["server_status"])
+	}
+	if serverStatus["status"] != "running" {
+		t.Fatalf("server_status.status 期望 running，得到 %v", serverStatus["status"])
+	}
+
+	generatedAt, ok := result["generated_at"].(string)
+	if !ok || generatedAt == "" {
+		t.Fatalf("generated_at 应返回 RFC3339 时间，得到 %v", result["generated_at"])
+	}
+	freshUntil, ok := result["fresh_until"].(string)
+	if !ok || freshUntil == "" {
+		t.Fatalf("fresh_until 应返回 RFC3339 时间，得到 %v", result["fresh_until"])
+	}
 }
 
 func TestAPI_Status_TunnelCounts(t *testing.T) {
@@ -439,6 +490,14 @@ func TestAPI_Clients_WithStats(t *testing.T) {
 			statsMap := a["stats"].(map[string]any)
 			if statsMap["cpu_usage"].(float64) != 55.5 {
 				t.Errorf("cpu_usage 期望 55.5，得到 %v", statsMap["cpu_usage"])
+			}
+			updatedAt, ok := statsMap["updated_at"].(string)
+			if !ok || updatedAt == "" {
+				t.Fatalf("stats.updated_at 应存在，得到 %v", statsMap["updated_at"])
+			}
+			freshUntil, ok := statsMap["fresh_until"].(string)
+			if !ok || freshUntil == "" {
+				t.Fatalf("stats.fresh_until 应存在，得到 %v", statsMap["fresh_until"])
 			}
 		}
 	}
@@ -1712,7 +1771,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	defer ts.Close()
 
 	// 模拟已登录的 AdminSession
-	session := store.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, store, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, _ := s.GenerateAdminToken(session)
 
 	// API 请求助手
@@ -1936,11 +1995,13 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	wsConn, authResp := connectAndAuth(t, ts, "timeout-client")
 	defer wsConn.Close()
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
 	}
+	eventsCh := s.events.Subscribe()
+	defer s.events.Unsubscribe(eventsCh)
 
 	type apiResult struct {
 		code int
@@ -1996,6 +2057,40 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	if exists {
 		t.Fatal("create timeout 后 runtime pending tunnel 应被清理")
 	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case event := <-eventsCh:
+			if event.Type != "tunnel_changed" {
+				continue
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+				t.Fatalf("解析 tunnel_changed 事件失败: %v", err)
+			}
+			if payload["action"] != "error" {
+				continue
+			}
+			tunnelPayload, ok := payload["tunnel"].(map[string]any)
+			if !ok {
+				t.Fatalf("tunnel_changed.tunnel 类型无效: %#v", payload["tunnel"])
+			}
+			if tunnelPayload["name"] != "timeout-tunnel" {
+				continue
+			}
+			if tunnelPayload["runtime_state"] != protocol.ProxyRuntimeStateError {
+				t.Fatalf("超时失败事件 runtime_state 期望 error，得到 %v", tunnelPayload["runtime_state"])
+			}
+			if tunnelPayload["error"] == "" {
+				t.Fatal("超时失败事件应携带 error 文案")
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	t.Fatal("create timeout 后未收到最终 error 通知")
 }
 
 func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
@@ -2019,7 +2114,7 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 		LocalPort: 8080,
 	}, protocol.ProxyStatusPaused)
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2105,7 +2200,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	}
 	client.proxyMu.Unlock()
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2149,7 +2244,7 @@ func TestServer_CreateTunnelHTTPInvalidDomainReturns400WithTypedError(t *testing
 	wsConn, authResp := connectAndAuth(t, ts, "http-invalid-domain-create")
 	defer wsConn.Close()
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2192,7 +2287,7 @@ func TestServer_CreateTunnelHTTPManagementHostConflictReturnsTypedError(t *testi
 	wsConn, authResp := connectAndAuth(t, ts, "http-server-addr-conflict-create")
 	defer wsConn.Close()
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2248,7 +2343,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "resume-test-agent")
+	session := mustCreateSession(t, s.adminStore, "user-1", "admin", "admin", "127.0.0.1", "resume-test-agent")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -3025,9 +3120,24 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws/control", s.Port)
 	dialer := *websocket.DefaultDialer
 	dialer.Subprotocols = []string{protocol.WSSubProtocolControl}
-	conn, _, err := dialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+
+	var conn *websocket.Conn
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var dialErr error
+		conn, _, dialErr = dialer.Dial(wsURL, nil)
+		if dialErr == nil {
+			break
+		}
+		select {
+		case err := <-serverErr:
+			t.Fatalf("服务端启动失败: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("WebSocket 连接失败: %v", dialErr)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	defer conn.Close()
 
@@ -3077,6 +3187,75 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	}
 
 	// 验证 Server 已停止（Serve 返回）
+	select {
+	case err := <-serverErr:
+		if err != nil && err.Error() != "http: Server closed" {
+			t.Errorf("Server 返回了非预期错误: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("Server 应在 Shutdown 后返回")
+	}
+}
+
+func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.StorePath = filepath.Join(t.TempDir(), "tunnels.json")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("获取临时端口失败: %v", err)
+	}
+	s.Port = ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- s.Start()
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws/control", s.Port)
+	dialer := *websocket.DefaultDialer
+	dialer.Subprotocols = []string{protocol.WSSubProtocolControl}
+
+	var conn *websocket.Conn
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var dialErr error
+		conn, _, dialErr = dialer.Dial(wsURL, nil)
+		if dialErr == nil {
+			break
+		}
+		select {
+		case err := <-serverErr:
+			t.Fatalf("服务端启动失败: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("WebSocket 连接失败: %v", dialErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown 失败: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	var msg protocol.Message
+	err = conn.ReadJSON(&msg)
+	if err == nil {
+		t.Fatal("Shutdown 后未认证控制连接应被关闭")
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("Shutdown 后控制连接未被及时关闭，读超时: %v", err)
+	}
+
 	select {
 	case err := <-serverErr:
 		if err != nil && err.Error() != "http: Server closed" {

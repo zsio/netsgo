@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -686,5 +687,76 @@ func TestMarkTCPProxyRuntimeErrorIfCurrent_StaleListenerDoesNotDemote(t *testing
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
 		t.Fatalf("stale listener 后 store 状态应保持 running/exposed，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+	}
+}
+
+func TestHandleProxyConn_OpenStreamFailureMarksTunnelError(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	client := &ClientConn{
+		ID:      "open-stream-error-client",
+		proxies: make(map[string]*ProxyTunnel),
+	}
+	s.clients.Store(client.ID, client)
+
+	listener := newScriptedListener(t)
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:         "open-stream-error-tunnel",
+			Type:         protocol.ProxyTypeTCP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    8080,
+			RemotePort:   listener.addr.(*net.TCPAddr).Port,
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateExposed,
+		},
+		Listener: listener,
+		done:     make(chan struct{}),
+	}
+	client.proxies[tunnel.Config.Name] = tunnel
+
+	mustAddStableTunnel(t, s.store, storedTunnelFromRuntime(client, tunnel))
+
+	peerConn, extConn := net.Pipe()
+	defer peerConn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		s.handleProxyConn(client, tunnel, listener, extConn)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleProxyConn 在 OpenStream 失败后未及时退出")
+	}
+
+	client.proxyMu.RLock()
+	got := client.proxies[tunnel.Config.Name].Config
+	currentListener := client.proxies[tunnel.Config.Name].Listener
+	client.proxyMu.RUnlock()
+
+	if got.DesiredState != protocol.ProxyDesiredStateRunning || got.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("OpenStream 失败后状态应为 running/error，得到 %s/%s", got.DesiredState, got.RuntimeState)
+	}
+	if !strings.Contains(got.Error, "数据通道未建立") {
+		t.Fatalf("OpenStream 失败后 error 应包含数据通道原因，得到 %q", got.Error)
+	}
+	if currentListener != nil {
+		t.Fatal("OpenStream 失败后 listener 应已清理")
+	}
+
+	stored, ok := s.store.GetTunnel(client.ID, tunnel.Config.Name)
+	if !ok {
+		t.Fatal("store 中应仍存在该隧道")
+	}
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("store 状态应为 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+	}
+	if !strings.Contains(stored.Error, "数据通道未建立") {
+		t.Fatalf("store error 应包含数据通道原因，得到 %q", stored.Error)
 	}
 }

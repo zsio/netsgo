@@ -269,7 +269,13 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			stream, err := s.openStreamToClient(client, tunnel.Config.Name)
 			if err != nil {
 				log.Printf("⚠️ UDP 代理 [%s] 打开 Stream 失败: %v", tunnel.Config.Name, err)
-				continue
+				s.markUDPProxyRuntimeErrorIfCurrent(
+					client,
+					tunnel,
+					state,
+					fmt.Sprintf("UDP 代理转发通道失败: %v", err),
+				)
+				return
 			}
 
 			sess := &UDPSession{

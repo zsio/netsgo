@@ -393,7 +393,7 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listen
 			}
 		}
 
-		go s.handleProxyConn(client, tunnel.Config.Name, extConn)
+		go s.handleProxyConn(client, tunnel, listener, extConn)
 	}
 }
 
@@ -401,12 +401,13 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listen
 // 1. 在 yamux Session 上 OpenStream
 // 2. 向 Stream 写入 StreamHeader（proxyName）
 // 3. Relay(stream, extConn) 双向搬运
-func (s *Server) handleProxyConn(client *ClientConn, proxyName string, extConn net.Conn) {
+func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, extConn net.Conn) {
 	defer extConn.Close()
 
-	stream, err := s.openStreamToClient(client, proxyName)
+	stream, err := s.openStreamToClient(client, tunnel.Config.Name)
 	if err != nil {
-		log.Printf("⚠️ 代理 [%s] 打开 Stream 失败: %v", proxyName, err)
+		log.Printf("⚠️ 代理 [%s] 打开 Stream 失败: %v", tunnel.Config.Name, err)
+		s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("TCP 代理转发通道失败: %v", err))
 		return
 	}
 

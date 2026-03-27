@@ -114,7 +114,7 @@ func TestAuthMiddleware_FallbackSecretTokenRejected(t *testing.T) {
 	s := New(0)
 	s.adminStore = store
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
+	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	claims := AdminClaims{
 		SessionID: session.ID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -177,7 +177,7 @@ func TestGenerateAdminToken_MissingJWTSecret(t *testing.T) {
 	s.adminStore = store
 	clearJWTSecretForTest(store)
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
+	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	_, err := s.GenerateAdminToken(session)
 	if !errors.Is(err, errJWTSecretMissing) {
 		t.Fatalf("缺少 JWT Secret 时 GenerateAdminToken 应返回 errJWTSecretMissing，得到 %v", err)
@@ -212,14 +212,14 @@ func TestAuthMiddleware_ValidTokenButSessionRevoked(t *testing.T) {
 	s.adminStore = store
 
 	// 创建一个合法的 session 并生成 token
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
+	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
 	}
 
 	// 模拟 session 被注销/踢出
-	store.DeleteSession(session.ID)
+	mustDeleteSession(t, store, session.ID)
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenString)
@@ -240,7 +240,7 @@ func TestAuthMiddleware_ValidTokenSuccess(t *testing.T) {
 	s := New(0)
 	s.adminStore = store
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
+	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
@@ -328,7 +328,7 @@ func TestAuthMiddleware_CookieAuth_Success(t *testing.T) {
 	s := New(0)
 	s.adminStore = store
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
+	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
@@ -387,7 +387,7 @@ func TestAuthMiddleware_HeaderPriority(t *testing.T) {
 	s := New(0)
 	s.adminStore = store
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
+	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	validToken, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)

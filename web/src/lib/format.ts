@@ -45,3 +45,30 @@ export function formatInstallAge(unixTimestamp: number): string {
   if (seconds < 0) return '-';
   return formatUptime(seconds);
 }
+
+export function formatTimestamp(value?: string): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString();
+}
+
+export function describeFreshness(updatedAt?: string, freshUntil?: string): string {
+  if (!updatedAt) return '时间未知';
+
+  const updated = new Date(updatedAt);
+  if (Number.isNaN(updated.getTime())) return '时间未知';
+
+  if (freshUntil) {
+    const expiry = new Date(freshUntil);
+    if (!Number.isNaN(expiry.getTime()) && expiry.getTime() < Date.now()) {
+      return '可能已过期';
+    }
+  }
+
+  const seconds = Math.max(0, Math.floor((Date.now() - updated.getTime()) / 1000));
+  if (seconds < 60) return `${seconds} 秒前更新`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前更新`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前更新`;
+  return `${Math.floor(seconds / 86400)} 天前更新`;
+}
