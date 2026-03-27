@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/go-%3E%3D1.23-00ADD8?logo=go" alt="Go">
+  <img src="https://img.shields.io/badge/go-1.25.5-00ADD8?logo=go" alt="Go 1.25.5">
   <img src="https://img.shields.io/badge/react-19-61DAFB?logo=react" alt="React">
   <img src="https://img.shields.io/badge/platform-linux-lightgrey" alt="Platform">
 </p>
@@ -75,6 +75,28 @@ volumes:
 </details>
 
 ---
+
+## 🧰 本地构建与开发要求
+
+当前仓库的实际工具链要求以仓库文件和 CI 为准：
+
+- **Go：`1.25.5`**（见 `go.mod`）
+- **前端工具：Bun**（见 `web/bun.lock`、`Makefile` 与 `.github/workflows/ci.yml`）
+
+常用本地检查命令：
+
+```bash
+# Go 测试
+go test ./...
+
+# 前端依赖安装 / lint / 构建
+cd web
+bun install --frozen-lockfile
+bun run lint
+bun run build
+```
+
+如果 README 其他位置与 `go.mod`、`web/bun.lock` 或 CI 工作流不一致，应以后者为准并同步修正文档。
 
 ## 💡 快速开始
 
