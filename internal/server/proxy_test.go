@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -493,4 +494,197 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 	// 清理
 	s.StopAllProxies(client1)
 	s.StopAllProxies(client2)
+}
+
+type scriptedListener struct {
+	addr      net.Addr
+	acceptCh  chan error
+	closeOnce sync.Once
+}
+
+func newScriptedListener(t *testing.T) *scriptedListener {
+	t.Helper()
+	return &scriptedListener{
+		addr:     &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: reserveTCPPort(t)},
+		acceptCh: make(chan error, 1),
+	}
+}
+
+func (l *scriptedListener) Accept() (net.Conn, error) {
+	err, ok := <-l.acceptCh
+	if !ok {
+		return nil, net.ErrClosed
+	}
+	return nil, err
+}
+
+func (l *scriptedListener) Close() error {
+	l.closeOnce.Do(func() {
+		close(l.acceptCh)
+	})
+	return nil
+}
+
+func (l *scriptedListener) Addr() net.Addr { return l.addr }
+
+func TestProxyAcceptLoop_UnexpectedAcceptFailureMarksTunnelError(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	client := &ClientConn{
+		ID:      "accept-error-client",
+		proxies: make(map[string]*ProxyTunnel),
+	}
+	s.clients.Store(client.ID, client)
+
+	listener := newScriptedListener(t)
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:         "accept-error-tunnel",
+			Type:         protocol.ProxyTypeTCP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    8080,
+			RemotePort:   listener.addr.(*net.TCPAddr).Port,
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateExposed,
+		},
+		Listener: listener,
+		done:     make(chan struct{}),
+	}
+	client.proxies[tunnel.Config.Name] = tunnel
+
+	mustAddStableTunnel(t, s.store, storedTunnelFromRuntime(client, tunnel))
+
+	listener.acceptCh <- errors.New("boom")
+	s.proxyAcceptLoop(client, tunnel, listener, tunnel.done)
+
+	client.proxyMu.RLock()
+	got := client.proxies[tunnel.Config.Name].Config
+	currentListener := client.proxies[tunnel.Config.Name].Listener
+	client.proxyMu.RUnlock()
+
+	if got.DesiredState != protocol.ProxyDesiredStateRunning || got.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("意外 Accept 失败后状态应为 running/error，得到 %s/%s", got.DesiredState, got.RuntimeState)
+	}
+	if got.Error == "" {
+		t.Fatal("意外 Accept 失败后 error 不应为空")
+	}
+	if currentListener != nil {
+		t.Fatal("意外 Accept 失败后 listener 应已清理")
+	}
+
+	stored, ok := s.store.GetTunnel(client.ID, tunnel.Config.Name)
+	if !ok {
+		t.Fatal("store 中应仍存在该隧道")
+	}
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("store 状态应为 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+	}
+	if stored.Error == "" {
+		t.Fatal("store error 不应为空")
+	}
+}
+
+func TestProxyAcceptLoop_ClosedDoneDoesNotMarkTunnelError(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	client := &ClientConn{
+		ID:      "accept-shutdown-client",
+		proxies: make(map[string]*ProxyTunnel),
+	}
+	s.clients.Store(client.ID, client)
+
+	listener := newScriptedListener(t)
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:         "accept-shutdown-tunnel",
+			Type:         protocol.ProxyTypeTCP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    8080,
+			RemotePort:   listener.addr.(*net.TCPAddr).Port,
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateExposed,
+		},
+		Listener: listener,
+		done:     make(chan struct{}),
+	}
+	client.proxies[tunnel.Config.Name] = tunnel
+
+	mustAddStableTunnel(t, s.store, storedTunnelFromRuntime(client, tunnel))
+
+	close(tunnel.done)
+	listener.acceptCh <- net.ErrClosed
+	s.proxyAcceptLoop(client, tunnel, listener, tunnel.done)
+
+	client.proxyMu.RLock()
+	got := client.proxies[tunnel.Config.Name].Config
+	client.proxyMu.RUnlock()
+
+	if got.DesiredState != protocol.ProxyDesiredStateRunning || got.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("正常关闭不应把状态降级为 error，得到 %s/%s", got.DesiredState, got.RuntimeState)
+	}
+
+	stored, ok := s.store.GetTunnel(client.ID, tunnel.Config.Name)
+	if !ok {
+		t.Fatal("store 中应仍存在该隧道")
+	}
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("正常关闭后 store 状态应保持 running/exposed，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+	}
+}
+
+func TestMarkTCPProxyRuntimeErrorIfCurrent_StaleListenerDoesNotDemote(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	client := &ClientConn{
+		ID:      "stale-listener-client",
+		proxies: make(map[string]*ProxyTunnel),
+	}
+	s.clients.Store(client.ID, client)
+
+	oldListener := newScriptedListener(t)
+	currentListener := newScriptedListener(t)
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:         "stale-listener-tunnel",
+			Type:         protocol.ProxyTypeTCP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    8080,
+			RemotePort:   currentListener.addr.(*net.TCPAddr).Port,
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateExposed,
+		},
+		Listener: currentListener,
+		done:     make(chan struct{}),
+	}
+	client.proxies[tunnel.Config.Name] = tunnel
+
+	mustAddStableTunnel(t, s.store, storedTunnelFromRuntime(client, tunnel))
+
+	s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, oldListener, "stale accept failure")
+
+	client.proxyMu.RLock()
+	got := client.proxies[tunnel.Config.Name].Config
+	gotListener := client.proxies[tunnel.Config.Name].Listener
+	client.proxyMu.RUnlock()
+
+	if got.DesiredState != protocol.ProxyDesiredStateRunning || got.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("stale listener 不应把状态降级为 error，得到 %s/%s", got.DesiredState, got.RuntimeState)
+	}
+	if gotListener != currentListener {
+		t.Fatal("stale listener 不应清理当前 listener")
+	}
+
+	stored, ok := s.store.GetTunnel(client.ID, tunnel.Config.Name)
+	if !ok {
+		t.Fatal("store 中应仍存在该隧道")
+	}
+	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("stale listener 后 store 状态应保持 running/exposed，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+	}
 }
