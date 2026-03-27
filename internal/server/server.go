@@ -68,6 +68,9 @@ type Server struct {
 	publicIPv4                  string       // 缓存的公网 IPv4
 	publicIPv6                  string       // 缓存的公网 IPv6
 	publicIPMu                  sync.RWMutex // 保护公网 IP 缓存
+	managedConnMu               sync.Mutex
+	managedConns                map[*websocket.Conn]struct{}
+	longLivedHandlers           sync.WaitGroup
 	nextGeneration              atomic.Uint64
 	pendingProvisionAckMu       sync.Mutex
 	pendingProvisionAcks        map[pendingTunnelProvisionAckKey]chan provisionAckResult
@@ -207,6 +210,7 @@ func New(port int) *Server {
 		events:                  NewEventBus(),
 		startTime:               time.Now(),
 		done:                    make(chan struct{}),
+		managedConns:            make(map[*websocket.Conn]struct{}),
 		pendingProvisionAcks:    make(map[pendingTunnelProvisionAckKey]chan provisionAckResult),
 		pendingDataTimeout:      15 * time.Second,
 		dataHandshakeTimeout:    10 * time.Second,
@@ -273,10 +277,69 @@ func (a *ClientConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool
 	}
 }
 
+func (s *Server) beginLongLivedHandler() func() {
+	s.longLivedHandlers.Add(1)
+	return s.longLivedHandlers.Done
+}
+
+func (s *Server) trackManagedConn(conn *websocket.Conn) func() {
+	release := s.beginLongLivedHandler()
+	s.managedConnMu.Lock()
+	if s.managedConns == nil {
+		s.managedConns = make(map[*websocket.Conn]struct{})
+	}
+	s.managedConns[conn] = struct{}{}
+	s.managedConnMu.Unlock()
+
+	return func() {
+		s.managedConnMu.Lock()
+		delete(s.managedConns, conn)
+		s.managedConnMu.Unlock()
+		release()
+	}
+}
+
+func (s *Server) closeManagedConns(reason string) {
+	s.managedConnMu.Lock()
+	conns := make([]*websocket.Conn, 0, len(s.managedConns))
+	for conn := range s.managedConns {
+		conns = append(conns, conn)
+	}
+	s.managedConnMu.Unlock()
+
+	deadline := time.Now().Add(time.Second)
+	for _, conn := range conns {
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, reason),
+			deadline,
+		)
+		_ = conn.Close()
+	}
+}
+
+func (s *Server) waitForLongLivedHandlers(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.longLivedHandlers.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Start 启动服务端，单端口同时处理 HTTP、控制通道和数据通道 WebSocket。
 func (s *Server) Start() error {
 	s.startTime = time.Now()
 	s.done = make(chan struct{})
+	s.managedConnMu.Lock()
+	s.managedConns = make(map[*websocket.Conn]struct{})
+	s.managedConnMu.Unlock()
 
 	// 初始化嵌入的前端资源
 	webFS, err := web.DistFS()
@@ -401,7 +464,8 @@ func (s *Server) emitSetupTokenBanner(w io.Writer) {
 // 1. 通知后台 goroutine 退出
 // 2. 关闭事件总线（让 SSE 连接退出）
 // 3. 断开所有 Client 连接（让 WebSocket 连接退出）
-// 4. 关闭 HTTP 服务器（等待活跃请求结束——此时 SSE/WS 已退出，不会阻塞）
+// 4. 等待长连接 handler 退出
+// 5. 关闭 HTTP 服务器（等待活跃请求结束——此时 SSE/WS 已退出，不会阻塞）
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Printf("🛑 开始优雅关闭...")
 
@@ -427,10 +491,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		log.Printf("🔌 已断开 %d 个 Client 连接", clientCount)
 	}
 
-	// 短暂等待，让 SSE/WebSocket handler 有时间处理断开并从 ServeHTTP 返回
-	time.Sleep(200 * time.Millisecond)
+	s.closeManagedConns("server_shutdown")
 
-	// 4. 关闭 HTTP 服务器（此时长连接已断开，Shutdown 应能快速完成）
+	if err := s.waitForLongLivedHandlers(ctx); err != nil {
+		log.Printf("⚠️ 等待长连接处理退出超时: %v", err)
+		return err
+	}
+
+	// 5. 关闭 HTTP 服务器（此时长连接已断开，Shutdown 应能快速完成）
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
 			log.Printf("⚠️ HTTP 服务器关闭出错: %v", err)
@@ -567,6 +635,8 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("❌ WebSocket 升级失败: %v", err)
 		return
 	}
+	release := s.trackManagedConn(conn)
+	defer release()
 	defer conn.Close()
 
 	// 限制单条 WebSocket 消息大小，防止恶意客户端发送超大消息导致 OOM

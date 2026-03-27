@@ -28,6 +28,8 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("❌ 数据通道 WebSocket 升级失败: %v", err)
 		return
 	}
+	release := s.trackManagedConn(conn)
+	defer release()
 	defer conn.Close()
 
 	conn.SetReadLimit(wsDataMaxMessageSize)

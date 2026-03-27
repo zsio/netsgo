@@ -3088,9 +3088,24 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws/control", s.Port)
 	dialer := *websocket.DefaultDialer
 	dialer.Subprotocols = []string{protocol.WSSubProtocolControl}
-	conn, _, err := dialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+
+	var conn *websocket.Conn
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var dialErr error
+		conn, _, dialErr = dialer.Dial(wsURL, nil)
+		if dialErr == nil {
+			break
+		}
+		select {
+		case err := <-serverErr:
+			t.Fatalf("服务端启动失败: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("WebSocket 连接失败: %v", dialErr)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	defer conn.Close()
 
@@ -3140,6 +3155,75 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	}
 
 	// 验证 Server 已停止（Serve 返回）
+	select {
+	case err := <-serverErr:
+		if err != nil && err.Error() != "http: Server closed" {
+			t.Errorf("Server 返回了非预期错误: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("Server 应在 Shutdown 后返回")
+	}
+}
+
+func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.StorePath = filepath.Join(t.TempDir(), "tunnels.json")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("获取临时端口失败: %v", err)
+	}
+	s.Port = ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- s.Start()
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws/control", s.Port)
+	dialer := *websocket.DefaultDialer
+	dialer.Subprotocols = []string{protocol.WSSubProtocolControl}
+
+	var conn *websocket.Conn
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var dialErr error
+		conn, _, dialErr = dialer.Dial(wsURL, nil)
+		if dialErr == nil {
+			break
+		}
+		select {
+		case err := <-serverErr:
+			t.Fatalf("服务端启动失败: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("WebSocket 连接失败: %v", dialErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown 失败: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	var msg protocol.Message
+	err = conn.ReadJSON(&msg)
+	if err == nil {
+		t.Fatal("Shutdown 后未认证控制连接应被关闭")
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("Shutdown 后控制连接未被及时关闭，读超时: %v", err)
+	}
+
 	select {
 	case err := <-serverErr:
 		if err != nil && err.Error() != "http: Server closed" {
