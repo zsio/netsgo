@@ -21,6 +21,12 @@ import (
 // ============================================================
 
 // mockServer 模拟 Server 端行为，用于测试 Client
+func (ms *mockServer) writeControlJSON(conn *websocket.Conn, v any) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	return conn.WriteJSON(v)
+}
+
 type mockServer struct {
 	mu                   sync.Mutex
 	receivedMsgs         []protocol.Message
@@ -84,11 +90,11 @@ func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case protocol.MsgTypeAuth:
 			resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, ms.authResp)
-			conn.WriteJSON(resp)
+			ms.writeControlJSON(conn, resp)
 
 		case protocol.MsgTypePing:
 			pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
-			conn.WriteJSON(pong)
+			ms.writeControlJSON(conn, pong)
 
 		case protocol.MsgTypeProbeReport:
 			// 服务端不回复探针上报
@@ -96,7 +102,7 @@ func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 		default:
 			if ms.onMessage != nil {
 				if reply := ms.onMessage(msg); reply != nil {
-					conn.WriteJSON(reply)
+					ms.writeControlJSON(conn, reply)
 				}
 			}
 		}
@@ -456,10 +462,10 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 				authCount++
 				authMu.Unlock()
 				resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, ms.authResp)
-				conn.WriteJSON(resp)
+				ms.writeControlJSON(conn, resp)
 			case protocol.MsgTypePing:
 				pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
-				conn.WriteJSON(pong)
+				ms.writeControlJSON(conn, pong)
 			}
 		}
 	})
@@ -665,15 +671,21 @@ func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 
 	// Server 主动发送 proxy_create_resp (成功)
 	ms.mu.Lock()
+	var conn *websocket.Conn
 	if len(ms.conns) > 0 {
+		conn = ms.conns[len(ms.conns)-1]
+	}
+	ms.mu.Unlock()
+	if conn != nil {
 		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
 			Success:    true,
 			Message:    "tunnel created",
 			RemotePort: 19090,
 		})
-		ms.conns[len(ms.conns)-1].WriteJSON(resp)
+		if err := ms.writeControlJSON(conn, resp); err != nil {
+			t.Fatalf("服务端发送 proxy_create_resp 失败: %v", err)
+		}
 	}
-	ms.mu.Unlock()
 
 	// 等待 Client 处理，不崩溃即通过
 	time.Sleep(200 * time.Millisecond)
@@ -693,14 +705,20 @@ func TestClient_ControlLoop_ProxyCreateResp_Failure(t *testing.T) {
 
 	// Server 主动发送 proxy_create_resp (失败)
 	ms.mu.Lock()
+	var conn *websocket.Conn
 	if len(ms.conns) > 0 {
+		conn = ms.conns[len(ms.conns)-1]
+	}
+	ms.mu.Unlock()
+	if conn != nil {
 		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
 			Success: false,
 			Message: "port conflict",
 		})
-		ms.conns[len(ms.conns)-1].WriteJSON(resp)
+		if err := ms.writeControlJSON(conn, resp); err != nil {
+			t.Fatalf("服务端发送 proxy_create_resp 失败: %v", err)
+		}
 	}
-	ms.mu.Unlock()
 
 	time.Sleep(200 * time.Millisecond)
 }
@@ -736,6 +754,8 @@ func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
 		ms.mu.Unlock()
 		t.Fatal("客户端控制连接未建立")
 	}
+	conn := ms.conns[len(ms.conns)-1]
+	ms.mu.Unlock()
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyProvision, protocol.ProxyProvisionRequest{
 		Name:       "server-pushed-proxy",
 		Type:       protocol.ProxyTypeTCP,
@@ -743,8 +763,7 @@ func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
 		LocalPort:  8080,
 		RemotePort: 19090,
 	})
-	err := ms.conns[len(ms.conns)-1].WriteJSON(msg)
-	ms.mu.Unlock()
+	err := ms.writeControlJSON(conn, msg)
 	if err != nil {
 		t.Fatalf("服务端发送 proxy_provision 失败: %v", err)
 	}
@@ -793,6 +812,8 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 		ms.mu.Unlock()
 		t.Fatal("客户端控制连接未建立")
 	}
+	conn := ms.conns[len(ms.conns)-1]
+	ms.mu.Unlock()
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyProvision, protocol.ProxyProvisionRequest{
 		Name:       "unreachable-backend",
 		Type:       protocol.ProxyTypeTCP,
@@ -800,8 +821,7 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 		LocalPort:  1,
 		RemotePort: 19091,
 	})
-	err := ms.conns[len(ms.conns)-1].WriteJSON(msg)
-	ms.mu.Unlock()
+	err := ms.writeControlJSON(conn, msg)
 	if err != nil {
 		t.Fatalf("服务端发送 proxy_provision 失败: %v", err)
 	}
