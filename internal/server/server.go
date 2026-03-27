@@ -104,6 +104,23 @@ type ClientConn struct {
 	proxyMu      sync.RWMutex            // 保护 proxies
 }
 
+func (c *ClientConn) writeJSON(v any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return fmt.Errorf("client %s 控制通道不可用", c.ID)
+	}
+	return c.conn.WriteJSON(v)
+}
+
+func (c *ClientConn) detachControlConn() *websocket.Conn {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	conn := c.conn
+	c.conn = nil
+	return conn
+}
+
 // generateDataToken 生成 32 字节随机 hex 字符串，用作数据通道握手凭证
 func generateDataToken() string {
 	buf := make([]byte, 32)
@@ -872,9 +889,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 			}
 			// 收到心跳，回复 Pong
 			pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
-			client.mu.Lock()
-			_ = conn.WriteJSON(pong)
-			client.mu.Unlock()
+			if err := client.writeJSON(pong); err != nil {
+				log.Printf("⚠️ 发送 Pong 失败 [%s]: %v", client.ID, err)
+			}
 
 		case protocol.MsgTypeProbeReport:
 			if !s.isCurrentLive(client.ID, client.generation) {
@@ -955,9 +972,9 @@ func (s *Server) controlLoop(client *ClientConn) {
 				s.emitTunnelChanged(client.ID, config, "created_by_client")
 			}
 
-			client.mu.Lock()
-			_ = conn.WriteJSON(resp)
-			client.mu.Unlock()
+			if err := client.writeJSON(resp); err != nil {
+				log.Printf("⚠️ 发送代理响应失败 [%s]: %v", client.ID, err)
+			}
 
 		case protocol.MsgTypeProxyProvisionAck:
 			var ack protocol.ProxyProvisionAck

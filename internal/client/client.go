@@ -91,6 +91,41 @@ type sessionRuntime struct {
 	dataMu      sync.RWMutex
 }
 
+func (rt *sessionRuntime) writeJSON(v any) error {
+	rt.connMu.Lock()
+	defer rt.connMu.Unlock()
+	if rt.conn == nil {
+		return fmt.Errorf("控制通道不可用")
+	}
+	return rt.conn.WriteJSON(v)
+}
+
+func (rt *sessionRuntime) writeMessage(messageType int, data []byte) error {
+	rt.connMu.Lock()
+	defer rt.connMu.Unlock()
+	if rt.conn == nil {
+		return fmt.Errorf("控制通道不可用")
+	}
+	return rt.conn.WriteMessage(messageType, data)
+}
+
+func (rt *sessionRuntime) writeControl(messageType int, data []byte, deadline time.Time) error {
+	rt.connMu.Lock()
+	defer rt.connMu.Unlock()
+	if rt.conn == nil {
+		return fmt.Errorf("控制通道不可用")
+	}
+	return rt.conn.WriteControl(messageType, data, deadline)
+}
+
+func (rt *sessionRuntime) detachConn() *websocket.Conn {
+	rt.connMu.Lock()
+	defer rt.connMu.Unlock()
+	conn := rt.conn
+	rt.conn = nil
+	return conn
+}
+
 func newSessionRuntime(epoch uint64) *sessionRuntime {
 	return &sessionRuntime{
 		epoch: epoch,
@@ -199,34 +234,42 @@ func (c *Client) runtimeForStandaloneUse() *sessionRuntime {
 // 输出: http://host:port 或 https://host:port
 // 同时设置 c.useTLS 标记。
 func (c *Client) normalizeServerAddr() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	addr := strings.TrimRight(c.ServerAddr, "/")
+	useTLS := false
 
 	switch {
 	case strings.HasPrefix(addr, "wss://"):
 		addr = "https://" + strings.TrimPrefix(addr, "wss://")
-		c.useTLS = true
+		useTLS = true
 	case strings.HasPrefix(addr, "ws://"):
 		addr = "http://" + strings.TrimPrefix(addr, "ws://")
-		c.useTLS = false
 	case strings.HasPrefix(addr, "https://"):
-		c.useTLS = true
+		useTLS = true
 	case strings.HasPrefix(addr, "http://"):
-		c.useTLS = false
 	default:
 		// 无协议前缀，默认 http
 		addr = "http://" + addr
-		c.useTLS = false
 	}
 
 	c.ServerAddr = addr
+	c.useTLS = useTLS
 }
 
 // deriveControlURL 从规范化后的 ServerAddr 推导控制通道 WebSocket URL
 // http://host:port -> ws://host:port/ws/control
 // https://host:port -> wss://host:port/ws/control
+func (c *Client) currentServerState() (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ServerAddr, c.useTLS
+}
+
 func (c *Client) deriveControlURL() string {
-	addr := c.ServerAddr
-	if c.useTLS {
+	addr, useTLS := c.currentServerState()
+	if useTLS {
 		addr = "wss://" + strings.TrimPrefix(addr, "https://")
 	} else {
 		addr = "ws://" + strings.TrimPrefix(addr, "http://")
@@ -235,8 +278,8 @@ func (c *Client) deriveControlURL() string {
 }
 
 func (c *Client) deriveDataURL() string {
-	addr := c.ServerAddr
-	if c.useTLS {
+	addr, useTLS := c.currentServerState()
+	if useTLS {
 		addr = "wss://" + strings.TrimPrefix(addr, "https://")
 	} else {
 		addr = "ws://" + strings.TrimPrefix(addr, "http://")
@@ -245,6 +288,42 @@ func (c *Client) deriveDataURL() string {
 }
 
 // buildTLSConfig 构建客户端 TLS 配置
+func (c *Client) CurrentClientID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ClientID
+}
+
+func (c *Client) CurrentToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Token
+}
+
+func (c *Client) CurrentTLSFingerprint() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.TLSFingerprint
+}
+
+func (c *Client) UsesTLS() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.useTLS
+}
+
+func (c *Client) currentAuthState() (clientID, dataToken, token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ClientID, c.dataToken, c.Token
+}
+
+func (c *Client) setToken(token string) {
+	c.mu.Lock()
+	c.Token = token
+	c.mu.Unlock()
+}
+
 func (c *Client) buildTLSConfig(host string) *tls.Config {
 	return &tls.Config{
 		InsecureSkipVerify: c.TLSSkipVerify,
@@ -319,7 +398,8 @@ func (c *Client) Start() error {
 			log.Printf("🔄 将在 %v 后重连...", interval)
 			time.Sleep(interval)
 
-			log.Printf("🔄 正在尝试重连 %s ...", c.ServerAddr)
+			serverAddr, _ := c.currentServerState()
+			log.Printf("🔄 正在尝试重连 %s ...", serverAddr)
 			err := c.connectAndRun()
 			if err == nil {
 				// connectAndRun 正常返回（连接又断了），开始新一轮重连
@@ -355,14 +435,10 @@ func (c *Client) Shutdown() {
 	log.Printf("🛑 客户端开始优雅关闭...")
 
 	if rt := c.getCurrentRuntime(); rt != nil {
-		rt.connMu.Lock()
-		if rt.conn != nil {
-			rt.conn.WriteMessage(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "client shutting down"),
-			)
-		}
-		rt.connMu.Unlock()
+		_ = rt.writeMessage(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "client shutting down"),
+		)
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -393,10 +469,7 @@ func (c *Client) stopRuntime(rt *sessionRuntime, reason string) {
 		_ = session.Close()
 	}
 
-	rt.connMu.Lock()
-	conn := rt.conn
-	rt.conn = nil
-	rt.connMu.Unlock()
+	conn := rt.detachConn()
 	if conn != nil {
 		if reason != "" {
 			_ = conn.WriteControl(
@@ -423,8 +496,10 @@ func (c *Client) cleanup() {
 		return true
 	})
 
+	c.mu.Lock()
 	c.ClientID = ""
 	c.dataToken = ""
+	c.mu.Unlock()
 }
 
 func (c *Client) failRuntime(rt *sessionRuntime, reason string) {
@@ -450,7 +525,8 @@ func (c *Client) connectAndRun() error {
 	controlURL := c.deriveControlURL()
 	log.Printf("🔌 正在连接 Server: %s", controlURL)
 
-	u, err := url.Parse(c.ServerAddr)
+	serverAddr, useTLS := c.currentServerState()
+	u, err := url.Parse(serverAddr)
 	if err != nil {
 		c.clearCurrentRuntime(rt)
 		return fmt.Errorf("解析 ServerAddr 失败: %w", err)
@@ -464,7 +540,7 @@ func (c *Client) connectAndRun() error {
 		return fmt.Errorf("连接 Server 失败: %w", err)
 	}
 
-	if c.useTLS && !c.TLSSkipVerify {
+	if useTLS && !c.TLSSkipVerify {
 		if err := c.checkTLSFingerprint(conn); err != nil {
 			conn.Close()
 			c.clearCurrentRuntime(rt)
@@ -482,7 +558,7 @@ func (c *Client) connectAndRun() error {
 		c.clearCurrentRuntime(rt)
 		return err
 	}
-	log.Printf("✅ 认证成功，Client ID: %s", c.ClientID)
+	log.Printf("✅ 认证成功，Client ID: %s", c.CurrentClientID())
 
 	// 3. 建立数据通道
 	if err := c.connectDataChannelRuntime(rt); err != nil {
@@ -532,10 +608,11 @@ func (c *Client) authenticate() error {
 func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 	hostname, _ := os.Hostname()
 	localIP := netutil.GetOutboundIP()
+	_, _, token := c.currentAuthState()
 
 	authReq := protocol.AuthRequest{
 		Key:       c.Key,
-		Token:     c.Token,
+		Token:     token,
 		InstallID: c.InstallID,
 		Client: protocol.ClientInfo{
 			Hostname: hostname,
@@ -547,7 +624,7 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 	}
 
 	// 如果有 Token，先只发 Token（不发 Key，避免服务端在 Token 无效时消耗 Key）
-	if c.Token != "" {
+	if token != "" {
 		tokenReq := authReq
 		tokenReq.Key = "" // 不发送 Key
 		authResp, err := c.sendAuthRequestRuntime(rt, tokenReq)
@@ -586,15 +663,15 @@ func (c *Client) sendAuthRequestRuntime(rt *sessionRuntime, authReq protocol.Aut
 		return protocol.AuthResponse{}, err
 	}
 
+	if err := rt.writeJSON(msg); err != nil {
+		return protocol.AuthResponse{}, fmt.Errorf("发送认证消息失败: %w", err)
+	}
+
 	rt.connMu.Lock()
 	conn := rt.conn
 	rt.connMu.Unlock()
 	if conn == nil {
 		return protocol.AuthResponse{}, fmt.Errorf("控制通道不可用")
-	}
-
-	if err := conn.WriteJSON(msg); err != nil {
-		return protocol.AuthResponse{}, fmt.Errorf("发送认证消息失败: %w", err)
 	}
 
 	var resp protocol.Message
@@ -613,11 +690,15 @@ func (c *Client) sendAuthRequestRuntime(rt *sessionRuntime, authReq protocol.Aut
 }
 
 func (c *Client) applyAuthSuccess(authResp protocol.AuthResponse) {
+	c.mu.Lock()
 	c.ClientID = authResp.ClientID
 	c.dataToken = authResp.DataToken
-
 	if authResp.Token != "" {
 		c.Token = authResp.Token
+	}
+	c.mu.Unlock()
+
+	if authResp.Token != "" {
 		if err := c.saveToken(authResp.Token); err != nil {
 			log.Printf("⚠️ 保存 Token 失败: %v", err)
 		} else {
@@ -634,7 +715,7 @@ func (c *Client) handleAuthFailure(authResp protocol.AuthResponse, attemptedWith
 
 	if authResp.ClearToken {
 		log.Printf("⚠️ 服务端要求清除本地 Token: code=%s", authResp.Code)
-		c.Token = ""
+		c.setToken("")
 		if err := c.clearToken(); err != nil {
 			log.Printf("⚠️ 清除本地 Token 失败: %v", err)
 		}
@@ -680,7 +761,8 @@ func (c *Client) connectDataChannel() error {
 func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
 	c.normalizeServerAddr()
 
-	u, err := url.Parse(c.ServerAddr)
+	serverAddr, _ := c.currentServerState()
+	u, err := url.Parse(serverAddr)
 	if err != nil {
 		return fmt.Errorf("解析 ServerAddr 失败: %w", err)
 	}
@@ -695,7 +777,8 @@ func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
 	wsConn.SetReadLimit(wsDataMaxMessageSize)
 	wsConn.SetReadDeadline(time.Now().Add(c.dataHandshakeTimeout))
 
-	handshake := protocol.EncodeDataHandshake(c.ClientID, c.dataToken)
+	clientID, dataToken, _ := c.currentAuthState()
+	handshake := protocol.EncodeDataHandshake(clientID, dataToken)
 	if err := wsConn.WriteMessage(websocket.BinaryMessage, handshake); err != nil {
 		wsConn.Close()
 		return fmt.Errorf("发送数据通道握手失败: %w", err)
@@ -759,9 +842,12 @@ func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
 	}
 	serverFP := strings.Join(parts, ":")
 
-	if c.TLSFingerprint == "" {
+	c.mu.Lock()
+	currentFingerprint := c.TLSFingerprint
+	if currentFingerprint == "" {
 		// TOFU: 首次连接，记录指纹
 		c.TLSFingerprint = serverFP
+		c.mu.Unlock()
 		log.Printf("🔒 TOFU: 首次连接，记录服务器证书指纹")
 		log.Printf("🔒 指纹: %s", serverFP)
 		// 持久化指纹
@@ -770,15 +856,16 @@ func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
 		}
 		return nil
 	}
+	c.mu.Unlock()
 
 	// 已有指纹，严格比对
-	if serverFP != c.TLSFingerprint {
+	if serverFP != currentFingerprint {
 		return fmt.Errorf(
 			"\n⚠️ TLS 证书指纹不匹配！可能存在中间人攻击。"+
 				"\n  期望: %s"+
 				"\n  实际: %s"+
 				"\n  如果服务器确实更换了证书，请删除客户端状态文件后重试。",
-			c.TLSFingerprint, serverFP,
+			currentFingerprint, serverFP,
 		)
 	}
 
@@ -882,13 +969,7 @@ func (c *Client) requestProxyRuntime(rt *sessionRuntime, cfg protocol.ProxyNewRe
 	c.proxies.Store(cfg.Name, cfg)
 
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, protocol.ProxyCreateRequest(cfg))
-	rt.connMu.Lock()
-	conn := rt.conn
-	rt.connMu.Unlock()
-	if conn == nil {
-		return
-	}
-	err := conn.WriteJSON(msg)
+	err := rt.writeJSON(msg)
 	if err != nil {
 		log.Printf("❌ 发送代理请求失败 [%s]: %v", cfg.Name, err)
 		return
@@ -910,13 +991,7 @@ func (c *Client) heartbeatLoopRuntime(rt *sessionRuntime) {
 		select {
 		case <-ticker.C:
 			msg, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
-			rt.connMu.Lock()
-			conn := rt.conn
-			rt.connMu.Unlock()
-			if conn == nil {
-				return
-			}
-			err := conn.WriteJSON(msg)
+			err := rt.writeJSON(msg)
 			if err != nil {
 				log.Printf("⚠️ 发送心跳失败: %v", err)
 				c.failRuntime(rt, "heartbeat_write_failed")
@@ -964,17 +1039,13 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 
 	// 刷新公网 IP（内部有 5 分钟 TTL 控制）并附加到探针数据
 	c.refreshPublicIPs()
+	c.mu.Lock()
 	stats.PublicIPv4 = c.publicIPv4
 	stats.PublicIPv6 = c.publicIPv6
+	c.mu.Unlock()
 
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
-	rt.connMu.Lock()
-	conn := rt.conn
-	rt.connMu.Unlock()
-	if conn == nil {
-		return
-	}
-	err = conn.WriteJSON(msg)
+	err = rt.writeJSON(msg)
 	if err != nil {
 		log.Printf("⚠️ 上报探针数据失败: %v", err)
 		c.failRuntime(rt, "probe_write_failed")
@@ -983,10 +1054,17 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 
 // refreshPublicIPs 获取公网 IP 并缓存（仅当距上次获取超过 5 分钟时才实际请求）
 func (c *Client) refreshPublicIPs() {
+	c.mu.Lock()
 	if !c.publicIPFetched.IsZero() && time.Since(c.publicIPFetched) < 5*time.Minute {
+		c.mu.Unlock()
 		return // 还没过期，使用缓存
 	}
+	c.mu.Unlock()
+
 	ipv4, ipv6 := netutil.FetchPublicIPs()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if ipv4 != "" {
 		c.publicIPv4 = ipv4
 	}
@@ -1041,7 +1119,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			})
 			log.Printf("✅ 已接受服务端隧道 provisioning 配置 [%s]", req.Name)
 
-			if err := conn.WriteJSON(resp); err != nil {
+			if err := rt.writeJSON(resp); err != nil {
 				log.Printf("⚠️ 返回 provisioning ACK 失败 [%s]: %v", req.Name, err)
 				c.failRuntime(rt, "proxy_provision_ack_write_failed")
 				return

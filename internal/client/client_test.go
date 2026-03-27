@@ -241,8 +241,8 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// 验证 ClientID 被设置
-	if c.ClientID != "mock_client_1" {
-		t.Errorf("ClientID 期望 'mock_client_1'，得到 %q", c.ClientID)
+	if c.CurrentClientID() != "mock_client_1" {
+		t.Errorf("ClientID 期望 'mock_client_1'，得到 %q", c.CurrentClientID())
 	}
 
 	// 验证 Server 收到了认证消息
@@ -373,7 +373,7 @@ func TestClient_ServerDisconnect_WithReconnect(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// 验证连接正常
-	if c.ClientID == "" {
+	if c.CurrentClientID() == "" {
 		t.Fatal("Client 应已完成认证")
 	}
 
@@ -542,7 +542,7 @@ func TestClient_Cleanup(t *testing.T) {
 	c.cleanup()
 
 	// 验证清理结果
-	if c.ClientID != "" {
+	if c.CurrentClientID() != "" {
 		t.Error("cleanup 后 ClientID 应为空")
 	}
 

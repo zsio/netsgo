@@ -707,13 +707,7 @@ func (s *Server) writeControlMessage(client *ClientConn, message *protocol.Messa
 		return fmt.Errorf("client %s 当前不处于 live 会话", client.ID)
 	}
 
-	client.mu.Lock()
-	defer client.mu.Unlock()
-
-	if client.conn == nil {
-		return fmt.Errorf("client %s 控制通道不可用", client.ID)
-	}
-	if err := client.conn.WriteJSON(message); err != nil {
+	if err := client.writeJSON(message); err != nil {
 		return fmt.Errorf("写入控制消息失败: %w", err)
 	}
 	return nil
