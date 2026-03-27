@@ -291,6 +291,38 @@ func TestAPI_Status_ExtendedFields(t *testing.T) {
 	}
 }
 
+func TestAPI_ConsoleSnapshot(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	result := getAPIJSON(t, s, ts, "/api/console/snapshot")
+
+	clients, ok := result["clients"].([]any)
+	if !ok {
+		t.Fatalf("clients 应返回数组，得到 %T", result["clients"])
+	}
+	if len(clients) != 0 {
+		t.Fatalf("初始 clients 应为空，得到 %d", len(clients))
+	}
+
+	serverStatus, ok := result["server_status"].(map[string]any)
+	if !ok {
+		t.Fatalf("server_status 应返回对象，得到 %T", result["server_status"])
+	}
+	if serverStatus["status"] != "running" {
+		t.Fatalf("server_status.status 期望 running，得到 %v", serverStatus["status"])
+	}
+
+	generatedAt, ok := result["generated_at"].(string)
+	if !ok || generatedAt == "" {
+		t.Fatalf("generated_at 应返回 RFC3339 时间，得到 %v", result["generated_at"])
+	}
+	freshUntil, ok := result["fresh_until"].(string)
+	if !ok || freshUntil == "" {
+		t.Fatalf("fresh_until 应返回 RFC3339 时间，得到 %v", result["fresh_until"])
+	}
+}
+
 func TestAPI_Status_TunnelCounts(t *testing.T) {
 	s, conn, ts, cleanup := setupWSTest(t)
 	defer cleanup()

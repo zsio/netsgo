@@ -544,6 +544,7 @@ func (s *Server) registerManagementRoutes(mux *http.ServeMux) {
 	// API
 	mux.HandleFunc("GET /api/status", s.RequireAuth(s.handleAPIStatus))
 	mux.HandleFunc("GET /api/clients", s.RequireAuth(s.handleAPIClients))
+	mux.HandleFunc("GET /api/console/snapshot", s.RequireAuth(s.handleAPIConsoleSnapshot))
 	mux.HandleFunc("PUT /api/clients/{id}/display-name", s.RequireAuth(s.handleUpdateDisplayName))
 	mux.HandleFunc("POST /api/clients/{id}/tunnels", s.RequireAuth(s.handleCreateTunnel))
 	mux.HandleFunc("PUT /api/clients/{id}/tunnels/{name}/pause", s.RequireAuth(s.handlePauseTunnel))
@@ -1086,6 +1087,11 @@ func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.getCachedServerStatus())
+}
+
+func (s *Server) handleAPIConsoleSnapshot(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.collectSnapshot())
 }
 
 func (s *Server) collectSnapshot() consoleSnapshot {
