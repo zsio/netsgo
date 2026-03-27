@@ -348,6 +348,10 @@ func (c *Client) newWSDialer(host string) *websocket.Dialer {
 // 前 5 分钟以 3s 为基准，之后以 10s 为基准，并加入正向抖动，
 // 避免大量 Client 同时断线后按固定节奏一起回连。
 func retryInterval(disconnectTime time.Time) time.Duration {
+	return retryIntervalWithJitter(disconnectTime, retryJitterFloat64())
+}
+
+func retryIntervalWithJitter(disconnectTime time.Time, jitter float64) time.Duration {
 	elapsed := time.Since(disconnectTime)
 	base := retryShortInterval
 	if elapsed < retryLongIntervalAfter {
@@ -356,7 +360,6 @@ func retryInterval(disconnectTime time.Time) time.Duration {
 		base = retryLongInterval
 	}
 
-	jitter := retryJitterFloat64()
 	if jitter < 0 {
 		jitter = 0
 	}

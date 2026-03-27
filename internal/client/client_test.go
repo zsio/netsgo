@@ -511,25 +511,20 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 }
 
 func TestClient_RetryInterval(t *testing.T) {
-	originalJitter := retryJitterFloat64
-	defer func() { retryJitterFloat64 = originalJitter }()
-
 	recent := time.Now().Add(-1 * time.Minute)
 	old := time.Now().Add(-6 * time.Minute)
 
-	retryJitterFloat64 = func() float64 { return 0 }
-	if interval := retryInterval(recent); interval != retryShortInterval {
+	if interval := retryIntervalWithJitter(recent, 0); interval != retryShortInterval {
 		t.Errorf("断连 1 分钟内最小重试间隔应为 %v，得到 %v", retryShortInterval, interval)
 	}
-	if interval := retryInterval(old); interval != retryLongInterval {
+	if interval := retryIntervalWithJitter(old, 0); interval != retryLongInterval {
 		t.Errorf("断连超过 5 分钟最小重试间隔应为 %v，得到 %v", retryLongInterval, interval)
 	}
 
-	retryJitterFloat64 = func() float64 { return 1 }
-	if interval := retryInterval(recent); interval != 4500*time.Millisecond {
+	if interval := retryIntervalWithJitter(recent, 1); interval != 4500*time.Millisecond {
 		t.Errorf("断连 1 分钟内最大重试间隔应为 4.5s，得到 %v", interval)
 	}
-	if interval := retryInterval(old); interval != 15*time.Second {
+	if interval := retryIntervalWithJitter(old, 1); interval != 15*time.Second {
 		t.Errorf("断连超过 5 分钟最大重试间隔应为 15s，得到 %v", interval)
 	}
 }
