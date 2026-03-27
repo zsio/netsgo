@@ -270,6 +270,25 @@ func TestAPI_Status_ExtendedFields(t *testing.T) {
 	if result["tunnel_active"].(float64) != 0 {
 		t.Errorf("tunnel_active 期望 0，得到 %v", result["tunnel_active"])
 	}
+	generatedAt, ok := result["generated_at"].(string)
+	if !ok || generatedAt == "" {
+		t.Fatalf("generated_at 应返回 RFC3339 时间，得到 %v", result["generated_at"])
+	}
+	freshUntil, ok := result["fresh_until"].(string)
+	if !ok || freshUntil == "" {
+		t.Fatalf("fresh_until 应返回 RFC3339 时间，得到 %v", result["fresh_until"])
+	}
+	generatedTime, err := time.Parse(time.RFC3339Nano, generatedAt)
+	if err != nil {
+		t.Fatalf("generated_at 解析失败: %v", err)
+	}
+	freshUntilTime, err := time.Parse(time.RFC3339Nano, freshUntil)
+	if err != nil {
+		t.Fatalf("fresh_until 解析失败: %v", err)
+	}
+	if !freshUntilTime.After(generatedTime) {
+		t.Fatalf("fresh_until 应晚于 generated_at: %s <= %s", freshUntil, generatedAt)
+	}
 }
 
 func TestAPI_Status_TunnelCounts(t *testing.T) {
@@ -439,6 +458,14 @@ func TestAPI_Clients_WithStats(t *testing.T) {
 			statsMap := a["stats"].(map[string]any)
 			if statsMap["cpu_usage"].(float64) != 55.5 {
 				t.Errorf("cpu_usage 期望 55.5，得到 %v", statsMap["cpu_usage"])
+			}
+			updatedAt, ok := statsMap["updated_at"].(string)
+			if !ok || updatedAt == "" {
+				t.Fatalf("stats.updated_at 应存在，得到 %v", statsMap["updated_at"])
+			}
+			freshUntil, ok := statsMap["fresh_until"].(string)
+			if !ok || freshUntil == "" {
+				t.Fatalf("stats.fresh_until 应存在，得到 %v", statsMap["fresh_until"])
 			}
 		}
 	}
@@ -1941,6 +1968,8 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
 	}
+	eventsCh := s.events.Subscribe()
+	defer s.events.Unsubscribe(eventsCh)
 
 	type apiResult struct {
 		code int
@@ -1996,6 +2025,40 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	if exists {
 		t.Fatal("create timeout 后 runtime pending tunnel 应被清理")
 	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case event := <-eventsCh:
+			if event.Type != "tunnel_changed" {
+				continue
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+				t.Fatalf("解析 tunnel_changed 事件失败: %v", err)
+			}
+			if payload["action"] != "error" {
+				continue
+			}
+			tunnelPayload, ok := payload["tunnel"].(map[string]any)
+			if !ok {
+				t.Fatalf("tunnel_changed.tunnel 类型无效: %#v", payload["tunnel"])
+			}
+			if tunnelPayload["name"] != "timeout-tunnel" {
+				continue
+			}
+			if tunnelPayload["runtime_state"] != protocol.ProxyRuntimeStateError {
+				t.Fatalf("超时失败事件 runtime_state 期望 error，得到 %v", tunnelPayload["runtime_state"])
+			}
+			if tunnelPayload["error"] == "" {
+				t.Fatal("超时失败事件应携带 error 文案")
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	t.Fatal("create timeout 后未收到最终 error 通知")
 }
 
 func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {

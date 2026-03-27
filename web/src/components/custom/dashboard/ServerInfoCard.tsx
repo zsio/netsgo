@@ -1,7 +1,7 @@
 import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp } from 'lucide-react';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatUptime, formatBytes, formatInstallAge } from '@/lib/format';
+import { formatUptime, formatBytes, formatInstallAge, formatTimestamp, describeFreshness } from '@/lib/format';
 import {
   HoverCard,
   HoverCardContent,
@@ -44,8 +44,13 @@ export function ServerInfoCard() {
           <h3 className="font-semibold text-foreground">服务端信息</h3>
         </div>
         <div className="flex items-center gap-2 text-sm">
-           <div className={`w-2 h-2 rounded-full ${status?.status === 'running' ? 'bg-emerald-500' : 'bg-destructive'}`} />
-           <span className="font-medium text-muted-foreground">{status?.status === 'running' ? '正常运行' : '异常'}</span>
+          <div className={`w-2 h-2 rounded-full ${status?.status === 'running' ? 'bg-emerald-500' : 'bg-destructive'}`} />
+          <div className="flex flex-col items-end leading-tight">
+            <span className="font-medium text-muted-foreground">{status?.status === 'running' ? '正常运行' : '异常'}</span>
+            <span className="text-[11px] text-muted-foreground/70" title={formatTimestamp(status?.generated_at)}>
+              {describeFreshness(status?.generated_at, status?.fresh_until)}
+            </span>
+          </div>
         </div>
       </div>
 

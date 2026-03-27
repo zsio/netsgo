@@ -8,7 +8,7 @@ import {
 import { Link, useMatch, useRouterState } from '@tanstack/react-router';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
-import { useServerStatus } from '@/hooks/use-server-status';
+import { summarizeConsoleClients } from '@/lib/console-summary';
 import { AddClientDialog } from './AddClientDialog';
 import {
   Sidebar,
@@ -68,12 +68,11 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
     });
   }, [clients]);
 
-  const onlineCount = clients.filter((c) => c.online).length;
-  const totalCount = clients.length;
-
-  const { data: status } = useServerStatus();
-  const activeTunnels = status?.tunnel_active ?? 0;
-  const totalTunnels = activeTunnels + (status?.tunnel_paused ?? 0) + (status?.tunnel_stopped ?? 0);
+  const summary = summarizeConsoleClients(clients);
+  const onlineCount = summary.onlineClients;
+  const totalCount = summary.totalClients;
+  const activeTunnels = summary.activeTunnels;
+  const totalTunnels = summary.totalTunnels;
 
   return (
     <Sidebar collapsible="offcanvas">

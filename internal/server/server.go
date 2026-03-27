@@ -161,7 +161,7 @@ type consoleSnapshot struct {
 }
 
 const (
-	clientStatsFreshnessWindow = 20 * time.Second
+	clientStatsFreshnessWindow  = 20 * time.Second
 	serverStatusFreshnessWindow = 20 * time.Second
 	snapshotFreshnessWindow     = 15 * time.Second
 )
