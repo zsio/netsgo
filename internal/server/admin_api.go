@@ -197,7 +197,11 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 创建 session（会自动踢出旧 session → 单端登录）
-	session := s.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
+	session, err := s.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
+	if err != nil {
+		http.Error(w, `{"error":"failed to persist session"}`, http.StatusInternalServerError)
+		return
+	}
 
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
@@ -205,7 +209,6 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.adminStore.UpdateAdminLoginTime(user.ID)
 	slog.Info("Admin user logged in", "user", user.Username, "module", "auth")
 	if s.loginLimiter != nil {
 		s.loginLimiter.ResetFailures(ip)
@@ -236,7 +239,10 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.adminStore.DeleteSession(info.SessionID)
+	if err := s.adminStore.DeleteSession(info.SessionID); err != nil {
+		http.Error(w, `{"error":"failed to persist logout"}`, http.StatusInternalServerError)
+		return
+	}
 	slog.Info("Admin user logged out", "user", info.Username, "module", "auth")
 
 	s.clearSessionCookie(w, r)

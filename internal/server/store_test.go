@@ -157,12 +157,8 @@ func TestTunnelStore_LoadLegacyHostnameBindingFallsBackToEmptyStore(t *testing.T
 		t.Fatalf("写入 legacy store 文件失败: %v", err)
 	}
 
-	store, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("NewTunnelStore 不应因旧格式文件直接失败: %v", err)
-	}
-	if tunnels := store.GetAllTunnels(); len(tunnels) != 0 {
-		t.Fatalf("旧 legacy 绑定文件应被丢弃为空 store，得到 %d 条记录", len(tunnels))
+	if _, err := NewTunnelStore(path); err == nil {
+		t.Fatal("旧格式/无效状态文件应导致 NewTunnelStore 失败")
 	}
 }
 
@@ -174,12 +170,8 @@ func TestTunnelStore_CorruptedFile(t *testing.T) {
 		t.Fatalf("写入损坏文件失败: %v", err)
 	}
 
-	store, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("损坏文件不应导致 NewTunnelStore 失败: %v", err)
-	}
-	if len(store.GetAllTunnels()) != 0 {
-		t.Error("损坏文件应降级为空列表")
+	if _, err := NewTunnelStore(path); err == nil {
+		t.Fatal("损坏文件应导致 NewTunnelStore 返回错误")
 	}
 }
 

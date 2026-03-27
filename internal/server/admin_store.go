@@ -39,6 +39,10 @@ type AdminStore struct {
 	path string
 	mu   sync.RWMutex
 	data AdminData
+
+	// 仅供测试使用：注入下一次 save 失败，验证回滚路径。
+	failSaveErr   error
+	failSaveCount int
 }
 
 const tokenExpiryDuration = 7 * 24 * time.Hour // Token 不活跃过期时间
@@ -75,10 +79,7 @@ func NewAdminStore(path string) (*AdminStore, error) {
 	// 尝试加载已有数据
 	if _, err := os.Stat(path); err == nil {
 		if err := store.load(); err != nil {
-			log.Printf("⚠️ 加载 admin 配置失败，将使用空配置: %v", err)
-			store.data = AdminData{
-				APIKeys: []APIKey{}, AdminUsers: []AdminUser{}, Clients: []RegisteredClient{}, ClientTokens: []ClientToken{}, Sessions: []AdminSession{},
-			}
+			return nil, fmt.Errorf("加载 admin 配置失败: %w", err)
 		}
 	}
 
@@ -87,7 +88,9 @@ func NewAdminStore(path string) (*AdminStore, error) {
 	}
 
 	// 启动后清理过期 session
-	store.CleanExpiredSessions()
+	if err := store.CleanExpiredSessions(); err != nil {
+		return nil, fmt.Errorf("清理过期 session 失败: %w", err)
+	}
 
 	if !store.data.Initialized {
 		log.Printf("⚠️ 服务尚未初始化，请通过 Web 面板完成初始化设置")
@@ -105,11 +108,44 @@ func (s *AdminStore) load() error {
 }
 
 func (s *AdminStore) save() error {
+	if s.failSaveErr != nil && s.failSaveCount > 0 {
+		err := s.failSaveErr
+		s.failSaveCount--
+		if s.failSaveCount == 0 {
+			s.failSaveErr = nil
+		}
+		return err
+	}
 	data, err := json.MarshalIndent(s.data, "", "  ")
 	if err != nil {
 		return err
 	}
 	return fileutil.AtomicWriteFile(s.path, data, 0600)
+}
+
+func cloneAdminData(data AdminData) AdminData {
+	cloned := data
+	cloned.APIKeys = append([]APIKey(nil), data.APIKeys...)
+	cloned.AdminUsers = append([]AdminUser(nil), data.AdminUsers...)
+	cloned.ClientTokens = append([]ClientToken(nil), data.ClientTokens...)
+	cloned.Sessions = append([]AdminSession(nil), data.Sessions...)
+	cloned.Clients = make([]RegisteredClient, len(data.Clients))
+	copy(cloned.Clients, data.Clients)
+	for i := range cloned.Clients {
+		cloned.Clients[i].Stats = cloneSystemStats(data.Clients[i].Stats)
+	}
+	if len(data.ServerConfig.AllowedPorts) > 0 {
+		cloned.ServerConfig.AllowedPorts = append([]PortRange(nil), data.ServerConfig.AllowedPorts...)
+	}
+	return cloned
+}
+
+func (s *AdminStore) saveWithRollbackLocked(previous AdminData) error {
+	if err := s.save(); err != nil {
+		s.data = previous
+		return err
+	}
+	return nil
 }
 
 func (s *AdminStore) validateLoadedState() error {
@@ -278,17 +314,19 @@ func (s *AdminStore) ValidateAdminPassword(username, password string) (*AdminUse
 	return nil, fmt.Errorf("用户名或密码错误")
 }
 
-func (s *AdminStore) UpdateAdminLoginTime(id string) {
+func (s *AdminStore) UpdateAdminLoginTime(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	previous := cloneAdminData(s.data)
 	for i, u := range s.data.AdminUsers {
 		if u.ID == id {
 			now := time.Now()
 			s.data.AdminUsers[i].LastLogin = &now
-			s.save()
-			break
+			return s.saveWithRollbackLocked(previous)
 		}
 	}
+	return nil
 }
 
 // ========== Clients ==========
@@ -303,12 +341,13 @@ func (s *AdminStore) GetOrCreateClient(installID string, info protocol.ClientInf
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous := cloneAdminData(s.data)
 	for i, client := range s.data.Clients {
 		if client.InstallID == installID {
 			s.data.Clients[i].Info = info
 			s.data.Clients[i].LastSeen = time.Now()
 			s.data.Clients[i].LastIP = lastIP
-			if err := s.save(); err != nil {
+			if err := s.saveWithRollbackLocked(previous); err != nil {
 				return nil, err
 			}
 			copy := s.data.Clients[i]
@@ -325,7 +364,7 @@ func (s *AdminStore) GetOrCreateClient(installID string, info protocol.ClientInf
 		LastIP:    lastIP,
 	}
 	s.data.Clients = append(s.data.Clients, client)
-	if err := s.save(); err != nil {
+	if err := s.saveWithRollbackLocked(previous); err != nil {
 		return nil, err
 	}
 	return &client, nil
@@ -335,6 +374,7 @@ func (s *AdminStore) TouchClient(clientID string, info protocol.ClientInfo, remo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous := cloneAdminData(s.data)
 	for i, client := range s.data.Clients {
 		if client.ID == clientID {
 			s.data.Clients[i].Info = info
@@ -342,7 +382,7 @@ func (s *AdminStore) TouchClient(clientID string, info protocol.ClientInfo, remo
 			if ip := remoteIP(remoteAddr); ip != "" {
 				s.data.Clients[i].LastIP = ip
 			}
-			return s.save()
+			return s.saveWithRollbackLocked(previous)
 		}
 	}
 
@@ -366,6 +406,7 @@ func (s *AdminStore) UpdateClientStats(clientID string, info protocol.ClientInfo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous := cloneAdminData(s.data)
 	for i, client := range s.data.Clients {
 		if client.ID == clientID {
 			s.data.Clients[i].Info = info
@@ -374,7 +415,7 @@ func (s *AdminStore) UpdateClientStats(clientID string, info protocol.ClientInfo
 			if ip := remoteIP(remoteAddr); ip != "" {
 				s.data.Clients[i].LastIP = ip
 			}
-			return s.save()
+			return s.saveWithRollbackLocked(previous)
 		}
 	}
 
@@ -412,10 +453,11 @@ func (s *AdminStore) UpdateClientDisplayName(clientID, displayName string) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous := cloneAdminData(s.data)
 	for i, client := range s.data.Clients {
 		if client.ID == clientID {
 			s.data.Clients[i].DisplayName = displayName
-			return s.save()
+			return s.saveWithRollbackLocked(previous)
 		}
 	}
 	return fmt.Errorf("client %q 不存在", clientID)
@@ -424,9 +466,11 @@ func (s *AdminStore) UpdateClientDisplayName(clientID, displayName string) error
 // ========== Sessions ==========
 
 // CreateSession 创建新 session（会先删除同用户旧 session → 单端登录）
-func (s *AdminStore) CreateSession(userID, username, role, ip, ua string) *AdminSession {
+func (s *AdminStore) CreateSession(userID, username, role, ip, ua string) (*AdminSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	previous := cloneAdminData(s.data)
 
 	// 删除该用户的所有旧 session（实现单端登录）
 	filtered := make([]AdminSession, 0, len(s.data.Sessions))
@@ -448,8 +492,17 @@ func (s *AdminStore) CreateSession(userID, username, role, ip, ua string) *Admin
 	}
 
 	s.data.Sessions = append(filtered, session)
-	s.save()
-	return &session
+	for i, user := range s.data.AdminUsers {
+		if user.ID == userID {
+			now := time.Now()
+			s.data.AdminUsers[i].LastLogin = &now
+			break
+		}
+	}
+	if err := s.saveWithRollbackLocked(previous); err != nil {
+		return nil, err
+	}
+	return &session, nil
 }
 
 // GetSession 获取指定 session（不存在或已过期返回 nil）
@@ -470,10 +523,11 @@ func (s *AdminStore) GetSession(sessionID string) *AdminSession {
 }
 
 // DeleteSession 删除指定 session
-func (s *AdminStore) DeleteSession(sessionID string) {
+func (s *AdminStore) DeleteSession(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous := cloneAdminData(s.data)
 	filtered := make([]AdminSession, 0, len(s.data.Sessions))
 	for _, sess := range s.data.Sessions {
 		if sess.ID != sessionID {
@@ -481,14 +535,15 @@ func (s *AdminStore) DeleteSession(sessionID string) {
 		}
 	}
 	s.data.Sessions = filtered
-	s.save()
+	return s.saveWithRollbackLocked(previous)
 }
 
 // DeleteSessionsByUserID 删除该用户的所有 session
-func (s *AdminStore) DeleteSessionsByUserID(userID string) {
+func (s *AdminStore) DeleteSessionsByUserID(userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous := cloneAdminData(s.data)
 	filtered := make([]AdminSession, 0, len(s.data.Sessions))
 	for _, sess := range s.data.Sessions {
 		if sess.UserID != userID {
@@ -496,11 +551,11 @@ func (s *AdminStore) DeleteSessionsByUserID(userID string) {
 		}
 	}
 	s.data.Sessions = filtered
-	s.save()
+	return s.saveWithRollbackLocked(previous)
 }
 
 // CleanExpiredSessions 清理过期 session
-func (s *AdminStore) CleanExpiredSessions() {
+func (s *AdminStore) CleanExpiredSessions() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -515,10 +570,14 @@ func (s *AdminStore) CleanExpiredSessions() {
 		}
 	}
 	if cleaned > 0 {
+		previous := cloneAdminData(s.data)
 		s.data.Sessions = filtered
-		s.save()
+		if err := s.saveWithRollbackLocked(previous); err != nil {
+			return err
+		}
 		log.Printf("🧹 清理了 %d 个过期 session", cleaned)
 	}
+	return nil
 }
 
 // ========== API Keys ==========
@@ -607,11 +666,14 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 			if err != nil {
 				return "", nil, err
 			}
+			previous := cloneAdminData(s.data)
 			s.data.ClientTokens[i].TokenHash = hashToken(newToken)
 			s.data.ClientTokens[i].LastActiveAt = time.Now()
 			s.data.ClientTokens[i].LastIP = ip
 			s.data.ClientTokens[i].ClientID = clientID
-			s.save()
+			if err := s.saveWithRollbackLocked(previous); err != nil {
+				return "", nil, err
+			}
 			copy := s.data.ClientTokens[i]
 			log.Printf("🔑 Token 已刷新 [install_id=%s]: 已有有效 Token，未消耗 Key", installID)
 			return newToken, &copy, nil
@@ -626,6 +688,7 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 
 	// 消耗 Key 的使用次数
 	idx := s.findKeyIndexByRaw(key)
+	previous := cloneAdminData(s.data)
 	if idx >= 0 {
 		s.data.APIKeys[idx].UseCount++
 	}
@@ -660,7 +723,9 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 	}
 
 	s.data.ClientTokens = append(s.data.ClientTokens, clientToken)
-	s.save()
+	if err := s.saveWithRollbackLocked(previous); err != nil {
+		return "", nil, err
+	}
 
 	log.Printf("🔑 Token 已兑换 [install_id=%s, key_id=%s]", installID, keyID)
 	return newToken, &clientToken, nil
@@ -692,8 +757,11 @@ func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken,
 				return nil, ErrClientTokenExpired
 			}
 			// 验证通过，更新最后活跃时间
+			previous := cloneAdminData(s.data)
 			s.data.ClientTokens[i].LastActiveAt = time.Now()
-			s.save()
+			if err := s.saveWithRollbackLocked(previous); err != nil {
+				return nil, err
+			}
 			copy := s.data.ClientTokens[i]
 			return &copy, nil
 		}
@@ -703,20 +771,21 @@ func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken,
 }
 
 // TouchToken 更新 Token 的最后活跃时间和 IP
-func (s *AdminStore) TouchToken(tokenID, remoteAddr string) {
+func (s *AdminStore) TouchToken(tokenID, remoteAddr string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous := cloneAdminData(s.data)
 	for i, t := range s.data.ClientTokens {
 		if t.ID == tokenID {
 			s.data.ClientTokens[i].LastActiveAt = time.Now()
 			if ip := remoteIP(remoteAddr); ip != "" {
 				s.data.ClientTokens[i].LastIP = ip
 			}
-			s.save()
-			return
+			return s.saveWithRollbackLocked(previous)
 		}
 	}
+	return nil
 }
 
 // RevokeToken 吊销指定 Token
@@ -734,11 +803,12 @@ func (s *AdminStore) RevokeToken(tokenID string) error {
 }
 
 // RevokeTokensByKeyID 吊销某 Key 下所有 Token，返回吊销数量
-func (s *AdminStore) RevokeTokensByKeyID(keyID string) int {
+func (s *AdminStore) RevokeTokensByKeyID(keyID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	count := 0
+	previous := cloneAdminData(s.data)
 	for i, t := range s.data.ClientTokens {
 		if t.KeyID == keyID && !t.IsRevoked {
 			s.data.ClientTokens[i].IsRevoked = true
@@ -746,13 +816,15 @@ func (s *AdminStore) RevokeTokensByKeyID(keyID string) int {
 		}
 	}
 	if count > 0 {
-		s.save()
+		if err := s.saveWithRollbackLocked(previous); err != nil {
+			return 0, err
+		}
 	}
-	return count
+	return count, nil
 }
 
 // CleanExpiredTokens 清理不活跃超过 7 天的 Token 和已吊销的 Token
-func (s *AdminStore) CleanExpiredTokens() {
+func (s *AdminStore) CleanExpiredTokens() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -767,10 +839,14 @@ func (s *AdminStore) CleanExpiredTokens() {
 		filtered = append(filtered, t)
 	}
 	if cleaned > 0 {
+		previous := cloneAdminData(s.data)
 		s.data.ClientTokens = filtered
-		s.save()
+		if err := s.saveWithRollbackLocked(previous); err != nil {
+			return err
+		}
 		log.Printf("🧹 清理了 %d 个过期/已吊销 Token", cleaned)
 	}
+	return nil
 }
 
 // GetTokensByKeyID 查询某 Key 兑换的所有 Token
@@ -824,8 +900,11 @@ func (s *AdminStore) AddAPIKey(name, keyString string, permissions []string, exp
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := cloneAdminData(s.data)
 	s.data.APIKeys = append(s.data.APIKeys, k)
-	s.save()
+	if err := s.saveWithRollbackLocked(previous); err != nil {
+		return nil, err
+	}
 
 	return &k, nil
 }

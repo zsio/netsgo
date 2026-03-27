@@ -291,7 +291,9 @@ func (s *Server) Start() error {
 
 	// 启动时清理过期 Token
 	if s.adminStore != nil {
-		s.adminStore.CleanExpiredTokens()
+		if err := s.adminStore.CleanExpiredTokens(); err != nil {
+			return fmt.Errorf("清理过期 token 失败: %w", err)
+		}
 		go s.tokenCleanupLoop()
 	}
 
@@ -934,7 +936,9 @@ func (s *Server) tokenCleanupLoop() {
 			return
 		case <-ticker.C:
 			if s.adminStore != nil {
-				s.adminStore.CleanExpiredTokens()
+				if err := s.adminStore.CleanExpiredTokens(); err != nil {
+					log.Printf("⚠️ 清理过期 Token 失败: %v", err)
+				}
 			}
 		}
 	}

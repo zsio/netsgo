@@ -79,7 +79,7 @@ func initTestAdminStore(t *testing.T, s *Server) {
 func issueAdminToken(t *testing.T, s *Server) string {
 	t.Helper()
 
-	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "Go-http-client/1.1")
+	session := mustCreateSession(t, s.adminStore, "user-1", "admin", "admin", "127.0.0.1", "Go-http-client/1.1")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -1712,7 +1712,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	defer ts.Close()
 
 	// 模拟已登录的 AdminSession
-	session := store.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, store, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, _ := s.GenerateAdminToken(session)
 
 	// API 请求助手
@@ -1936,7 +1936,7 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	wsConn, authResp := connectAndAuth(t, ts, "timeout-client")
 	defer wsConn.Close()
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2019,7 +2019,7 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 		LocalPort: 8080,
 	}, protocol.ProxyStatusPaused)
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2105,7 +2105,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	}
 	client.proxyMu.Unlock()
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2149,7 +2149,7 @@ func TestServer_CreateTunnelHTTPInvalidDomainReturns400WithTypedError(t *testing
 	wsConn, authResp := connectAndAuth(t, ts, "http-invalid-domain-create")
 	defer wsConn.Close()
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2192,7 +2192,7 @@ func TestServer_CreateTunnelHTTPManagementHostConflictReturnsTypedError(t *testi
 	wsConn, authResp := connectAndAuth(t, ts, "http-server-addr-conflict-create")
 	defer wsConn.Close()
 
-	session := s.adminStore.CreateSession("test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2248,7 +2248,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	session := s.adminStore.CreateSession("user-1", "admin", "admin", "127.0.0.1", "resume-test-agent")
+	session := mustCreateSession(t, s.adminStore, "user-1", "admin", "admin", "127.0.0.1", "resume-test-agent")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)

@@ -200,6 +200,18 @@ func TestAdminStore_NewInitializedWithoutJWTSecret_Fails(t *testing.T) {
 	}
 }
 
+func TestAdminStore_NewCorruptedFileFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "admin.json")
+	if err := os.WriteFile(path, []byte(`{{{invalid json`), 0o600); err != nil {
+		t.Fatalf("写入损坏 admin.json 失败: %v", err)
+	}
+
+	if _, err := NewAdminStore(path); err == nil {
+		t.Fatal("损坏 admin.json 应导致 NewAdminStore 返回错误")
+	}
+}
+
 // --- 端口白名单 ---
 
 func TestAdminStore_IsPortAllowed_EmptyWhitelist(t *testing.T) {
@@ -403,7 +415,7 @@ func TestAdminStore_PersistedSecretsSurviveReload(t *testing.T) {
 func TestAdminStore_Session_CreateAndGet(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "test-client")
+	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	if session == nil {
 		t.Fatal("CreateSession 不应返回 nil")
 	}
@@ -423,7 +435,7 @@ func TestAdminStore_Session_CreateAndGet(t *testing.T) {
 func TestAdminStore_Session_GetExpired(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "ua")
+	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "ua")
 
 	// 手动设置为过期
 	store.mu.Lock()
@@ -452,8 +464,8 @@ func TestAdminStore_Session_GetNotFound(t *testing.T) {
 func TestAdminStore_Session_Delete(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
-	session := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "ua")
-	store.DeleteSession(session.ID)
+	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "ua")
+	mustDeleteSession(t, store, session.ID)
 
 	got := store.GetSession(session.ID)
 	if got != nil {
@@ -465,8 +477,8 @@ func TestAdminStore_Session_SingleLogin(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
 	// 同一 userID 创建两次 session → 旧的被踢出
-	s1 := store.CreateSession("user-1", "admin", "admin", "1.1.1.1", "ua1")
-	s2 := store.CreateSession("user-1", "admin", "admin", "2.2.2.2", "ua2")
+	s1 := mustCreateSession(t, store, "user-1", "admin", "admin", "1.1.1.1", "ua1")
+	s2 := mustCreateSession(t, store, "user-1", "admin", "admin", "2.2.2.2", "ua2")
 
 	got1 := store.GetSession(s1.ID)
 	if got1 != nil {
@@ -482,8 +494,10 @@ func TestAdminStore_Session_SingleLogin(t *testing.T) {
 func TestAdminStore_Session_DeleteByUserID(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
-	s1 := store.CreateSession("user-1", "admin", "admin", "1.1.1.1", "ua")
-	store.DeleteSessionsByUserID("user-1")
+	s1 := mustCreateSession(t, store, "user-1", "admin", "admin", "1.1.1.1", "ua")
+	if err := store.DeleteSessionsByUserID("user-1"); err != nil {
+		t.Fatalf("DeleteSessionsByUserID 失败: %v", err)
+	}
 
 	if store.GetSession(s1.ID) != nil {
 		t.Error("DeleteSessionsByUserID 后 session 应不存在")
@@ -493,7 +507,7 @@ func TestAdminStore_Session_DeleteByUserID(t *testing.T) {
 func TestAdminStore_Session_CleanExpired(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
-	store.CreateSession("user-1", "admin", "admin", "1.1.1.1", "ua")
+	mustCreateSession(t, store, "user-1", "admin", "admin", "1.1.1.1", "ua")
 
 	// 手动将所有 session 设为过期
 	store.mu.Lock()
@@ -502,7 +516,9 @@ func TestAdminStore_Session_CleanExpired(t *testing.T) {
 	}
 	store.mu.Unlock()
 
-	store.CleanExpiredSessions()
+	if err := store.CleanExpiredSessions(); err != nil {
+		t.Fatalf("CleanExpiredSessions 失败: %v", err)
+	}
 
 	store.mu.RLock()
 	count := len(store.data.Sessions)
@@ -513,6 +529,28 @@ func TestAdminStore_Session_CleanExpired(t *testing.T) {
 	}
 }
 
+func TestAdminStore_CreateSession_SaveFailureRollsBack(t *testing.T) {
+	store := newInitializedAdminStore(t)
+	originalSessions := len(store.data.Sessions)
+	originalLastLogin := store.data.AdminUsers[0].LastLogin
+	saveErr := errors.New("save failed")
+	store.failSaveErr = saveErr
+	store.failSaveCount = 1
+
+	session, err := store.CreateSession("user-1", "admin", "admin", "127.0.0.1", "ua")
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("CreateSession 应返回 save 错误，得到 %v", err)
+	}
+	if session != nil {
+		t.Fatal("save 失败时不应返回 session")
+	}
+	if got := len(store.data.Sessions); got != originalSessions {
+		t.Fatalf("save 失败后 session 数量应回滚到 %d，得到 %d", originalSessions, got)
+	}
+	if store.data.AdminUsers[0].LastLogin != originalLastLogin {
+		t.Fatal("save 失败后 LastLogin 应回滚")
+	}
+}
 
 // --- Login Time ---
 
@@ -520,7 +558,9 @@ func TestAdminStore_UpdateAdminLoginTime(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
 	user, _ := store.ValidateAdminPassword("admin", "Admin1234")
-	store.UpdateAdminLoginTime(user.ID)
+	if err := store.UpdateAdminLoginTime(user.ID); err != nil {
+		t.Fatalf("UpdateAdminLoginTime 失败: %v", err)
+	}
 
 	// 再次获取用户信息
 	store.mu.RLock()
@@ -534,6 +574,24 @@ func TestAdminStore_UpdateAdminLoginTime(t *testing.T) {
 		}
 	}
 	t.Error("未找到用户")
+}
+
+func TestAdminStore_AddAPIKey_SaveFailureRollsBack(t *testing.T) {
+	store := newInitializedAdminStore(t)
+	saveErr := errors.New("save failed")
+	store.failSaveErr = saveErr
+	store.failSaveCount = 1
+
+	key, err := store.AddAPIKey("test", "sk-real-key", []string{"connect"}, nil)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("AddAPIKey 应返回 save 错误，得到 %v", err)
+	}
+	if key != nil {
+		t.Fatal("save 失败时不应返回 API key")
+	}
+	if got := len(store.GetAPIKeys()); got != 0 {
+		t.Fatalf("save 失败后不应残留 API key，得到 %d", got)
+	}
 }
 
 // --- Server Config ---
@@ -581,6 +639,32 @@ func TestAdminStore_Token_ExchangeAndValidate(t *testing.T) {
 	}
 	if result.ID != clientToken.ID {
 		t.Errorf("Token ID 不匹配: %s != %s", result.ID, clientToken.ID)
+	}
+}
+
+func TestAdminStore_Token_ExchangeSaveFailureRollsBack(t *testing.T) {
+	store := newTestAdminStore(t)
+	rawKey := "sk-test-key"
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey 失败: %v", err)
+	}
+	saveErr := errors.New("save failed")
+	store.failSaveErr = saveErr
+	store.failSaveCount = 1
+
+	tokenStr, clientToken, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("ExchangeToken 应返回 save 错误，得到 %v", err)
+	}
+	if tokenStr != "" || clientToken != nil {
+		t.Fatal("save 失败时不应返回有效 token")
+	}
+	if got := len(store.data.ClientTokens); got != 0 {
+		t.Fatalf("save 失败后不应残留 ClientToken，得到 %d", got)
+	}
+	keys := store.GetAPIKeys()
+	if len(keys) != 1 || keys[0].UseCount != 0 {
+		t.Fatalf("save 失败后 API key UseCount 应回滚到 0，得到 %+v", keys)
 	}
 }
 
@@ -640,6 +724,46 @@ func TestAdminStore_Token_ValidateExpired(t *testing.T) {
 	}
 	if !errors.Is(err, ErrClientTokenExpired) {
 		t.Fatalf("过期 Token 应返回 ErrClientTokenExpired，得到 %v", err)
+	}
+}
+
+func TestAdminStore_Token_ValidateSaveFailureReturnsError(t *testing.T) {
+	store := newTestAdminStore(t)
+	rawKey := "sk-validate-key"
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey 失败: %v", err)
+	}
+
+	tokenStr, clientToken, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
+	if err != nil {
+		t.Fatalf("ExchangeToken 失败: %v", err)
+	}
+
+	store.mu.RLock()
+	originalLastActiveAt := store.data.ClientTokens[0].LastActiveAt
+	store.mu.RUnlock()
+
+	saveErr := errors.New("save failed")
+	store.failSaveErr = saveErr
+	store.failSaveCount = 1
+
+	result, err := store.ValidateClientToken(tokenStr, "install-1")
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("ValidateClientToken 应返回 save 错误，得到 %v", err)
+	}
+	if result != nil {
+		t.Fatal("save 失败时不应返回有效 token")
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	if len(store.data.ClientTokens) != 1 {
+		t.Fatalf("save 失败后 token 记录数量应保持 1，得到 %d", len(store.data.ClientTokens))
+	}
+	if store.data.ClientTokens[0].ID != clientToken.ID {
+		t.Fatalf("token ID 不应变化，期望 %s，得到 %s", clientToken.ID, store.data.ClientTokens[0].ID)
+	}
+	if !store.data.ClientTokens[0].LastActiveAt.Equal(originalLastActiveAt) {
+		t.Fatal("save 失败后 LastActiveAt 应回滚")
 	}
 }
 
@@ -717,7 +841,9 @@ func TestAdminStore_Token_CleanExpired(t *testing.T) {
 	}
 	store.mu.Unlock()
 
-	store.CleanExpiredTokens()
+	if err := store.CleanExpiredTokens(); err != nil {
+		t.Fatalf("CleanExpiredTokens 失败: %v", err)
+	}
 
 	store.mu.RLock()
 	count := len(store.data.ClientTokens)
