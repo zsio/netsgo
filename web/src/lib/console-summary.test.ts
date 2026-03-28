@@ -66,16 +66,16 @@ describe('summarizeConsoleClients', () => {
       }),
     ]);
 
-    expect(summary.totalClients).toBe(2);
-    expect(summary.onlineClients).toBe(1);
-    expect(summary.offlineClients).toBe(1);
-    expect(summary.totalTunnels).toBe(6);
-    expect(summary.activeTunnels).toBe(1);
-    expect(summary.inactiveTunnels).toBe(5);
-    expect(summary.pendingTunnels).toBe(1);
-    expect(summary.offlineTunnels).toBe(1);
-    expect(summary.pausedTunnels).toBe(1);
-    expect(summary.stoppedTunnels).toBe(1);
-    expect(summary.errorTunnels).toBe(1);
+    expect(summary.total_clients).toBe(2);
+    expect(summary.online_clients).toBe(1);
+    expect(summary.offline_clients).toBe(1);
+    expect(summary.total_tunnels).toBe(6);
+    expect(summary.active_tunnels).toBe(1);
+    expect(summary.inactive_tunnels).toBe(5);
+    expect(summary.pending_tunnels).toBe(1);
+    expect(summary.offline_tunnels).toBe(1);
+    expect(summary.paused_tunnels).toBe(1);
+    expect(summary.stopped_tunnels).toBe(1);
+    expect(summary.error_tunnels).toBe(1);
   });
 });

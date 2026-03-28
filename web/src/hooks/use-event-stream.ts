@@ -2,18 +2,28 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouterState } from '@tanstack/react-router';
 import { api } from '@/lib/api';
+import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
 import { useConnectionStore } from '@/stores/connection-store';
 import { useAuthStore } from '@/stores/auth-store';
-import type { Client, ConsoleSnapshot, ServerStatus } from '@/types';
+import type { Client, ConsoleSnapshot, ConsoleSummary, ServerStatus } from '@/types';
 
 type EventStreamQueryClient = ReturnType<typeof useQueryClient>;
 
+function snapshotSummary(snapshot: ConsoleSnapshot): ConsoleSummary {
+  return snapshot.summary ?? snapshot.server_status?.summary ?? EMPTY_CONSOLE_SUMMARY;
+}
+
 function applyConsoleSnapshot(queryClient: EventStreamQueryClient, snapshot: ConsoleSnapshot) {
+  const summary = snapshotSummary(snapshot);
   if (Array.isArray(snapshot.clients)) {
     queryClient.setQueryData<Client[]>(['clients'], snapshot.clients);
   }
+  queryClient.setQueryData<ConsoleSummary>(['console-summary'], summary);
   if (snapshot.server_status) {
-    queryClient.setQueryData<ServerStatus>(['server-status'], snapshot.server_status);
+    queryClient.setQueryData<ServerStatus>(['server-status'], {
+      ...snapshot.server_status,
+      summary,
+    });
   }
 }
 
@@ -68,6 +78,7 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
             client.id === parsed.client_id ? { ...client, info: parsed.info, online: true } : client,
           );
         });
+        void resyncConsoleSnapshot(queryClient);
       } catch {
         queryClient.invalidateQueries({ queryKey: ['clients'] });
       }
@@ -80,6 +91,7 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
             client.id === parsed.client_id ? { ...client, online: false } : client,
           ),
         );
+        void resyncConsoleSnapshot(queryClient);
       } catch {
         queryClient.invalidateQueries({ queryKey: ['clients'] });
       }
@@ -121,6 +133,7 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
             };
           }),
         );
+        void resyncConsoleSnapshot(queryClient);
       } catch {
         queryClient.invalidateQueries({ queryKey: ['clients'] });
       }

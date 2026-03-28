@@ -4,14 +4,14 @@ import {
   UserPlus, LogOut, Monitor, Zap, MonitorOff, Pause
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useClients } from '@/hooks/use-clients';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
 import { useNavigate } from '@tanstack/react-router';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
-import { summarizeConsoleClients } from '@/lib/console-summary';
+import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
+import { useConsoleSummary } from '@/hooks/use-console-summary';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -85,16 +85,15 @@ export function DualTriggerCard({ triggers, children }: { triggers: React.ReactN
 function TopBarInner() {
   const navigate = useNavigate();
   const [showAddClient, setShowAddClient] = useState(false);
-  const { data: clients } = useClients();
+  const { data: summary = EMPTY_CONSOLE_SUMMARY } = useConsoleSummary();
   const logout = useAuthStore((state) => state.logout);
 
-  const summary = summarizeConsoleClients(clients);
-  const totalClients = summary.totalClients;
-  const onlineClientCount = summary.onlineClients;
-  const offlineClientCount = summary.offlineClients;
-  const activeTunnels = summary.activeTunnels;
-  const totalTunnels = summary.totalTunnels;
-  const inactiveTunnels = summary.inactiveTunnels;
+  const totalClients = summary.total_clients;
+  const onlineClientCount = summary.online_clients;
+  const offlineClientCount = summary.offline_clients;
+  const activeTunnels = summary.active_tunnels;
+  const totalTunnels = summary.total_tunnels;
+  const inactiveTunnels = summary.inactive_tunnels;
 
   const handleLogout = async () => {
     try {

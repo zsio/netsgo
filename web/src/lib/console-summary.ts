@@ -1,69 +1,57 @@
 import { resolveTunnelStatus } from '@/lib/tunnel-model';
-import type { Client } from '@/types';
+import type { Client, ConsoleSummary } from '@/types';
 
-export interface ConsoleSummary {
-  totalClients: number;
-  onlineClients: number;
-  offlineClients: number;
-  totalTunnels: number;
-  activeTunnels: number;
-  inactiveTunnels: number;
-  pendingTunnels: number;
-  offlineTunnels: number;
-  pausedTunnels: number;
-  stoppedTunnels: number;
-  errorTunnels: number;
-}
+export const EMPTY_CONSOLE_SUMMARY: ConsoleSummary = {
+  total_clients: 0,
+  online_clients: 0,
+  offline_clients: 0,
+  total_tunnels: 0,
+  active_tunnels: 0,
+  inactive_tunnels: 0,
+  pending_tunnels: 0,
+  offline_tunnels: 0,
+  paused_tunnels: 0,
+  stopped_tunnels: 0,
+  error_tunnels: 0,
+};
 
 export function summarizeConsoleClients(clients: Client[] | null | undefined): ConsoleSummary {
-  const base: ConsoleSummary = {
-    totalClients: 0,
-    onlineClients: 0,
-    offlineClients: 0,
-    totalTunnels: 0,
-    activeTunnels: 0,
-    inactiveTunnels: 0,
-    pendingTunnels: 0,
-    offlineTunnels: 0,
-    pausedTunnels: 0,
-    stoppedTunnels: 0,
-    errorTunnels: 0,
-  };
+  const base: ConsoleSummary = { ...EMPTY_CONSOLE_SUMMARY };
 
   for (const client of clients ?? []) {
-    base.totalClients += 1;
+    base.total_clients += 1;
     if (client.online) {
-      base.onlineClients += 1;
+      base.online_clients += 1;
     } else {
-      base.offlineClients += 1;
+      base.offline_clients += 1;
     }
 
     for (const tunnel of client.proxies ?? []) {
-      base.totalTunnels += 1;
+      base.total_tunnels += 1;
 
       switch (resolveTunnelStatus(tunnel, client.online).key) {
         case 'exposed':
-          base.activeTunnels += 1;
+          base.active_tunnels += 1;
           break;
         case 'pending':
-          base.pendingTunnels += 1;
+          base.pending_tunnels += 1;
           break;
         case 'offline':
-          base.offlineTunnels += 1;
+          base.offline_tunnels += 1;
           break;
         case 'paused':
-          base.pausedTunnels += 1;
+          base.paused_tunnels += 1;
           break;
         case 'stopped':
-          base.stoppedTunnels += 1;
+          base.stopped_tunnels += 1;
           break;
         case 'error':
-          base.errorTunnels += 1;
+          base.error_tunnels += 1;
           break;
       }
     }
   }
 
-  base.inactiveTunnels = base.totalTunnels - base.activeTunnels;
+  base.inactive_tunnels = base.total_tunnels - base.active_tunnels;
   return base;
 }
