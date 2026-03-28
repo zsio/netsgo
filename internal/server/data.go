@@ -113,10 +113,11 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 
 	promoted := s.promotePendingToLiveIfCurrent(client)
 	if promoted {
+		info := client.GetInfo()
 		log.Printf("🔗 数据通道已建立: Client [%s] generation=%d", clientID, generation)
 		s.events.PublishJSON("client_online", map[string]any{
 			"client_id": client.ID,
-			"info":      client.Info,
+			"info":      info,
 		})
 		go s.restoreTunnels(client)
 	}

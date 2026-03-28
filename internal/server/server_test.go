@@ -367,6 +367,8 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-stopped", Type: protocol.ProxyTypeTCP, RemotePort: 20003}, protocol.ProxyStatusStopped)
 
 	authResp := doAuthWithInstallID(t, conn, "online-summary-host", "install-online-summary-host", "test-key")
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
 	time.Sleep(50 * time.Millisecond)
 
 	val, ok := s.clients.Load(authResp.ClientID)

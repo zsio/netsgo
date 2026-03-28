@@ -160,7 +160,8 @@ func (s *Server) invalidateLogicalSessionIfCurrent(clientID string, generation u
 	s.PauseAllProxies(client)
 
 	if wasLive {
-		log.Printf("🔌 Client 已断开: %s [ID: %s, reason=%s]", client.Info.Hostname, client.ID, reason)
+		info := client.GetInfo()
+		log.Printf("🔌 Client 已断开: %s [ID: %s, reason=%s]", info.Hostname, client.ID, reason)
 		s.events.PublishJSON("client_offline", map[string]any{
 			"client_id": client.ID,
 		})

@@ -57,6 +57,24 @@ jobs:
       - name: Run Go tests
         run: go test ./...
 
+  test-race:
+    runs-on: ubuntu-latest
+    needs: web-dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web-dist-archive
+      - name: Restore web dist
+        shell: bash
+        run: tar -xzf web-dist-archive/web-dist.tgz -C web
+      - name: Run Go race tests
+        run: make test-race
+
   test-e2e:
     runs-on: ubuntu-latest
     needs: web-dist

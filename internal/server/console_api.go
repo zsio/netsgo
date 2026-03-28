@@ -162,12 +162,12 @@ func (s *Server) collectClientViews() []clientView {
 		if !ok {
 			view = clientView{
 				ID:      client.ID,
-				Info:    client.Info,
+				Info:    client.GetInfo(),
 				Proxies: []protocol.ProxyConfig{},
 			}
 		}
 		now := time.Now()
-		view.Info = client.Info
+		view.Info = client.GetInfo()
 		if liveStats := client.GetStats(); liveStats != nil {
 			view.Stats = liveStats
 		}

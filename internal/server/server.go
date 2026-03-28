@@ -76,6 +76,7 @@ type ClientConn struct {
 	ID           string
 	InstallID    string
 	Info         protocol.ClientInfo
+	infoMu       sync.RWMutex
 	RemoteAddr   string
 	stats        *protocol.SystemStats
 	prevStats    *protocol.SystemStats // 上一次探针快照（用于计算速率）
@@ -92,6 +93,18 @@ type ClientConn struct {
 	pendingTimer *time.Timer
 	proxies      map[string]*ProxyTunnel // 代理隧道 name -> tunnel
 	proxyMu      sync.RWMutex            // 保护 proxies
+}
+
+func (c *ClientConn) GetInfo() protocol.ClientInfo {
+	c.infoMu.RLock()
+	defer c.infoMu.RUnlock()
+	return c.Info
+}
+
+func (c *ClientConn) SetInfo(info protocol.ClientInfo) {
+	c.infoMu.Lock()
+	c.Info = info
+	c.infoMu.Unlock()
 }
 
 func (c *ClientConn) writeJSON(v any) error {
@@ -545,10 +558,11 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("✅ Client 已认证: %s (%s/%s) [ID: %s, generation=%d]", client.Info.Hostname, client.Info.OS, client.Info.Arch, client.ID, client.generation)
+	info := client.GetInfo()
+	log.Printf("✅ Client 已认证: %s (%s/%s) [ID: %s, generation=%d]", info.Hostname, info.OS, info.Arch, client.ID, client.generation)
 
 	if s.store != nil {
-		if err := s.store.UpdateHostname(client.ID, client.Info.Hostname); err != nil {
+		if err := s.store.UpdateHostname(client.ID, info.Hostname); err != nil {
 			log.Printf("⚠️ 更新隧道展示主机名失败 [%s]: %v", client.ID, err)
 		}
 	}
@@ -738,160 +752,6 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 
 	s.startPendingDataTimer(client)
 	return client, nil
-}
-
-// controlLoop 持续处理控制通道上的消息
-func (s *Server) controlLoop(client *ClientConn) {
-	client.mu.Lock()
-	conn := client.conn
-	client.mu.Unlock()
-	if conn == nil {
-		return
-	}
-
-	for {
-		var msg protocol.Message
-		if err := conn.ReadJSON(&msg); err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("⚠️ Client [%s] 连接异常: %v", client.ID, err)
-			}
-			return
-		}
-
-		switch msg.Type {
-		case protocol.MsgTypePing:
-			if !s.isCurrentLive(client.ID, client.generation) {
-				continue
-			}
-			// 收到心跳，回复 Pong
-			pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
-			if err := client.writeJSON(pong); err != nil {
-				log.Printf("⚠️ 发送 Pong 失败 [%s]: %v", client.ID, err)
-			}
-
-		case protocol.MsgTypeProbeReport:
-			if !s.isCurrentLive(client.ID, client.generation) {
-				continue
-			}
-			// 收到探针数据
-			var stats protocol.SystemStats
-			if err := msg.ParsePayload(&stats); err != nil {
-				log.Printf("⚠️ 解析探针数据失败 [%s]: %v", client.ID, err)
-				continue
-			}
-			now := time.Now()
-			stats.UpdatedAt = now
-			stats.FreshUntil = now.Add(clientStatsFreshnessWindow)
-			// 计算派生指标（网络速率等）
-			client.enrichStats(&stats)
-			client.SetStats(&stats)
-			// 合并公网 IP 到 ClientInfo（探针附带）
-			if stats.PublicIPv4 != "" {
-				client.Info.PublicIPv4 = stats.PublicIPv4
-			}
-			if stats.PublicIPv6 != "" {
-				client.Info.PublicIPv6 = stats.PublicIPv6
-			}
-			// 更新基准快照
-			client.statsMu.Lock()
-			client.prevStats = cloneSystemStats(&stats)
-			client.prevStatsAt = time.Now()
-			client.statsMu.Unlock()
-			if s.adminStore != nil {
-				if err := s.adminStore.UpdateClientStats(client.ID, client.Info, stats, client.RemoteAddr); err != nil {
-					log.Printf("⚠️ 持久化 Client 最新状态失败 [%s]: %v", client.ID, err)
-				}
-			}
-			log.Printf("📊 [%s] CPU: %.1f%% | 内存: %.1f%% | 磁盘: %.1f%%",
-				client.Info.Hostname, stats.CPUUsage, stats.MemUsage, stats.DiskUsage)
-
-			// 发布探针数据更新事件
-			s.events.PublishJSON("stats_update", map[string]any{
-				"client_id": client.ID,
-				"stats":     stats,
-			})
-
-		case protocol.MsgTypeProxyCreate:
-			if !s.isCurrentLive(client.ID, client.generation) {
-				continue
-			}
-			// 收到创建代理隧道请求
-			var req protocol.ProxyNewRequest
-			if err := msg.ParsePayload(&req); err != nil {
-				log.Printf("⚠️ 解析代理请求失败 [%s]: %v", client.ID, err)
-				continue
-			}
-
-			err := s.StartProxy(client, req)
-			var resp *protocol.Message
-			if err != nil {
-				log.Printf("❌ 创建代理失败 [%s]: %v", client.ID, err)
-				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
-					Name:    req.Name,
-					Success: false,
-					Message: err.Error(),
-				})
-			} else {
-				client.proxyMu.RLock()
-				tunnel := client.proxies[req.Name]
-				actualPort := tunnel.Config.RemotePort
-				config := tunnel.Config
-				client.proxyMu.RUnlock()
-
-				resp, _ = protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
-					Name:       req.Name,
-					Success:    true,
-					Message:    "代理隧道创建成功",
-					RemotePort: actualPort,
-				})
-
-				s.emitTunnelChanged(client.ID, config, "created_by_client")
-			}
-
-			if err := client.writeJSON(resp); err != nil {
-				log.Printf("⚠️ 发送代理响应失败 [%s]: %v", client.ID, err)
-			}
-
-		case protocol.MsgTypeProxyProvisionAck:
-			var ack protocol.ProxyProvisionAck
-			if err := msg.ParsePayload(&ack); err != nil {
-				log.Printf("⚠️ 解析 provisioning ack 失败 [%s]: %v", client.ID, err)
-				continue
-			}
-			resp := provisionAckResult{
-				name:     ack.Name,
-				accepted: ack.Accepted,
-				message:  ack.Message,
-			}
-			if s.resolveTunnelProvisionAckWaiter(client.ID, client.generation, resp) {
-				continue
-			}
-			log.Printf("📩 收到未匹配的 provisioning ack [%s]: name=%s accepted=%v", client.ID, resp.name, resp.accepted)
-
-		case protocol.MsgTypeProxyClose:
-			if !s.isCurrentLive(client.ID, client.generation) {
-				continue
-			}
-			var req protocol.ProxyCloseRequest
-			if err := msg.ParsePayload(&req); err != nil {
-				log.Printf("⚠️ 解析关闭代理请求失败 [%s]: %v", client.ID, err)
-				continue
-			}
-			if err := s.StopProxy(client, req.Name); err != nil {
-				log.Printf("⚠️ 关闭代理失败 [%s]: %v", client.ID, err)
-			} else {
-				s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
-					Name:         req.Name,
-					ClientID:     client.ID,
-					DesiredState: protocol.ProxyDesiredStateStopped,
-					RuntimeState: protocol.ProxyRuntimeStateIdle,
-				}, "closed_by_client")
-			}
-
-		default:
-			log.Printf("⚠️ 未知消息类型 [%s]: %s", client.ID, msg.Type)
-		}
-	}
 }
 
 func writeAuthResult(conn *websocket.Conn, authResp protocol.AuthResponse) error {
