@@ -221,6 +221,25 @@ func getAPIJSON(t *testing.T, s *Server, ts *httptest.Server, path string) map[s
 	return result
 }
 
+func assertConsoleSummaryMap(t *testing.T, summary any, expected map[string]float64) {
+	t.Helper()
+
+	payload, ok := summary.(map[string]any)
+	if !ok {
+		t.Fatalf("summary 应返回对象，得到 %T", summary)
+	}
+
+	for key, want := range expected {
+		got, ok := payload[key].(float64)
+		if !ok {
+			t.Fatalf("summary[%s] 应返回数字，得到 %T", key, payload[key])
+		}
+		if got != want {
+			t.Fatalf("summary[%s] 期望 %v，得到 %v", key, want, got)
+		}
+	}
+}
+
 // ============================================================
 // API 端点测试 (7)
 // ============================================================
@@ -321,6 +340,71 @@ func TestAPI_ConsoleSnapshot(t *testing.T) {
 	if !ok || freshUntil == "" {
 		t.Fatalf("fresh_until 应返回 RFC3339 时间，得到 %v", result["fresh_until"])
 	}
+}
+
+func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
+	s, conn, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+	s.store = store
+
+	offlineInfo := protocol.ClientInfo{
+		Hostname: "offline-summary-host",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}
+	offlineRecord, err := s.adminStore.GetOrCreateClient("install-offline-summary-host", offlineInfo, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("预创建离线 Client 失败: %v", err)
+	}
+	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-active", Type: protocol.ProxyTypeTCP, RemotePort: 20001}, protocol.ProxyStatusActive)
+	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-paused", Type: protocol.ProxyTypeTCP, RemotePort: 20002}, protocol.ProxyStatusPaused)
+	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-stopped", Type: protocol.ProxyTypeTCP, RemotePort: 20003}, protocol.ProxyStatusStopped)
+
+	authResp := doAuthWithInstallID(t, conn, "online-summary-host", "install-online-summary-host", "test-key")
+	time.Sleep(50 * time.Millisecond)
+
+	val, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("未找到在线 Client %s", authResp.ClientID)
+	}
+	client := val.(*ClientConn)
+	client.proxyMu.Lock()
+	client.proxies["active"] = &ProxyTunnel{Config: protocol.ProxyConfig{Name: "active", DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStateExposed}, done: make(chan struct{})}
+	client.proxies["pending"] = &ProxyTunnel{Config: protocol.ProxyConfig{Name: "pending", DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStatePending}, done: make(chan struct{})}
+	client.proxies["error"] = &ProxyTunnel{Config: protocol.ProxyConfig{Name: "error", DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStateError, Error: "boom"}, done: make(chan struct{})}
+	client.proxyMu.Unlock()
+
+	expected := map[string]float64{
+		"total_clients":    2,
+		"online_clients":   1,
+		"offline_clients":  1,
+		"total_tunnels":    6,
+		"active_tunnels":   1,
+		"inactive_tunnels": 5,
+		"pending_tunnels":  1,
+		"offline_tunnels":  1,
+		"paused_tunnels":   1,
+		"stopped_tunnels":  1,
+		"error_tunnels":    1,
+	}
+
+	status := getAPIJSON(t, s, ts, "/api/status")
+	assertConsoleSummaryMap(t, status["summary"], expected)
+
+	snapshot := getAPIJSON(t, s, ts, "/api/console/snapshot")
+	assertConsoleSummaryMap(t, snapshot["summary"], expected)
+
+	serverStatus, ok := snapshot["server_status"].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot.server_status 应返回对象，得到 %T", snapshot["server_status"])
+	}
+	assertConsoleSummaryMap(t, serverStatus["summary"], expected)
 }
 
 func TestAPI_Status_TunnelCounts(t *testing.T) {

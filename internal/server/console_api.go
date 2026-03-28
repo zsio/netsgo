@@ -38,6 +38,7 @@ type clientView struct {
 type serverStatusView struct {
 	Status         string                   `json:"status"`
 	ClientCount    int                      `json:"client_count"`
+	Summary        consoleSummaryView       `json:"summary"`
 	Version        string                   `json:"version"`
 	ListenPort     int                      `json:"listen_port"`
 	Uptime         int64                    `json:"uptime"`
@@ -70,10 +71,11 @@ type serverStatusView struct {
 }
 
 type consoleSnapshot struct {
-	Clients      []clientView     `json:"clients"`
-	ServerStatus serverStatusView `json:"server_status"`
-	GeneratedAt  time.Time        `json:"generated_at"`
-	FreshUntil   time.Time        `json:"fresh_until"`
+	Clients      []clientView       `json:"clients"`
+	Summary      consoleSummaryView `json:"summary"`
+	ServerStatus serverStatusView   `json:"server_status"`
+	GeneratedAt  time.Time          `json:"generated_at"`
+	FreshUntil   time.Time          `json:"fresh_until"`
 }
 
 const (
@@ -84,7 +86,7 @@ const (
 
 func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.getCachedServerStatus())
+	json.NewEncoder(w).Encode(s.collectConsoleStatus())
 }
 
 func (s *Server) handleAPIConsoleSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -99,12 +101,22 @@ func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) collectSnapshot() consoleSnapshot {
 	now := time.Now()
+	data := s.collectConsoleData()
+	status := s.getCachedServerStatus()
+	status.Summary = data.Summary
 	return consoleSnapshot{
-		Clients:      s.collectClientViews(),
-		ServerStatus: s.getCachedServerStatus(),
+		Clients:      data.Clients,
+		Summary:      data.Summary,
+		ServerStatus: status,
 		GeneratedAt:  now,
 		FreshUntil:   now.Add(snapshotFreshnessWindow),
 	}
+}
+
+func (s *Server) collectConsoleStatus() serverStatusView {
+	status := s.getCachedServerStatus()
+	status.Summary = summarizeConsoleClients(s.collectClientViews())
+	return status
 }
 
 func (s *Server) collectClientViews() []clientView {

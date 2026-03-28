@@ -8,7 +8,8 @@ import {
 import { Link, useMatch, useRouterState } from '@tanstack/react-router';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
-import { summarizeConsoleClients } from '@/lib/console-summary';
+import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
+import { useConsoleSummary } from '@/hooks/use-console-summary';
 import { AddClientDialog } from './AddClientDialog';
 import {
   Sidebar,
@@ -68,11 +69,11 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
     });
   }, [clients]);
 
-  const summary = summarizeConsoleClients(clients);
-  const onlineCount = summary.onlineClients;
-  const totalCount = summary.totalClients;
-  const activeTunnels = summary.activeTunnels;
-  const totalTunnels = summary.totalTunnels;
+  const { data: summary = EMPTY_CONSOLE_SUMMARY } = useConsoleSummary();
+  const onlineCount = summary.online_clients;
+  const totalCount = summary.total_clients;
+  const activeTunnels = summary.active_tunnels;
+  const totalTunnels = summary.total_tunnels;
 
   return (
     <Sidebar collapsible="offcanvas">
