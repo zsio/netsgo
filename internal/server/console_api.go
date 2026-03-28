@@ -71,11 +71,11 @@ type serverStatusView struct {
 }
 
 type consoleSnapshot struct {
-	Clients      []clientView     `json:"clients"`
+	Clients      []clientView       `json:"clients"`
 	Summary      consoleSummaryView `json:"summary"`
-	ServerStatus serverStatusView `json:"server_status"`
-	GeneratedAt  time.Time        `json:"generated_at"`
-	FreshUntil   time.Time        `json:"fresh_until"`
+	ServerStatus serverStatusView   `json:"server_status"`
+	GeneratedAt  time.Time          `json:"generated_at"`
+	FreshUntil   time.Time          `json:"fresh_until"`
 }
 
 const (
