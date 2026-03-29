@@ -83,7 +83,7 @@ func TestAuthMiddleware_InvalidTokenSignature(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 
 	// 创建一个被其他密钥签名的 token
 	claims := AdminClaims{
@@ -112,7 +112,7 @@ func TestAuthMiddleware_FallbackSecretTokenRejected(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	claims := AdminClaims{
@@ -141,7 +141,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 
 	// 创建一个已过期的 token
 	claims := AdminClaims{
@@ -174,7 +174,7 @@ func TestGenerateAdminToken_MissingJWTSecret(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 	clearJWTSecretForTest(store)
 
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
@@ -189,7 +189,7 @@ func TestAuthMiddleware_MissingJWTSecret(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 	clearJWTSecretForTest(store)
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -209,7 +209,7 @@ func TestAuthMiddleware_ValidTokenButSessionRevoked(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 
 	// 创建一个合法的 session 并生成 token
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
@@ -238,7 +238,7 @@ func TestAuthMiddleware_ValidTokenSuccess(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
@@ -326,7 +326,7 @@ func TestAuthMiddleware_CookieAuth_Success(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
@@ -366,7 +366,7 @@ func TestAuthMiddleware_CookieAuth_InvalidToken(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "invalid-token"})
@@ -385,7 +385,7 @@ func TestAuthMiddleware_HeaderPriority(t *testing.T) {
 	defer cleanup()
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	validToken, err := s.GenerateAdminToken(session)

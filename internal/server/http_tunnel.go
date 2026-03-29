@@ -359,8 +359,8 @@ func checkDomainConflict(domain, excludeName, excludeClientID string, server *Se
 	}
 
 	var cfg *ServerConfig
-	if server.adminStore != nil {
-		current := server.adminStore.GetServerConfig()
+	if server.auth.adminStore != nil {
+		current := server.auth.adminStore.GetServerConfig()
 		cfg = &current
 	}
 

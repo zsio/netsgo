@@ -95,8 +95,8 @@ func (s *Server) handleProbeReportMessage(client *ClientConn, msg protocol.Messa
 	client.prevStatsAt = now
 	client.statsMu.Unlock()
 
-	if s.adminStore != nil {
-		if err := s.adminStore.UpdateClientStats(client.ID, info, stats, client.RemoteAddr); err != nil {
+	if s.auth.adminStore != nil {
+		if err := s.auth.adminStore.UpdateClientStats(client.ID, info, stats, client.RemoteAddr); err != nil {
 			log.Printf("⚠️ 持久化 Client 最新状态失败 [%s]: %v", client.ID, err)
 		}
 	}

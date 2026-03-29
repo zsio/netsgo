@@ -41,19 +41,14 @@ type Server struct {
 	events                      *EventBus         // SSE 事件总线
 	store                       *TunnelStore      // 隧道持久化存储
 	startTime                   time.Time         // 服务器启动时间
-	adminStore                  *AdminStore       // 系统管理后台数据存储
+	auth                        *AuthService      // 认证与访问控制（adminStore、速率限制、setupToken）
 	webFS                       fs.FS             // 嵌入的前端静态资源 (nil 表示开发模式)
 	webHandler                  http.Handler      // 缓存的 FileServer (nil 表示开发模式)
 	cachedStatus                *serverStatusView // 后台采集的最新服务端状态
 	cachedStatusMu              sync.RWMutex      // 保护 cachedStatus
-	loginLimiter                *RateLimiter      // 管理员登录速率限制
-	clientLimiter               *RateLimiter      // Client 认证速率限制
-	setupLimiter                *RateLimiter      // 初始化接口速率限制
-	authTimeout                 time.Duration     // WebSocket 认证阶段读超时（0 使用默认 30s）
 	httpServer                  *http.Server
 	listener                    net.Listener
 	done                        chan struct{}
-	setupToken                  string
 	tlsEnabled                  bool
 	publicIPv4                  string       // 缓存的公网 IPv4
 	publicIPv6                  string       // 缓存的公网 IPv6
@@ -170,6 +165,7 @@ func New(port int) *Server {
 	return &Server{
 		Port:                    port,
 		events:                  NewEventBus(),
+		auth:                    newAuthService(),
 		startTime:               time.Now(),
 		done:                    make(chan struct{}),
 		managedConns:            make(map[*websocket.Conn]struct{}),
@@ -206,7 +202,7 @@ func (s *Server) initStore() error {
 	if err != nil {
 		return err
 	}
-	s.adminStore = adminStore
+	s.auth.adminStore = adminStore
 	log.Printf("📦 系统管理存储: %s", adminPath)
 
 	return nil
@@ -269,30 +265,30 @@ func (s *Server) Start() error {
 	}
 
 	// 启动时清理过期 Token
-	if s.adminStore != nil {
-		if err := s.adminStore.CleanExpiredTokens(); err != nil {
+	if s.auth.adminStore != nil {
+		if err := s.auth.adminStore.CleanExpiredTokens(); err != nil {
 			return fmt.Errorf("清理过期 token 失败: %w", err)
 		}
 		go s.tokenCleanupLoop()
 	}
 
-	if s.adminStore != nil && !s.adminStore.IsInitialized() {
-		if s.setupToken == "" {
+	if s.auth.adminStore != nil && !s.auth.adminStore.IsInitialized() {
+		if s.auth.setupToken == "" {
 			if s.SetupToken != "" {
-				s.setupToken = s.SetupToken
+				s.auth.setupToken = s.SetupToken
 			} else {
 				buf := make([]byte, 32)
 				if _, err := rand.Read(buf); err != nil {
 					return fmt.Errorf("生成 Setup Token 失败: %w", err)
 				}
-				s.setupToken = hex.EncodeToString(buf)
+				s.auth.setupToken = hex.EncodeToString(buf)
 			}
 		}
 		s.emitSetupTokenBanner(os.Stderr)
 	}
 
 	// 初始化速率限制器
-	s.initRateLimiters()
+	s.auth.initRateLimiters()
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Port))
 	if err != nil {
@@ -361,7 +357,7 @@ func (s *Server) emitSetupTokenBanner(w io.Writer) {
 	fmt.Fprintln(w, "┌──────────────────────────────────────────────────────────────────┐")
 	fmt.Fprintln(w, "│  ⚠️  服务尚未初始化                                              │")
 	fmt.Fprintln(w, "│  请使用以下 Setup Token 完成初始化:                               │")
-	fmt.Fprintf(w, "│  SETUP_TOKEN=%s │\n", s.setupToken)
+	fmt.Fprintf(w, "│  SETUP_TOKEN=%s │\n", s.auth.setupToken)
 	fmt.Fprintln(w, "└──────────────────────────────────────────────────────────────────┘")
 	fmt.Fprintln(w)
 }
@@ -578,8 +574,8 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientConn, error) {
 	// 速率限制检查
 	ip := remoteIP(remoteAddr)
-	if s.clientLimiter != nil {
-		if allowed, retryAfter := s.clientLimiter.Allow(ip); !allowed {
+	if s.auth.clientLimiter != nil {
+		if allowed, retryAfter := s.auth.clientLimiter.Allow(ip); !allowed {
 			log.Printf("🚫 Client 认证被限速 [%s]: 需等待 %v", remoteAddr, retryAfter)
 			slog.Warn("Client 认证被限速", "ip", ip, "module", "security")
 			_ = writeAuthResult(conn, protocol.AuthResponse{
@@ -592,7 +588,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 		}
 	}
 
-	authTimeout := s.authTimeout
+	authTimeout := s.auth.authTimeout
 	if authTimeout == 0 {
 		authTimeout = 30 * time.Second
 	}
@@ -621,12 +617,12 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 	var newToken string // 如果通过 Key 兑换，需要下发给客户端
 	var clientID string
 
-	if s.adminStore != nil {
-		if !s.adminStore.IsInitialized() {
+	if s.auth.adminStore != nil {
+		if !s.auth.adminStore.IsInitialized() {
 			log.Printf("⚠️ 服务未初始化，拒绝 Client 连接 [%s]", remoteAddr)
 			slog.Warn("服务未初始化时拒绝 Client 连接", "ip", ip, "module", "security")
-			if s.clientLimiter != nil {
-				s.clientLimiter.RecordFailure(ip)
+			if s.auth.clientLimiter != nil {
+				s.auth.clientLimiter.RecordFailure(ip)
 			}
 			_ = writeAuthResult(conn, protocol.AuthResponse{
 				Success:   false,
@@ -638,11 +634,11 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 		}
 
 		if authReq.Token != "" {
-			clientToken, err := s.adminStore.ValidateClientToken(authReq.Token, authReq.InstallID)
+			clientToken, err := s.auth.adminStore.ValidateClientToken(authReq.Token, authReq.InstallID)
 			if err != nil {
 				log.Printf("⚠️ Client Token 验证失败 [%s]: %v", remoteAddr, err)
-				if s.clientLimiter != nil {
-					s.clientLimiter.RecordFailure(ip)
+				if s.auth.clientLimiter != nil {
+					s.auth.clientLimiter.RecordFailure(ip)
 				}
 				code := protocol.AuthCodeInvalidToken
 				if errors.Is(err, ErrClientTokenRevoked) {
@@ -673,11 +669,11 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 			}
 
 			log.Printf("🔑 Client Token 认证通过 [install_id=%s]", authReq.InstallID)
-			if s.clientLimiter != nil {
-				s.clientLimiter.ResetFailures(ip)
+			if s.auth.clientLimiter != nil {
+				s.auth.clientLimiter.ResetFailures(ip)
 			}
 		} else {
-			record, err := s.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, remoteAddr)
+			record, err := s.auth.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, remoteAddr)
 			if err != nil {
 				return nil, fmt.Errorf("登记 Client 失败: %w", err)
 			}
@@ -696,11 +692,11 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 				}
 			}
 
-			tokenStr, _, err := s.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, clientID, remoteAddr)
+			tokenStr, _, err := s.auth.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, clientID, remoteAddr)
 			if err != nil {
 				log.Printf("❌ Client Key 兑换 Token 失败 [%s]: %v", remoteAddr, err)
-				if s.clientLimiter != nil {
-					s.clientLimiter.RecordFailure(ip)
+				if s.auth.clientLimiter != nil {
+					s.auth.clientLimiter.RecordFailure(ip)
 				}
 				_ = writeAuthResult(conn, protocol.AuthResponse{
 					Success: false,
@@ -711,8 +707,8 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 			}
 			newToken = tokenStr
 			log.Printf("🔑 Client Key 兑换 Token 成功 [install_id=%s]", authReq.InstallID)
-			if s.clientLimiter != nil {
-				s.clientLimiter.ResetFailures(ip)
+			if s.auth.clientLimiter != nil {
+				s.auth.clientLimiter.ResetFailures(ip)
 			}
 		}
 	}
@@ -772,8 +768,8 @@ func (s *Server) tokenCleanupLoop() {
 		case <-s.done:
 			return
 		case <-ticker.C:
-			if s.adminStore != nil {
-				if err := s.adminStore.CleanExpiredTokens(); err != nil {
+			if s.auth.adminStore != nil {
+				if err := s.auth.adminStore.CleanExpiredTokens(); err != nil {
 					log.Printf("⚠️ 清理过期 Token 失败: %v", err)
 				}
 			}
@@ -852,12 +848,12 @@ func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if s.adminStore == nil {
+	if s.auth.adminStore == nil {
 		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "admin store unavailable"})
 		return
 	}
 
-	if err := s.adminStore.UpdateClientDisplayName(clientID, req.DisplayName); err != nil {
+	if err := s.auth.adminStore.UpdateClientDisplayName(clientID, req.DisplayName); err != nil {
 		encodeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1217,7 +1213,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			return
 		}
 		// 检查端口是否仍在白名单范围内
-		if st.RemotePort != 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(st.RemotePort) {
+		if st.RemotePort != 0 && s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(st.RemotePort) {
 			log.Printf("⚠️ 隧道 %s 端口 %d 不在当前允许范围内，标记为 error", st.Name, st.RemotePort)
 			errMsg := fmt.Sprintf("端口 %d 不在允许范围内", st.RemotePort)
 			client.proxyMu.Lock()

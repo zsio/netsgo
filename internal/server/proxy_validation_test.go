@@ -21,7 +21,7 @@ func newProxyValidationTestServer(t *testing.T, port int, serverAddr string, all
 	if err := adminStore.Initialize("admin", "password123", serverAddr, allowedPorts); err != nil {
 		t.Fatalf("初始化 AdminStore 失败: %v", err)
 	}
-	s.adminStore = adminStore
+	s.auth.adminStore = adminStore
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {

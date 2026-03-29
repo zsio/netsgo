@@ -14,7 +14,7 @@ import (
 func registerOfflineHTTPTestClient(t *testing.T, s *Server, hostname string) string {
 	t.Helper()
 
-	record, err := s.adminStore.GetOrCreateClient(
+	record, err := s.auth.adminStore.GetOrCreateClient(
 		"install-"+hostname,
 		protocol.ClientInfo{
 			Hostname: hostname,

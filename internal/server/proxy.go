@@ -81,9 +81,9 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 		return newProxyRequestValidationError(fmt.Errorf("端口 %d 与 NetsGo 管理服务监听端口冲突", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
 
-	if s.adminStore != nil {
+	if s.auth.adminStore != nil {
 		// 校验端口白名单
-		if s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(req.RemotePort) {
+		if s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(req.RemotePort) {
 			return newProxyRequestValidationError(fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 		}
 	}
@@ -467,7 +467,7 @@ func (s *Server) ResumeProxy(client *ClientConn, name string) error {
 	client.proxyMu.RUnlock()
 
 	// 检查端口是否仍在白名单范围内
-	if tunnel.Config.RemotePort != 0 && s.adminStore != nil && s.adminStore.IsInitialized() && !s.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
+	if tunnel.Config.RemotePort != 0 && s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
 		return fmt.Errorf("端口 %d 不在当前允许范围内，无法恢复", tunnel.Config.RemotePort)
 	}
 

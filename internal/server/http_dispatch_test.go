@@ -42,7 +42,7 @@ func newDispatchTestServer(t *testing.T, initialized bool, serverAddr string) (*
 	}
 
 	s := New(0)
-	s.adminStore = adminStore
+	s.auth.adminStore = adminStore
 	s.store = tunnelStore
 
 	return s, func() {}

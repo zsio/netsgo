@@ -47,7 +47,7 @@ func setupTestServerWithDB(t *testing.T, initialized bool) (*Server, func()) {
 	}
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
@@ -277,7 +277,7 @@ func TestAPI_SetupInit_Success(t *testing.T) {
 		t.Errorf("初始化后不应返回 token，用户应通过登录页登录")
 	}
 
-	secret, err := s.adminStore.GetJWTSecret()
+	secret, err := s.auth.adminStore.GetJWTSecret()
 	if err != nil {
 		t.Fatalf("setup 完成后应已生成 JWT Secret: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestAPI_SetupInit_Success(t *testing.T) {
 	}
 
 	// 验证确实已经初始化
-	if !s.adminStore.IsInitialized() {
+	if !s.auth.adminStore.IsInitialized() {
 		t.Errorf("API 成功后，Store 状态应为已初始化")
 	}
 }
@@ -348,8 +348,8 @@ func TestAPI_Login_PersistSessionFailure(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
 
-	s.adminStore.failSaveErr = errors.New("save failed")
-	s.adminStore.failSaveCount = 1
+	s.auth.adminStore.failSaveErr = errors.New("save failed")
+	s.auth.adminStore.failSaveCount = 1
 
 	body := []byte(`{"username":"admin","password":"password123"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
@@ -470,8 +470,8 @@ func TestAPI_AdminKeys_CreateFailsWhenPersistFails(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
 
-	s.adminStore.failSaveErr = errors.New("save failed")
-	s.adminStore.failSaveCount = 1
+	s.auth.adminStore.failSaveErr = errors.New("save failed")
+	s.auth.adminStore.failSaveCount = 1
 
 	body := []byte(`{"name":"test-key","permissions":["connect"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/keys", bytes.NewReader(body))
@@ -570,7 +570,7 @@ func TestAPI_AdminConfig_ServerAddrNormalization(t *testing.T) {
 		t.Fatalf("带根路径的 server_addr 应返回 200，得到 %d, body: %s", w.Code, w.Body.String())
 	}
 
-	if got := s.adminStore.GetServerConfig().ServerAddr; got != "https://example.com" {
+	if got := s.auth.adminStore.GetServerConfig().ServerAddr; got != "https://example.com" {
 		t.Fatalf("server_addr 应规范化为无尾斜杠，得到 %q", got)
 	}
 }
@@ -579,7 +579,7 @@ func TestAPI_AdminConfig_AllowsUpdatingPortsWithLegacyServerAddr(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, false)
 	defer cleanup()
 
-	if err := s.adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
+	if err := s.auth.adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("初始化 legacy server_addr 失败: %v", err)
 	}
 
@@ -594,7 +594,7 @@ func TestAPI_AdminConfig_AllowsUpdatingPortsWithLegacyServerAddr(t *testing.T) {
 		t.Fatalf("legacy server_addr 未修改时应允许仅更新端口，得到 %d, body: %s", w.Code, w.Body.String())
 	}
 
-	if got := s.adminStore.GetServerConfig().ServerAddr; got != "localhost" {
+	if got := s.auth.adminStore.GetServerConfig().ServerAddr; got != "localhost" {
 		t.Fatalf("legacy server_addr 应保持原值，得到 %q", got)
 	}
 }
@@ -764,7 +764,7 @@ func TestAdminConfigUpdateAllowsDefaultPortNormalizationWhenLocked(t *testing.T)
 	s, cleanup := setupTestServerWithDB(t, false)
 	defer cleanup()
 
-	if err := s.adminStore.Initialize("admin", "password123", "https://example.com:443", nil); err != nil {
+	if err := s.auth.adminStore.Initialize("admin", "password123", "https://example.com:443", nil); err != nil {
 		t.Fatalf("初始化带默认端口的 server_addr 失败: %v", err)
 	}
 	t.Setenv("NETSGO_SERVER_ADDR", "https://locked.example.com")
@@ -888,7 +888,7 @@ func TestAPI_Logout_ClearsCookie(t *testing.T) {
 	defer cleanup()
 
 	// 先登录获取 session
-	session := mustCreateSession(t, s.adminStore, "user-1", "admin", "admin", "127.0.0.1", "")
+	session := mustCreateSession(t, s.auth.adminStore, "user-1", "admin", "admin", "127.0.0.1", "")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)

@@ -48,26 +48,26 @@ func sanitizeAPIKeys(keys []APIKey) []apiKeyResponse {
 
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	initialized := false
-	if s.adminStore != nil {
-		initialized = s.adminStore.IsInitialized()
+	if s.auth.adminStore != nil {
+		initialized = s.auth.adminStore.IsInitialized()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"initialized":          initialized,
-		"setup_token_required": !initialized && s.setupToken != "",
+		"setup_token_required": !initialized && s.auth.setupToken != "",
 	})
 }
 
 func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
-	if s.adminStore == nil {
+	if s.auth.adminStore == nil {
 		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
 		return
 	}
 
 	// 速率限制检查
 	ip := s.clientIP(r)
-	if s.setupLimiter != nil {
-		if allowed, retryAfter := s.setupLimiter.Allow(ip); !allowed {
+	if s.auth.setupLimiter != nil {
+		if allowed, retryAfter := s.auth.setupLimiter.Allow(ip); !allowed {
 			slog.Warn("初始化接口被限速", "ip", ip, "module", "security")
 			writeRateLimitResponse(w, retryAfter)
 			return
@@ -108,10 +108,10 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ServerAddr = normalizedServerAddr
 
-	if s.setupToken != "" {
-		if req.SetupToken != s.setupToken {
-			if s.setupLimiter != nil {
-				s.setupLimiter.RecordFailure(ip)
+	if s.auth.setupToken != "" {
+		if req.SetupToken != s.auth.setupToken {
+			if s.auth.setupLimiter != nil {
+				s.auth.setupLimiter.RecordFailure(ip)
 			}
 			slog.Warn("Setup Token 验证失败", "ip", ip, "module", "security")
 			w.Header().Set("Content-Type", "application/json")
@@ -124,15 +124,15 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 执行初始化（内部持有锁，重复调用会返回错误）
-	if err := s.adminStore.Initialize(req.Admin.Username, req.Admin.Password, req.ServerAddr, req.AllowedPorts); err != nil {
+	if err := s.auth.adminStore.Initialize(req.Admin.Username, req.Admin.Password, req.ServerAddr, req.AllowedPorts); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		// 区分"已初始化"和其他错误（如密码不合规）
-		if s.adminStore.IsInitialized() {
+		if s.auth.adminStore.IsInitialized() {
 			w.WriteHeader(http.StatusForbidden)
 		} else {
 			w.WriteHeader(http.StatusBadRequest)
-			if s.setupLimiter != nil {
-				s.setupLimiter.RecordFailure(ip)
+			if s.auth.setupLimiter != nil {
+				s.auth.setupLimiter.RecordFailure(ip)
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{
@@ -142,7 +142,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("服务初始化完成", "admin", req.Admin.Username, "module", "setup")
-	s.setupToken = ""
+	s.auth.setupToken = ""
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -162,9 +162,9 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 
 	// 速率限制检查
 	ip := s.clientIP(r)
-	if s.loginLimiter != nil {
-		if allowed, retryAfter := s.loginLimiter.Allow(ip); !allowed {
-			if s.adminStore != nil {
+	if s.auth.loginLimiter != nil {
+		if allowed, retryAfter := s.auth.loginLimiter.Allow(ip); !allowed {
+			if s.auth.adminStore != nil {
 				slog.Warn("登录接口被限速", "ip", ip, "module", "security")
 			}
 			writeRateLimitResponse(w, retryAfter)
@@ -182,22 +182,22 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.adminStore == nil {
+	if s.auth.adminStore == nil {
 		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
 		return
 	}
 
-	user, err := s.adminStore.ValidateAdminPassword(req.Username, req.Password)
+	user, err := s.auth.adminStore.ValidateAdminPassword(req.Username, req.Password)
 	if err != nil {
-		if s.loginLimiter != nil {
-			s.loginLimiter.RecordFailure(ip)
+		if s.auth.loginLimiter != nil {
+			s.auth.loginLimiter.RecordFailure(ip)
 		}
 		http.Error(w, `{"error":"username or password incorrect"}`, http.StatusUnauthorized)
 		return
 	}
 
 	// 创建 session（会自动踢出旧 session → 单端登录）
-	session, err := s.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
+	session, err := s.auth.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
 	if err != nil {
 		http.Error(w, `{"error":"failed to persist session"}`, http.StatusInternalServerError)
 		return
@@ -210,8 +210,8 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("Admin user logged in", "user", user.Username, "module", "auth")
-	if s.loginLimiter != nil {
-		s.loginLimiter.ResetFailures(ip)
+	if s.auth.loginLimiter != nil {
+		s.auth.loginLimiter.ResetFailures(ip)
 	}
 
 	s.setSessionCookie(w, r, token, int(sessionDefaultTTL.Seconds()))
@@ -239,7 +239,7 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.adminStore.DeleteSession(info.SessionID); err != nil {
+	if err := s.auth.adminStore.DeleteSession(info.SessionID); err != nil {
 		http.Error(w, `{"error":"failed to persist logout"}`, http.StatusInternalServerError)
 		return
 	}
@@ -254,14 +254,14 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 // ========= API Keys =========
 
 func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
-	if s.adminStore == nil {
+	if s.auth.adminStore == nil {
 		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		keys := s.adminStore.GetAPIKeys()
+		keys := s.auth.adminStore.GetAPIKeys()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(sanitizeAPIKeys(keys))
 
@@ -291,7 +291,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 
 		// 后端生成一个随机字符串作为原始 key
 		rawKey := "sk-" + generateUUID()
-		key, err := s.adminStore.AddAPIKey(req.Name, rawKey, req.Permissions, expiresAt)
+		key, err := s.auth.adminStore.AddAPIKey(req.Name, rawKey, req.Permissions, expiresAt)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
@@ -303,7 +303,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 
 		// 设置 MaxUses
 		if req.MaxUses > 0 {
-			if err := s.adminStore.SetAPIKeyMaxUses(key.ID, req.MaxUses); err != nil {
+			if err := s.auth.adminStore.SetAPIKeyMaxUses(key.ID, req.MaxUses); err != nil {
 				slog.Warn("Failed to set max_uses for key", "key_id", key.ID, "module", "admin")
 			}
 			key.MaxUses = req.MaxUses
@@ -313,8 +313,8 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 
 		// 获取 server_addr
 		serverAddr := ""
-		if s.adminStore != nil {
-			serverAddr = s.adminStore.GetServerConfig().ServerAddr
+		if s.auth.adminStore != nil {
+			serverAddr = s.auth.adminStore.GetServerConfig().ServerAddr
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -332,7 +332,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
-	if s.adminStore == nil {
+	if s.auth.adminStore == nil {
 		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
 		return
 	}
@@ -353,7 +353,7 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := s.adminStore.SetAPIKeyActive(keyID, active); err != nil {
+		if err := s.auth.adminStore.SetAPIKeyActive(keyID, active); err != nil {
 			http.Error(w, `{"error":"key not found"}`, http.StatusNotFound)
 			return
 		}
@@ -368,7 +368,7 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"success": true})
 
 	case http.MethodDelete:
-		if err := s.adminStore.DeleteAPIKey(keyID); err != nil {
+		if err := s.auth.adminStore.DeleteAPIKey(keyID); err != nil {
 			http.Error(w, `{"error":"key not found"}`, http.StatusNotFound)
 			return
 		}
@@ -384,14 +384,14 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 // ========= Server Config =========
 
 func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
-	if s.adminStore == nil {
+	if s.auth.adminStore == nil {
 		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		config := s.adminStore.GetServerConfig()
+		config := s.auth.adminStore.GetServerConfig()
 		if config.AllowedPorts == nil {
 			config.AllowedPorts = []PortRange{}
 		}
@@ -409,7 +409,7 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		current := s.adminStore.GetServerConfig()
+		current := s.auth.adminStore.GetServerConfig()
 
 		normalizedServerAddr, err := normalizeServerAddrForConfigUpdate(config.ServerAddr, current.ServerAddr)
 		if err != nil {
@@ -475,7 +475,7 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 实际保存配置
-		if err := s.adminStore.UpdateServerConfig(config); err != nil {
+		if err := s.auth.adminStore.UpdateServerConfig(config); err != nil {
 			http.Error(w, `{"error":"failed to update config"}`, http.StatusInternalServerError)
 			return
 		}

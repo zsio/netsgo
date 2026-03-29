@@ -289,30 +289,3 @@ func retryAfterString(d time.Duration) string {
 	}
 	return strconv.Itoa(secs)
 }
-
-// initRateLimiters 初始化服务端的三个速率限制器
-func (s *Server) initRateLimiters() {
-	s.loginLimiter = NewRateLimiter(RateLimiterConfig{
-		WindowSize:      time.Minute,
-		MaxRequests:     10,
-		MaxFailures:     5,
-		LockoutPeriod:   15 * time.Minute,
-		CleanupInterval: 10 * time.Minute,
-	})
-
-	s.clientLimiter = NewRateLimiter(RateLimiterConfig{
-		WindowSize:      time.Minute,
-		MaxRequests:     20,
-		MaxFailures:     10,
-		LockoutPeriod:   15 * time.Minute,
-		CleanupInterval: 10 * time.Minute,
-	})
-
-	s.setupLimiter = NewRateLimiter(RateLimiterConfig{
-		WindowSize:      time.Minute,
-		MaxRequests:     5,
-		MaxFailures:     3,
-		LockoutPeriod:   30 * time.Minute,
-		CleanupInterval: 10 * time.Minute,
-	})
-}

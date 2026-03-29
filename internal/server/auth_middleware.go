@@ -46,7 +46,7 @@ type SessionInfo struct {
 
 // GenerateAdminToken 生成一个新的 JWT Token（绑定 session）
 func (s *Server) GenerateAdminToken(session *AdminSession) (string, error) {
-	secret, err := s.adminStore.GetJWTSecret()
+	secret, err := s.auth.adminStore.GetJWTSecret()
 	if err != nil {
 		return "", fmt.Errorf("get jwt secret: %w", err)
 	}
@@ -80,12 +80,12 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// 🔑 核心：检查 adminStore 是否已初始化
-		if s.adminStore == nil {
+		if s.auth.adminStore == nil {
 			http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
 			return
 		}
 		claims := &AdminClaims{}
-		secret, err := s.adminStore.GetJWTSecret()
+		secret, err := s.auth.adminStore.GetJWTSecret()
 		if err != nil {
 			http.Error(w, `{"error":"jwt secret unavailable"}`, http.StatusInternalServerError)
 			return
@@ -103,7 +103,7 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		session := s.adminStore.GetSession(claims.SessionID)
+		session := s.auth.adminStore.GetSession(claims.SessionID)
 		if session == nil {
 			// session 被删除（登出/踢出/过期）→ 401
 			http.Error(w, `{"error":"session expired or revoked"}`, http.StatusUnauthorized)
@@ -154,7 +154,7 @@ func GetAdminFromContext(ctx context.Context) *SessionInfo {
 // - 如果已初始化，则走完整的 JWT + Session 鉴权
 func (s *Server) RequireAuthIfInitialized(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.adminStore == nil || !s.adminStore.IsInitialized() {
+		if s.auth.adminStore == nil || !s.auth.adminStore.IsInitialized() {
 			next.ServeHTTP(w, r)
 			return
 		}

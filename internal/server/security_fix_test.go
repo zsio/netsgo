@@ -123,7 +123,7 @@ func TestP8_SetupToken_Required(t *testing.T) {
 	defer cleanup()
 
 	// 模拟服务启动时生成的 Setup Token
-	s.setupToken = "test-setup-token-12345"
+	s.auth.setupToken = "test-setup-token-12345"
 
 	// 不携带 setup_token 的初始化请求 → 应该被拒绝
 	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[]}`)
@@ -148,7 +148,7 @@ func TestP8_SetupToken_Wrong(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, false)
 	defer cleanup()
 
-	s.setupToken = "correct-token"
+	s.auth.setupToken = "correct-token"
 
 	// 携带错误的 setup_token → 应该被拒绝
 	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[],"setup_token":"wrong-token"}`)
@@ -167,7 +167,7 @@ func TestP8_SetupToken_Correct(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, false)
 	defer cleanup()
 
-	s.setupToken = "correct-token-abc123"
+	s.auth.setupToken = "correct-token-abc123"
 
 	// 携带正确的 setup_token → 应该成功初始化
 	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[],"setup_token":"correct-token-abc123"}`)
@@ -182,12 +182,12 @@ func TestP8_SetupToken_Correct(t *testing.T) {
 	}
 
 	// 验证 setupToken 被清空
-	if s.setupToken != "" {
+	if s.auth.setupToken != "" {
 		t.Error("初始化成功后 setupToken 应被清空")
 	}
 
 	// 验证确实已经初始化
-	if !s.adminStore.IsInitialized() {
+	if !s.auth.adminStore.IsInitialized() {
 		t.Error("初始化应成功完成")
 	}
 }
@@ -216,7 +216,7 @@ func TestP8_SetupStatus_ReportsTokenRequired(t *testing.T) {
 	defer cleanup()
 
 	// 设置 setupToken → status 应返回 setup_token_required: true
-	s.setupToken = "some-token"
+	s.auth.setupToken = "some-token"
 
 	req := httptest.NewRequest(http.MethodGet, "/api/setup/status", nil)
 	w := httptest.NewRecorder()
