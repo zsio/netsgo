@@ -112,8 +112,23 @@ export interface TunnelChangedEvent {
   tunnel: ProxyConfig;
 }
 
+export interface ConsoleSummary {
+  total_clients: number;
+  online_clients: number;
+  offline_clients: number;
+  total_tunnels: number;
+  active_tunnels: number;
+  inactive_tunnels: number;
+  pending_tunnels: number;
+  offline_tunnels: number;
+  paused_tunnels: number;
+  stopped_tunnels: number;
+  error_tunnels: number;
+}
+
 export interface ConsoleSnapshot {
   clients?: Client[];
+  summary?: ConsoleSummary;
   server_status?: ServerStatus;
   generated_at?: string;
   fresh_until?: string;
@@ -130,6 +145,7 @@ export interface DiskPartition {
 export interface ServerStatus {
   status: string;
   client_count: number;
+  summary?: ConsoleSummary;
   version: string;
   listen_port: number;
   uptime: number;         // seconds (process uptime)

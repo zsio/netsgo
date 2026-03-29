@@ -221,6 +221,25 @@ func getAPIJSON(t *testing.T, s *Server, ts *httptest.Server, path string) map[s
 	return result
 }
 
+func assertConsoleSummaryMap(t *testing.T, summary any, expected map[string]float64) {
+	t.Helper()
+
+	payload, ok := summary.(map[string]any)
+	if !ok {
+		t.Fatalf("summary 应返回对象，得到 %T", summary)
+	}
+
+	for key, want := range expected {
+		got, ok := payload[key].(float64)
+		if !ok {
+			t.Fatalf("summary[%s] 应返回数字，得到 %T", key, payload[key])
+		}
+		if got != want {
+			t.Fatalf("summary[%s] 期望 %v，得到 %v", key, want, got)
+		}
+	}
+}
+
 // ============================================================
 // API 端点测试 (7)
 // ============================================================
@@ -321,6 +340,73 @@ func TestAPI_ConsoleSnapshot(t *testing.T) {
 	if !ok || freshUntil == "" {
 		t.Fatalf("fresh_until 应返回 RFC3339 时间，得到 %v", result["fresh_until"])
 	}
+}
+
+func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
+	s, conn, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("创建 TunnelStore 失败: %v", err)
+	}
+	s.store = store
+
+	offlineInfo := protocol.ClientInfo{
+		Hostname: "offline-summary-host",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}
+	offlineRecord, err := s.adminStore.GetOrCreateClient("install-offline-summary-host", offlineInfo, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("预创建离线 Client 失败: %v", err)
+	}
+	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-active", Type: protocol.ProxyTypeTCP, RemotePort: 20001}, protocol.ProxyStatusActive)
+	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-paused", Type: protocol.ProxyTypeTCP, RemotePort: 20002}, protocol.ProxyStatusPaused)
+	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-stopped", Type: protocol.ProxyTypeTCP, RemotePort: 20003}, protocol.ProxyStatusStopped)
+
+	authResp := doAuthWithInstallID(t, conn, "online-summary-host", "install-online-summary-host", "test-key")
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	val, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("未找到在线 Client %s", authResp.ClientID)
+	}
+	client := val.(*ClientConn)
+	client.proxyMu.Lock()
+	client.proxies["active"] = &ProxyTunnel{Config: protocol.ProxyConfig{Name: "active", DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStateExposed}, done: make(chan struct{})}
+	client.proxies["pending"] = &ProxyTunnel{Config: protocol.ProxyConfig{Name: "pending", DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStatePending}, done: make(chan struct{})}
+	client.proxies["error"] = &ProxyTunnel{Config: protocol.ProxyConfig{Name: "error", DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStateError, Error: "boom"}, done: make(chan struct{})}
+	client.proxyMu.Unlock()
+
+	expected := map[string]float64{
+		"total_clients":    2,
+		"online_clients":   1,
+		"offline_clients":  1,
+		"total_tunnels":    6,
+		"active_tunnels":   1,
+		"inactive_tunnels": 5,
+		"pending_tunnels":  1,
+		"offline_tunnels":  1,
+		"paused_tunnels":   1,
+		"stopped_tunnels":  1,
+		"error_tunnels":    1,
+	}
+
+	status := getAPIJSON(t, s, ts, "/api/status")
+	assertConsoleSummaryMap(t, status["summary"], expected)
+
+	snapshot := getAPIJSON(t, s, ts, "/api/console/snapshot")
+	assertConsoleSummaryMap(t, snapshot["summary"], expected)
+
+	serverStatus, ok := snapshot["server_status"].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot.server_status 应返回对象，得到 %T", snapshot["server_status"])
+	}
+	assertConsoleSummaryMap(t, serverStatus["summary"], expected)
 }
 
 func TestAPI_Status_TunnelCounts(t *testing.T) {
@@ -1661,6 +1747,67 @@ func TestControlLoop_ProxyCreateResponse(t *testing.T) {
 	}
 	if !payload.Success {
 		t.Fatalf("创建代理应成功，得到失败: %s", payload.Message)
+	}
+
+	client.proxyMu.RLock()
+	_, exists := client.proxies[req.Name]
+	client.proxyMu.RUnlock()
+	if !exists {
+		t.Fatalf("创建代理后隧道应存在: %s", req.Name)
+	}
+}
+
+func TestControlLoop_ProxyCreateWaitsForPendingDataChannel(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	authResp := doAuthWithInstallID(t, conn, "pending-proxy-create-host", "install-pending-proxy-create", "test-key")
+
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatal("认证成功后 Client 应已注册到 clients map")
+	}
+	client := value.(*ClientConn)
+	if client.getState() != clientStatePendingData {
+		t.Fatalf("未建立数据通道前 Client 应处于 pending，得到 %s", client.getState())
+	}
+
+	req := protocol.ProxyNewRequest{
+		Name:       "pending-proxy-create",
+		Type:       protocol.ProxyTypeTCP,
+		RemotePort: reserveTCPPort(t),
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, protocol.ProxyCreateRequest(req))
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("发送创建代理请求失败: %v", err)
+	}
+
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
+
+	var resp protocol.Message
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("读取创建代理响应失败: %v", err)
+	}
+
+	if resp.Type != protocol.MsgTypeProxyCreateResp {
+		t.Fatalf("期望返回 %s，得到 %s", protocol.MsgTypeProxyCreateResp, resp.Type)
+	}
+
+	var payload protocol.ProxyCreateResponse
+	if err := resp.ParsePayload(&payload); err != nil {
+		t.Fatalf("解析创建代理响应失败: %v", err)
+	}
+	if !payload.Success {
+		t.Fatalf("等待数据通道后创建代理应成功，得到失败: %s", payload.Message)
 	}
 
 	client.proxyMu.RLock()

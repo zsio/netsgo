@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -78,6 +79,31 @@ func (s *Server) isCurrentLive(clientID string, generation uint64) bool {
 		return false
 	}
 	return client.isLive()
+}
+
+func (s *Server) waitForCurrentDataReady(client *ClientConn, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if !s.isCurrentGeneration(client.ID, client.generation) {
+			return fmt.Errorf("逻辑会话已失效")
+		}
+		if client.getState() == clientStateClosing {
+			return fmt.Errorf("逻辑会话正在关闭")
+		}
+
+		client.dataMu.RLock()
+		session := client.dataSession
+		dataReady := session != nil && !session.IsClosed()
+		client.dataMu.RUnlock()
+		if dataReady {
+			return nil
+		}
+
+		if timeout <= 0 || time.Now().After(deadline) {
+			return fmt.Errorf("等待数据通道就绪超时")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (s *Server) loadLiveClient(clientID string) (*ClientConn, bool) {
@@ -160,7 +186,8 @@ func (s *Server) invalidateLogicalSessionIfCurrent(clientID string, generation u
 	s.PauseAllProxies(client)
 
 	if wasLive {
-		log.Printf("🔌 Client 已断开: %s [ID: %s, reason=%s]", client.Info.Hostname, client.ID, reason)
+		info := client.GetInfo()
+		log.Printf("🔌 Client 已断开: %s [ID: %s, reason=%s]", info.Hostname, client.ID, reason)
 		s.events.PublishJSON("client_offline", map[string]any{
 			"client_id": client.ID,
 		})

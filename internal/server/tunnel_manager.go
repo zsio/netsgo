@@ -522,7 +522,7 @@ func storedTunnelFromRuntime(client *ClientConn, tunnel *ProxyTunnel) StoredTunn
 	stored := StoredTunnel{
 		ProxyNewRequest: tunnel.Config.ToProxyNewRequest(),
 		ClientID:        client.ID,
-		Hostname:        client.Info.Hostname,
+		Hostname:        client.GetInfo().Hostname,
 		Binding:         TunnelBindingClientID,
 	}
 	stored.DesiredState = tunnel.Config.DesiredState
@@ -798,7 +798,7 @@ func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affecte
 				}
 				affected = append(affected, affectedTunnel{
 					ClientID:     client.ID,
-					Hostname:     client.Info.Hostname,
+					Hostname:     client.GetInfo().Hostname,
 					DisplayName:  displayName,
 					TunnelName:   name,
 					RemotePort:   tunnel.Config.RemotePort,

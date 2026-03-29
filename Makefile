@@ -1,4 +1,4 @@
-.PHONY: build build-web build-go clean docs dev-server dev-client dev-bench dev-web test lint test-e2e-nginx test-e2e-caddy bench-data soak-data compose-stack-up compose-stack-logs compose-stack-down compose-stack-clean test-compose-stack test-compose-stack-nginx test-compose-stack-caddy
+.PHONY: build build-web build-go clean docs dev-server dev-client dev-bench dev-web test test-race lint test-e2e-nginx test-e2e-caddy bench-data soak-data compose-stack-up compose-stack-logs compose-stack-down compose-stack-clean test-compose-stack test-compose-stack-nginx test-compose-stack-caddy
 
 # 编译输出目录
 BIN_DIR=bin
@@ -65,6 +65,9 @@ dev-bench:
 
 test:
 	go test ./...
+
+test-race:
+	go test -race ./...
 
 lint:
 	cd web && bun run lint
