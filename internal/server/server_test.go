@@ -1757,6 +1757,67 @@ func TestControlLoop_ProxyCreateResponse(t *testing.T) {
 	}
 }
 
+func TestControlLoop_ProxyCreateWaitsForPendingDataChannel(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket 连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	authResp := doAuthWithInstallID(t, conn, "pending-proxy-create-host", "install-pending-proxy-create", "test-key")
+
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatal("认证成功后 Client 应已注册到 clients map")
+	}
+	client := value.(*ClientConn)
+	if client.getState() != clientStatePendingData {
+		t.Fatalf("未建立数据通道前 Client 应处于 pending，得到 %s", client.getState())
+	}
+
+	req := protocol.ProxyNewRequest{
+		Name:       "pending-proxy-create",
+		Type:       protocol.ProxyTypeTCP,
+		RemotePort: reserveTCPPort(t),
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, protocol.ProxyCreateRequest(req))
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("发送创建代理请求失败: %v", err)
+	}
+
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer dataConn.Close()
+
+	var resp protocol.Message
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("读取创建代理响应失败: %v", err)
+	}
+
+	if resp.Type != protocol.MsgTypeProxyCreateResp {
+		t.Fatalf("期望返回 %s，得到 %s", protocol.MsgTypeProxyCreateResp, resp.Type)
+	}
+
+	var payload protocol.ProxyCreateResponse
+	if err := resp.ParsePayload(&payload); err != nil {
+		t.Fatalf("解析创建代理响应失败: %v", err)
+	}
+	if !payload.Success {
+		t.Fatalf("等待数据通道后创建代理应成功，得到失败: %s", payload.Message)
+	}
+
+	client.proxyMu.RLock()
+	_, exists := client.proxies[req.Name]
+	client.proxyMu.RUnlock()
+	if !exists {
+		t.Fatalf("创建代理后隧道应存在: %s", req.Name)
+	}
+}
+
 // ============================================================
 // controlLoop 边缘场景测试 (2)
 // ============================================================

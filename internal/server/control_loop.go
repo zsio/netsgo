@@ -111,14 +111,25 @@ func (s *Server) handleProbeReportMessage(client *ClientConn, msg protocol.Messa
 }
 
 func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Message) {
-	if !s.isCurrentLive(client.ID, client.generation) {
-		return
-	}
-
 	var req protocol.ProxyNewRequest
 	if err := msg.ParsePayload(&req); err != nil {
 		log.Printf("⚠️ 解析代理请求失败 [%s]: %v", client.ID, err)
 		return
+	}
+
+	if !s.isCurrentLive(client.ID, client.generation) {
+		if err := s.waitForCurrentDataReady(client, s.pendingDataTimeout); err != nil {
+			log.Printf("⚠️ 代理创建等待数据通道就绪失败 [%s]: %v", client.ID, err)
+			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
+				Name:    req.Name,
+				Success: false,
+				Message: err.Error(),
+			})
+			if writeErr := client.writeJSON(resp); writeErr != nil {
+				log.Printf("⚠️ 发送代理响应失败 [%s]: %v", client.ID, writeErr)
+			}
+			return
+		}
 	}
 
 	err := s.StartProxy(client, req)

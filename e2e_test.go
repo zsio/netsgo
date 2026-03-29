@@ -80,7 +80,7 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 			Type:       protocol.ProxyTypeTCP,
 			LocalIP:    "127.0.0.1",
 			LocalPort:  localPort,
-			RemotePort: publicProxyPort, // 固定分配以便测试请求
+			RemotePort: publicProxyPort,
 		},
 	}
 
@@ -93,6 +93,7 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 
 	// 4. 等待完整的握手、数据通道建立、代理创建
 	httpClient := http.Client{Timeout: 3 * time.Second}
+	waitForTunnelExposed(t, srv, proxyName, publicProxyPort, 8*time.Second)
 	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", publicProxyPort)
 
 	var resp *http.Response
@@ -124,6 +125,34 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 
 	if !bytes.Contains(body, []byte("e2e backend response")) {
 		t.Errorf("返回内容错误: %s", string(body))
+	}
+}
+
+func waitForTunnelExposed(t *testing.T, srv *server.Server, proxyName string, publicProxyPort int, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		exposed := false
+		srv.RangeClients(func(_ string, client *server.ClientConn) bool {
+			client.RangeProxies(func(name string, tunnel *server.ProxyTunnel) bool {
+				if name == proxyName &&
+					tunnel.Config.RemotePort == publicProxyPort &&
+					tunnel.Config.RuntimeState == protocol.ProxyRuntimeStateExposed {
+					exposed = true
+					return false
+				}
+				return true
+			})
+			return !exposed
+		})
+		if exposed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("等待隧道 %s 在端口 %d 上进入 exposed 状态超时", proxyName, publicProxyPort)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
