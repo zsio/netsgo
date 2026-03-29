@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -46,6 +45,7 @@ type Server struct {
 	webHandler                  http.Handler      // 缓存的 FileServer (nil 表示开发模式)
 	cachedStatus                *serverStatusView // 后台采集的最新服务端状态
 	cachedStatusMu              sync.RWMutex      // 保护 cachedStatus
+	sessions                    *SessionManager   // 连接生命周期（managedConns、longLivedHandlers、代际、data 超时）
 	httpServer                  *http.Server
 	listener                    net.Listener
 	done                        chan struct{}
@@ -53,17 +53,10 @@ type Server struct {
 	publicIPv4                  string       // 缓存的公网 IPv4
 	publicIPv6                  string       // 缓存的公网 IPv6
 	publicIPMu                  sync.RWMutex // 保护公网 IP 缓存
-	managedConnMu               sync.Mutex
-	managedConns                map[*websocket.Conn]struct{}
-	longLivedHandlers           sync.WaitGroup
-	nextGeneration              atomic.Uint64
 	pendingProvisionAckMu       sync.Mutex
 	pendingProvisionAcks        map[pendingTunnelProvisionAckKey]chan provisionAckResult
 
-	pendingDataTimeout      time.Duration
-	dataHandshakeTimeout    time.Duration
-	dataHandshakeAckTimeout time.Duration
-	tunnelReadyTimeout      time.Duration
+	tunnelReadyTimeout time.Duration
 }
 
 // ClientConn 代表一个已连接的 Client
@@ -163,17 +156,14 @@ func (a *ClientConn) enrichStats(stats *protocol.SystemStats) {
 // New 创建一个新的 Server 实例
 func New(port int) *Server {
 	return &Server{
-		Port:                    port,
-		events:                  NewEventBus(),
-		auth:                    newAuthService(),
-		startTime:               time.Now(),
-		done:                    make(chan struct{}),
-		managedConns:            make(map[*websocket.Conn]struct{}),
-		pendingProvisionAcks:    make(map[pendingTunnelProvisionAckKey]chan provisionAckResult),
-		pendingDataTimeout:      15 * time.Second,
-		dataHandshakeTimeout:    10 * time.Second,
-		dataHandshakeAckTimeout: 2 * time.Second,
-		tunnelReadyTimeout:      5 * time.Second,
+		Port:                 port,
+		events:               NewEventBus(),
+		auth:                 newAuthService(),
+		sessions:             newSessionManager(),
+		startTime:            time.Now(),
+		done:                 make(chan struct{}),
+		pendingProvisionAcks: make(map[pendingTunnelProvisionAckKey]chan provisionAckResult),
+		tunnelReadyTimeout:   5 * time.Second,
 	}
 }
 
@@ -239,9 +229,7 @@ func (a *ClientConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool
 func (s *Server) Start() error {
 	s.startTime = time.Now()
 	s.done = make(chan struct{})
-	s.managedConnMu.Lock()
-	s.managedConns = make(map[*websocket.Conn]struct{})
-	s.managedConnMu.Unlock()
+	s.sessions = newSessionManager()
 
 	// 初始化嵌入的前端资源
 	webFS, err := web.DistFS()

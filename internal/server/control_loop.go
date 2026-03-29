@@ -118,7 +118,7 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 	}
 
 	if !s.isCurrentLive(client.ID, client.generation) {
-		if err := s.waitForCurrentDataReady(client, s.pendingDataTimeout); err != nil {
+		if err := s.waitForCurrentDataReady(client, s.sessions.pendingDataTimeout); err != nil {
 			log.Printf("⚠️ 代理创建等待数据通道就绪失败 [%s]: %v", client.ID, err)
 			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
 				Name:    req.Name,

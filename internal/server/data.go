@@ -33,7 +33,7 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	conn.SetReadLimit(wsDataMaxMessageSize)
-	conn.SetReadDeadline(time.Now().Add(s.dataHandshakeTimeout))
+	conn.SetReadDeadline(time.Now().Add(s.sessions.dataHandshakeTimeout))
 
 	messageType, payload, err := conn.ReadMessage()
 	if err != nil {
@@ -140,7 +140,7 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) error {
-	conn.SetWriteDeadline(time.Now().Add(s.dataHandshakeAckTimeout))
+	conn.SetWriteDeadline(time.Now().Add(s.sessions.dataHandshakeAckTimeout))
 	defer conn.SetWriteDeadline(time.Time{})
 	return conn.WriteMessage(websocket.BinaryMessage, []byte{status})
 }
