@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/crypto/bcrypt"
 	"netsgo/pkg/protocol"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func newProxyValidationTestServer(t *testing.T, port int, serverAddr string, allowedPorts []PortRange) *Server {

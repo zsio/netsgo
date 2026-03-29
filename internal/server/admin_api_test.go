@@ -11,8 +11,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"golang.org/x/crypto/bcrypt"
 	"netsgo/pkg/protocol"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func defaultTestRequestHost() string {
