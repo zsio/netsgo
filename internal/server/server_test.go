@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/bcrypt"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
@@ -67,6 +68,7 @@ func initTestAdminStore(t *testing.T, s *Server) {
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if err := store.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("初始化 AdminStore 失败: %v", err)
 	}
@@ -1907,6 +1909,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, _ := NewAdminStore(dbPath)
+	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	store.Initialize("admin", "password123", "localhost", nil)
 	store.AddAPIKey("default", "test-key", []string{"connect"}, nil)
 
@@ -2859,6 +2862,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, _ := NewAdminStore(dbPath)
+	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	store.Initialize("admin", "password123", "localhost", nil)
 
 	tunnelStorePath := filepath.Join(tmpDir, "tunnels.json")
@@ -3045,6 +3049,7 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if err := adminStore.Initialize("admin", "password123", "localhost", []PortRange{{Start: 20000, End: 20010}}); err != nil {
 		t.Fatalf("初始化 AdminStore 失败: %v", err)
 	}
@@ -3248,6 +3253,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("初始化 AdminStore 失败: %v", err)
 	}

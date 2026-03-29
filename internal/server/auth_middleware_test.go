@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // setupMockAdminStore 创建一个用于测试的临时 AdminStore
@@ -25,6 +26,7 @@ func setupMockAdminStore(t *testing.T) (*AdminStore, func()) {
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 
 	// 初始化一个默认的 admin
 	err = store.Initialize("admin", "password123", "localhost", nil)

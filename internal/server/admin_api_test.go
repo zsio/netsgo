@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
 	"netsgo/pkg/protocol"
 )
 
@@ -38,6 +39,7 @@ func setupTestServerWithDB(t *testing.T, initialized bool) (*Server, func()) {
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 
 	if initialized {
 		err = store.Initialize("admin", "password123", "http://localhost", nil)

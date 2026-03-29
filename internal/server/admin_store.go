@@ -36,9 +36,14 @@ type AdminData struct {
 
 // AdminStore 负责管理员账号、API Key 和 Session 的持久化
 type AdminStore struct {
-	path string
-	mu   sync.RWMutex
-	data AdminData
+	path       string
+	mu         sync.RWMutex
+	data       AdminData
+	bcryptCost int // 0 表示使用 bcrypt.DefaultCost
+
+	// timing-safe dummy hash，与 bcryptCost 匹配，懒初始化。
+	dummyHashOnce sync.Once
+	dummyHash     []byte
 
 	// 仅供测试使用：注入下一次 save 失败，验证回滚路径。
 	failSaveErr   error
@@ -61,7 +66,8 @@ var (
 // NewAdminStore 创建一个新的管理存储
 func NewAdminStore(path string) (*AdminStore, error) {
 	store := &AdminStore{
-		path: path,
+		path:       path,
+		bcryptCost: bcrypt.DefaultCost,
 		data: AdminData{
 			APIKeys:      []APIKey{},
 			AdminUsers:   []AdminUser{},
@@ -182,7 +188,7 @@ func (s *AdminStore) Initialize(username, password, serverAddr string, allowedPo
 	}
 
 	// 创建管理员账号
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.bcryptCost)
 	if err != nil {
 		return fmt.Errorf("密码加密失败: %w", err)
 	}
@@ -289,12 +295,15 @@ func (s *AdminStore) IsPortAllowed(port int) bool {
 
 // ========== AdminUsers ==========
 
-// dummyBcryptHash 用于用户名不存在时执行等价的 bcrypt 运算，
-// 消除计时侧信道，防止攻击者通过响应时间差异枚举有效用户名。
-var dummyBcryptHash = func() []byte {
-	h, _ := bcrypt.GenerateFromPassword([]byte("timing-safe-dummy"), bcrypt.DefaultCost)
-	return h
-}()
+// getDummyHash 返回与当前 bcryptCost 匹配的 timing-safe dummy hash，
+// 懒初始化，同一个 AdminStore 实例只计算一次。
+func (s *AdminStore) getDummyHash() []byte {
+	s.dummyHashOnce.Do(func() {
+		h, _ := bcrypt.GenerateFromPassword([]byte("timing-safe-dummy"), s.bcryptCost)
+		s.dummyHash = h
+	})
+	return s.dummyHash
+}
 
 func (s *AdminStore) ValidateAdminPassword(username, password string) (*AdminUser, error) {
 	s.mu.RLock()
@@ -310,7 +319,7 @@ func (s *AdminStore) ValidateAdminPassword(username, password string) (*AdminUse
 		}
 	}
 	// 用户不存在时也执行 bcrypt 比较，保持一致的时间开销，防计时侧信道
-	_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
+	_ = bcrypt.CompareHashAndPassword(s.getDummyHash(), []byte(password))
 	return nil, fmt.Errorf("用户名或密码错误")
 }
 
@@ -883,7 +892,7 @@ func (s *AdminStore) AddAPIKey(name, keyString string, permissions []string, exp
 		return nil, err
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(keyString), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(keyString), s.bcryptCost)
 	if err != nil {
 		return nil, err
 	}

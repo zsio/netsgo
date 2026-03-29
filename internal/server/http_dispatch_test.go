@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
+	"golang.org/x/crypto/bcrypt"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
@@ -27,6 +28,7 @@ func newDispatchTestServer(t *testing.T, initialized bool, serverAddr string) (*
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if initialized {
 		if serverAddr == "" {
 			serverAddr = "https://panel.example.com"
