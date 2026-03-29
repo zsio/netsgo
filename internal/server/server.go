@@ -50,13 +50,10 @@ type Server struct {
 	listener                    net.Listener
 	done                        chan struct{}
 	tlsEnabled                  bool
-	publicIPv4                  string       // 缓存的公网 IPv4
-	publicIPv6                  string       // 缓存的公网 IPv6
-	publicIPMu                  sync.RWMutex // 保护公网 IP 缓存
-	pendingProvisionAckMu       sync.Mutex
-	pendingProvisionAcks        map[pendingTunnelProvisionAckKey]chan provisionAckResult
-
-	tunnelReadyTimeout time.Duration
+	publicIPv4                  string          // 缓存的公网 IPv4
+	publicIPv6                  string          // 缓存的公网 IPv6
+	publicIPMu                  sync.RWMutex    // 保护公网 IP 缓存
+	tunnels                     *TunnelRegistry // 隧道 provision 等待与超时
 }
 
 // ClientConn 代表一个已连接的 Client
@@ -156,14 +153,13 @@ func (a *ClientConn) enrichStats(stats *protocol.SystemStats) {
 // New 创建一个新的 Server 实例
 func New(port int) *Server {
 	return &Server{
-		Port:                 port,
-		events:               NewEventBus(),
-		auth:                 newAuthService(),
-		sessions:             newSessionManager(),
-		startTime:            time.Now(),
-		done:                 make(chan struct{}),
-		pendingProvisionAcks: make(map[pendingTunnelProvisionAckKey]chan provisionAckResult),
-		tunnelReadyTimeout:   5 * time.Second,
+		Port:      port,
+		events:    NewEventBus(),
+		auth:      newAuthService(),
+		sessions:  newSessionManager(),
+		tunnels:   newTunnelRegistry(),
+		startTime: time.Now(),
+		done:      make(chan struct{}),
 	}
 }
 
