@@ -577,3 +577,48 @@ func TestDispatch_SSE_ImmediateFlush(t *testing.T) {
 		t.Fatal("SSE 首条事件未能及时 flush 到客户端")
 	}
 }
+
+// TestDispatch_LoopbackEquivalence 验证 serverListenAddr 返回 localhost:PORT 时，
+// 用 127.0.0.1:PORT 或 [::1]:PORT 访问同样能进入管理面（Vite changeOrigin 场景）。
+func TestDispatch_LoopbackEquivalence(t *testing.T) {
+	testCases := []struct {
+		name      string
+		reqHost   string
+		wantAllow bool
+	}{
+		{"127.0.0.1 same port", "127.0.0.1:8080", true},
+		{"[::1] same port", "[::1]:8080", true},
+		{"127.0.0.1 different port", "127.0.0.1:9090", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.db"))
+			if err != nil {
+				t.Fatalf("创建 AdminStore 失败: %v", err)
+			}
+			if err := adminStore.Initialize("admin", "password123", "", nil); err != nil {
+				t.Fatalf("初始化失败: %v", err)
+			}
+			tunnelStore, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+			if err != nil {
+				t.Fatalf("创建 TunnelStore 失败: %v", err)
+			}
+			s := New(8080)
+			s.adminStore = adminStore
+			s.store = tunnelStore
+
+			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", tc.reqHost, nil)
+			w := httptest.NewRecorder()
+
+			s.StartHTTPOnly().ServeHTTP(w, req)
+
+			if tc.wantAllow && w.Code == http.StatusNotFound {
+				t.Fatalf("loopback 等价地址 %s 应能访问管理面，得到 404", tc.reqHost)
+			}
+			if !tc.wantAllow && w.Code != http.StatusNotFound {
+				t.Fatalf("不同端口 %s 不应匹配管理面，得到 %d", tc.reqHost, w.Code)
+			}
+		})
+	}
+}
