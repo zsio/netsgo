@@ -49,7 +49,11 @@ func (s *Server) handleControlMessage(client *ClientConn, msg protocol.Message) 
 }
 
 func (s *Server) handlePingMessage(client *ClientConn) {
-	if !s.isCurrentLive(client.ID, client.generation) {
+	// Ping/Pong 是纯心跳消息，不依赖数据通道状态。
+	// 只要会话尚未进入 Closing 就应当回复 Pong，
+	// 避免数据通道握手完成（DataHandshakeOK 已发出）但 promotePendingToLive
+	// 尚未执行的窗口期内丢失 Pong 响应。
+	if client.getState() == clientStateClosing {
 		return
 	}
 
