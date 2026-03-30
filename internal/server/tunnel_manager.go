@@ -714,7 +714,8 @@ func (s *Server) writeControlMessage(client *ClientConn, message *protocol.Messa
 }
 
 func (s *Server) emitTunnelChanged(clientID string, tunnel protocol.ProxyConfig, action string) {
-	setProxyConfigStates(&tunnel, tunnel.DesiredState, tunnel.RuntimeState, tunnel.Error)
+	_, clientOnline := s.loadLiveClient(clientID)
+	tunnel = proxyConfigForClientView(tunnel, clientOnline)
 	payload := map[string]any{
 		"client_id": clientID,
 		"action":    action,
