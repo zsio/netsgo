@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // ============================================================
@@ -20,6 +22,7 @@ func newTestAdminStore(t *testing.T) *AdminStore {
 	if err != nil {
 		t.Fatalf("NewAdminStore 失败: %v", err)
 	}
+	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	return store
 }
 

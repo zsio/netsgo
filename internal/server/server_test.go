@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/bcrypt"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
@@ -67,19 +68,20 @@ func initTestAdminStore(t *testing.T, s *Server) {
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if err := store.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("初始化 AdminStore 失败: %v", err)
 	}
 	if _, err := store.AddAPIKey("default", "test-key", []string{"connect"}, nil); err != nil {
 		t.Fatalf("创建测试 API Key 失败: %v", err)
 	}
-	s.adminStore = store
+	s.auth.adminStore = store
 }
 
 func issueAdminToken(t *testing.T, s *Server) string {
 	t.Helper()
 
-	session := mustCreateSession(t, s.adminStore, "user-1", "admin", "admin", "127.0.0.1", "Go-http-client/1.1")
+	session := mustCreateSession(t, s.auth.adminStore, "user-1", "admin", "admin", "127.0.0.1", "Go-http-client/1.1")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -358,7 +360,7 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 		Arch:     "amd64",
 		Version:  "0.1.0",
 	}
-	offlineRecord, err := s.adminStore.GetOrCreateClient("install-offline-summary-host", offlineInfo, "127.0.0.1:10001")
+	offlineRecord, err := s.auth.adminStore.GetOrCreateClient("install-offline-summary-host", offlineInfo, "127.0.0.1:10001")
 	if err != nil {
 		t.Fatalf("预创建离线 Client 失败: %v", err)
 	}
@@ -1056,7 +1058,7 @@ func TestAuth_EmptyKey(t *testing.T) {
 
 func TestAuth_UninitializedServerRejected(t *testing.T) {
 	s := New(0)
-	s.adminStore = newTestAdminStore(t)
+	s.auth.adminStore = newTestAdminStore(t)
 
 	ts := httptest.NewServer(s.newHTTPMux())
 	defer ts.Close()
@@ -1239,7 +1241,7 @@ func TestAuth_MalformedJSON(t *testing.T) {
 func TestAuth_TimeoutNoMessage(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)
-	s.authTimeout = 500 * time.Millisecond // 短超时方便测试
+	s.auth.authTimeout = 500 * time.Millisecond // 短超时方便测试
 
 	ts := httptest.NewServer(s.newHTTPMux())
 	defer ts.Close()
@@ -1429,11 +1431,11 @@ func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 		Version:  "0.1.0",
 	}
 
-	record, err := s.adminStore.GetOrCreateClient("install-persisted-host", info, "127.0.0.1:12345")
+	record, err := s.auth.adminStore.GetOrCreateClient("install-persisted-host", info, "127.0.0.1:12345")
 	if err != nil {
 		t.Fatalf("预创建 Client 记录失败: %v", err)
 	}
-	if err := s.adminStore.UpdateClientStats(record.ID, info, protocol.SystemStats{
+	if err := s.auth.adminStore.UpdateClientStats(record.ID, info, protocol.SystemStats{
 		CPUUsage: 88.8,
 		MemUsage: 66.6,
 		NumCPU:   16,
@@ -1907,11 +1909,12 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, _ := NewAdminStore(dbPath)
+	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	store.Initialize("admin", "password123", "localhost", nil)
 	store.AddAPIKey("default", "test-key", []string{"connect"}, nil)
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 	s.store, _ = NewTunnelStore(filepath.Join(tmpDir, "tunnels.json"))
 
 	ts := httptest.NewServer(s.newHTTPMux())
@@ -2142,7 +2145,7 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	wsConn, authResp := connectAndAuth(t, ts, "timeout-client")
 	defer wsConn.Close()
 
-	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2261,7 +2264,7 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 		LocalPort: 8080,
 	}, protocol.ProxyStatusPaused)
 
-	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2347,7 +2350,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	}
 	client.proxyMu.Unlock()
 
-	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2391,7 +2394,7 @@ func TestServer_CreateTunnelHTTPInvalidDomainReturns400WithTypedError(t *testing
 	wsConn, authResp := connectAndAuth(t, ts, "http-invalid-domain-create")
 	defer wsConn.Close()
 
-	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2434,7 +2437,7 @@ func TestServer_CreateTunnelHTTPManagementHostConflictReturnsTypedError(t *testi
 	wsConn, authResp := connectAndAuth(t, ts, "http-server-addr-conflict-create")
 	defer wsConn.Close()
 
-	session := mustCreateSession(t, s.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
+	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2490,7 +2493,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	session := mustCreateSession(t, s.adminStore, "user-1", "admin", "admin", "127.0.0.1", "resume-test-agent")
+	session := mustCreateSession(t, s.auth.adminStore, "user-1", "admin", "admin", "127.0.0.1", "resume-test-agent")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
 		t.Fatalf("生成 Admin Token 失败: %v", err)
@@ -2661,7 +2664,7 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 		t.Fatalf("创建 TunnelStore 失败: %v", err)
 	}
 
-	record, err := s.adminStore.GetOrCreateClient(
+	record, err := s.auth.adminStore.GetOrCreateClient(
 		"install-restore-post-ack-fail",
 		protocol.ClientInfo{Hostname: "restore-post-ack-fail"},
 		"127.0.0.1:12345",
@@ -2785,7 +2788,7 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 		t.Fatalf("创建 TunnelStore 失败: %v", err)
 	}
 
-	record, err := s.adminStore.GetOrCreateClient(
+	record, err := s.auth.adminStore.GetOrCreateClient(
 		"install-restore-http",
 		protocol.ClientInfo{Hostname: "restore-http-host"},
 		"127.0.0.1:12345",
@@ -2859,6 +2862,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, _ := NewAdminStore(dbPath)
+	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	store.Initialize("admin", "password123", "localhost", nil)
 
 	tunnelStorePath := filepath.Join(tmpDir, "tunnels.json")
@@ -2883,7 +2887,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	})
 
 	s := New(0)
-	s.adminStore = store
+	s.auth.adminStore = store
 	s.store = tStore // 会由 s.initStore(tStore) 被自动绑定在真实环境中，这里手动绑定
 
 	client := &ClientConn{
@@ -3045,10 +3049,11 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if err := adminStore.Initialize("admin", "password123", "localhost", []PortRange{{Start: 20000, End: 20010}}); err != nil {
 		t.Fatalf("初始化 AdminStore 失败: %v", err)
 	}
-	s.adminStore = adminStore
+	s.auth.adminStore = adminStore
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
@@ -3171,13 +3176,13 @@ func TestAuth_TokenReconnect(t *testing.T) {
 	conn1, _ := connectAndAuth(t, ts, "token-reconnect-host")
 
 	// 从 adminStore 获取为此 install_id 生成的 Token
-	clientToken := s.adminStore.GetClientTokenByInstallID("install-token-reconnect-host")
+	clientToken := s.auth.adminStore.GetClientTokenByInstallID("install-token-reconnect-host")
 	if clientToken == nil {
 		t.Fatal("首次 Key 认证后应有 Token 记录")
 	}
 
 	// 获取当前 Key 的 use_count
-	keys := s.adminStore.GetAPIKeys()
+	keys := s.auth.adminStore.GetAPIKeys()
 	useCountBefore := keys[0].UseCount
 
 	// 断开连接
@@ -3188,13 +3193,13 @@ func TestAuth_TokenReconnect(t *testing.T) {
 	//    这里直接重新用 Key 兑换一次来模拟客户端已有 Token 的场景
 	//    真实客户端会保存 AuthResponse.Token
 	// 实际上我们验证的是：同一 install_id 再次 ExchangeToken 不会增加 use_count
-	_, _, err := s.adminStore.ExchangeToken("test-key", "install-token-reconnect-host", clientToken.ClientID, "127.0.0.1:12345")
+	_, _, err := s.auth.adminStore.ExchangeToken("test-key", "install-token-reconnect-host", clientToken.ClientID, "127.0.0.1:12345")
 	if err != nil {
 		t.Fatalf("Token 重用 ExchangeToken 失败: %v", err)
 	}
 
 	// 同一 install_id 已有有效 Token，不应消耗 Key
-	keys = s.adminStore.GetAPIKeys()
+	keys = s.auth.adminStore.GetAPIKeys()
 	if keys[0].UseCount != useCountBefore {
 		t.Errorf("Token 重用不应消耗 Key: 期望 %d, 得到 %d", useCountBefore, keys[0].UseCount)
 	}
@@ -3248,13 +3253,14 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("初始化 AdminStore 失败: %v", err)
 	}
 	if _, err := adminStore.AddAPIKey("default", "test-key", []string{"connect"}, nil); err != nil {
 		t.Fatalf("创建测试 API Key 失败: %v", err)
 	}
-	s.adminStore = adminStore
+	s.auth.adminStore = adminStore
 
 	// 在 goroutine 中启动 Server
 	serverErr := make(chan error, 1)

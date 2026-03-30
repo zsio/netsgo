@@ -104,10 +104,10 @@ func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRe
 }
 
 func (s *Server) createOfflineManagedTunnel(clientID string, req protocol.ProxyNewRequest) (protocol.ProxyConfig, error) {
-	if s.adminStore == nil {
+	if s.auth.adminStore == nil {
 		return protocol.ProxyConfig{}, errManagedTunnelClientNotFound
 	}
-	record, ok := s.adminStore.GetRegisteredClient(clientID)
+	record, ok := s.auth.adminStore.GetRegisteredClient(clientID)
 	if !ok {
 		return protocol.ProxyConfig{}, errManagedTunnelClientNotFound
 	}
@@ -533,10 +533,10 @@ func storedTunnelFromRuntime(client *ClientConn, tunnel *ProxyTunnel) StoredTunn
 }
 
 func (s *Server) loadOfflineManagedTunnel(clientID, name string) (StoredTunnel, error) {
-	if s.adminStore == nil {
+	if s.auth.adminStore == nil {
 		return StoredTunnel{}, errManagedTunnelClientNotFound
 	}
-	if _, ok := s.adminStore.GetRegisteredClient(clientID); !ok {
+	if _, ok := s.auth.adminStore.GetRegisteredClient(clientID); !ok {
 		return StoredTunnel{}, errManagedTunnelClientNotFound
 	}
 	if s.store == nil {
@@ -792,8 +792,8 @@ func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affecte
 				seen[key] = true
 				// 尝试获取 display_name
 				displayName := ""
-				if s.adminStore != nil {
-					if reg, ok := s.adminStore.GetRegisteredClient(client.ID); ok {
+				if s.auth.adminStore != nil {
+					if reg, ok := s.auth.adminStore.GetRegisteredClient(client.ID); ok {
 						displayName = reg.DisplayName
 					}
 				}
@@ -831,8 +831,8 @@ func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affecte
 				hostname := st.Hostname
 				displayName := ""
 				// 尝试从 adminStore 获取更详细的主机名和展示名
-				if s.adminStore != nil && st.ClientID != "" {
-					if reg, ok := s.adminStore.GetRegisteredClient(st.ClientID); ok {
+				if s.auth.adminStore != nil && st.ClientID != "" {
+					if reg, ok := s.auth.adminStore.GetRegisteredClient(st.ClientID); ok {
 						hostname = reg.Info.Hostname
 						displayName = reg.DisplayName
 					}

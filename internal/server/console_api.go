@@ -122,8 +122,8 @@ func (s *Server) collectConsoleStatus() serverStatusView {
 func (s *Server) collectClientViews() []clientView {
 	views := make(map[string]clientView)
 
-	if s.adminStore != nil {
-		for _, registered := range s.adminStore.GetRegisteredClients() {
+	if s.auth.adminStore != nil {
+		for _, registered := range s.auth.adminStore.GetRegisteredClients() {
 			lastSeen := registered.LastSeen
 			view := clientView{
 				ID:          registered.ID,
@@ -270,8 +270,8 @@ func (s *Server) collectServerStatus() serverStatusView {
 
 	serverAddr := ""
 	var allowedPorts []PortRange
-	if s.adminStore != nil {
-		config := s.adminStore.GetServerConfig()
+	if s.auth.adminStore != nil {
+		config := s.auth.adminStore.GetServerConfig()
 		serverAddr = config.ServerAddr
 		allowedPorts = config.AllowedPorts
 	}

@@ -52,7 +52,7 @@ func (s *Server) allowSetupRequest(r *http.Request) bool {
 	if r == nil || r.URL == nil {
 		return false
 	}
-	if s.adminStore != nil && s.adminStore.IsInitialized() {
+	if s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() {
 		return false
 	}
 
@@ -73,8 +73,8 @@ func (s *Server) allowSetupRequest(r *http.Request) bool {
 
 func (s *Server) isManagementHost(host string) bool {
 	var cfg *ServerConfig
-	if s.adminStore != nil {
-		current := s.adminStore.GetServerConfig()
+	if s.auth.adminStore != nil {
+		current := s.auth.adminStore.GetServerConfig()
 		cfg = &current
 	}
 	managementHost := effectiveManagementHost(cfg, serverListenAddr(s))

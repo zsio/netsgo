@@ -37,11 +37,11 @@ func (c *ClientConn) stopPendingTimer() {
 }
 
 func (s *Server) nextClientGeneration() uint64 {
-	return s.nextGeneration.Add(1)
+	return s.sessions.nextClientGeneration()
 }
 
 func (s *Server) startPendingDataTimer(client *ClientConn) {
-	timeout := s.pendingDataTimeout
+	timeout := s.sessions.pendingDataTimeout
 	if timeout <= 0 {
 		return
 	}

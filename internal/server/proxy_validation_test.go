@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"netsgo/pkg/protocol"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func newProxyValidationTestServer(t *testing.T, port int, serverAddr string, allowedPorts []PortRange) *Server {
@@ -18,10 +20,11 @@ func newProxyValidationTestServer(t *testing.T, port int, serverAddr string, all
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if err := adminStore.Initialize("admin", "password123", serverAddr, allowedPorts); err != nil {
 		t.Fatalf("初始化 AdminStore 失败: %v", err)
 	}
-	s.adminStore = adminStore
+	s.auth.adminStore = adminStore
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {

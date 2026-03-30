@@ -18,13 +18,13 @@ func setupRateLimitedServer(t *testing.T, loginCfg, setupCfg RateLimiterConfig) 
 	t.Helper()
 	s, cleanup := setupTestServerWithDB(t, true)
 
-	s.loginLimiter = NewRateLimiter(loginCfg)
-	s.setupLimiter = NewRateLimiter(setupCfg)
+	s.auth.loginLimiter = NewRateLimiter(loginCfg)
+	s.auth.setupLimiter = NewRateLimiter(setupCfg)
 
 	origCleanup := cleanup
 	cleanup = func() {
-		s.loginLimiter.Stop()
-		s.setupLimiter.Stop()
+		s.auth.loginLimiter.Stop()
+		s.auth.setupLimiter.Stop()
 		origCleanup()
 	}
 
@@ -212,13 +212,13 @@ func TestSetup_RateLimitBlocksAfterMaxRequests(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, false)
 	defer cleanup()
 
-	s.setupLimiter = NewRateLimiter(RateLimiterConfig{
+	s.auth.setupLimiter = NewRateLimiter(RateLimiterConfig{
 		WindowSize:    time.Minute,
 		MaxRequests:   2, // 窗口内最多 2 次
 		MaxFailures:   100,
 		LockoutPeriod: time.Hour,
 	})
-	defer s.setupLimiter.Stop()
+	defer s.auth.setupLimiter.Stop()
 
 	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[]}`)
 
@@ -260,13 +260,13 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)
 
-	s.clientLimiter = NewRateLimiter(RateLimiterConfig{
+	s.auth.clientLimiter = NewRateLimiter(RateLimiterConfig{
 		WindowSize:    time.Minute,
 		MaxRequests:   100,
 		MaxFailures:   3, // 3 次失败触发锁定
 		LockoutPeriod: 200 * time.Millisecond,
 	})
-	defer s.clientLimiter.Stop()
+	defer s.auth.clientLimiter.Stop()
 
 	ts := httptest.NewServer(s.newHTTPMux())
 	defer ts.Close()

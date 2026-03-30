@@ -19,7 +19,7 @@ func TestEmitSetupTokenBanner_WritesToStderrOnly(t *testing.T) {
 	t.Cleanup(logger.Close)
 
 	s := New(0)
-	s.setupToken = "setup-secret-123"
+	s.auth.setupToken = "setup-secret-123"
 
 	stderr := captureStderr(t, func() {
 		s.emitSetupTokenBanner(os.Stderr)

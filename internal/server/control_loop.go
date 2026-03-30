@@ -49,7 +49,11 @@ func (s *Server) handleControlMessage(client *ClientConn, msg protocol.Message) 
 }
 
 func (s *Server) handlePingMessage(client *ClientConn) {
-	if !s.isCurrentLive(client.ID, client.generation) {
+	// Ping/Pong 是纯心跳消息，不依赖数据通道状态。
+	// 只要会话尚未进入 Closing 就应当回复 Pong，
+	// 避免数据通道握手完成（DataHandshakeOK 已发出）但 promotePendingToLive
+	// 尚未执行的窗口期内丢失 Pong 响应。
+	if client.getState() == clientStateClosing {
 		return
 	}
 
@@ -95,8 +99,8 @@ func (s *Server) handleProbeReportMessage(client *ClientConn, msg protocol.Messa
 	client.prevStatsAt = now
 	client.statsMu.Unlock()
 
-	if s.adminStore != nil {
-		if err := s.adminStore.UpdateClientStats(client.ID, info, stats, client.RemoteAddr); err != nil {
+	if s.auth.adminStore != nil {
+		if err := s.auth.adminStore.UpdateClientStats(client.ID, info, stats, client.RemoteAddr); err != nil {
 			log.Printf("⚠️ 持久化 Client 最新状态失败 [%s]: %v", client.ID, err)
 		}
 	}
@@ -118,7 +122,7 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 	}
 
 	if !s.isCurrentLive(client.ID, client.generation) {
-		if err := s.waitForCurrentDataReady(client, s.pendingDataTimeout); err != nil {
+		if err := s.waitForCurrentDataReady(client, s.sessions.pendingDataTimeout); err != nil {
 			log.Printf("⚠️ 代理创建等待数据通道就绪失败 [%s]: %v", client.ID, err)
 			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
 				Name:    req.Name,
