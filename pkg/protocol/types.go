@@ -46,18 +46,28 @@ type SystemStats struct {
 	FreshUntil     time.Time       `json:"fresh_until,omitempty"`     // 页面可将该状态视为“新鲜”的截止时间
 }
 
+// TunnelCapabilities 描述一条隧道当前允许执行的操作，由服务端计算并注入，仅用于前端展示
+type TunnelCapabilities struct {
+	CanPause  bool `json:"can_pause"`  // 是否可以暂停
+	CanResume bool `json:"can_resume"` // 是否可以恢复
+	CanStop   bool `json:"can_stop"`   // 是否可以停止
+	CanEdit   bool `json:"can_edit"`   // 是否可以编辑
+	CanDelete bool `json:"can_delete"` // 是否可以删除
+}
+
 // ProxyConfig 代理隧道的完整配置
 type ProxyConfig struct {
-	Name         string `json:"name"`            // 隧道名称（唯一标识）
-	Type         string `json:"type"`            // 隧道类型: tcp, udp, http
-	LocalIP      string `json:"local_ip"`        // 内网目标服务 IP
-	LocalPort    int    `json:"local_port"`      // 内网目标服务端口
-	RemotePort   int    `json:"remote_port"`     // 公网暴露端口
-	Domain       string `json:"domain"`          // HTTP 类型时的域名
-	ClientID     string `json:"client_id"`       // 所属 Client ID
-	DesiredState string `json:"desired_state"`   // 用户目标状态: running, paused, stopped
-	RuntimeState string `json:"runtime_state"`   // 实际运行状态: pending, exposed, offline, idle, error
-	Error        string `json:"error,omitempty"` // 错误状态时的具体原因
+	Name         string              `json:"name"`                   // 隧道名称（唯一标识）
+	Type         string              `json:"type"`                   // 隧道类型: tcp, udp, http
+	LocalIP      string              `json:"local_ip"`               // 内网目标服务 IP
+	LocalPort    int                 `json:"local_port"`             // 内网目标服务端口
+	RemotePort   int                 `json:"remote_port"`            // 公网暴露端口
+	Domain       string              `json:"domain"`                 // HTTP 类型时的域名
+	ClientID     string              `json:"client_id"`              // 所属 Client ID
+	DesiredState string              `json:"desired_state"`          // 用户目标状态: running, paused, stopped
+	RuntimeState string              `json:"runtime_state"`          // 实际运行状态: pending, exposed, offline, idle, error
+	Error        string              `json:"error,omitempty"`        // 错误状态时的具体原因
+	Capabilities *TunnelCapabilities `json:"capabilities,omitempty"` // 可执行操作（服务端计算，仅供前端使用）
 }
 
 // ToProxyNewRequest 将 ProxyConfig 转换为 ProxyNewRequest（用于发送给 Client）
