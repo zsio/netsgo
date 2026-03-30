@@ -467,6 +467,11 @@ func serverListenAddr(server *Server) string {
 		return ""
 	}
 	if server.listener != nil {
+		if tcp, ok := server.listener.Addr().(*net.TCPAddr); ok {
+			if tcp.IP == nil || tcp.IP.IsUnspecified() {
+				return fmt.Sprintf("localhost:%d", tcp.Port)
+			}
+		}
 		return server.listener.Addr().String()
 	}
 	if server.Port > 0 {

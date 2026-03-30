@@ -85,6 +85,21 @@ func canEditOrDeleteLiveTunnel(config protocol.ProxyConfig) bool {
 		(config.DesiredState == protocol.ProxyDesiredStateRunning && config.RuntimeState == protocol.ProxyRuntimeStateError)
 }
 
+func computeTunnelCapabilities(config protocol.ProxyConfig) *protocol.TunnelCapabilities {
+	canPause := canPauseTunnel(config)
+	canResume := canResumeTunnel(config)
+	canStop := isTunnelExposed(config) || isTunnelOffline(config)
+	canEdit := canEditOrDeleteLiveTunnel(config) || isTunnelOffline(config)
+	canDelete := config.RuntimeState != protocol.ProxyRuntimeStatePending
+	return &protocol.TunnelCapabilities{
+		CanPause:  canPause,
+		CanResume: canResume,
+		CanStop:   canStop,
+		CanEdit:   canEdit,
+		CanDelete: canDelete,
+	}
+}
+
 func proxyConfigForClientView(config protocol.ProxyConfig, clientOnline bool) protocol.ProxyConfig {
 	normalized := config
 	setProxyConfigStates(&normalized, normalized.DesiredState, normalized.RuntimeState, normalized.Error)
@@ -94,5 +109,6 @@ func proxyConfigForClientView(config protocol.ProxyConfig, clientOnline bool) pr
 		normalized.RuntimeState = protocol.ProxyRuntimeStateOffline
 		normalized.Error = ""
 	}
+	normalized.Capabilities = computeTunnelCapabilities(normalized)
 	return normalized
 }

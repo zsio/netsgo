@@ -87,6 +87,17 @@ func (s *Server) isManagementHost(host string) bool {
 		return true
 	}
 
+	// localhost / 127.0.0.1 / [::1] 在同端口下视为等价。
+	// 开发环境下 Vite 等反代工具会把 Host 改写为 127.0.0.1:PORT，
+	// 而 serverListenAddr 兜底返回 localhost:PORT，需要在此对齐。
+	if isLoopbackHost(managementHost) && isLoopbackHost(reqCanonical) {
+		_, mPort, _ := net.SplitHostPort(managementHost)
+		_, rPort, _ := net.SplitHostPort(reqCanonical)
+		if mPort != "" && mPort == rPort {
+			return true
+		}
+	}
+
 	if !s.AllowLoopbackManagementHost {
 		return false
 	}
