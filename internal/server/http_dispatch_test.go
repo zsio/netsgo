@@ -607,7 +607,7 @@ func TestDispatch_LoopbackEquivalence(t *testing.T) {
 				t.Fatalf("创建 TunnelStore 失败: %v", err)
 			}
 			s := New(8080)
-			s.adminStore = adminStore
+			s.auth.adminStore = adminStore
 			s.store = tunnelStore
 
 			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", tc.reqHost, nil)
