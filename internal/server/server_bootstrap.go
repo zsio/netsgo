@@ -44,6 +44,14 @@ func (s *Server) initStore() error {
 	s.auth.adminStore = adminStore
 	log.Printf("📦 系统管理存储: %s", adminPath)
 
+	trafficPath := filepath.Join(s.getDataDir(), "traffic.json")
+	trafficStore, err := NewTrafficStore(trafficPath)
+	if err != nil {
+		return err
+	}
+	s.trafficStore = trafficStore
+	log.Printf("📦 流量历史存储: %s", trafficPath)
+
 	return nil
 }
 
@@ -155,6 +163,8 @@ func (s *Server) Start() error {
 	}
 
 	go s.serverStatusLoop()
+	go s.trafficRollupLoop()
+	go s.trafficPersistLoop()
 
 	return s.httpServer.Serve(serveLn)
 }
@@ -198,6 +208,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return err
 	}
 
+	if s.trafficStore != nil {
+		if err := s.trafficStore.Flush(); err != nil {
+			log.Printf("⚠️ 流量数据持久化失败: %v", err)
+		}
+	}
+
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
 			log.Printf("⚠️ HTTP 服务器关闭出错: %v", err)
@@ -221,6 +237,40 @@ func (s *Server) tokenCleanupLoop() {
 			if s.auth.adminStore != nil {
 				if err := s.auth.adminStore.CleanExpiredTokens(); err != nil {
 					log.Printf("⚠️ 清理过期 Token 失败: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func (s *Server) trafficRollupLoop() {
+	ticker := time.NewTicker(trafficFlushInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			if s.trafficStore != nil {
+				s.trafficStore.Compact(time.Now())
+			}
+		}
+	}
+}
+
+func (s *Server) trafficPersistLoop() {
+	ticker := time.NewTicker(trafficFlushInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			if s.trafficStore != nil {
+				if err := s.trafficStore.Flush(); err != nil {
+					log.Printf("⚠️ 流量数据持久化失败: %v", err)
 				}
 			}
 		}
