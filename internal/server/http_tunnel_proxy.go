@@ -8,9 +8,32 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync/atomic"
 
 	"netsgo/pkg/protocol"
 )
+
+type countingConn struct {
+	net.Conn
+	read    atomic.Int64
+	written atomic.Int64
+}
+
+func (c *countingConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.read.Add(int64(n))
+	}
+	return n, err
+}
+
+func (c *countingConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.written.Add(int64(n))
+	}
+	return n, err
+}
 
 type httpTunnelRoute struct {
 	config protocol.ProxyConfig
@@ -192,6 +215,8 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 		Host:   "netsgo-http-tunnel",
 	}
 
+	var cc *countingConn
+
 	transport := &http.Transport{
 		Proxy:                 nil,
 		ForceAttemptHTTP2:     false,
@@ -199,7 +224,12 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 		DisableCompression:    false,
 		ResponseHeaderTimeout: 0,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return s.openStreamToClient(route.client, route.config.Name)
+			conn, err := s.openStreamToClient(route.client, route.config.Name)
+			if err != nil {
+				return nil, err
+			}
+			cc = &countingConn{Conn: conn}
+			return cc, nil
 		},
 	}
 
@@ -222,6 +252,10 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 	}
 
 	proxy.ServeHTTP(w, r)
+
+	if s.trafficStore != nil && cc != nil {
+		s.trafficStore.RecordBytes(route.client.ID, route.config.Name, route.config.Type, uint64(cc.read.Load()), uint64(cc.written.Load()))
+	}
 }
 
 func isHTTPRouteUnavailable(err error) bool {

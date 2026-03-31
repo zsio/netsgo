@@ -295,7 +295,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			} else {
 				val = sess
 				// 启动反向读取循环：stream → 回复给 srcAddr
-				go s.udpSessionReverse(state, sess, tunnel.Config.Name)
+				go s.udpSessionReverse(state, sess, client.ID, tunnel.Config.Name)
 			}
 		}
 
@@ -310,6 +310,8 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			// 即使 udpReaper 或 Close() 已先行清理，此处也只会得到 loaded=false，不会双减。
 			sess.Close()
 			state.removeSession(key)
+		} else if s.trafficStore != nil {
+			s.trafficStore.RecordBytes(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(n), 0)
 		}
 	}
 }
@@ -317,7 +319,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 // udpSessionReverse 从 yamux stream 读取回复帧，通过 packetConn 回传给外部客户端。
 // 退出机制：goroutine 阻塞于 ReadUDPFrame，由 sess.Close()→stream.Close() 触发退出，
 // 而非通过 select 轮询——这是有意为之，不需要为 ReadUDPFrame 单独设置 ReadDeadline。
-func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, proxyName string) {
+func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clientID, proxyName string) {
 	defer func() {
 		sess.Close()
 		state.removeSession(sess.srcAddr.String())
@@ -349,6 +351,9 @@ func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, proxy
 			log.Printf("⚠️ UDP 代理 [%s] WriteTo 失败 [%s]: %v",
 				proxyName, sess.srcAddr.String(), err)
 			return
+		}
+		if s.trafficStore != nil {
+			s.trafficStore.RecordBytes(clientID, proxyName, protocol.ProxyTypeUDP, 0, uint64(len(payload)))
 		}
 	}
 }
