@@ -90,6 +90,27 @@ export interface CreateTunnelInput {
   domain?: string;
 }
 
+export type TrafficResolution = 'minute' | 'hour';
+export type ClientTrafficRange = '24h' | '7d';
+
+export interface TrafficPoint {
+  bucket_start: string;
+  ingress_bytes: number;
+  egress_bytes: number;
+  total_bytes: number;
+}
+
+export interface TunnelTrafficSeries {
+  tunnel_name: string;
+  tunnel_type: ProxyType;
+  points: TrafficPoint[];
+}
+
+export interface ClientTrafficResponse {
+  resolution: TrafficResolution;
+  items: TunnelTrafficSeries[];
+}
+
 // --- SSE Events ---
 
 export interface StatsUpdateEvent {
@@ -175,26 +196,6 @@ export interface ServerStatus {
   public_ipv6?: string;
   generated_at: string;
   fresh_until: string;
-}
-
-export type TrafficResolution = "minute" | "hour";
-
-export interface TrafficPoint {
-  bucket_start: string;
-  ingress_bytes: number;
-  egress_bytes: number;
-  total_bytes: number;
-}
-
-export interface TunnelTrafficSeries {
-  tunnel_name: string;
-  tunnel_type: ProxyType;
-  points: TrafficPoint[];
-}
-
-export interface ClientTrafficResponse {
-  resolution: TrafficResolution;
-  items: TunnelTrafficSeries[];
 }
 
 // --- Admin System ---

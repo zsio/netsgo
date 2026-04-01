@@ -26,7 +26,6 @@ function ClientDetailPage() {
 
   const client = clients?.find((a) => a.id === clientId);
 
-  // 如果加载完成但 client 不存在，回到 dashboard 概览
   useEffect(() => {
     if (!isLoading && !isFetching && clients && !client) {
       navigate({ to: '/dashboard' });
@@ -35,7 +34,7 @@ function ClientDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="p-8 max-w-6xl mx-auto w-full flex flex-col gap-8 z-10">
+      <div className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-8 p-8">
         <Skeleton className="h-20 w-full rounded-xl" />
         <Skeleton className="h-[200px] w-full rounded-xl" />
         <Skeleton className="h-64 w-full rounded-xl" />
@@ -44,13 +43,13 @@ function ClientDetailPage() {
   }
 
   if (!client) {
-    return null; // will redirect via useEffect
+    return null;
   }
 
   return (
     <motion.div
       key={clientId}
-      className="p-8 max-w-6xl mx-auto w-full flex flex-col gap-8 z-10"
+      className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-8 p-8"
       variants={stagger}
       initial="hidden"
       animate="show"
@@ -58,7 +57,9 @@ function ClientDetailPage() {
       <motion.div variants={fadeUp}><ClientHeader client={client} /></motion.div>
       <motion.div variants={fadeUp}><ClientInfoCard client={client} /></motion.div>
       <motion.div variants={fadeUp}><TunnelTable client={client} /></motion.div>
-      <motion.div variants={fadeUp}><TrafficChart client={client} /></motion.div>
+      <motion.div variants={fadeUp}>
+        <TrafficChart clientId={clientId} tunnels={client.proxies ?? []} />
+      </motion.div>
     </motion.div>
   );
 }

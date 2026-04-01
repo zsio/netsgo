@@ -99,7 +99,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
       }
     }
 
-    const tunnelSeries = knownTunnels.map((tunnel, index) => ({
+    const tunnelSeries: TunnelMeta[] = knownTunnels.map((tunnel, index) => ({
       key: `tunnel_${index}`,
       name: tunnel.name,
       type: tunnel.type,
@@ -153,7 +153,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
     };
   }, [data?.items, tunnels]);
 
-  const hasTunnels = tunnels.length > 0;
+  const hasTunnels = tunnelSeries.length > 0;
   const hasTrafficData = chartData.length > 0;
 
   return (
@@ -231,7 +231,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
       ) : (
         <div className="h-80 w-full">
           <ChartContainer config={chartConfig} className="h-full w-full">
-            <LineChart data={chartData} margin={{ top: 12, right: 12, left: 12, bottom: 4 }}>
+            <LineChart data={chartData} margin={{ top: 12, right: 12, left: 20, bottom: 4 }}>
               <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" strokeOpacity={0.45} />
               <XAxis
                 dataKey="timestamp"
@@ -245,7 +245,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
                 axisLine={false}
                 tickLine={false}
                 tickMargin={10}
-                width={92}
+                width={96}
                 tickFormatter={(value) => formatTrafficValue(Number(value))}
               />
               <ChartTooltip
