@@ -411,7 +411,7 @@ func TestTrafficAPI_DefaultTimeRange(t *testing.T) {
 		t.Fatalf("解析默认时间范围响应失败: %v", err)
 	}
 	if resp.Resolution != TrafficResolutionMinute {
-		t.Fatalf("默认 1h 时间范围应为 minute，得到 %s", resp.Resolution)
+		t.Fatalf("默认 24h 时间范围应为 minute，得到 %s", resp.Resolution)
 	}
 }
 
@@ -459,6 +459,57 @@ func TestTrafficAPI_InvalidTimeRange(t *testing.T) {
 	w := doMuxRequest(t, handler, http.MethodGet, "/api/clients/c1/traffic?from="+itoa(from)+"&to="+itoa(to), token, nil)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("from > to 应返回 400，得到 %d", w.Code)
+	}
+}
+
+func TestTrafficAPI_TimeRangeTooLarge(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	trafficDir, err := os.MkdirTemp("", "traffic_range_large_*")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(trafficDir)
+
+	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
+	if err != nil {
+		t.Fatalf("创建 TrafficStore 失败: %v", err)
+	}
+	s.trafficStore = ts
+
+	now := time.Now().UTC()
+	from := now.Add(-(trafficMaxRange + time.Hour)).Unix()
+	to := now.Unix()
+	w := doMuxRequest(t, handler, http.MethodGet, "/api/clients/c1/traffic?from="+itoa(from)+"&to="+itoa(to), token, nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("超过 7 天范围应返回 400，得到 %d", w.Code)
+	}
+}
+
+func TestTrafficAPI_TooLargeTimeRange(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	trafficDir, err := os.MkdirTemp("", "traffic_large_range_*")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(trafficDir)
+
+	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
+	if err != nil {
+		t.Fatalf("创建 TrafficStore 失败: %v", err)
+	}
+	s.trafficStore = ts
+
+	now := time.Now().UTC()
+	from := now.Add(-(trafficMaxRange + time.Hour)).Unix()
+	to := now.Unix()
+
+	w := doMuxRequest(t, handler, http.MethodGet, "/api/clients/c1/traffic?from="+itoa(from)+"&to="+itoa(to), token, nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("超出最大范围应返回 400，得到 %d", w.Code)
 	}
 }
 

@@ -48,7 +48,7 @@ func (s *Server) handleGetClientTraffic(w http.ResponseWriter, r *http.Request) 
 
 func parseTrafficTimeRange(fromStr, toStr string, now time.Time) (time.Time, time.Time, error) {
 	to := now
-	from := now.Add(-time.Hour)
+	from := now.Add(-24 * time.Hour)
 
 	if toStr != "" {
 		t, err := parseUnixOrRFC3339(toStr)
@@ -72,7 +72,7 @@ func parseTrafficTimeRange(fromStr, toStr string, now time.Time) (time.Time, tim
 		return time.Time{}, time.Time{}, errors.New("from must be before to")
 	}
 	if to.Sub(from) > trafficMaxRange {
-		return time.Time{}, time.Time{}, errors.New("time range must be within 30 days")
+		return time.Time{}, time.Time{}, errors.New("time range must be within 7 days")
 	}
 
 	return from, to, nil

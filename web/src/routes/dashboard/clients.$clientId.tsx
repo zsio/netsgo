@@ -58,7 +58,7 @@ function ClientDetailPage() {
       <motion.div variants={fadeUp}><ClientHeader client={client} /></motion.div>
       <motion.div variants={fadeUp}><ClientInfoCard client={client} /></motion.div>
       <motion.div variants={fadeUp}><TunnelTable client={client} /></motion.div>
-      <motion.div variants={fadeUp}><TrafficChart /></motion.div>
+      <motion.div variants={fadeUp}><TrafficChart client={client} /></motion.div>
     </motion.div>
   );
 }

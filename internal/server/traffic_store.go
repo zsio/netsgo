@@ -17,8 +17,8 @@ import (
 const (
 	trafficFlushInterval   = 10 * time.Second
 	trafficMinuteRetention = 24 * time.Hour
-	trafficHourRetention   = 30 * 24 * time.Hour
-	trafficMaxRange        = 30 * 24 * time.Hour
+	trafficHourRetention   = 7 * 24 * time.Hour
+	trafficMaxRange        = 7 * 24 * time.Hour
 	trafficSchemaVersion   = 1
 )
 

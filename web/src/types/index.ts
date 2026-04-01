@@ -177,6 +177,26 @@ export interface ServerStatus {
   fresh_until: string;
 }
 
+export type TrafficResolution = "minute" | "hour";
+
+export interface TrafficPoint {
+  bucket_start: string;
+  ingress_bytes: number;
+  egress_bytes: number;
+  total_bytes: number;
+}
+
+export interface TunnelTrafficSeries {
+  tunnel_name: string;
+  tunnel_type: ProxyType;
+  points: TrafficPoint[];
+}
+
+export interface ClientTrafficResponse {
+  resolution: TrafficResolution;
+  items: TunnelTrafficSeries[];
+}
+
 // --- Admin System ---
 
 export interface APIKey {
