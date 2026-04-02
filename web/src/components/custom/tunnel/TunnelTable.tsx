@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { ArrowRightLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
+import { useClientTraffic } from '@/hooks/use-client-traffic';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 
@@ -9,11 +11,31 @@ interface TunnelTableProps {
 }
 
 export function TunnelTable({ client }: TunnelTableProps) {
+  const {
+    data: trafficData,
+    isLoading: isTraffic24hLoading,
+    isError: isTraffic24hError,
+  } = useClientTraffic(client.id, '24h');
+
+  const traffic24hByTunnel = useMemo(() => {
+    const totals = new Map<string, number>();
+
+    for (const item of trafficData?.items ?? []) {
+      totals.set(
+        `${item.tunnel_type}:${item.tunnel_name}`,
+        item.points.reduce((sum, point) => sum + point.total_bytes, 0),
+      );
+    }
+
+    return totals;
+  }, [trafficData?.items]);
+
   const tunnels: TunnelEntry[] = (client.proxies ?? []).map((proxy) => ({
     ...proxy,
     clientId: client.id,
     clientName: getClientDisplayName(client),
     clientOnline: client.online,
+    traffic24hBytes: trafficData ? (traffic24hByTunnel.get(`${proxy.type}:${proxy.name}`) ?? 0) : undefined,
   }));
 
   return (
@@ -22,6 +44,14 @@ export function TunnelTable({ client }: TunnelTableProps) {
       title="下属隧道"
       icon={<ArrowRightLeft className="h-5 w-5 text-primary" />}
       showClient={false}
+      showTraffic24h
+      traffic24hState={
+        isTraffic24hError
+          ? 'error'
+          : isTraffic24hLoading
+            ? 'loading'
+            : 'ready'
+      }
       showActions
       showSearch
       emptyAction={

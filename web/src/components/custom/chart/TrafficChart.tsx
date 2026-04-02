@@ -23,7 +23,6 @@ type TunnelMeta = {
   name: string;
   type: ProxyType;
   color: string;
-  totalBytes: number;
 };
 
 type ChartRow = {
@@ -120,7 +119,6 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
         name: tunnel.name,
         type: tunnel.type,
         color: getTunnelColor(index),
-        totalBytes: 0,
       }));
 
     const chartConfig = tunnelSeries.reduce<ChartConfig>((config, tunnel) => {
@@ -136,21 +134,15 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
 
     for (const item of data?.items ?? []) {
       const pointMap = new Map<number, number>();
-      let totalBytes = 0;
 
       for (const point of item.points) {
         const timestamp = new Date(point.bucket_start).getTime();
         pointMap.set(timestamp, point.total_bytes);
         timestamps.add(timestamp);
-        totalBytes += point.total_bytes;
       }
 
       const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
       pointsByTunnel.set(seriesKey, pointMap);
-      const target = tunnelSeries.find((tunnel) => tunnel.key === seriesKey);
-      if (target) {
-        target.totalBytes = totalBytes;
-      }
     }
 
     const chartData = Array.from(timestamps)
@@ -204,28 +196,6 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
           })}
         </div>
       </div>
-
-      {hasTunnels ? (
-        <div className="mb-5 flex flex-wrap gap-2">
-          {tunnelSeries.map((tunnel) => (
-            <div
-              key={tunnel.key}
-              className="flex min-w-[180px] items-center gap-2 rounded-lg border border-border/60 bg-background/70 px-3 py-2"
-            >
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: tunnel.color }}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-foreground">{tunnel.name}</div>
-                <div className="text-xs text-muted-foreground">
-                  {tunnel.type.toUpperCase()} · {formatTrafficValue(tunnel.totalBytes)}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
 
       {!hasTunnels ? (
         <div className="flex h-72 flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/30 text-center">
