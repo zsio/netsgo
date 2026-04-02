@@ -487,32 +487,6 @@ func TestTrafficAPI_TimeRangeTooLarge(t *testing.T) {
 	}
 }
 
-func TestTrafficAPI_TooLargeTimeRange(t *testing.T) {
-	s, handler, token, cleanup := setupTestServerWithStores(t, true)
-	defer cleanup()
-
-	trafficDir, err := os.MkdirTemp("", "traffic_large_range_*")
-	if err != nil {
-		t.Fatalf("创建临时目录失败: %v", err)
-	}
-	defer os.RemoveAll(trafficDir)
-
-	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
-	if err != nil {
-		t.Fatalf("创建 TrafficStore 失败: %v", err)
-	}
-	s.trafficStore = ts
-
-	now := time.Now().UTC()
-	from := now.Add(-(trafficMaxRange + time.Hour)).Unix()
-	to := now.Unix()
-
-	w := doMuxRequest(t, handler, http.MethodGet, "/api/clients/c1/traffic?from="+itoa(from)+"&to="+itoa(to), token, nil)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("超出最大范围应返回 400，得到 %d", w.Code)
-	}
-}
-
 func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
