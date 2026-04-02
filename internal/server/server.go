@@ -24,6 +24,7 @@ type Server struct {
 	clients                     sync.Map          // stable clientID -> *ClientConn
 	events                      *EventBus         // SSE 事件总线
 	store                       *TunnelStore      // 隧道持久化存储
+	trafficStore                *TrafficStore     // 流量历史存储
 	startTime                   time.Time         // 服务器启动时间
 	auth                        *AuthService      // 认证与访问控制（adminStore、速率限制、setupToken）
 	webFS                       fs.FS             // 嵌入的前端静态资源 (nil 表示开发模式)

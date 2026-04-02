@@ -75,4 +75,29 @@ describe('TunnelListTable', () => {
       }),
     ])).toThrow('Tunnel capabilities are required');
   });
+
+  test('可选显示 24h 流量列', () => {
+    const client = new QueryClient();
+    const markup = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(TunnelListTable, {
+          tunnels: [
+            createTunnel({
+              traffic24hBytes: 1536,
+            }),
+          ],
+          title: '下属隧道',
+          showActions: false,
+          showSearch: false,
+          showTraffic24h: true,
+          traffic24hState: 'ready',
+        }),
+      ),
+    );
+
+    expect(markup).toContain('24 小时流量');
+    expect(markup).toContain('1.5 KB');
+  });
 });

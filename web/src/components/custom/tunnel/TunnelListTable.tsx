@@ -23,13 +23,17 @@ import {
   usePauseTunnel, useResumeTunnel, useStopTunnel, useDeleteTunnel,
 } from '@/hooks/use-tunnel-mutations';
 import type { ProxyConfig } from '@/types';
+import { formatBytes } from '@/lib/format';
 
 // 扩展的隧道条目，可以附带归属节点信息
 export interface TunnelEntry extends ProxyConfig {
   clientId: string;
   clientName?: string;
   clientOnline: boolean;
+  traffic24hBytes?: number;
 }
+
+type Traffic24hState = 'loading' | 'error' | 'ready';
 
 interface TunnelListTableProps {
   /** 隧道列表 */
@@ -40,6 +44,10 @@ interface TunnelListTableProps {
   icon?: React.ReactNode;
   /** 是否显示归属节点列（全网视图用） */
   showClient?: boolean;
+  /** 是否显示 24h 流量列（Client 详情页用） */
+  showTraffic24h?: boolean;
+  /** 24h 流量数据状态 */
+  traffic24hState?: Traffic24hState;
   /** 是否显示操作按钮（暂停/恢复/删除/编辑） */
   showActions?: boolean;
   /** 是否显示搜索框 */
@@ -55,6 +63,8 @@ export function TunnelListTable({
   title,
   icon,
   showClient = false,
+  showTraffic24h = false,
+  traffic24hState = 'ready',
   showActions = true,
   showSearch = true,
   emptyAction,
@@ -194,6 +204,7 @@ export function TunnelListTable({
                     <th className="px-6 py-3 font-medium">隧道名称</th>
                     <th className="px-6 py-3 font-medium">应用 / 类型</th>
                     <th className="px-6 py-3 font-medium">映射关系</th>
+                    {showTraffic24h && <th className="px-6 py-3 font-medium">24 小时流量</th>}
                     <th className="px-6 py-3 font-medium">状态</th>
                     {showClient && <th className="px-6 py-3 font-medium">归属节点</th>}
                     {(showActions || renderRowAction) && (
@@ -207,6 +218,8 @@ export function TunnelListTable({
                       key={`${tunnel.clientId}-${tunnel.name}`}
                       tunnel={tunnel}
                       showClient={showClient}
+                      showTraffic24h={showTraffic24h}
+                      traffic24hState={traffic24hState}
                       showActions={showActions}
                       renderRowAction={renderRowAction}
                       renderActionButtons={renderActionButtons}
@@ -264,12 +277,16 @@ export function TunnelListTable({
 function TunnelTableRow({
   tunnel,
   showClient,
+  showTraffic24h,
+  traffic24hState,
   showActions,
   renderRowAction,
   renderActionButtons,
 }: {
   tunnel: TunnelEntry;
   showClient: boolean;
+  showTraffic24h: boolean;
+  traffic24hState: Traffic24hState;
   showActions: boolean;
   renderRowAction?: (tunnel: TunnelEntry) => React.ReactNode;
   renderActionButtons: (tunnel: TunnelEntry) => React.ReactNode;
@@ -293,6 +310,18 @@ function TunnelTableRow({
           <span className="break-all">{view.destinationLabel}</span>
         </div>
       </td>
+
+      {showTraffic24h && (
+        <td className="px-6 py-3">
+          <span className="font-mono text-xs text-muted-foreground">
+            {traffic24hState === 'error'
+              ? '加载失败'
+              : traffic24hState === 'loading'
+                ? '加载中...'
+                : formatBytes(tunnel.traffic24hBytes ?? 0)}
+          </span>
+        </td>
+      )}
 
       <td className="px-6 py-3">
         <TunnelStatusBadge status={view.status} error={tunnel.error} />

@@ -412,7 +412,10 @@ func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listen
 	}
 
 	// Relay：双向搬运数据
-	mux.Relay(stream, extConn)
+	atob, btoa := mux.Relay(stream, extConn)
+	if s.trafficStore != nil {
+		s.trafficStore.RecordBytes(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(btoa), uint64(atob))
+	}
 }
 
 // StopProxy 停止一条代理隧道

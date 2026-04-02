@@ -8,9 +8,36 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync/atomic"
 
 	"netsgo/pkg/protocol"
 )
+
+type countingConn struct {
+	net.Conn
+	read    atomic.Int64
+	written atomic.Int64
+}
+
+func (c *countingConn) ingressEgressBytes() (uint64, uint64) {
+	return uint64(c.written.Load()), uint64(c.read.Load())
+}
+
+func (c *countingConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.read.Add(int64(n))
+	}
+	return n, err
+}
+
+func (c *countingConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.written.Add(int64(n))
+	}
+	return n, err
+}
 
 type httpTunnelRoute struct {
 	config protocol.ProxyConfig
@@ -91,9 +118,25 @@ func (s *Server) isManagementHost(host string) bool {
 	// 开发环境下 Vite 等反代工具会把 Host 改写为 127.0.0.1:PORT，
 	// 而 serverListenAddr 兜底返回 localhost:PORT，需要在此对齐。
 	if isLoopbackHost(managementHost) && isLoopbackHost(reqCanonical) {
-		_, mPort, _ := net.SplitHostPort(managementHost)
-		_, rPort, _ := net.SplitHostPort(reqCanonical)
+		_, mPort := splitCanonicalHostPort(managementHost)
+		_, rPort := splitCanonicalHostPort(reqCanonical)
 		if mPort != "" && mPort == rPort {
+			return true
+		}
+
+		// 显式配置为 http://localhost 这类“无端口 loopback”时，也允许
+		// 同机代理改写成 127.0.0.1:<server-port> / [::1]:<server-port>。
+		if mPort == "" {
+			_, listenPort := splitCanonicalHostPort(serverListenAddr(s))
+			switch {
+			case rPort == "":
+				return true
+			case listenPort != "" && rPort == listenPort:
+				return true
+			}
+		}
+
+		if mPort == "" && rPort == "" {
 			return true
 		}
 	}
@@ -105,17 +148,24 @@ func (s *Server) isManagementHost(host string) bool {
 	return isLoopbackHost(reqCanonical)
 }
 
-func isLoopbackHost(host string) bool {
+func splitCanonicalHostPort(host string) (string, string) {
 	canonical := canonicalHost(host)
+	if canonical == "" {
+		return "", ""
+	}
+	if hostPart, port, err := net.SplitHostPort(canonical); err == nil {
+		return strings.Trim(hostPart, "[]"), port
+	}
+	return strings.Trim(canonical, "[]"), ""
+}
+
+func isLoopbackHost(host string) bool {
+	canonical, _ := splitCanonicalHostPort(host)
 	if canonical == "" {
 		return false
 	}
 
-	if hostPart, _, err := net.SplitHostPort(canonical); err == nil {
-		canonical = hostPart
-	}
-
-	switch strings.Trim(canonical, "[]") {
+	switch canonical {
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	default:
@@ -192,6 +242,8 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 		Host:   "netsgo-http-tunnel",
 	}
 
+	var cc *countingConn
+
 	transport := &http.Transport{
 		Proxy:                 nil,
 		ForceAttemptHTTP2:     false,
@@ -199,7 +251,12 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 		DisableCompression:    false,
 		ResponseHeaderTimeout: 0,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return s.openStreamToClient(route.client, route.config.Name)
+			conn, err := s.openStreamToClient(route.client, route.config.Name)
+			if err != nil {
+				return nil, err
+			}
+			cc = &countingConn{Conn: conn}
+			return cc, nil
 		},
 	}
 
@@ -222,6 +279,11 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 	}
 
 	proxy.ServeHTTP(w, r)
+
+	if s.trafficStore != nil && cc != nil {
+		ingressBytes, egressBytes := cc.ingressEgressBytes()
+		s.trafficStore.RecordBytes(route.client.ID, route.config.Name, route.config.Type, ingressBytes, egressBytes)
+	}
 }
 
 func isHTTPRouteUnavailable(err error) bool {
