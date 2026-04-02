@@ -44,6 +44,20 @@ func TestCanonicalHost(t *testing.T) {
 	}
 }
 
+func TestCountingConnIngressEgressBytes(t *testing.T) {
+	cc := &countingConn{}
+	cc.written.Store(321)
+	cc.read.Store(654)
+
+	ingressBytes, egressBytes := cc.ingressEgressBytes()
+	if ingressBytes != 321 {
+		t.Fatalf("ingress bytes 期望 321，得到 %d", ingressBytes)
+	}
+	if egressBytes != 654 {
+		t.Fatalf("egress bytes 期望 654，得到 %d", egressBytes)
+	}
+}
+
 func TestValidateDomain(t *testing.T) {
 	testCases := []struct {
 		name   string

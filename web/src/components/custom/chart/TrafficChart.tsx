@@ -48,6 +48,10 @@ function getTunnelColor(index: number) {
   return CHART_COLORS[index] ?? `hsl(${(index * 67) % 360} 72% 58%)`;
 }
 
+function getTunnelSeriesKey(name: string, type: ProxyType) {
+  return `${type}:${name}`;
+}
+
 function formatTrafficValue(value: number) {
   return formatBytes(value).replace('.0 ', ' ');
 }
@@ -85,27 +89,39 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
   const { data, isLoading, isError, error, isFetching } = useClientTraffic(clientId, range);
 
   const { chartConfig, chartData, tunnelSeries } = useMemo(() => {
-    const knownTunnels = tunnels.map((tunnel) => ({
-      name: tunnel.name,
-      type: tunnel.type,
-    }));
+    const knownTunnels = new Map<string, Pick<TunnelMeta, 'name' | 'type'>>();
+
+    for (const tunnel of tunnels) {
+      knownTunnels.set(getTunnelSeriesKey(tunnel.name, tunnel.type), {
+        name: tunnel.name,
+        type: tunnel.type,
+      });
+    }
 
     for (const item of data?.items ?? []) {
-      if (!knownTunnels.some((tunnel) => tunnel.name === item.tunnel_name)) {
-        knownTunnels.push({
+      const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
+      if (!knownTunnels.has(seriesKey)) {
+        knownTunnels.set(seriesKey, {
           name: item.tunnel_name,
           type: item.tunnel_type,
         });
       }
     }
 
-    const tunnelSeries: TunnelMeta[] = knownTunnels.map((tunnel, index) => ({
-      key: `tunnel_${index}`,
-      name: tunnel.name,
-      type: tunnel.type,
-      color: getTunnelColor(index),
-      totalBytes: 0,
-    }));
+    const tunnelSeries: TunnelMeta[] = Array.from(knownTunnels.values())
+      .sort((left, right) => {
+        if (left.name !== right.name) {
+          return left.name.localeCompare(right.name);
+        }
+        return left.type.localeCompare(right.type);
+      })
+      .map((tunnel, index) => ({
+        key: getTunnelSeriesKey(tunnel.name, tunnel.type),
+        name: tunnel.name,
+        type: tunnel.type,
+        color: getTunnelColor(index),
+        totalBytes: 0,
+      }));
 
     const chartConfig = tunnelSeries.reduce<ChartConfig>((config, tunnel) => {
       config[tunnel.key] = {
@@ -129,8 +145,9 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
         totalBytes += point.total_bytes;
       }
 
-      pointsByTunnel.set(item.tunnel_name, pointMap);
-      const target = tunnelSeries.find((tunnel) => tunnel.name === item.tunnel_name);
+      const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
+      pointsByTunnel.set(seriesKey, pointMap);
+      const target = tunnelSeries.find((tunnel) => tunnel.key === seriesKey);
       if (target) {
         target.totalBytes = totalBytes;
       }
@@ -141,7 +158,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
       .map<ChartRow>((timestamp) => {
         const row: ChartRow = { timestamp };
         for (const tunnel of tunnelSeries) {
-          row[tunnel.key] = pointsByTunnel.get(tunnel.name)?.get(timestamp) ?? 0;
+          row[tunnel.key] = pointsByTunnel.get(tunnel.key)?.get(timestamp) ?? 0;
         }
         return row;
       });

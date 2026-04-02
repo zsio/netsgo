@@ -46,6 +46,17 @@ func findSeries(t *testing.T, result TrafficQueryResult, tunnelName string) Tunn
 	return TunnelTrafficSeries{}
 }
 
+func findSeriesWithType(t *testing.T, result TrafficQueryResult, tunnelName, tunnelType string) TunnelTrafficSeries {
+	t.Helper()
+	for _, item := range result.Items {
+		if item.TunnelName == tunnelName && item.TunnelType == tunnelType {
+			return item
+		}
+	}
+	t.Fatalf("未找到 tunnel=%s type=%s", tunnelName, tunnelType)
+	return TunnelTrafficSeries{}
+}
+
 func TestTrafficStore_RecordAndQuery(t *testing.T) {
 	ts, cleanup := newTestTrafficStore(t)
 	defer cleanup()
@@ -111,6 +122,33 @@ func TestTrafficStore_TunnelFilter(t *testing.T) {
 	series := mustSingleSeries(t, got, "tun1")
 	if series.Points[0].IngressBytes != 100 {
 		t.Errorf("tun1 ingress 期望 100，得到 %d", series.Points[0].IngressBytes)
+	}
+}
+
+func TestTrafficStore_QuerySeparatesSameNameDifferentTypes(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	minuteStart := minuteFloorUTC(now)
+	ts.ApplyDeltas([]TrafficDelta{
+		{ClientID: "c1", TunnelName: "shared", TunnelType: "tcp", MinuteStart: minuteStart.Unix(), IngressBytes: 100, EgressBytes: 10},
+		{ClientID: "c1", TunnelName: "shared", TunnelType: "http", MinuteStart: minuteStart.Unix(), IngressBytes: 200, EgressBytes: 20},
+	})
+
+	got := ts.QueryWithResolution("c1", "shared", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	if len(got.Items) != 2 {
+		t.Fatalf("期望 2 条同名不同类型 series，得到 %d", len(got.Items))
+	}
+
+	tcpSeries := findSeriesWithType(t, got, "shared", "tcp")
+	if tcpSeries.Points[0].IngressBytes != 100 || tcpSeries.Points[0].EgressBytes != 10 {
+		t.Fatalf("tcp series 聚合错误: %+v", tcpSeries.Points[0])
+	}
+
+	httpSeries := findSeriesWithType(t, got, "shared", "http")
+	if httpSeries.Points[0].IngressBytes != 200 || httpSeries.Points[0].EgressBytes != 20 {
+		t.Fatalf("http series 聚合错误: %+v", httpSeries.Points[0])
 	}
 }
 

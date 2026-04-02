@@ -19,6 +19,10 @@ type countingConn struct {
 	written atomic.Int64
 }
 
+func (c *countingConn) ingressEgressBytes() (uint64, uint64) {
+	return uint64(c.written.Load()), uint64(c.read.Load())
+}
+
 func (c *countingConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
@@ -254,7 +258,8 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 	proxy.ServeHTTP(w, r)
 
 	if s.trafficStore != nil && cc != nil {
-		s.trafficStore.RecordBytes(route.client.ID, route.config.Name, route.config.Type, uint64(cc.read.Load()), uint64(cc.written.Load()))
+		ingressBytes, egressBytes := cc.ingressEgressBytes()
+		s.trafficStore.RecordBytes(route.client.ID, route.config.Name, route.config.Type, ingressBytes, egressBytes)
 	}
 }
 

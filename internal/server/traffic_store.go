@@ -61,6 +61,11 @@ type TunnelTrafficSeries struct {
 	Points     []TrafficPoint `json:"points"`
 }
 
+type trafficSeriesKey struct {
+	TunnelName string
+	TunnelType string
+}
+
 type TrafficQueryResult struct {
 	Resolution TrafficResolution     `json:"resolution"`
 	Items      []TunnelTrafficSeries `json:"items"`
@@ -232,19 +237,26 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 		if buckets[i].TunnelName != buckets[j].TunnelName {
 			return buckets[i].TunnelName < buckets[j].TunnelName
 		}
+		if buckets[i].TunnelType != buckets[j].TunnelType {
+			return buckets[i].TunnelType < buckets[j].TunnelType
+		}
 		return buckets[i].BucketStart < buckets[j].BucketStart
 	})
 
-	seriesMap := make(map[string]*TunnelTrafficSeries)
+	seriesMap := make(map[trafficSeriesKey]*TunnelTrafficSeries)
 	for _, bucket := range buckets {
-		series, ok := seriesMap[bucket.TunnelName]
+		key := trafficSeriesKey{
+			TunnelName: bucket.TunnelName,
+			TunnelType: bucket.TunnelType,
+		}
+		series, ok := seriesMap[key]
 		if !ok {
 			series = &TunnelTrafficSeries{
 				TunnelName: bucket.TunnelName,
 				TunnelType: bucket.TunnelType,
 				Points:     make([]TrafficPoint, 0),
 			}
-			seriesMap[bucket.TunnelName] = series
+			seriesMap[key] = series
 		}
 		series.Points = append(series.Points, TrafficPoint{
 			BucketStart:  time.Unix(bucket.BucketStart, 0).UTC(),
@@ -258,7 +270,12 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 	for _, series := range seriesMap {
 		items = append(items, *series)
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].TunnelName < items[j].TunnelName })
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TunnelName != items[j].TunnelName {
+			return items[i].TunnelName < items[j].TunnelName
+		}
+		return items[i].TunnelType < items[j].TunnelType
+	})
 
 	return TrafficQueryResult{
 		Resolution: resolution,
