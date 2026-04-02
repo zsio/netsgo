@@ -411,6 +411,38 @@ func TestDispatch_ExplicitLoopbackManagementHosts_AllowManagementAPI(t *testing.
 	}
 }
 
+func TestDispatch_ExplicitLoopbackManagementHostWithoutPort_AllowsLoopbackEquivalenceOnListenPort(t *testing.T) {
+	testCases := []struct {
+		name      string
+		reqHost   string
+		wantAllow bool
+	}{
+		{name: "ipv4 same listen port", reqHost: "127.0.0.1:8080", wantAllow: true},
+		{name: "ipv6 same listen port", reqHost: "[::1]:8080", wantAllow: true},
+		{name: "localhost no port", reqHost: "localhost", wantAllow: true},
+		{name: "ipv4 different port", reqHost: "127.0.0.1:9090", wantAllow: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newDispatchTestServer(t, true, "http://localhost")
+			s.Port = 8080
+
+			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", tc.reqHost, nil)
+			w := httptest.NewRecorder()
+
+			s.StartHTTPOnly().ServeHTTP(w, req)
+
+			if tc.wantAllow && w.Code != http.StatusOK {
+				t.Fatalf("显式无端口 loopback 管理地址时，%s 应允许访问，得到 %d", tc.reqHost, w.Code)
+			}
+			if !tc.wantAllow && w.Code != http.StatusNotFound {
+				t.Fatalf("不同端口 %s 不应匹配管理面，得到 %d", tc.reqHost, w.Code)
+			}
+		})
+	}
+}
+
 func TestDispatch_LoopbackHostsDoNotBypassManagementHostByDefault(t *testing.T) {
 	testCases := []string{"localhost", "127.0.0.1", "[::1]"}
 

@@ -118,9 +118,25 @@ func (s *Server) isManagementHost(host string) bool {
 	// 开发环境下 Vite 等反代工具会把 Host 改写为 127.0.0.1:PORT，
 	// 而 serverListenAddr 兜底返回 localhost:PORT，需要在此对齐。
 	if isLoopbackHost(managementHost) && isLoopbackHost(reqCanonical) {
-		_, mPort, _ := net.SplitHostPort(managementHost)
-		_, rPort, _ := net.SplitHostPort(reqCanonical)
+		_, mPort := splitCanonicalHostPort(managementHost)
+		_, rPort := splitCanonicalHostPort(reqCanonical)
 		if mPort != "" && mPort == rPort {
+			return true
+		}
+
+		// 显式配置为 http://localhost 这类“无端口 loopback”时，也允许
+		// 同机代理改写成 127.0.0.1:<server-port> / [::1]:<server-port>。
+		if mPort == "" {
+			_, listenPort := splitCanonicalHostPort(serverListenAddr(s))
+			switch {
+			case rPort == "":
+				return true
+			case listenPort != "" && rPort == listenPort:
+				return true
+			}
+		}
+
+		if mPort == "" && rPort == "" {
 			return true
 		}
 	}
@@ -132,17 +148,24 @@ func (s *Server) isManagementHost(host string) bool {
 	return isLoopbackHost(reqCanonical)
 }
 
-func isLoopbackHost(host string) bool {
+func splitCanonicalHostPort(host string) (string, string) {
 	canonical := canonicalHost(host)
+	if canonical == "" {
+		return "", ""
+	}
+	if hostPart, port, err := net.SplitHostPort(canonical); err == nil {
+		return strings.Trim(hostPart, "[]"), port
+	}
+	return strings.Trim(canonical, "[]"), ""
+}
+
+func isLoopbackHost(host string) bool {
+	canonical, _ := splitCanonicalHostPort(host)
 	if canonical == "" {
 		return false
 	}
 
-	if hostPart, _, err := net.SplitHostPort(canonical); err == nil {
-		canonical = hostPart
-	}
-
-	switch strings.Trim(canonical, "[]") {
+	switch canonical {
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	default:
