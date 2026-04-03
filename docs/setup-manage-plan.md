@@ -41,11 +41,13 @@ NetsGo 现在已经支持：
 
 - `netsgo install`
 - `netsgo manage`
+- `netsgo update`
 - server / client 的 systemd 服务安装与管理
 - 统一 runtime root 设计
 - 单机本地单实例保护
 - install token（Web 端 setup 用）自动生成或手动输入
 - 卸载时删除运行数据
+- 二进制统一安装到 `/usr/local/bin/netsgo`
 
 ## 2.2 非目标
 
@@ -54,9 +56,10 @@ NetsGo 现在已经支持：
 - macOS launchd / Windows service 支持
 - 多实例 server 管理
 - 多实例 client 管理
-- 在线“重配置”能力
-- 程序内置下载源选择逻辑
+- 在线”重配置”能力
+- 程序内置下载源选择逻辑（下载源选择由 `netsgo update` 的交互菜单负责）
 - Web UI 发起安装 / 管理
+- 升级版本的回滚能力
 
 说明：
 
@@ -72,6 +75,7 @@ NetsGo 现在已经支持：
 ```bash
 netsgo install
 netsgo manage
+netsgo update
 ```
 
 ### `netsgo install`
@@ -95,6 +99,15 @@ netsgo manage
 - 自动发现已安装的 server / client 服务
 - 进入管理菜单
 - 执行 status / start / stop / restart / inspect / uninstall
+
+### `netsgo update`
+
+用于升级已安装的 `netsgo` 二进制：
+
+- 选择下载源（默认使用 GitHub）
+- 下载最新版本并替换 `/usr/local/bin/netsgo`
+- 替换后自动重启已安装的服务
+- 需要 root 权限
 
 ## 3.2 保留的直跑命令
 
@@ -369,8 +382,9 @@ netsgo client --runtime-root ...
 
 - 检测当前是否 root
   - 若是：继续
-  - 若否：尝试通过 `sudo` 提权，提示用户输入密码
-- 若无法获取 root 权限（非 root 且无 sudo）：
+  - 若否：以 `exec sudo <binary> install` 的方式整体重新以 root 启动当前进程（re-exec）
+    - 这样整个 install 流程都以 root 身份运行，不存在"部分操作提权"的问题
+- 若无法获取 root 权限（非 root 且无 sudo，或用户拒绝输入密码）：
   - 输出清晰错误：「安装需要 root 权限，请使用 sudo 运行」
   - 直接退出，退出码非 0
 
@@ -596,24 +610,52 @@ netsgo manage
 /etc/systemd/system/netsgo-client.service
 ```
 
-## 11.3 ExecStart 形态
+## 11.3 unit 文件内容规范
 
 ### server
 
 ```ini
+[Unit]
+Description=NetsGo Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
 ExecStart=/usr/local/bin/netsgo server --runtime-root /var/lib/netsgo
+EnvironmentFile=/etc/netsgo/services/server.env
+Restart=on-failure
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 ### client
 
 ```ini
+[Unit]
+Description=NetsGo Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
 ExecStart=/usr/local/bin/netsgo client --runtime-root /var/lib/netsgo
+EnvironmentFile=/etc/netsgo/services/client.env
+Restart=on-failure
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-EnvironmentFile 指向：
+关键字段说明：
 
-- `/etc/netsgo/services/server.env`
-- `/etc/netsgo/services/client.env`
+- `After=network-online.target`：确保网络就绪后再启动，对 client 建立出站连接尤其重要
+- `Restart=on-failure`：异常退出后自动重启；正常 `stop` 不触发重启
+- `RestartSec=5s`：重启间隔，避免快速循环崩溃
+- `User=root`：本期以 root 运行，简化权限模型
 
 ---
 
@@ -748,7 +790,13 @@ $HOME/.local/state/netsgo/
 - status/start/stop/restart/inspect/uninstall
 - 删除路径确认提示
 
-## Phase 5：文档与下载脚本
+## Phase 5：`netsgo update`
+
+- 下载源选择菜单
+- 下载并替换二进制
+- 重启已安装服务
+
+## Phase 6：文档与下载脚本
 
 - 更新 README
 - 提供下载脚本
@@ -760,7 +808,7 @@ $HOME/.local/state/netsgo/
 
 本期规划结论如下：
 
-1. 采用 `netsgo install` + `netsgo manage` 的交互式双入口
+1. 采用 `netsgo install` + `netsgo manage` + `netsgo update` 的交互式三入口
 2. 保留 `netsgo server` / `netsgo client` 直跑模式
 3. server 与 client 均纳入交互式安装/管理范围
 4. 不做重配置；改配置即卸载重装
@@ -770,6 +818,124 @@ $HOME/.local/state/netsgo/
 8. uninstall 两个分支都删除运行数据，区别只在于是否删除二进制
 9. install token（Web 端 setup 用）支持手填；留空时自动生成 16 位随机值
 10. client reinstall 视为新身份生命周期
+11. 二进制统一安装到 `/usr/local/bin/netsgo`
+12. `install` / `update` 非 root 时整体 re-exec sudo，不做部分提权
+13. `manage` 的 start/stop/restart/uninstall 操作需要 root；status/inspect 普通用户可用
+14. systemd unit 统一使用 `Restart=on-failure` + `After=network-online.target`
+
+---
+
+## 17. 二进制安装路径
+
+## 17.1 安装位置
+
+```text
+/usr/local/bin/netsgo
+```
+
+## 17.2 install 的处理方式
+
+`netsgo install` 执行时：
+
+- 检查 `/usr/local/bin/netsgo` 是否已存在
+  - 若不存在：将当前运行的二进制 copy 到该路径
+  - 若已存在且与当前二进制为同一文件（inode 相同）：跳过，不重复 copy
+  - 若已存在但路径不同：覆盖，并在 UI 中告知用户
+- systemd unit 的 `ExecStart` 始终硬编码为 `/usr/local/bin/netsgo`
+
+## 17.3 uninstall 行为
+
+- 选项 1（保留二进制）：不删除 `/usr/local/bin/netsgo`
+- 选项 2（删除二进制）：删除 `/usr/local/bin/netsgo`
+
+---
+
+## 18. `netsgo manage` 权限要求
+
+`manage` 不像 `install` 那样整体要求 root，因为部分操作普通用户也可以执行。
+
+## 18.1 各操作权限
+
+| 操作 | 是否需要 root |
+|---|---|
+| status | 否（读 systemctl is-active） |
+| inspect | 否（读 spec JSON 和 systemctl 状态） |
+| start | 是（systemctl start） |
+| stop | 是（systemctl stop） |
+| restart | 是（systemctl restart） |
+| uninstall | 是（删文件、disable、remove unit） |
+
+## 18.2 提权方式
+
+与 `install` 保持一致：对需要 root 的操作，整体 re-exec sudo 后重新进入 manage，而不是逐操作提权。
+
+具体行为：
+
+- 用户以普通身份运行 `netsgo manage`
+- 选择 status / inspect：正常执行
+- 选择需要 root 的操作（start/stop/restart/uninstall）：
+  - 若已是 root：继续
+  - 若非 root：re-exec `sudo netsgo manage`，整体重启为 root 进程
+  - 无法提权则报错退出
+
+---
+
+## 19. `netsgo update` 升级命令设计
+
+## 19.1 功能
+
+下载最新版本二进制并替换 `/usr/local/bin/netsgo`，然后重启已安装的服务。
+
+需要 root 权限，提权方式与 `install` 相同（整体 re-exec sudo）。
+
+## 19.2 交互流程
+
+**第一屏：选择下载源**
+
+```
+请选择下载源：
+  1. 默认（GitHub Releases）
+  2. 中国镜像源
+  3. 退出
+```
+
+- 用户不选择时默认 GitHub
+- 超时或直接回车也默认 GitHub
+
+**第二屏：确认版本**
+
+- 展示当前版本和最新版本
+- 若已是最新版本，提示「当前已是最新版本」并提供选项继续或退出
+- 若有新版本，确认后开始下载
+
+**第三屏：下载与替换**
+
+- 下载进度展示
+- 校验 checksum
+- 替换 `/usr/local/bin/netsgo`
+
+**第四屏：重启服务**
+
+- 自动检测并重启已安装的 server / client 服务
+- 展示重启结果
+
+## 19.3 下载源地址
+
+### GitHub（默认）
+
+从 GitHub Releases 下载，根据当前系统架构（amd64 / arm64）自动选择对应资产。
+
+### 中国镜像源
+
+```text
+# TODO: 补充国内镜像地址，待后期确认具体镜像仓库后填入
+```
+
+## 19.4 注意事项
+
+- 替换二进制前先备份原文件到 `/usr/local/bin/netsgo.bak`（本期不提供回滚命令，但保留文件方便手动恢复）
+- 替换完成后通过 `systemctl restart` 重启服务，不做进程内热更新
+- 本期不支持版本回滚命令
 
 ---
 
