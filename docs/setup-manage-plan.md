@@ -1,4 +1,4 @@
-# NetsGo `setup` / `manage` 交互式服务管理规划
+# NetsGo `install` / `manage` 交互式服务管理规划
 
 ## 文档状态
 
@@ -24,7 +24,7 @@ NetsGo 现在已经支持：
 
 本期目标是补齐这一层终端用户体验：
 
-1. 新增 `netsgo setup` 作为交互式安装入口
+1. 新增 `netsgo install` 作为交互式安装入口
 2. 新增 `netsgo manage` 作为交互式服务管理入口
 3. 同时支持 **server** 与 **client** 的交互式安装与管理
 4. 保留现有直跑模式，不破坏 Docker / 自动化场景
@@ -39,12 +39,12 @@ NetsGo 现在已经支持：
 
 本期包含：
 
-- `netsgo setup`
+- `netsgo install`
 - `netsgo manage`
 - server / client 的 systemd 服务安装与管理
 - 统一 runtime root 设计
 - 单机本地单实例保护
-- setup token 自动生成或手动输入
+- install token（Web 端 setup 用）自动生成或手动输入
 - 卸载时删除运行数据
 
 ## 2.2 非目标
@@ -60,8 +60,8 @@ NetsGo 现在已经支持：
 
 说明：
 
-- 如果用户想修改参数，做法是：**卸载后重新走 `setup`**
-- 下载脚本只负责下载二进制并启动 `netsgo setup`，网络优化留在脚本层完成
+- 如果用户想修改参数，做法是：**卸载后重新走 `install`**
+- 下载脚本只负责下载二进制并启动 `netsgo install`，网络优化留在脚本层完成
 
 ---
 
@@ -70,16 +70,17 @@ NetsGo 现在已经支持：
 ## 3.1 交互式命令
 
 ```bash
-netsgo setup
+netsgo install
 netsgo manage
 ```
 
-### `netsgo setup`
+### `netsgo install`
 
-用于交互式安装服务：
+用于交互式安装服务（仅 root 或 sudo 可执行）：
 
 - 选择语言
 - 选择安装 server 或 client
+- 检查目标角色是否已安装，若已安装则提示「已安装，请先卸载后重装」并退出
 - 采集必要参数
 - 写入配置
 - 生成/安装 systemd unit
@@ -109,7 +110,7 @@ netsgo client ...
 - 传统 shell 启动方式
 - 手工调试
 
-这条线与 `setup` / `manage` 分离，不要求交互。
+这条线与 `install` / `manage` 分离，不要求交互。
 
 ---
 
@@ -149,7 +150,7 @@ netsgo client ...
 
 1. 进入 `netsgo manage`
 2. 卸载当前服务
-3. 重新执行 `netsgo setup`
+3. 重新执行 `netsgo install`
 
 ## 4.3 每个角色固定单实例
 
@@ -162,7 +163,7 @@ netsgo client ...
 
 - 本机只允许一个受管 server 服务
 - 本机只允许一个受管 client 服务
-- `setup/manage` 不支持创建第二个 server 或第二个 client
+- `install/manage` 不支持创建第二个 server 或第二个 client
 
 这不是指“整个世界只能有一个”，而是指：
 
@@ -207,7 +208,7 @@ netsgo client ...
 ### 直跑模式默认 root
 
 ```text
-$HOME/.local/netsgo
+$HOME/.local/state/netsgo
 ```
 
 ### systemd 服务模式默认 root
@@ -299,7 +300,7 @@ netsgo client --runtime-root ...
 
 - 不传时使用各模式的默认 root
 - direct-run 可显式指定运行根目录
-- setup/manage 安装 systemd 服务时会把它固化进 unit
+- install/manage 安装 systemd 服务时会把它固化进 unit
 - Docker 可挂载该目录以持久化数据
 
 本期不优先暴露零散的：
@@ -343,12 +344,12 @@ netsgo client --runtime-root ...
 - 同角色重复启动会失败
 - 这同时适用于：
   - direct-run
-  - setup/manage 安装出来的 systemd 服务
+  - install/manage 安装出来的 systemd 服务
 
 ### 不同 root 下
 
 - technically 可以并存
-- 但本期产品不鼓励，也不在 `setup/manage` 中暴露这种能力
+- 但本期产品不鼓励，也不在 `install/manage` 中暴露这种能力
 
 ### Docker / 容器场景
 
@@ -358,7 +359,20 @@ netsgo client --runtime-root ...
 
 ---
 
-## 8. `netsgo setup` 交互流程
+## 8. `netsgo install` 交互流程
+
+## 8.0 权限检查
+
+`install` 命令需要 root 权限来写入 systemd unit、/etc 配置和 /var/lib 数据目录。
+
+启动时行为：
+
+- 检测当前是否 root
+  - 若是：继续
+  - 若否：尝试通过 `sudo` 提权，提示用户输入密码
+- 若无法获取 root 权限（非 root 且无 sudo）：
+  - 输出清晰错误：「安装需要 root 权限，请使用 sudo 运行」
+  - 直接退出，退出码非 0
 
 ## 8.1 首屏
 
@@ -381,18 +395,17 @@ netsgo client --runtime-root ...
 
 - 监听端口（默认 `9527`）
 - 服务地址 / 域名
-- setup token（可留空）
+- install token（可留空，用于 Web 端初始化）
 
-### setup token 规则
+### install token 规则
 
-- 用户填写：直接使用，但长度必须 **大于 6**
+- 用户填写：直接使用，但长度必须 **大于等于 6**
 - 用户留空：程序自动生成 **16 位随机值**
 
 要求：
 
 - 生成值应便于人工复制
 - 不沿用当前 64 字符 hex 的默认生成方式
-- 程序应拒绝过短或明显过于简单的 token
 
 ## 8.4 客户端安装表单
 
@@ -411,7 +424,7 @@ netsgo client --runtime-root ...
 - 服务名：`netsgo-server`
 - 当前状态
 - 管理面地址
-- setup token 来源：手填 / 自动生成
+- install token 来源：手填 / 自动生成
 - 查看日志命令
 - 下一步提示：
 
@@ -454,7 +467,7 @@ netsgo manage
 
 提示未检测到已安装服务，并提供跳转：
 
-- 进入 `netsgo setup`
+- 进入 `netsgo install`（需 root/sudo）
 - 退出
 
 ## 9.2 管理菜单
@@ -486,7 +499,6 @@ netsgo manage
 - env/spec path
 - server addr
 - port
-- setup 状态（pending / initialized）
 
 ### client inspect
 
@@ -518,7 +530,7 @@ netsgo manage
 因为两种典型场景都是：
 
 1. 全面卸载
-2. 删除旧配置并重新 setup
+2. 删除旧配置并重新 install
 
 ## 10.2 菜单分支
 
@@ -544,7 +556,7 @@ netsgo manage
 行为：
 
 - 包含选项 1 的所有动作
-- 额外删除安装的二进制（若当前二进制由 setup 管理）
+- 额外删除安装的二进制（若当前二进制由 install 管理）
 
 ## 10.3 重要要求
 
@@ -575,6 +587,7 @@ netsgo manage
 - `*.json` 用于保存安装规格，例如角色、service 名称、binary 路径、runtime root、端口/地址等非敏感信息
 - `*.env` 用于保存运行时需要注入的敏感或运行配置，例如 `NETSGO_SETUP_TOKEN`、`NETSGO_SERVER`、`NETSGO_KEY` 等
 - systemd unit 通过 `EnvironmentFile=` 引用这些变量，避免把敏感信息硬编码进 unit 内容
+- `*.env` 文件由 install 写入时必须设置权限为 `0600`，归属 root 或专用运行用户，防止其他用户读取敏感配置
 
 ## 11.2 unit 文件
 
@@ -614,7 +627,7 @@ EnvironmentFile 指向：
 - 保留 flags / env 的现有能力
 - 不依赖交互
 
-### setup/manage 模式
+### install/manage 模式
 
 - 给终端用户使用
 - 封装服务安装与管理
@@ -647,19 +660,19 @@ EnvironmentFile 指向：
 
 ### 决策
 
-- `setup` 安装 client 时，视为创建一份新的受管 client 运行实例
-- `uninstall` 删除 client 运行数据后，再次 `setup` 视为新的 client 身份
+- `install` 安装 client 时，视为创建一份新的受管 client 运行实例
+- `uninstall` 删除 client 运行数据后，再次 `install` 视为新的 client 身份
 - direct-run client 若使用不同 runtime root，也视为不同本地运行实例
 
 ### 结果
 
-- “卸载再 setup” = 身份重建
+- “卸载再 install” = 身份重建
 - 不做旧身份迁移
 - 不做 client 重配置
 
-这能让 setup/manage 的完整体验成立，但也意味着：
+这能让 install/manage 的完整体验成立，但也意味着：
 
-- client reinstall 不是“无痕替换参数”
+- client reinstall 不是”无痕替换参数”
 - 而是新实例生命周期
 
 ---
@@ -669,7 +682,7 @@ EnvironmentFile 指向：
 ## 14.1 用户直跑默认
 
 ```text
-$HOME/.local/netsgo/
+$HOME/.local/state/netsgo/
 ```
 
 例如：
@@ -721,12 +734,12 @@ $HOME/.local/netsgo/
 - 增加 `client.lock`
 - 启动前检测并阻止同 root 下重复启动
 
-## Phase 3：`netsgo setup`
+## Phase 3：`netsgo install`
 
 - 菜单与表单
 - server 安装
 - client 安装
-- setup token 自动生成逻辑
+- install token（Web 端 setup 用）自动生成逻辑
 - systemd unit/spec/env 生成
 
 ## Phase 4：`netsgo manage`
@@ -739,7 +752,7 @@ $HOME/.local/netsgo/
 
 - 更新 README
 - 提供下载脚本
-- 脚本仅负责下载 + 运行 `netsgo setup`
+- 脚本仅负责下载 + 运行 `netsgo install`
 
 ---
 
@@ -747,7 +760,7 @@ $HOME/.local/netsgo/
 
 本期规划结论如下：
 
-1. 采用 `netsgo setup` + `netsgo manage` 的交互式双入口
+1. 采用 `netsgo install` + `netsgo manage` 的交互式双入口
 2. 保留 `netsgo server` / `netsgo client` 直跑模式
 3. server 与 client 均纳入交互式安装/管理范围
 4. 不做重配置；改配置即卸载重装
@@ -755,7 +768,7 @@ $HOME/.local/netsgo/
 6. 结构统一，默认 root 按模式区分
 7. 通过角色锁文件尽量防止本地重复实例
 8. uninstall 两个分支都删除运行数据，区别只在于是否删除二进制
-9. setup token 支持手填；留空时自动生成 16 位随机值
+9. install token（Web 端 setup 用）支持手填；留空时自动生成 16 位随机值
 10. client reinstall 视为新身份生命周期
 
 ---
