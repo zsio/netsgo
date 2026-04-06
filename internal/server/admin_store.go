@@ -54,7 +54,7 @@ const tokenExpiryDuration = 7 * 24 * time.Hour // Token 不活跃过期时间
 const sessionDefaultTTL = 24 * time.Hour
 
 var (
-	errJWTSecretUnavailable = errors.New("jwt secret unavailable before setup")
+	errJWTSecretUnavailable = errors.New("jwt secret unavailable before initialization")
 	errJWTSecretMissing     = errors.New("initialized admin store missing jwt secret")
 
 	ErrClientTokenInvalid         = errors.New("client token invalid")
@@ -108,7 +108,7 @@ func NewAdminStore(path string) (*AdminStore, error) {
 	}
 
 	if !store.data.Initialized {
-		log.Printf("⚠️ 服务尚未初始化，请通过 Web 面板完成初始化设置")
+		log.Printf("⚠️ 服务尚未初始化，请使用 install 或 init 参数完成初始化")
 	}
 
 	return store, nil

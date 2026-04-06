@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"netsgo/pkg/datadir"
 	"netsgo/pkg/fileutil"
 )
 
@@ -17,12 +18,12 @@ type persistedState struct {
 	TLSFingerprint string `json:"tls_fingerprint,omitempty"`
 }
 
-func defaultStatePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("获取用户目录失败: %w", err)
+func (c *Client) statePath() string {
+	root := c.DataDir
+	if root == "" {
+		root = datadir.DefaultDataDir()
 	}
-	return filepath.Join(home, ".netsgo", "client.json"), nil
+	return filepath.Join(root, "client", "client.json")
 }
 
 func (c *Client) ensureInstallID() error {
@@ -30,15 +31,7 @@ func (c *Client) ensureInstallID() error {
 		return nil
 	}
 
-	path := c.StatePath
-	if path == "" {
-		var err error
-		path, err = defaultStatePath()
-		if err != nil {
-			return err
-		}
-		c.StatePath = path
-	}
+	path := c.statePath()
 
 	if data, err := os.ReadFile(path); err == nil {
 		var state persistedState
@@ -80,9 +73,9 @@ func (c *Client) ensureInstallID() error {
 
 // saveToken 将 Token 持久化到客户端状态文件
 func (c *Client) saveToken(token string) error {
-	path := c.StatePath
-	if path == "" {
-		return nil
+	path := c.statePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("创建客户端状态目录失败: %w", err)
 	}
 
 	// 读取已有状态
@@ -111,9 +104,9 @@ func generateInstallID() (string, error) {
 
 // saveTLSFingerprint 将 TLS 指纹持久化到客户端状态文件 (P1 TOFU)
 func (c *Client) saveTLSFingerprint(fingerprint string) error {
-	path := c.StatePath
-	if path == "" {
-		return nil
+	path := c.statePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("创建客户端状态目录失败: %w", err)
 	}
 
 	state := persistedState{

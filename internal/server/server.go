@@ -16,8 +16,7 @@ import (
 // Server 是服务端的核心结构体
 type Server struct {
 	Port                        int
-	StorePath                   string // 隧道配置文件路径（空则使用默认）
-	SetupToken                  string // 显式配置初始化 Token（空则启动时随机生成）
+	DataDir                     string
 	AllowLoopbackManagementHost bool
 	TLS                         *TLSConfig
 	TLSFingerprint              string
@@ -26,7 +25,7 @@ type Server struct {
 	store                       *TunnelStore      // 隧道持久化存储
 	trafficStore                *TrafficStore     // 流量历史存储
 	startTime                   time.Time         // 服务器启动时间
-	auth                        *AuthService      // 认证与访问控制（adminStore、速率限制、setupToken）
+	auth                        *AuthService      // 认证与访问控制（adminStore、速率限制）
 	webFS                       fs.FS             // 嵌入的前端静态资源 (nil 表示开发模式)
 	webHandler                  http.Handler      // 缓存的 FileServer (nil 表示开发模式)
 	cachedStatus                *serverStatusView // 后台采集的最新服务端状态

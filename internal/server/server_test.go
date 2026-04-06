@@ -285,8 +285,8 @@ func TestAPI_Status_ExtendedFields(t *testing.T) {
 	if result["uptime"] == nil || result["uptime"].(float64) < 0 {
 		t.Errorf("uptime 无效: %v", result["uptime"])
 	}
-	if result["store_path"] == nil {
-		t.Errorf("store_path 无效: %v", result["store_path"])
+	if _, ok := result["store_path"]; ok {
+		t.Errorf("store_path 不应继续对外暴露: %v", result["store_path"])
 	}
 	if result["tunnel_active"].(float64) != 0 {
 		t.Errorf("tunnel_active 期望 0，得到 %v", result["tunnel_active"])
@@ -2052,7 +2052,8 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	// ========= 测试开始 =========
 
 	// 1. 创建隧道 (/api/clients/{id}/tunnels)
-	createReq := []byte(`{"name":"test-tunnel","type":"tcp","local_ip":"127.0.0.1","local_port":8080,"remote_port":18080}`)
+	remotePort := reserveTCPPort(t)
+	createReq := []byte(fmt.Sprintf(`{"name":"test-tunnel","type":"tcp","local_ip":"127.0.0.1","local_port":8080,"remote_port":%d}`, remotePort))
 	result := runPendingAction(http.MethodPost, fmt.Sprintf("/api/clients/%s/tunnels", clientID), createReq, "test-tunnel")
 	code, resp := result.code, result.body
 
@@ -3246,10 +3247,10 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	// 使用真实的 Start() 启动服务器
 	tmpDir := t.TempDir()
 	s := New(reserveTCPPort(t))
-	s.StorePath = filepath.Join(tmpDir, "tunnels.json")
+	s.DataDir = tmpDir
 
 	// 预创建 AdminStore
-	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "server", "admin.json"))
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
@@ -3351,9 +3352,22 @@ func TestServer_GracefulShutdown(t *testing.T) {
 }
 
 func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
+	tmpDir := t.TempDir()
 	s := New(0)
-	initTestAdminStore(t, s)
-	s.StorePath = filepath.Join(t.TempDir(), "tunnels.json")
+	s.DataDir = tmpDir
+
+	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "server", "admin.json"))
+	if err != nil {
+		t.Fatalf("创建 AdminStore 失败: %v", err)
+	}
+	adminStore.bcryptCost = bcrypt.MinCost
+	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
+		t.Fatalf("初始化 AdminStore 失败: %v", err)
+	}
+	if _, err := adminStore.AddAPIKey("default", "test-key", []string{"connect"}, nil); err != nil {
+		t.Fatalf("创建测试 API Key 失败: %v", err)
+	}
+	s.auth.adminStore = adminStore
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("获取临时端口失败: %v", err)

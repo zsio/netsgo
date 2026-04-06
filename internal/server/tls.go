@@ -114,7 +114,7 @@ func (c *TLSConfig) loadCustomTLS() (*tls.Config, string, error) {
 func (c *TLSConfig) loadOrGenerateAutoTLS(dataDir string) (*tls.Config, string, error) {
 	autoDir := c.AutoDir
 	if autoDir == "" {
-		autoDir = filepath.Join(dataDir, "tls")
+		autoDir = filepath.Join(dataDir, "server", "tls")
 	}
 
 	certPath := filepath.Join(autoDir, "server.crt")

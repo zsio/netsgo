@@ -2,27 +2,20 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
 
+	"netsgo/pkg/datadir"
 	"netsgo/web"
 )
 
 func (s *Server) initStore() error {
-	path := s.StorePath
-	if path == "" {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, ".netsgo", "tunnels.json")
-	}
+	path := s.getStorePath()
 	store, err := NewTunnelStore(path)
 	if err != nil {
 		return err
@@ -30,13 +23,7 @@ func (s *Server) initStore() error {
 	s.store = store
 	log.Printf("📦 隧道配置存储: %s", path)
 
-	adminPath := s.StorePath
-	if adminPath == "" {
-		home, _ := os.UserHomeDir()
-		adminPath = filepath.Join(home, ".netsgo", "admin.json")
-	} else {
-		adminPath = filepath.Join(filepath.Dir(s.StorePath), "admin.json")
-	}
+	adminPath := filepath.Join(s.serverDataDir(), "admin.json")
 	adminStore, err := NewAdminStore(adminPath)
 	if err != nil {
 		return err
@@ -44,7 +31,7 @@ func (s *Server) initStore() error {
 	s.auth.adminStore = adminStore
 	log.Printf("📦 系统管理存储: %s", adminPath)
 
-	trafficPath := filepath.Join(s.getDataDir(), "traffic.json")
+	trafficPath := filepath.Join(s.serverDataDir(), "traffic.json")
 	trafficStore, err := NewTrafficStore(trafficPath)
 	if err != nil {
 		return err
@@ -56,11 +43,21 @@ func (s *Server) initStore() error {
 }
 
 func (s *Server) getDataDir() string {
-	if s.StorePath != "" {
-		return filepath.Dir(s.StorePath)
+	if s.DataDir != "" {
+		return s.DataDir
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".netsgo")
+	return datadir.DefaultDataDir()
+}
+
+func (s *Server) serverDataDir() string {
+	return filepath.Join(s.getDataDir(), "server")
+}
+
+func (s *Server) getStorePath() string {
+	if s.store != nil {
+		return s.store.path
+	}
+	return filepath.Join(s.serverDataDir(), "tunnels.json")
 }
 
 func (s *Server) Start() error {
@@ -95,18 +92,7 @@ func (s *Server) Start() error {
 	}
 
 	if s.auth.adminStore != nil && !s.auth.adminStore.IsInitialized() {
-		if s.auth.setupToken == "" {
-			if s.SetupToken != "" {
-				s.auth.setupToken = s.SetupToken
-			} else {
-				buf := make([]byte, 32)
-				if _, err := rand.Read(buf); err != nil {
-					return fmt.Errorf("生成 Setup Token 失败: %w", err)
-				}
-				s.auth.setupToken = hex.EncodeToString(buf)
-			}
-		}
-		s.emitSetupTokenBanner(os.Stderr)
+		return fmt.Errorf("服务尚未初始化，请使用 install 或 init 参数完成初始化")
 	}
 
 	s.auth.initRateLimiters()
@@ -168,17 +154,6 @@ func (s *Server) Start() error {
 
 	return s.httpServer.Serve(serveLn)
 }
-
-func (s *Server) emitSetupTokenBanner(w io.Writer) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "┌──────────────────────────────────────────────────────────────────┐")
-	fmt.Fprintln(w, "│  ⚠️  服务尚未初始化                                              │")
-	fmt.Fprintln(w, "│  请使用以下 Setup Token 完成初始化:                               │")
-	fmt.Fprintf(w, "│  SETUP_TOKEN=%s │\n", s.auth.setupToken)
-	fmt.Fprintln(w, "└──────────────────────────────────────────────────────────────────┘")
-	fmt.Fprintln(w)
-}
-
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Printf("🛑 开始优雅关闭...")
 

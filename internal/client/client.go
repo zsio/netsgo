@@ -45,7 +45,7 @@ type Client struct {
 	Key             string // 认证密钥（用于兑换 Token）
 	Token           string // 客户端连接密钥（由 Key 兑换）
 	InstallID       string // 稳定安装 ID
-	StatePath       string // 安装 ID 持久化路径
+	DataDir         string
 	ClientID        string // Server 分配的稳定 Client ID
 	TLSSkipVerify   bool
 	TLSFingerprint  string

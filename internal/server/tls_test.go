@@ -243,6 +243,25 @@ func TestAutoTLS_PersistAndReload(t *testing.T) {
 	}
 }
 
+func TestAutoTLS_DefaultDir_UsesServerSubdir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &TLSConfig{Mode: TLSModeAuto}
+	if _, _, err := cfg.loadOrBuildTLSConfig(tmpDir); err != nil {
+		t.Fatalf("loadOrBuildTLSConfig() error = %v", err)
+	}
+
+	certPath := filepath.Join(tmpDir, "server", "tls", "server.crt")
+	keyPath := filepath.Join(tmpDir, "server", "tls", "server.key")
+
+	if _, err := os.Stat(certPath); err != nil {
+		t.Fatalf("expected cert at %q: %v", certPath, err)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("expected key at %q: %v", keyPath, err)
+	}
+}
+
 // ============================================================
 // 证书指纹格式测试
 // ============================================================

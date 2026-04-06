@@ -2,12 +2,16 @@ package main
 
 import (
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"netsgo/internal/client"
-	"netsgo/pkg/logger"
+	"netsgo/pkg/datadir"
+	"netsgo/pkg/flock"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -17,6 +21,9 @@ var clientCmd = &cobra.Command{
 	Use:   "client",
 	Short: "启动 NetsGo 客户端 (代理端)",
 	Long: `启动 NetsGo 客户端，连接到服务端并等待服务端下发指令。
+
+该命令更适合 direct-run、开发调试或容器场景。
+如果你是在 Linux 主机上长期运行，请优先使用 netsgo install 与 netsgo manage 管理受管服务。
 
 客户端启动后会自动完成:
   1. 连接到服务端并完成认证
@@ -46,21 +53,24 @@ var clientCmd = &cobra.Command{
   # 使用 ws:// 格式连接（向后兼容）
   netsgo client --server ws://1.2.3.4:8080 --key mykey`,
 	Run: func(cmd *cobra.Command, args []string) {
-		logDir, err := logger.DefaultDir()
-		if err != nil {
-			log.Fatalf("❌ 获取日志目录失败: %v", err)
-		}
-		if err := logger.Init("client", logDir); err != nil {
-			log.Fatalf("❌ 初始化日志失败: %v", err)
-		}
-		defer logger.Close()
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 		serverAddr := viper.GetString("server")
 		key := viper.GetString("key")
 
-		log.Printf("🔗 NetsGo Client 连接到 %s ...", serverAddr)
+		log.Printf("🔗 NetsGo Client 连接到 %s (key: %s) ...", serverAddr, maskKey(key))
+		if key == "" {
+			log.Printf("⚠️ 未提供 --key 参数，客户端大概率会在认证阶段失败")
+		}
 
 		c := client.New(serverAddr, key)
+		c.DataDir = viper.GetString("data-dir")
+
+		unlock, err := flock.TryLock(filepath.Join(c.DataDir, "locks", "client.lock"))
+		if err != nil {
+			log.Fatalf("❌ 获取 client 单实例锁失败: %v", err)
+		}
+		defer unlock()
 
 		c.TLSSkipVerify = viper.GetBool("tls-skip-verify")
 		if fp := viper.GetString("tls-fingerprint"); fp != "" {
@@ -83,10 +93,21 @@ var clientCmd = &cobra.Command{
 	},
 }
 
+func maskKey(key string) string {
+	if key == "" {
+		return "(empty)"
+	}
+	if len(key) <= 4 {
+		return strings.Repeat("*", len(key))
+	}
+	return strings.Repeat("*", len(key)-4) + key[len(key)-4:]
+}
+
 func init() {
 	// 定义 flags
 	clientCmd.Flags().StringP("server", "s", "ws://localhost:8080", "服务端地址 (支持 ws/wss/http/https)")
 	clientCmd.Flags().StringP("key", "k", "", "认证密钥")
+	clientCmd.Flags().String("data-dir", datadir.DefaultDataDir(), "运行数据根目录")
 
 	clientCmd.Flags().Bool("tls-skip-verify", false, "跳过 TLS 证书校验（仅开发/测试用）")
 	clientCmd.Flags().String("tls-fingerprint", "", "指定服务器证书 SHA-256 指纹 (AA:BB:CC:... 格式)")
@@ -94,6 +115,7 @@ func init() {
 	// 绑定 viper (支持环境变量)
 	viper.BindPFlag("server", clientCmd.Flags().Lookup("server"))
 	viper.BindPFlag("key", clientCmd.Flags().Lookup("key"))
+	viper.BindPFlag("data-dir", clientCmd.Flags().Lookup("data-dir"))
 	viper.BindPFlag("tls-skip-verify", clientCmd.Flags().Lookup("tls-skip-verify"))
 	viper.BindPFlag("tls-fingerprint", clientCmd.Flags().Lookup("tls-fingerprint"))
 

@@ -274,11 +274,11 @@ func TestCheckTLSFingerprint_TOFU_PersistsToStateFile(t *testing.T) {
 	defer conn.Close()
 
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
+	statePath := filepath.Join(tmpDir, "client", "client.json")
 
 	c := New("wss://localhost", "key")
 	c.InstallID = "test-install-id"
-	c.StatePath = statePath
+	c.DataDir = tmpDir
 
 	if err := c.checkTLSFingerprint(conn); err != nil {
 		t.Fatalf("TOFU 首次连接不应报错: %v", err)
@@ -306,12 +306,12 @@ func TestCheckTLSFingerprint_TOFU_PersistsToStateFile(t *testing.T) {
 
 func TestSaveTLSFingerprint_WritesCorrectly(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
+	statePath := filepath.Join(tmpDir, "client", "client.json")
 
 	c := New("wss://localhost", "key")
 	c.InstallID = "install-abc"
 	c.Token = "token-xyz"
-	c.StatePath = statePath
+	c.DataDir = tmpDir
 
 	fp := "AA:BB:CC:DD:EE:FF"
 	if err := c.saveTLSFingerprint(fp); err != nil {
@@ -339,17 +339,16 @@ func TestSaveTLSFingerprint_WritesCorrectly(t *testing.T) {
 
 func TestSaveTLSFingerprint_EmptyStatePath_NoOp(t *testing.T) {
 	c := New("wss://localhost", "key")
-	c.StatePath = "" // 空路径
+	c.DataDir = t.TempDir()
 
-	// 不应报错，也不应写文件
 	if err := c.saveTLSFingerprint("AA:BB"); err != nil {
-		t.Errorf("空 StatePath 应直接返回 nil，得到: %v", err)
+		t.Errorf("saveTLSFingerprint() error = %v", err)
 	}
 }
 
 func TestEnsureInstallID_LoadsTLSFingerprint(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
+	statePath := filepath.Join(tmpDir, "client", "client.json")
 
 	// 先写一个包含指纹的状态文件
 	state := persistedState{
@@ -358,11 +357,12 @@ func TestEnsureInstallID_LoadsTLSFingerprint(t *testing.T) {
 		TLSFingerprint: "11:22:33:44:55:66",
 	}
 	data, _ := json.MarshalIndent(state, "", "  ")
+	os.MkdirAll(filepath.Dir(statePath), 0o755)
 	os.WriteFile(statePath, data, 0o600)
 
 	// 新 Client 加载状态
 	c := New("wss://localhost", "key")
-	c.StatePath = statePath
+	c.DataDir = tmpDir
 
 	if err := c.ensureInstallID(); err != nil {
 		t.Fatalf("ensureInstallID 失败: %v", err)
@@ -381,7 +381,7 @@ func TestEnsureInstallID_LoadsTLSFingerprint(t *testing.T) {
 
 func TestEnsureInstallID_DoesNotOverwriteExistingFingerprint(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
+	statePath := filepath.Join(tmpDir, "client", "client.json")
 
 	// 状态文件中有一个旧指纹
 	state := persistedState{
@@ -389,11 +389,12 @@ func TestEnsureInstallID_DoesNotOverwriteExistingFingerprint(t *testing.T) {
 		TLSFingerprint: "OLD:FP",
 	}
 	data, _ := json.MarshalIndent(state, "", "  ")
+	os.MkdirAll(filepath.Dir(statePath), 0o755)
 	os.WriteFile(statePath, data, 0o600)
 
 	// Client 已有一个新指纹
 	c := New("wss://localhost", "key")
-	c.StatePath = statePath
+	c.DataDir = tmpDir
 	c.TLSFingerprint = "NEW:FP" // 已有值
 
 	if err := c.ensureInstallID(); err != nil {
@@ -408,13 +409,12 @@ func TestEnsureInstallID_DoesNotOverwriteExistingFingerprint(t *testing.T) {
 
 func TestState_AllFieldsRoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
 
 	// 保存完整状态
 	c1 := New("wss://localhost", "key")
 	c1.InstallID = "rt-install"
 	c1.Token = "rt-token"
-	c1.StatePath = statePath
+	c1.DataDir = tmpDir
 
 	if err := c1.saveTLSFingerprint("RT:FP:AA:BB"); err != nil {
 		t.Fatalf("保存失败: %v", err)
@@ -422,7 +422,7 @@ func TestState_AllFieldsRoundTrip(t *testing.T) {
 
 	// 新 Client 加载
 	c2 := New("wss://localhost", "key")
-	c2.StatePath = statePath
+	c2.DataDir = tmpDir
 
 	if err := c2.ensureInstallID(); err != nil {
 		t.Fatalf("加载失败: %v", err)
@@ -461,7 +461,7 @@ func TestScenario_TLS_ConnectAndAuth(t *testing.T) {
 	c := New(wssURL, "test-key")
 	c.TLSSkipVerify = true
 	c.DisableReconnect = true
-	c.StatePath = filepath.Join(t.TempDir(), "client.json")
+	c.DataDir = t.TempDir()
 
 	go c.Start()
 	time.Sleep(3 * time.Second)
@@ -499,7 +499,7 @@ func TestScenario_PlainWS_NoTLSUsed(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
 	c.DisableReconnect = true
-	c.StatePath = filepath.Join(t.TempDir(), "client.json")
+	c.DataDir = t.TempDir()
 
 	go c.Start()
 	time.Sleep(2 * time.Second)
@@ -529,7 +529,7 @@ func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
 	c := New(wssURL, "test-key")
 	c.TLSSkipVerify = true
 	c.DisableReconnect = true
-	c.StatePath = filepath.Join(t.TempDir(), "client.json")
+	c.DataDir = t.TempDir()
 
 	go c.Start()
 	time.Sleep(3 * time.Second)
@@ -611,14 +611,13 @@ func TestScenario_TLS_FingerprintPersistedAndLoadedOnRestart(t *testing.T) {
 	defer ts.Close()
 
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
 	expectedFP := computeTestFingerprint(x509Cert.Raw)
 
 	// ---- 第一次连接：记录指纹 ----
 	conn1 := dialTLSWS(t, wsURL)
 	c1 := New("wss://localhost", "key")
 	c1.InstallID = "persist-test"
-	c1.StatePath = statePath
+	c1.DataDir = tmpDir
 
 	if err := c1.checkTLSFingerprint(conn1); err != nil {
 		t.Fatalf("首次连接不应报错: %v", err)
@@ -631,7 +630,7 @@ func TestScenario_TLS_FingerprintPersistedAndLoadedOnRestart(t *testing.T) {
 
 	// ---- 模拟重启：新 Client 实例加载状态 ----
 	c2 := New("wss://localhost", "key")
-	c2.StatePath = statePath
+	c2.DataDir = tmpDir
 	if err := c2.ensureInstallID(); err != nil {
 		t.Fatalf("加载状态失败: %v", err)
 	}

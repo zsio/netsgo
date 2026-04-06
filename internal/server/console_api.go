@@ -44,7 +44,6 @@ type serverStatusView struct {
 	Uptime         int64                    `json:"uptime"`
 	SystemUptime   int64                    `json:"system_uptime"`
 	OSInstallTime  int64                    `json:"os_install_time,omitempty"`
-	StorePath      string                   `json:"store_path"`
 	TunnelActive   int                      `json:"tunnel_active"`
 	TunnelPaused   int                      `json:"tunnel_paused"`
 	TunnelStopped  int                      `json:"tunnel_stopped"`
@@ -376,7 +375,6 @@ func (s *Server) collectServerStatus() serverStatusView {
 		Uptime:         int64(time.Since(s.startTime).Seconds()),
 		SystemUptime:   int64(sysUptime),
 		OSInstallTime:  osInstallTime,
-		StorePath:      s.getStorePath(),
 		TunnelActive:   tunnelActive,
 		TunnelPaused:   tunnelPaused,
 		TunnelStopped:  tunnelStopped,
@@ -411,11 +409,4 @@ func baseDiskName(device string) string {
 		return m
 	}
 	return device
-}
-
-func (s *Server) getStorePath() string {
-	if s.store != nil {
-		return s.store.path
-	}
-	return s.StorePath
 }
