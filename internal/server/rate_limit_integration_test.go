@@ -19,12 +19,10 @@ func setupRateLimitedServer(t *testing.T, loginCfg, setupCfg RateLimiterConfig) 
 	s, cleanup := setupTestServerWithDB(t, true)
 
 	s.auth.loginLimiter = NewRateLimiter(loginCfg)
-	s.auth.setupLimiter = NewRateLimiter(setupCfg)
 
 	origCleanup := cleanup
 	cleanup = func() {
 		s.auth.loginLimiter.Stop()
-		s.auth.setupLimiter.Stop()
 		origCleanup()
 	}
 
@@ -200,55 +198,6 @@ func TestLogin_RateLimitResetOnSuccess(t *testing.T) {
 
 	if w2.Code != http.StatusOK {
 		t.Fatalf("重置后再次失败未达阈值，不应被锁定，得到 %d", w2.Code)
-	}
-}
-
-// ============================================================
-// Setup 速率限制集成测试
-// ============================================================
-
-func TestSetup_RateLimitBlocksAfterMaxRequests(t *testing.T) {
-	// 使用未初始化的 Server
-	s, cleanup := setupTestServerWithDB(t, false)
-	defer cleanup()
-
-	s.auth.setupLimiter = NewRateLimiter(RateLimiterConfig{
-		WindowSize:    time.Minute,
-		MaxRequests:   2, // 窗口内最多 2 次
-		MaxFailures:   100,
-		LockoutPeriod: time.Hour,
-	})
-	defer s.auth.setupLimiter.Stop()
-
-	body := []byte(`{"admin":{"username":"admin","password":"password123"},"server_addr":"http://localhost","allowed_ports":[]}`)
-
-	// 第 1 次初始化成功
-	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = "10.0.1.1:12345"
-	w := httptest.NewRecorder()
-	s.handleSetupInit(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("首次初始化期望 201，得到 %d (body: %s)", w.Code, w.Body.String())
-	}
-
-	// 第 2 次请求（已初始化会返回 403，但仍消耗 rate limit 配额）
-	req2 := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
-	req2.Header.Set("Content-Type", "application/json")
-	req2.RemoteAddr = "10.0.1.1:12345"
-	w2 := httptest.NewRecorder()
-	s.handleSetupInit(w2, req2)
-
-	// 第 3 次应被限速
-	req3 := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
-	req3.Header.Set("Content-Type", "application/json")
-	req3.RemoteAddr = "10.0.1.1:12345"
-	w3 := httptest.NewRecorder()
-	s.handleSetupInit(w3, req3)
-
-	if w3.Code != http.StatusTooManyRequests {
-		t.Fatalf("超过限制后期望 429，得到 %d", w3.Code)
 	}
 }
 

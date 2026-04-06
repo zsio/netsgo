@@ -24,8 +24,6 @@ func (s *Server) newHTTPMux() *http.ServeMux {
 
 func (s *Server) registerManagementRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", s.handleWeb)
-	mux.HandleFunc("GET /api/setup/status", s.handleSetupStatus)
-	mux.HandleFunc("POST /api/setup/init", s.handleSetupInit)
 	mux.HandleFunc("GET /api/status", s.RequireAuth(s.handleAPIStatus))
 	mux.HandleFunc("GET /api/clients", s.RequireAuth(s.handleAPIClients))
 	mux.HandleFunc("GET /api/console/snapshot", s.RequireAuth(s.handleAPIConsoleSnapshot))

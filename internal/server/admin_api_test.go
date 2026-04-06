@@ -215,100 +215,6 @@ func loginAdminTokenLocal(t *testing.T, handler http.Handler, username, password
 	return token
 }
 
-func TestAPI_SetupStatus_NotInitialized(t *testing.T) {
-	s, cleanup := setupTestServerWithDB(t, false)
-	defer cleanup()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/setup/status", nil)
-	w := httptest.NewRecorder()
-
-	s.handleSetupStatus(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("状态码期望 200，得到 %d", w.Code)
-	}
-
-	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["initialized"] != false {
-		t.Errorf("期望 initialized 为 false，得到 %v", resp["initialized"])
-	}
-}
-
-func TestAPI_SetupStatus_Initialized(t *testing.T) {
-	s, cleanup := setupTestServerWithDB(t, true)
-	defer cleanup()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/setup/status", nil)
-	w := httptest.NewRecorder()
-
-	s.handleSetupStatus(w, req)
-
-	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["initialized"] != true {
-		t.Errorf("期望 initialized 为 true，得到 %v", resp["initialized"])
-	}
-}
-
-func TestAPI_SetupInit_Success(t *testing.T) {
-	s, cleanup := setupTestServerWithDB(t, false)
-	defer cleanup()
-
-	body := []byte(`{"admin":{"username":"admin2","password":"password123"},"server_addr":"https://test-server.com","allowed_ports":[]}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	s.handleSetupInit(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("期望状态码 201 Created，得到 %d", w.Code)
-	}
-
-	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp)
-
-	if resp["success"] != true {
-		t.Errorf("期望 success 为 true，得到 %v", resp["success"])
-	}
-	if resp["message"] == nil || resp["message"] == "" {
-		t.Errorf("期望返回 message")
-	}
-	// 初始化后不再自动创建 session，用户需要单独登录
-	if resp["token"] != nil {
-		t.Errorf("初始化后不应返回 token，用户应通过登录页登录")
-	}
-
-	secret, err := s.auth.adminStore.GetJWTSecret()
-	if err != nil {
-		t.Fatalf("setup 完成后应已生成 JWT Secret: %v", err)
-	}
-	if len(secret) == 0 {
-		t.Fatal("setup 完成后 JWT Secret 不应为空")
-	}
-
-	// 验证确实已经初始化
-	if !s.auth.adminStore.IsInitialized() {
-		t.Errorf("API 成功后，Store 状态应为已初始化")
-	}
-}
-
-func TestAPI_SetupInit_AlreadyInitialized(t *testing.T) {
-	s, cleanup := setupTestServerWithDB(t, true)
-	defer cleanup()
-
-	body := []byte(`{"admin":{"username":"attacker","password":"password123"},"server_addr":"https://evil.com","allowed_ports":[]}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
-	w := httptest.NewRecorder()
-
-	s.handleSetupInit(w, req)
-
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("重复初始化应返回 403 Forbidden，得到 %d", w.Code)
-	}
-}
-
 func TestAPI_Login_Success(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
@@ -384,11 +290,6 @@ func TestAPI_ProtectedRoutes_LoginLogoutAndSingleSession(t *testing.T) {
 		if resp.Code != http.StatusUnauthorized {
 			t.Fatalf("%s 匿名访问应返回 401，得到 %d", path, resp.Code)
 		}
-	}
-
-	setupResp := doMuxRequest(t, mux, http.MethodGet, "/api/setup/status", "", nil)
-	if setupResp.Code != http.StatusOK {
-		t.Fatalf("/api/setup/status 应保持公开，得到 %d", setupResp.Code)
 	}
 
 	token1 := loginAdminTokenLocal(t, mux, "admin", "password123")
@@ -599,22 +500,6 @@ func TestAPI_AdminConfig_AllowsUpdatingPortsWithLegacyServerAddr(t *testing.T) {
 
 	if got := s.auth.adminStore.GetServerConfig().ServerAddr; got != "localhost" {
 		t.Fatalf("legacy server_addr 应保持原值，得到 %q", got)
-	}
-}
-
-func TestAPI_SetupInit_ServerAddrValidation(t *testing.T) {
-	s, cleanup := setupTestServerWithDB(t, false)
-	defer cleanup()
-
-	body := []byte(`{"admin":{"username":"admin2","password":"password123"},"server_addr":"example.com","allowed_ports":[]}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/setup/init", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	s.handleSetupInit(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("非法 server_addr 应返回 400，得到 %d", w.Code)
 	}
 }
 

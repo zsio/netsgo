@@ -14,7 +14,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +25,6 @@ import (
 )
 
 func TestProxyE2E(t *testing.T) {
-	const setupToken = "proxy-e2e-setup-token"
 	const managementHost = "panel.proxy.test"
 	const tunnelHost = "app.proxy.test"
 
@@ -54,9 +52,17 @@ func TestProxyE2E(t *testing.T) {
 	serverPort := mustAtoi(t, upstreamPort)
 
 	tmpDir := t.TempDir()
+	if err := server.ApplyInit(tmpDir, server.InitParams{
+		AdminUsername: "admin",
+		AdminPassword: "password123",
+		ServerAddr:    "http://" + managementHost,
+		AllowedPorts:  "1-65535",
+	}); err != nil {
+		t.Fatalf("初始化 E2E 服务端失败: %v", err)
+	}
+
 	srv := server.New(serverPort)
-	srv.StorePath = filepath.Join(tmpDir, "tunnels.json")
-	srv.SetupToken = setupToken
+	srv.DataDir = tmpDir
 	srv.TLS = &server.TLSConfig{
 		Mode:           server.TLSModeOff,
 		TrustedProxies: []string{"127.0.0.1/32", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
@@ -73,8 +79,6 @@ func TestProxyE2E(t *testing.T) {
 	}()
 
 	baseURL := "http://127.0.0.1:" + proxyPort
-	waitForSetupReady(t, baseURL, managementHost, 20*time.Second)
-	setupServer(t, baseURL, managementHost, "http://"+managementHost, setupToken)
 	adminToken := waitForAdminToken(t, baseURL, managementHost, 10*time.Second)
 	apiKey := createAPIKey(t, baseURL, managementHost, adminToken)
 
@@ -82,9 +86,8 @@ func TestProxyE2E(t *testing.T) {
 	defer backend.Close()
 
 	localPort := backend.Listener.Addr().(*net.TCPAddr).Port
-	clientStatePath := filepath.Join(tmpDir, "client.json")
 	c := client.New("ws://127.0.0.1:"+proxyPort, apiKey)
-	c.StatePath = clientStatePath
+	c.DataDir = tmpDir
 
 	clientErr := make(chan error, 1)
 	go func() {
@@ -123,22 +126,26 @@ func TestProxyE2E(t *testing.T) {
 	}
 }
 
-func TestWaitForSetupReady(t *testing.T) {
+func TestWaitForAdminToken(t *testing.T) {
 	attempts := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/setup/status" {
+		if r.URL.Path != "/api/auth/login" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		attempts++
 		if attempts < 3 {
-			w.WriteHeader(http.StatusServiceUnavailable)
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": "admin-token"})
 	}))
 	defer srv.Close()
 
-	waitForSetupReady(t, srv.URL, "panel.test", 2*time.Second)
+	token := waitForAdminToken(t, srv.URL, "panel.test", 2*time.Second)
+	if token != "admin-token" {
+		t.Fatalf("期望拿到 admin-token，得到 %q", token)
+	}
 
 	if attempts < 3 {
 		t.Fatalf("expected retries before ready, got %d attempts", attempts)
@@ -235,24 +242,6 @@ func waitForTunnel(t *testing.T, url, host string, expected []byte, timeout time
 	t.Fatalf("在 %v 内未观察到可用隧道: %s host=%s", timeout, url, host)
 }
 
-func waitForSetupReady(t *testing.T, baseURL, managementHost string, timeout time.Duration) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		resp, err := doRequest(http.MethodGet, baseURL+"/api/setup/status", managementHost, "", nil, "")
-		if err == nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return
-			}
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	t.Fatalf("在 %v 内未观察到 setup ready: %s/api/setup/status", timeout, baseURL)
-}
-
 func waitForLiveClientCount(t *testing.T, baseURL, managementHost, adminToken string, want int, timeout time.Duration) {
 	t.Helper()
 
@@ -316,21 +305,6 @@ func fetchClientCount(baseURL, managementHost, token string) (int, error) {
 		return 0, err
 	}
 	return len(payload), nil
-}
-
-func setupServer(t *testing.T, baseURL, managementHost, serverAddr, setupToken string) {
-	t.Helper()
-
-	body := bytes.NewBufferString(fmt.Sprintf(`{"admin":{"username":"admin","password":"password123"},"server_addr":"%s","allowed_ports":[],"setup_token":"%s"}`, serverAddr, setupToken))
-	resp, err := doRequest(http.MethodPost, baseURL+"/api/setup/init", managementHost, "", body, "application/json")
-	if err != nil {
-		t.Fatalf("初始化服务失败: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		payload, _ := io.ReadAll(resp.Body)
-		t.Fatalf("初始化服务状态异常: %d body=%s", resp.StatusCode, string(payload))
-	}
 }
 
 func waitForAdminToken(t *testing.T, baseURL, managementHost string, timeout time.Duration) string {

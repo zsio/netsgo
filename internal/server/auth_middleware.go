@@ -149,9 +149,6 @@ func GetAdminFromContext(ctx context.Context) *SessionInfo {
 	return GetSessionFromContext(ctx)
 }
 
-// RequireAuthIfInitialized 条件鉴权中间件：
-// - 如果服务尚未初始化（adminStore 为 nil 或未走 setup），直接放行以保持向后兼容
-// - 如果已初始化，则走完整的 JWT + Session 鉴权
 func (s *Server) RequireAuthIfInitialized(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.auth.adminStore == nil || !s.auth.adminStore.IsInitialized() {

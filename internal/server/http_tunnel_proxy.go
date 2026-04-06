@@ -66,36 +66,13 @@ func (s *Server) hostDispatchHandler(management http.Handler) http.Handler {
 			return
 		}
 
-		if s.allowSetupRequest(r) || s.isManagementHost(r.Host) {
+		if s.isManagementHost(r.Host) {
 			management.ServeHTTP(w, r)
 			return
 		}
 
 		http.NotFound(w, r)
 	})
-}
-
-func (s *Server) allowSetupRequest(r *http.Request) bool {
-	if r == nil || r.URL == nil {
-		return false
-	}
-	if s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() {
-		return false
-	}
-
-	path := r.URL.Path
-	switch {
-	case path == "/":
-		return true
-	case path == "/favicon.ico":
-		return true
-	case strings.HasPrefix(path, "/assets/"):
-		return true
-	case strings.HasPrefix(path, "/api/setup/"):
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *Server) isManagementHost(host string) bool {

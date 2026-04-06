@@ -172,7 +172,6 @@ export interface ServerStatus {
   uptime: number;         // seconds (process uptime)
   system_uptime: number;  // seconds (OS boot uptime)
   os_install_time?: number; // unix timestamp (seconds)
-  store_path: string;
   tunnel_active: number;
   tunnel_paused: number;
   tunnel_stopped: number;
@@ -271,24 +270,4 @@ export interface TunnelMutationErrorResponse {
   success?: boolean;
   error?: string;
   error_code?: string;
-}
-
-export interface SetupStatus {
-  initialized: boolean;
-  setup_token_required: boolean;
-}
-
-export interface SetupRequest {
-  admin: {
-    username: string;
-    password: string;
-  };
-  server_addr: string;
-  allowed_ports: PortRange[];
-  setup_token?: string;
-}
-
-export interface SetupResponse {
-  success: boolean;
-  message: string;
 }

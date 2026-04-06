@@ -7,6 +7,11 @@ import (
 )
 
 func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		http.NotFound(w, r)
+		return
+	}
+
 	if s.webFS == nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, devModeHTML)

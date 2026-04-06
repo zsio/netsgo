@@ -343,28 +343,29 @@ func TestDispatch_HTTPTunnel_ProxyFail_Returns502(t *testing.T) {
 	}
 }
 
-func TestDispatch_SetupPhase_AllowsFrontendAndBlocksOtherAPIs(t *testing.T) {
+func TestDispatch_UninitializedServer_DoesNotExposeManagementHostOnRandomHost(t *testing.T) {
 	s, _ := newDispatchTestServer(t, false, "")
 
-	rootReq := newManagementRequest(http.MethodGet, "http://random.example.com/", "random.example.com", nil)
-	rootResp := httptest.NewRecorder()
-	s.StartHTTPOnly().ServeHTTP(rootResp, rootReq)
-	if rootResp.Code != http.StatusOK {
-		t.Fatalf("setup 阶段任意 Host 访问管理前端应放行，得到 %d", rootResp.Code)
-	}
+	req := newManagementRequest(http.MethodGet, "http://random.example.com/", "random.example.com", nil)
+	w := httptest.NewRecorder()
 
-	assetReq := newManagementRequest(http.MethodGet, "http://random.example.com/assets/app.js", "random.example.com", nil)
-	assetResp := httptest.NewRecorder()
-	s.StartHTTPOnly().ServeHTTP(assetResp, assetReq)
-	if assetResp.Code != http.StatusOK {
-		t.Fatalf("setup 阶段静态资源应放行，得到 %d", assetResp.Code)
-	}
+	s.StartHTTPOnly().ServeHTTP(w, req)
 
-	adminReq := newManagementRequest(http.MethodGet, "http://random.example.com/api/admin/config", "random.example.com", nil)
-	adminResp := httptest.NewRecorder()
-	s.StartHTTPOnly().ServeHTTP(adminResp, adminReq)
-	if adminResp.Code == http.StatusOK {
-		t.Fatalf("setup 阶段非 setup API 不应被直接放行")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("未初始化且无管理 Host 时，随机 Host 不应回落到管理前端，得到 %d", w.Code)
+	}
+}
+
+func TestDispatch_UnknownAPIPath_DoesNotFallbackToWebIndex(t *testing.T) {
+	s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
+
+	req := newManagementRequest(http.MethodGet, "http://panel.example.com/api/setup/status", "panel.example.com", nil)
+	w := httptest.NewRecorder()
+
+	s.StartHTTPOnly().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("已删除 API 不应 fallback 到前端页面，得到 %d", w.Code)
 	}
 }
 

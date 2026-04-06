@@ -6,7 +6,6 @@ import { dashboardIndexRoute } from '@/routes/dashboard/index';
 import { dashboardClientRoute } from '@/routes/dashboard/clients.$clientId';
 
 import { loginRoute } from '@/routes/login';
-import { setupRoute } from '@/routes/setup';
 import { adminRoute } from '@/routes/admin';
 import { adminKeysRoute } from '@/routes/admin/keys';
 
@@ -27,7 +26,6 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   dashboardRouteTree,
   loginRoute,
-  setupRoute,
 ]);
 
 const hashHistory = createHashHistory();
