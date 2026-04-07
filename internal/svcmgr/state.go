@@ -105,7 +105,7 @@ func InspectWithPaths(role Role, unitPath, specPath, envPath, dataDir string) In
 		return inspection
 	}
 
-	expectedDataDir := filepath.Dir(dataDir)
+	parentDataDir := filepath.Dir(dataDir)
 	if spec.Role != role {
 		problems = append(problems, fmt.Sprintf("spec 角色不匹配: got %q want %q", spec.Role, role))
 	}
@@ -121,8 +121,8 @@ func InspectWithPaths(role Role, unitPath, specPath, envPath, dataDir string) In
 	if spec.EnvPath != envPath {
 		problems = append(problems, fmt.Sprintf("spec env 路径不匹配: got %q want %q", spec.EnvPath, envPath))
 	}
-	if spec.DataDir != expectedDataDir {
-		problems = append(problems, fmt.Sprintf("spec data dir 不匹配: got %q want %q", spec.DataDir, expectedDataDir))
+	if spec.DataDir != parentDataDir {
+		problems = append(problems, fmt.Sprintf("spec data dir 不匹配: got %q want %q", spec.DataDir, parentDataDir))
 	}
 	if spec.RunAsUser != SystemUser {
 		problems = append(problems, fmt.Sprintf("spec 运行用户不匹配: got %q want %q", spec.RunAsUser, SystemUser))
