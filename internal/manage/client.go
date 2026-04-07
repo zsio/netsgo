@@ -103,5 +103,5 @@ func uninstallClient(deps clientDeps) error {
 	if err := deps.DaemonReload(); err != nil {
 		return err
 	}
-	return maybeRemoveSharedBinary(deps.UI, deps.DetectServer, deps.RemoveBinary)
+	return maybeRemoveSharedBinary(deps.DetectServer, deps.RemoveBinary)
 }

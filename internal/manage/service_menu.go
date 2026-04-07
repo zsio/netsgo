@@ -77,15 +77,8 @@ func printManageCancelled(ui uiProvider) {
 	ui.PrintSummary("已取消", [][2]string{{"下一步", "运行 netsgo manage 继续管理服务"}})
 }
 
-func maybeRemoveSharedBinary(ui uiProvider, otherRoleState func() svcmgr.InstallState, removeBinary func() error) error {
+func maybeRemoveSharedBinary(otherRoleState func() svcmgr.InstallState, removeBinary func() error) error {
 	if otherRoleState() != svcmgr.StateNotInstalled {
-		return nil
-	}
-	ok, err := ui.Confirm("是否同时删除 /usr/local/bin/netsgo?")
-	if err != nil {
-		return err
-	}
-	if !ok {
 		return nil
 	}
 	return removeBinary()
