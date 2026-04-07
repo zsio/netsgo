@@ -42,11 +42,11 @@ func InstallClientWith(deps clientDeps) error {
 		return errInstallBrokenState
 	}
 
-	serverURL, err := deps.UI.Input("服务端地址")
+	serverURL, err := deps.UI.Input("服务端地址（例：wss://netsgo.example.com）")
 	if err != nil {
 		return err
 	}
-	clientKey, err := deps.UI.Password("客户端 Key")
+	clientKey, err := deps.UI.Password("客户端 Key（从 Web 面板客户端页获取，格式 sk-...）")
 	if err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func InstallClientWith(deps clientDeps) error {
 	if err != nil {
 		return err
 	}
-	tlsFingerprint, err := deps.UI.Input("TLS 证书指纹")
+	tlsFingerprint, err := deps.UI.Input("TLS 证书指纹（可留空，仅用于自签证书精确校验）")
 	if err != nil {
 		return err
 	}

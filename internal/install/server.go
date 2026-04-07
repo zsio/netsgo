@@ -2,8 +2,10 @@ package install
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 
 	"netsgo/internal/server"
@@ -46,7 +48,7 @@ func InstallServerWith(deps serverDeps) error {
 		return errInstallBrokenState
 	}
 
-	portRaw, err := deps.UI.Input("监听端口 [默认 8080]")
+	portRaw, err := deps.UI.Input("监听端口（留空使用默认值 8080）")
 	if err != nil {
 		return err
 	}
@@ -61,18 +63,18 @@ func InstallServerWith(deps serverDeps) error {
 	if err != nil {
 		return err
 	}
-	trustedProxies, err := deps.UI.Input("受信任代理 CIDR")
+	trustedProxies, err := deps.UI.Input("受信任代理 CIDR（可留空，例：127.0.0.1/8,192.168.0.0/16）")
 	if err != nil {
 		return err
 	}
 	tlsCert := ""
 	tlsKey := ""
 	if tlsMode == "custom" {
-		tlsCert, err = deps.UI.Input("TLS 证书路径")
+		tlsCert, err = deps.UI.Input("TLS 证书路径（例：/etc/ssl/certs/netsgo.pem）")
 		if err != nil {
 			return err
 		}
-		tlsKey, err = deps.UI.Input("TLS 私钥路径")
+		tlsKey, err = deps.UI.Input("TLS 私钥路径（例：/etc/ssl/private/netsgo.key）")
 		if err != nil {
 			return err
 		}
@@ -99,12 +101,12 @@ func InstallServerWith(deps serverDeps) error {
 		}
 		serverAddr = initParams.ServerAddr
 	} else {
-		serverAddr, err = deps.UI.Input("服务对外访问地址")
+		serverAddr, err = deps.UI.Input("服务对外访问地址（例：https://netsgo.example.com）")
 		if err != nil {
 			return err
 		}
 		initParams.ServerAddr = serverAddr
-		initParams.AdminUsername, err = deps.UI.Input("管理员用户名")
+		initParams.AdminUsername, err = deps.UI.Input("管理员用户名（例：admin）")
 		if err != nil {
 			return err
 		}
@@ -112,7 +114,7 @@ func InstallServerWith(deps serverDeps) error {
 		if err != nil {
 			return err
 		}
-		initParams.AllowedPorts, err = deps.UI.Input("允许的端口范围")
+		initParams.AllowedPorts, err = deps.UI.Input("允许的端口范围（例：1-65535）")
 		if err != nil {
 			return err
 		}
@@ -164,7 +166,11 @@ func defaultServerDeps() serverDeps {
 		Inspect: svcmgr.Inspect,
 		Detect:  svcmgr.Detect,
 		SelectTLSMode: func(ui uiProvider) (string, error) {
-			index, err := ui.Select("TLS 模式", []string{"off", "auto", "custom"})
+			index, err := ui.Select("TLS 模式", []string{
+				"off    — 不使用 TLS（适合放在反代后部署）",
+				"auto   — 自动生成自签证书（TOFU 模式）",
+				"custom — 使用自定义证书文件",
+			})
 			if err != nil {
 				return "", err
 			}
@@ -205,7 +211,13 @@ func ensureManagedServerDirs() error {
 	if err != nil {
 		return err
 	}
-	if err := os.Chown(svcmgr.ManagedDataDir+"/server", uid, gid); err != nil {
+	serverDir := svcmgr.ManagedDataDir + "/server"
+	if err := filepath.WalkDir(serverDir, func(path string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chown(path, uid, gid)
+	}); err != nil {
 		return err
 	}
 	return os.Chown(svcmgr.ManagedDataDir+"/locks", uid, gid)
