@@ -16,15 +16,15 @@ type managedInstallDeps struct {
 }
 
 func printInstalledSummary(ui uiProvider, title string) {
-	ui.PrintSummary(title, [][2]string{{"状态", "已安装"}, {"下一步", "运行 netsgo manage 管理已安装的服务"}})
+	ui.PrintSummary(title, [][2]string{{"Status", "Installed"}, {"Next step", "Run netsgo manage to manage the installed service"}})
 }
 
 func printBrokenSummary(ui uiProvider, title string, inspection svcmgr.InstallInspection) {
-	ui.PrintSummary(title, degradedRows(inspection, "请先清理残留状态，再重新运行 netsgo install"))
+	ui.PrintSummary(title, degradedRows(inspection, "Clean up residual state first, then re-run netsgo install"))
 }
 
 func printInstallCancelled(ui uiProvider) {
-	ui.PrintSummary("安装已取消", [][2]string{{"下一步", "重新运行 netsgo install 以继续安装"}})
+	ui.PrintSummary("Installation cancelled", [][2]string{{"Next step", "Run netsgo install again to continue"}})
 }
 
 func resolveInspection(inspect func(svcmgr.Role) svcmgr.InstallInspection, detect func(svcmgr.Role) svcmgr.InstallState, role svcmgr.Role) svcmgr.InstallInspection {
@@ -38,9 +38,9 @@ func resolveInspection(inspect func(svcmgr.Role) svcmgr.InstallInspection, detec
 }
 
 func degradedRows(inspection svcmgr.InstallInspection, advice string) [][2]string {
-	rows := [][2]string{{"状态", inspection.State.String()}, {"建议", advice}}
+	rows := [][2]string{{"Status", inspection.State.String()}, {"Advice", advice}}
 	for _, problem := range inspection.Problems {
-		rows = append(rows, [2]string{"问题", problem})
+		rows = append(rows, [2]string{"Problem", problem})
 	}
 	return rows
 }

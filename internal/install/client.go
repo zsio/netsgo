@@ -1,11 +1,14 @@
 package install
 
 import (
+	"fmt"
 	"os"
 	"os/user"
 	"strconv"
+	"strings"
 
 	"netsgo/internal/svcmgr"
+	"netsgo/internal/tui"
 )
 
 type clientDeps struct {
@@ -32,35 +35,59 @@ func InstallClientWith(deps clientDeps) error {
 	state := inspection.State
 	switch state {
 	case svcmgr.StateInstalled:
-		printInstalledSummary(deps.UI, "客户端已安装")
+		printInstalledSummary(deps.UI, "Client already installed")
 		return nil
 	case svcmgr.StateHistoricalDataOnly:
-		deps.UI.PrintSummary("客户端安装状态异常", [][2]string{{"状态", inspection.State.String()}, {"建议", "客户端不支持恢复旧数据；请清理残留数据后重新安装并重新认证"}, {"问题", firstProblem(inspection.Problems)}})
+		deps.UI.PrintSummary("Client installation state is broken", [][2]string{
+			{"Status", inspection.State.String()},
+			{"Advice", "Client does not support recovering existing data; clear residual data and reinstall"},
+			{"Problem", firstProblem(inspection.Problems)},
+		})
 		return errInstallBrokenState
 	case svcmgr.StateBroken:
-		printBrokenSummary(deps.UI, "客户端安装状态异常", inspection)
+		printBrokenSummary(deps.UI, "Client installation state is broken", inspection)
 		return errInstallBrokenState
 	}
 
-	serverURL, err := deps.UI.Input("服务端地址（例：wss://netsgo.example.com）")
+	serverURL, err := deps.UI.Input("Server address", tui.InputOptions{
+		Placeholder: "e.g. wss://netsgo.example.com",
+		Description: "WebSocket URL of the NetsGo server (ws:// or wss://)",
+	})
 	if err != nil {
 		return err
 	}
-	clientKey, err := deps.UI.Password("客户端 Key（从 Web 面板客户端页获取，格式 sk-...）")
+	clientKey, err := deps.UI.Password("Client key", tui.InputOptions{
+		Placeholder: "sk-...",
+		Description: "Obtain from the Web panel → Clients page",
+		Validate: func(s string) error {
+			if strings.TrimSpace(s) == "" {
+				return fmt.Errorf("client key cannot be empty")
+			}
+			return nil
+		},
+	})
 	if err != nil {
 		return err
 	}
-	tlsSkipVerify, err := deps.UI.Confirm("跳过 TLS 证书校验?")
+	tlsSkipVerify, err := deps.UI.Confirm("Skip TLS certificate verification?")
 	if err != nil {
 		return err
 	}
-	tlsFingerprint, err := deps.UI.Input("TLS 证书指纹（可留空，仅用于自签证书精确校验）")
+	tlsFingerprint, err := deps.UI.Input("TLS certificate fingerprint", tui.InputOptions{
+		Placeholder: "AA:BB:CC:...",
+		Description: "SHA-256 fingerprint for pinning a self-signed certificate (optional)",
+	})
 	if err != nil {
 		return err
 	}
 
-	deps.UI.PrintSummary("安装配置确认", [][2]string{{"角色", "client"}, {"服务端", serverURL}, {"跳过 TLS 校验", boolText(tlsSkipVerify)}, {"TLS 指纹", tlsFingerprint}})
-	ok, err := deps.UI.Confirm("确认安装?")
+	deps.UI.PrintSummary("Installation summary", [][2]string{
+		{"Role", "client"},
+		{"Server", serverURL},
+		{"Skip TLS verify", boolText(tlsSkipVerify)},
+		{"TLS fingerprint", tlsFingerprint},
+	})
+	ok, err := deps.UI.Confirm("Proceed with installation?")
 	if err != nil {
 		return err
 	}
@@ -88,7 +115,11 @@ func InstallClientWith(deps clientDeps) error {
 	}); err != nil {
 		return err
 	}
-	deps.UI.PrintSummary("客户端安装完成", [][2]string{{"状态", "运行中"}, {"连接到", serverURL}, {"下一步", "运行 netsgo manage 管理服务"}})
+	deps.UI.PrintSummary("Client installation complete", [][2]string{
+		{"Status", "Running"},
+		{"Connected to", serverURL},
+		{"Next step", "Run netsgo manage to manage the service"},
+	})
 	return nil
 }
 
@@ -136,14 +167,14 @@ func ensureManagedClientDirs() error {
 
 func boolText(v bool) string {
 	if v {
-		return "是"
+		return "Yes"
 	}
-	return "否"
+	return "No"
 }
 
 func firstProblem(problems []string) string {
 	if len(problems) == 0 {
-		return "安装状态异常"
+		return "unknown error"
 	}
 	return problems[0]
 }
