@@ -19,13 +19,13 @@ func TestInstallClientWithAlreadyInstalled(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("已安装时不应报错: %v", err)
+		t.Fatalf("should not error when already installed: %v", err)
 	}
 	if called {
-		t.Fatal("已安装时不应继续执行安装动作")
+		t.Fatal("should not continue install when already installed")
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "客户端已安装" {
-		t.Fatalf("已安装时应提示下一步，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Client already installed" {
+		t.Fatalf("should show next-step summary when already installed, got %#v", ui.summaries)
 	}
 }
 
@@ -34,17 +34,17 @@ func TestInstallClientWithBrokenStateFails(t *testing.T) {
 	err := InstallClientWith(clientDeps{
 		UI: ui,
 		Inspect: func(role svcmgr.Role) svcmgr.InstallInspection {
-			return svcmgr.InstallInspection{Role: role, State: svcmgr.StateBroken, Problems: []string{"缺少 env 文件"}}
+			return svcmgr.InstallInspection{Role: role, State: svcmgr.StateBroken, Problems: []string{"missing env file"}}
 		},
 	})
 	if err == nil {
-		t.Fatal("broken 状态应失败")
+		t.Fatal("broken state should fail")
 	}
 	if !errors.Is(err, errInstallBrokenState) {
-		t.Fatalf("broken 状态应返回 errInstallBrokenState，得到 %v", err)
+		t.Fatalf("broken state should return errInstallBrokenState, got %v", err)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "客户端安装状态异常" {
-		t.Fatalf("broken 状态应先输出问题摘要，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Client installation state is broken" {
+		t.Fatalf("broken state should show problem summary, got %#v", ui.summaries)
 	}
 }
 
@@ -53,28 +53,28 @@ func TestInstallClientWithHistoricalDataOnlyFailsWithReauthMessage(t *testing.T)
 	err := InstallClientWith(clientDeps{
 		UI: ui,
 		Inspect: func(role svcmgr.Role) svcmgr.InstallInspection {
-			return svcmgr.InstallInspection{Role: role, State: svcmgr.StateHistoricalDataOnly, Problems: []string{"残留运行数据目录仍存在: /var/lib/netsgo/client"}}
+			return svcmgr.InstallInspection{Role: role, State: svcmgr.StateHistoricalDataOnly, Problems: []string{"residual runtime data directory still exists: /var/lib/netsgo/client"}}
 		},
 	})
 	if err == nil {
-		t.Fatal("client 历史数据残留应拒绝安装")
+		t.Fatal("client historical data residual should refuse install")
 	}
 	if !errors.Is(err, errInstallBrokenState) {
-		t.Fatalf("client 历史数据残留应返回 errInstallBrokenState，得到 %v", err)
+		t.Fatalf("client historical data residual should return errInstallBrokenState, got %v", err)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "客户端安装状态异常" {
-		t.Fatalf("client 历史数据残留应输出异常摘要，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Client installation state is broken" {
+		t.Fatalf("client historical data should show broken state summary, got %#v", ui.summaries)
 	}
 	rows := ui.summaries[0].rows
 	foundAdvice := false
 	for _, row := range rows {
-		if row[0] == "建议" && row[1] == "客户端不支持恢复旧数据；请清理残留数据后重新安装并重新认证" {
+		if row[0] == "Advice" && row[1] == "Client does not support recovering existing data; clear residual data and reinstall" {
 			foundAdvice = true
 			break
 		}
 	}
 	if !foundAdvice {
-		t.Fatalf("client 历史数据残留应明确提示重新认证，得到 %#v", rows)
+		t.Fatalf("client historical data should advise re-authentication, got %#v", rows)
 	}
 }
 
@@ -102,16 +102,16 @@ func TestInstallClientWithFreshInstall(t *testing.T) {
 		EnableAndStart:  func(unit string) error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("新装 client 不应报错: %v", err)
+		t.Fatalf("fresh client install should not error: %v", err)
 	}
 	if !writeSpecCalled {
-		t.Fatal("新装 client 应写入 spec")
+		t.Fatal("fresh client install should write spec")
 	}
 	if len(ui.summaries) != 2 {
-		t.Fatalf("应输出确认与完成两次 summary，实际 %d 次", len(ui.summaries))
+		t.Fatalf("should show confirmation and completion summaries, got %d", len(ui.summaries))
 	}
-	if ui.summaries[1].title != "客户端安装完成" {
-		t.Fatalf("安装成功后应输出完成摘要，得到 %#v", ui.summaries)
+	if ui.summaries[1].title != "Client installation complete" {
+		t.Fatalf("expected 'Client installation complete' summary, got %#v", ui.summaries)
 	}
 }
 
@@ -136,10 +136,10 @@ func TestInstallClientWithEnsureDirs(t *testing.T) {
 		EnableAndStart:    func(unit string) error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("client install 不应报错: %v", err)
+		t.Fatalf("client install should not error: %v", err)
 	}
 	if !ensureDirsCalled {
-		t.Fatal("client install 应创建固定目录")
+		t.Fatal("client install should create required directories")
 	}
 }
 
@@ -163,9 +163,9 @@ func TestInstallClientWithConfirmNoShowsCancelledSummary(t *testing.T) {
 		EnableAndStart:    func(unit string) error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("取消安装不应报错: %v", err)
+		t.Fatalf("cancelling install should not error: %v", err)
 	}
-	if len(ui.summaries) != 2 || ui.summaries[1].title != "安装已取消" {
-		t.Fatalf("取消安装后应输出取消摘要，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "Installation cancelled" {
+		t.Fatalf("expected 'Installation cancelled' summary after declining, got %#v", ui.summaries)
 	}
 }

@@ -20,19 +20,19 @@ func TestInstallServerWithAlreadyInstalled(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("已安装时不应报错: %v", err)
+		t.Fatalf("should not error when already installed: %v", err)
 	}
 	if called {
-		t.Fatal("已安装时不应继续执行安装动作")
+		t.Fatal("should not continue install when already installed")
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "服务端已安装" {
-		t.Fatalf("已安装时应提示下一步，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Server already installed" {
+		t.Fatalf("expected 'Server already installed' summary, got %#v", ui.summaries)
 	}
 }
 
 func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 	ui := &fakeUI{
-		inputs:   []string{"8080", "127.0.0.1/32"},
+		inputs:   []string{"9527", "127.0.0.1/32"},
 		confirms: []bool{true, true},
 	}
 	applyInitCalled := false
@@ -62,28 +62,28 @@ func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 		EnableAndStart:  func(unit string) error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("历史数据恢复安装不应报错: %v", err)
+		t.Fatalf("historical data recovery install should not error: %v", err)
 	}
 	if applyInitCalled {
-		t.Fatal("历史数据恢复安装不应再次调用 ApplyInit")
+		t.Fatal("historical data recovery install should not call ApplyInit again")
 	}
 	if !writeSpecCalled {
-		t.Fatal("历史数据恢复安装应继续写入 spec/env/unit")
+		t.Fatal("historical data recovery install should still write spec/env/unit")
 	}
 	if len(ui.summaries) != 3 {
-		t.Fatalf("应输出历史数据确认、安装确认、完成三次 summary，实际 %d 次", len(ui.summaries))
+		t.Fatalf("expected 3 summaries (historical data, install confirm, complete), got %d", len(ui.summaries))
 	}
-	if ui.summaries[0].title != "检测到服务端历史数据" {
-		t.Fatalf("应先提示历史数据选择，得到 %#v", ui.summaries)
+	if ui.summaries[0].title != "Detected existing server data" {
+		t.Fatalf("expected first summary to be 'Detected existing server data', got %#v", ui.summaries)
 	}
-	if ui.summaries[2].title != "服务端安装完成" {
-		t.Fatalf("历史恢复安装完成后应输出成功摘要，得到 %#v", ui.summaries)
+	if ui.summaries[2].title != "Server installation complete" {
+		t.Fatalf("expected last summary to be 'Server installation complete', got %#v", ui.summaries)
 	}
 }
 
 func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 	ui := &fakeUI{
-		inputs:   []string{"8080", "127.0.0.1/32"},
+		inputs:   []string{"9527", "127.0.0.1/32"},
 		confirms: []bool{false},
 	}
 	writeSpecCalled := false
@@ -109,19 +109,19 @@ func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 		EnableAndStart:  func(unit string) error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("拒绝使用历史数据不应报错: %v", err)
+		t.Fatalf("declining historical data reuse should not error: %v", err)
 	}
 	if writeSpecCalled {
-		t.Fatal("拒绝使用历史数据后不应继续安装")
+		t.Fatal("should not continue install after declining historical data")
 	}
-	if len(ui.summaries) != 2 || ui.summaries[1].title != "安装已取消" {
-		t.Fatalf("拒绝使用历史数据后应输出取消摘要，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "Installation cancelled" {
+		t.Fatalf("should show cancellation summary after declining, got %#v", ui.summaries)
 	}
 }
 
 func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"8080", "127.0.0.1/32", "/tmp/cert.pem", "/tmp/key.pem", "https://panel.example.com", "admin", "1-65535"},
+		inputs:    []string{"9527", "127.0.0.1/32", "/tmp/cert.pem", "/tmp/key.pem", "https://panel.example.com", "admin", "1-65535"},
 		passwords: []string{"Password123"},
 		confirms:  []bool{true},
 	}
@@ -145,13 +145,13 @@ func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 		EnableAndStart:  func(unit string) error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("custom TLS 安装不应报错: %v", err)
+		t.Fatalf("custom TLS install should not error: %v", err)
 	}
 	if writtenEnv.TLSCert != "/tmp/cert.pem" || writtenEnv.TLSKey != "/tmp/key.pem" {
-		t.Fatalf("custom TLS 应写入 cert/key，得到 %#v", writtenEnv)
+		t.Fatalf("custom TLS should write cert/key, got %#v", writtenEnv)
 	}
-	if len(ui.summaries) != 2 || ui.summaries[1].title != "服务端安装完成" {
-		t.Fatalf("安装成功后应输出完成摘要，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "Server installation complete" {
+		t.Fatalf("should show completion summary after successful install, got %#v", ui.summaries)
 	}
 }
 
@@ -160,23 +160,23 @@ func TestInstallServerWithBrokenStateFails(t *testing.T) {
 	err := InstallServerWith(serverDeps{
 		UI: ui,
 		Inspect: func(role svcmgr.Role) svcmgr.InstallInspection {
-			return svcmgr.InstallInspection{Role: role, State: svcmgr.StateBroken, Problems: []string{"缺少 unit 文件"}}
+			return svcmgr.InstallInspection{Role: role, State: svcmgr.StateBroken, Problems: []string{"missing unit file"}}
 		},
 	})
 	if err == nil {
-		t.Fatal("broken 状态应失败")
+		t.Fatal("broken state should fail")
 	}
 	if !errors.Is(err, errInstallBrokenState) {
-		t.Fatalf("broken 状态应返回 errInstallBrokenState，得到 %v", err)
+		t.Fatalf("broken state should return errInstallBrokenState, got %v", err)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "服务端安装状态异常" {
-		t.Fatalf("broken 状态应先输出问题摘要，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Server installation state is broken" {
+		t.Fatalf("broken state should show problem summary, got %#v", ui.summaries)
 	}
 }
 
 func TestInstallServerWithConfirmNoPrintsCancelledSummary(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"8080", "127.0.0.1/32", "https://panel.example.com", "admin", "1-65535"},
+		inputs:    []string{"9527", "127.0.0.1/32", "https://panel.example.com", "admin", "1-65535"},
 		passwords: []string{"Password123"},
 		confirms:  []bool{false},
 	}
@@ -196,9 +196,9 @@ func TestInstallServerWithConfirmNoPrintsCancelledSummary(t *testing.T) {
 		EnableAndStart:    func(unit string) error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("取消安装不应报错: %v", err)
+		t.Fatalf("cancelling install should not error: %v", err)
 	}
-	if len(ui.summaries) != 2 || ui.summaries[1].title != "安装已取消" {
-		t.Fatalf("取消安装后应输出取消摘要，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "Installation cancelled" {
+		t.Fatalf("should show cancellation summary after declining, got %#v", ui.summaries)
 	}
 }
