@@ -11,7 +11,7 @@ func TestWriteReadServerSpec(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.json")
 	spec := NewSpec(RoleServer)
 	spec.SpecPath = path
-	spec.ListenPort = 8080
+	spec.ListenPort = 9527
 	spec.TLSMode = "off"
 	spec.ServerURL = "https://panel.example.com"
 	spec.InstalledAt = time.Now().UTC().Format(time.RFC3339)

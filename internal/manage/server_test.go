@@ -14,7 +14,7 @@ func TestManageServerInspectRedactsSensitiveData(t *testing.T) {
 		Status:         func() (string, error) { return "", nil },
 		ReadServerSpec: func() (svcmgr.ServiceSpec, error) { return svcmgr.ServiceSpec{}, nil },
 		ReadServerEnv: func() (svcmgr.ServerEnv, error) {
-			return svcmgr.ServerEnv{Port: 8080, TLSMode: "off", ServerAddr: "https://panel.example.com"}, nil
+			return svcmgr.ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: "https://panel.example.com"}, nil
 		},
 		DisableAndStop: func() error { return nil },
 		EnableAndStart: func() error { return nil },

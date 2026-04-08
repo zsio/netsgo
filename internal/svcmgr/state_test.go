@@ -129,14 +129,14 @@ func writeInstalledState(t *testing.T, role Role) (string, string, string, strin
 		RunAsUser:   SystemUser,
 	}
 	if role == RoleServer {
-		spec.ListenPort = 8080
+		spec.ListenPort = 9527
 		spec.TLSMode = "off"
 		spec.ServerURL = "https://panel.example.com"
 		writeStateTestFile(t, filepath.Join(dataDir, "admin.json"), 0o600)
 		if err := WriteServerSpec(spec); err != nil {
 			t.Fatalf("WriteServerSpec() 失败: %v", err)
 		}
-		if err := WriteServerEnv(spec, ServerEnv{Port: 8080, TLSMode: "off", ServerAddr: "https://panel.example.com"}); err != nil {
+		if err := WriteServerEnv(spec, ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: "https://panel.example.com"}); err != nil {
 			t.Fatalf("WriteServerEnv() 失败: %v", err)
 		}
 		if err := WriteServerUnit(spec); err != nil {

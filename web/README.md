@@ -11,7 +11,7 @@ bun run dev
 
 默认开发地址为 `http://localhost:5173`。
 
-如果后端不跑在 `http://127.0.0.1:8080`，启动前端前先指定代理目标：
+如果后端不跑在 `http://127.0.0.1:9527`，启动前端前先指定代理目标：
 
 ```bash
 VITE_DEV_PROXY_TARGET=http://127.0.0.1:9090 bun run dev

@@ -42,9 +42,9 @@ WORKDIR /app
 
 COPY --from=builder /out/netsgo /usr/local/bin/netsgo
 
-EXPOSE 8080
+EXPOSE 9527
 
-ENV NETSGO_PORT=8080
+ENV NETSGO_PORT=9527
 
 ENTRYPOINT ["/usr/local/bin/netsgo"]
 CMD ["server"]
@@ -60,7 +60,7 @@ COPY test/e2e/scripts /opt/netsgo-e2e
 
 RUN chmod +x /opt/netsgo-e2e/*.sh
 
-ENV NETSGO_PORT=8080
+ENV NETSGO_PORT=9527
 
 ENTRYPOINT ["/usr/local/bin/netsgo"]
 CMD ["server"]

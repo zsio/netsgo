@@ -37,7 +37,7 @@ docs:
 #   终端 2:  make dev-client
 #   终端 3:  make dev-web
 
-DEV_PORT ?= 8080
+DEV_PORT ?= 9527
 DEV_KEY  ?= dev-key
 STACK_PROXY ?= nginx
 STACK_PROJECT ?= netsgo-stack-$(STACK_PROXY)

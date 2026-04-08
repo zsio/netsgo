@@ -11,7 +11,7 @@ func TestWriteReadServerEnvRoundTrip(t *testing.T) {
 	spec.EnvPath = filepath.Join(t.TempDir(), "server.env")
 
 	want := ServerEnv{
-		Port:                        8080,
+		Port:                        9527,
 		TLSMode:                     "off",
 		TLSCert:                     "/tmp/cert.pem",
 		TLSKey:                      "/tmp/key.pem",
