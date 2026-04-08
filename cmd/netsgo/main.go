@@ -12,23 +12,23 @@ import (
 
 var version = buildversion.Summary()
 
-// rootCmd 是 CLI 的根命令
 var rootCmd = &cobra.Command{
 	Use:   "netsgo",
-	Short: "NetsGo — 新一代内网穿透与边缘管控平台",
-	Long: `🚀 NetsGo — 新一代内网穿透与边缘管控平台
+	Short: "NetsGo — next-gen intranet tunneling and edge management platform",
+	Long: `NetsGo — next-gen intranet tunneling and edge management platform
 
-轻量级管控中心 (C2) + 高性能网络隧道。
-单文件交付，支持服务端与客户端一体化运行。
+Lightweight control center (C2) + high-performance network tunnels.
+Single-binary delivery, supporting server and client in one executable.
 
-  文档: https://github.com/netsgo/netsgo
-  版本: ` + version,
+  Docs:    https://github.com/netsgo/netsgo
+  Version: ` + version,
 	Version: version,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cmd.Help()
+	},
 }
 
 func init() {
-	// 设置环境变量前缀: NETSGO_
-	// 例如 --port 对应 NETSGO_PORT
 	viper.SetEnvPrefix("NETSGO")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()

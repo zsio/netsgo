@@ -12,25 +12,24 @@ import (
 
 var docsCmd = &cobra.Command{
 	Use:   "docs",
-	Short: "生成命令行文档",
-	Long: `自动生成 NetsGo 命令行文档。
+	Short: "Generate CLI documentation",
+	Long: `Auto-generate NetsGo CLI documentation.
 
-支持 Markdown 和 Man Page 两种格式，默认输出到 ./docs/cli/ 目录。`,
-	Example: `  # 生成 Markdown 文档
+Supports Markdown and Man Page formats. Defaults to ./docs/cli/ output directory.`,
+	Example: `  # Generate Markdown documentation
   netsgo docs
 
-  # 生成 Markdown 文档到指定目录
+  # Generate to a specific directory
   netsgo docs --output ./my-docs
 
-  # 生成 Man Page 格式
+  # Generate Man Page format
   netsgo docs --format man`,
 	Run: func(cmd *cobra.Command, args []string) {
 		outputDir, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
 
-		// 确保输出目录存在
 		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			log.Fatalf("❌ 创建输出目录失败: %v", err)
+			log.Fatalf("❌ Failed to create output directory: %v", err)
 		}
 
 		absPath, _ := filepath.Abs(outputDir)
@@ -38,9 +37,9 @@ var docsCmd = &cobra.Command{
 		switch format {
 		case "markdown", "md":
 			if err := doc.GenMarkdownTree(rootCmd, outputDir); err != nil {
-				log.Fatalf("❌ 生成 Markdown 文档失败: %v", err)
+				log.Fatalf("❌ Failed to generate Markdown docs: %v", err)
 			}
-			fmt.Printf("✅ Markdown 文档已生成到: %s\n", absPath)
+			fmt.Printf("✅ Markdown docs generated to: %s\n", absPath)
 		case "man":
 			header := &doc.GenManHeader{
 				Title:   "NETSGO",
@@ -48,18 +47,18 @@ var docsCmd = &cobra.Command{
 				Source:  "NetsGo " + version,
 			}
 			if err := doc.GenManTree(rootCmd, header, outputDir); err != nil {
-				log.Fatalf("❌ 生成 Man Page 失败: %v", err)
+				log.Fatalf("❌ Failed to generate Man Page: %v", err)
 			}
-			fmt.Printf("✅ Man Page 已生成到: %s\n", absPath)
+			fmt.Printf("✅ Man Page generated to: %s\n", absPath)
 		default:
-			log.Fatalf("❌ 不支持的格式: %s (支持 markdown, man)", format)
+			log.Fatalf("❌ Unsupported format: %s (supported: markdown, man)", format)
 		}
 	},
 }
 
 func init() {
-	docsCmd.Flags().StringP("output", "o", "./docs/cli", "文档输出目录")
-	docsCmd.Flags().StringP("format", "f", "markdown", "文档格式 (markdown / man)")
+	docsCmd.Flags().StringP("output", "o", "./docs/cli", "Documentation output directory")
+	docsCmd.Flags().StringP("format", "f", "markdown", "Documentation format (markdown / man)")
 
 	rootCmd.AddCommand(docsCmd)
 }

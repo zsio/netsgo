@@ -124,10 +124,10 @@ func validateInitFlagsForStartup(initialized bool, values initFlagValues) error 
 		return nil
 	}
 	if !values.anyProvided() {
-		return fmt.Errorf("服务尚未初始化，请通过 init 参数完成一次性初始化")
+		return fmt.Errorf("server not yet initialized; use --init-* flags to complete one-time initialization")
 	}
 	if values.AdminUsername == "" || values.AdminPassword == "" || values.ServerAddr == "" || values.AllowedPorts == "" {
-		return fmt.Errorf("服务尚未初始化，必须完整提供 --init-admin-username、--init-admin-password、--init-server-addr、--init-allowed-ports")
+		return fmt.Errorf("server not yet initialized; must provide all of: --init-admin-username, --init-admin-password, --init-server-addr, --init-allowed-ports")
 	}
 	return nil
 }
@@ -138,35 +138,35 @@ func shouldWarnInitFlagsIgnored(initialized bool, values initFlagValues) bool {
 
 var serverCmd = &cobra.Command{
 	Use:   "server",
-	Short: "启动 NetsGo 服务端",
-	Long: `启动 NetsGo 服务端，提供 Web 面板、API、控制通道和数据通道。
+	Short: "Start NetsGo server",
+	Long: `Start NetsGo server, providing Web panel, API, control channel, and data channel.
 
-该命令更适合 direct-run、开发调试或容器场景。
-如果你是在 Linux 主机上长期运行，请优先使用 netsgo install 与 netsgo manage 管理受管服务。
+This command is best suited for direct-run, development/debug, or container scenarios.
+For long-running deployments on Linux hosts, prefer using netsgo install and netsgo manage.
 
-TLS 模式:
-  custom  用户提供证书和私钥（生产推荐）
-  auto    自动生成自签名证书并持久化（快速部署）
-  off     不使用 TLS，由反向代理负责（默认）
+TLS modes:
+  custom  User-provided certificate and key (recommended for production)
+  auto    Auto-generate self-signed certificate and persist it (quick deploy)
+  off     No TLS; let a reverse proxy handle it (default)
 
-所有参数均支持环境变量配置，环境变量前缀为 NETSGO_，例如:
+All flags support environment variable configuration with NETSGO_ prefix, e.g.:
   NETSGO_PORT=9090 NETSGO_TLS_MODE=auto netsgo server`,
-	Example: `  # 使用默认端口 8080 启动（无 TLS）
+	Example: `  # Start with default port 9527 (no TLS)
   netsgo server
 
-  # 自动生成自签名证书启动
+  # Start with auto-generated self-signed certificate
   netsgo server --tls-mode auto
 
-  # 使用用户提供的证书启动
+  # Start with user-provided certificate
   netsgo server --tls-mode custom --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
 
-  # 反向代理模式（信任特定代理 IP）
+  # Reverse proxy mode (trust specific proxy IPs)
   netsgo server --tls-mode off --trusted-proxies 127.0.0.1/32,10.0.0.0/8`,
 	Run: func(cmd *cobra.Command, args []string) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 		port := viper.GetInt("port")
-		log.Printf("🚀 NetsGo Server 启动中 (端口: %d)...", port)
+		log.Printf("🚀 NetsGo Server starting (port: %d)...", port)
 
 		s := server.New(port)
 		s.DataDir = viper.GetString("data-dir")
@@ -174,13 +174,13 @@ TLS 模式:
 
 		adminStore, err := server.NewAdminStore(filepath.Join(s.DataDir, "server", "admin.json"))
 		if err != nil {
-			log.Fatalf("❌ 读取服务初始化状态失败: %v", err)
+			log.Fatalf("❌ Failed to read server init state: %v", err)
 		}
 
 		initParams := buildInitParamsFromViper()
 		initParams, err = completeInitParamsForStartup(adminStore.IsInitialized(), initParams, terminalInitPrompter{})
 		if err != nil {
-			log.Fatalf("❌ 读取初始化输入失败: %v", err)
+			log.Fatalf("❌ Failed to read init inputs: %v", err)
 		}
 		if err := validateInitFlagsForStartup(adminStore.IsInitialized(), initFlagValues{
 			AdminUsername: initParams.AdminUsername,
@@ -196,22 +196,22 @@ TLS 模式:
 			ServerAddr:    initParams.ServerAddr,
 			AllowedPorts:  initParams.AllowedPorts,
 		}) {
-			log.Printf("ℹ️ 服务已初始化，--init-* 参数将被忽略")
+			log.Printf("ℹ️  Server already initialized, --init-* flags will be ignored")
 		}
 
 		if !adminStore.IsInitialized() {
 			if err := server.ApplyInit(s.DataDir, initParams); err != nil {
-				log.Fatalf("❌ 服务初始化失败: %v", err)
+				log.Fatalf("❌ Server initialization failed: %v", err)
 			}
 		}
 
 		unlock, err := flock.TryLock(filepath.Join(s.DataDir, "locks", "server.lock"))
 		if err != nil {
-			log.Fatalf("❌ 获取 server 单实例锁失败: %v", err)
+			log.Fatalf("❌ Failed to acquire server singleton lock: %v", err)
 		}
 		defer unlock()
 
-		// 将 server-addr 同步回环境变量，以便 internal/server 包中的 isServerAddrLocked() 等函数读取
+		// Sync server-addr back to env so internal/server's isServerAddrLocked() can read it
 		if addr := viper.GetString("server-addr"); addr != "" {
 			os.Setenv("NETSGO_SERVER_ADDR", addr)
 		}
@@ -225,7 +225,7 @@ TLS 模式:
 				AutoDir:  viper.GetString("tls-auto-dir"),
 			}
 
-			// 解析 trusted-proxies（逗号分隔）
+			// Parse trusted-proxies (comma-separated)
 			if proxies := viper.GetString("trusted-proxies"); proxies != "" {
 				for _, p := range strings.Split(proxies, ",") {
 					p = strings.TrimSpace(p)
@@ -236,7 +236,7 @@ TLS 模式:
 			}
 
 			if err := tlsCfg.Validate(); err != nil {
-				log.Fatalf("❌ TLS 配置无效: %v", err)
+				log.Fatalf("❌ Invalid TLS configuration: %v", err)
 			}
 			s.TLS = tlsCfg
 		}
@@ -246,46 +246,44 @@ TLS 模式:
 
 		go func() {
 			sig := <-sigCh
-			log.Printf("📩 收到信号 %v，开始优雅关闭...", sig)
+			log.Printf("📩 Received signal %v, starting graceful shutdown...", sig)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 
 			if err := s.Shutdown(ctx); err != nil {
-				log.Printf("⚠️ 优雅关闭出错: %v", err)
+				log.Printf("⚠️  Graceful shutdown error: %v", err)
 				os.Exit(1)
 			}
 			os.Exit(0)
 		}()
 
 		if err := s.Start(); err != nil {
-			// http.Server.Shutdown 会导致 Serve 返回 http.ErrServerClosed，这是正常行为
+			// http.Server.Shutdown causes Serve to return http.ErrServerClosed, which is expected
 			if err.Error() == "http: Server closed" {
-				select {} // 等待信号处理 goroutine 完成 Shutdown 并 os.Exit
+				select {} // wait for signal handler goroutine to finish Shutdown and os.Exit
 			}
-			log.Fatalf("❌ 服务端启动失败: %v", err)
+			log.Fatalf("❌ Server startup failed: %v", err)
 		}
 	},
 }
 
 func init() {
-	// 定义 flags
-	serverCmd.Flags().IntP("port", "p", 8080, "服务端监听端口")
-	serverCmd.Flags().String("data-dir", datadir.DefaultDataDir(), "运行数据根目录")
+	serverCmd.Flags().IntP("port", "p", 9527, "Server listening port")
+	serverCmd.Flags().String("data-dir", datadir.DefaultDataDir(), "Data root directory")
 
-	serverCmd.Flags().String("tls-mode", "", "TLS 模式: custom / auto / off")
-	serverCmd.Flags().String("tls-cert", "", "TLS 证书文件路径 (custom 模式)")
-	serverCmd.Flags().String("tls-key", "", "TLS 私钥文件路径 (custom 模式)")
-	serverCmd.Flags().String("tls-auto-dir", "", "自签证书存储目录 (auto 模式, 默认 <data-dir>/server/tls)")
-	serverCmd.Flags().String("trusted-proxies", "", "受信任代理 CIDR 列表, 逗号分隔 (off 模式)")
-	serverCmd.Flags().String("init-admin-username", "", "首次初始化管理员用户名")
-	serverCmd.Flags().String("init-admin-password", "", "首次初始化管理员密码")
-	serverCmd.Flags().String("init-server-addr", "", "首次初始化服务对外地址")
-	serverCmd.Flags().String("init-allowed-ports", "", "首次初始化允许端口范围")
-	serverCmd.Flags().String("server-addr", "", "强制配置服务端的外网访问地址或域名")
-	serverCmd.Flags().Bool("allow-loopback-management-host", false, "显式允许 localhost / 127.0.0.1 / ::1 作为管理面兜底 Host")
+	serverCmd.Flags().String("tls-mode", "", "TLS mode: custom / auto / off")
+	serverCmd.Flags().String("tls-cert", "", "TLS certificate file path (custom mode)")
+	serverCmd.Flags().String("tls-key", "", "TLS private key file path (custom mode)")
+	serverCmd.Flags().String("tls-auto-dir", "", "Self-signed cert storage dir (auto mode, default: <data-dir>/server/tls)")
+	serverCmd.Flags().String("trusted-proxies", "", "Trusted proxy CIDR list, comma-separated (off mode)")
+	serverCmd.Flags().String("init-admin-username", "", "Admin username for first-time initialization")
+	serverCmd.Flags().String("init-admin-password", "", "Admin password for first-time initialization")
+	serverCmd.Flags().String("init-server-addr", "", "Server external address for first-time initialization")
+	serverCmd.Flags().String("init-allowed-ports", "", "Allowed port ranges for first-time initialization")
+	serverCmd.Flags().String("server-addr", "", "Force-override server external address or domain")
+	serverCmd.Flags().Bool("allow-loopback-management-host", false, "Explicitly allow localhost/127.0.0.1/::1 as fallback management Host")
 
-	// 绑定 viper (支持环境变量)
 	viper.BindPFlag("port", serverCmd.Flags().Lookup("port"))
 	viper.BindPFlag("data-dir", serverCmd.Flags().Lookup("data-dir"))
 	viper.BindPFlag("tls-mode", serverCmd.Flags().Lookup("tls-mode"))
@@ -299,6 +297,5 @@ func init() {
 	viper.BindPFlag("init-allowed-ports", serverCmd.Flags().Lookup("init-allowed-ports"))
 	viper.BindPFlag("server-addr", serverCmd.Flags().Lookup("server-addr"))
 	viper.BindPFlag("allow-loopback-management-host", serverCmd.Flags().Lookup("allow-loopback-management-host"))
-	// 注册到根命令
 	rootCmd.AddCommand(serverCmd)
 }

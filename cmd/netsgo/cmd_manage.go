@@ -8,7 +8,12 @@ import (
 
 var manageCmd = &cobra.Command{
 	Use:   "manage",
-	Short: "管理已安装的 NetsGo systemd 服务 (仅 Linux)",
+	Short: "Manage installed NetsGo systemd services (Linux only)",
+	Long: `Manage installed NetsGo server and client systemd services.
+
+Supports status inspection, start/stop/restart, log streaming, and uninstallation.
+Requires Linux with systemd and root privileges.`,
+	Example: `  sudo netsgo manage`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return manage.Run()
 	},

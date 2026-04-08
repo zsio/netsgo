@@ -52,19 +52,19 @@ func TestBuildInitParamsFromViper(t *testing.T) {
 
 	params := buildInitParamsFromViper()
 	if params.AdminUsername != "admin" {
-		t.Fatalf("AdminUsername 期望 admin，得到 %q", params.AdminUsername)
+		t.Fatalf("expected AdminUsername %q, got %q", "admin", params.AdminUsername)
 	}
 	if params.AdminPassword != "Password123" {
-		t.Fatalf("AdminPassword 期望 Password123，得到 %q", params.AdminPassword)
+		t.Fatalf("expected AdminPassword %q, got %q", "Password123", params.AdminPassword)
 	}
 	if params.ServerAddr != "https://panel.example.com" {
-		t.Fatalf("ServerAddr 期望 https://panel.example.com，得到 %q", params.ServerAddr)
+		t.Fatalf("expected ServerAddr %q, got %q", "https://panel.example.com", params.ServerAddr)
 	}
 	if params.AllowedPorts != "10000-10010" {
-		t.Fatalf("AllowedPorts 期望 10000-10010，得到 %q", params.AllowedPorts)
+		t.Fatalf("expected AllowedPorts %q, got %q", "10000-10010", params.AllowedPorts)
 	}
 	if !params.IsComplete() {
-		t.Fatal("完整初始化参数应被识别为 complete")
+		t.Fatal("complete init params should be recognized as complete")
 	}
 }
 
@@ -115,10 +115,10 @@ func TestValidateInitFlagsForStartup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateInitFlagsForStartup(tt.initialized, tt.params)
 			if tt.wantErr && err == nil {
-				t.Fatal("期望返回错误，实际为 nil")
+				t.Fatal("expected error, got nil")
 			}
 			if !tt.wantErr && err != nil {
-				t.Fatalf("期望无错误，实际为 %v", err)
+				t.Fatalf("expected no error, got %v", err)
 			}
 		})
 	}
@@ -135,22 +135,22 @@ func TestCompleteInitParamsForStartup_PromptsMissingFieldsInInteractiveMode(t *t
 		AdminUsername: "admin",
 	}, prompter)
 	if err != nil {
-		t.Fatalf("交互补全不应报错: %v", err)
+		t.Fatalf("interactive completion should not fail: %v", err)
 	}
 	if params.AdminUsername != "admin" {
-		t.Fatalf("AdminUsername 期望保留 admin，得到 %q", params.AdminUsername)
+		t.Fatalf("expected AdminUsername to remain %q, got %q", "admin", params.AdminUsername)
 	}
 	if params.AdminPassword != "Password123" {
-		t.Fatalf("AdminPassword 期望 Password123，得到 %q", params.AdminPassword)
+		t.Fatalf("expected AdminPassword %q, got %q", "Password123", params.AdminPassword)
 	}
 	if params.ServerAddr != "https://panel.example.com" {
-		t.Fatalf("ServerAddr 期望 https://panel.example.com，得到 %q", params.ServerAddr)
+		t.Fatalf("expected ServerAddr %q, got %q", "https://panel.example.com", params.ServerAddr)
 	}
 	if params.AllowedPorts != "10000-10010" {
-		t.Fatalf("AllowedPorts 期望 10000-10010，得到 %q", params.AllowedPorts)
+		t.Fatalf("expected AllowedPorts %q, got %q", "10000-10010", params.AllowedPorts)
 	}
 	if len(prompter.prompts) != 3 {
-		t.Fatalf("期望提示 3 次，实际 %d 次", len(prompter.prompts))
+		t.Fatalf("expected 3 prompts, got %d", len(prompter.prompts))
 	}
 }
 
@@ -163,18 +163,18 @@ func TestCompleteInitParamsForStartup_PropagatesPromptError(t *testing.T) {
 
 	_, err := completeInitParamsForStartup(false, server.InitParams{}, prompter)
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("期望返回 prompt 错误 %v，得到 %v", wantErr, err)
+		t.Fatalf("expected prompt error %v, got %v", wantErr, err)
 	}
 }
 
 func TestShouldWarnInitFlagsIgnored(t *testing.T) {
 	if !shouldWarnInitFlagsIgnored(true, initFlagValues{AdminUsername: "admin"}) {
-		t.Fatal("已初始化且提供 init 参数时应提示已忽略")
+		t.Fatal("should warn when initialized and init flags provided")
 	}
 	if shouldWarnInitFlagsIgnored(false, initFlagValues{AdminUsername: "admin"}) {
-		t.Fatal("未初始化时不应提示已忽略")
+		t.Fatal("should not warn when not yet initialized")
 	}
 	if shouldWarnInitFlagsIgnored(true, initFlagValues{}) {
-		t.Fatal("未提供 init 参数时不应提示已忽略")
+		t.Fatal("should not warn when no init flags provided")
 	}
 }
