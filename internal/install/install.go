@@ -13,8 +13,8 @@ import (
 
 type uiProvider interface {
 	Select(prompt string, options []string) (int, error)
-	Input(prompt string) (string, error)
-	Password(prompt string) (string, error)
+	Input(prompt string, opts ...tui.InputOptions) (string, error)
+	Password(prompt string, opts ...tui.InputOptions) (string, error)
 	Confirm(prompt string) (bool, error)
 	PrintSummary(title string, rows [][2]string)
 }
@@ -24,8 +24,12 @@ type defaultUI struct{}
 func (defaultUI) Select(prompt string, options []string) (int, error) {
 	return tui.Select(prompt, options)
 }
-func (defaultUI) Input(prompt string) (string, error)         { return tui.Input(prompt) }
-func (defaultUI) Password(prompt string) (string, error)      { return tui.Password(prompt) }
+func (defaultUI) Input(prompt string, opts ...tui.InputOptions) (string, error) {
+	return tui.Input(prompt, opts...)
+}
+func (defaultUI) Password(prompt string, opts ...tui.InputOptions) (string, error) {
+	return tui.Password(prompt, opts...)
+}
 func (defaultUI) Confirm(prompt string) (bool, error)         { return tui.Confirm(prompt) }
 func (defaultUI) PrintSummary(title string, rows [][2]string) { tui.PrintSummary(title, rows) }
 
@@ -77,10 +81,7 @@ func RunWith(deps Deps) error {
 		return errors.New("install dependencies are incomplete")
 	}
 
-	if _, err := deps.UI.Select("Language / 语言", []string{"English", "中文"}); err != nil {
-		return err
-	}
-	role, err := deps.UI.Select("选择安装角色", []string{"服务端 (server)", "客户端 (client)"})
+	role, err := deps.UI.Select("Select installation role", []string{"Server", "Client"})
 	if err != nil {
 		return err
 	}

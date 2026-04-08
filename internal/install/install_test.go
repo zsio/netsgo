@@ -3,6 +3,8 @@ package install
 import (
 	"errors"
 	"testing"
+
+	"netsgo/internal/tui"
 )
 
 type fakeUI struct {
@@ -27,7 +29,7 @@ func (f *fakeUI) Select(prompt string, options []string) (int, error) {
 	return v, nil
 }
 
-func (f *fakeUI) Input(prompt string) (string, error) {
+func (f *fakeUI) Input(prompt string, opts ...tui.InputOptions) (string, error) {
 	if len(f.inputs) == 0 {
 		return "", errors.New("no input value")
 	}
@@ -36,7 +38,7 @@ func (f *fakeUI) Input(prompt string) (string, error) {
 	return v, nil
 }
 
-func (f *fakeUI) Password(prompt string) (string, error) {
+func (f *fakeUI) Password(prompt string, opts ...tui.InputOptions) (string, error) {
 	if len(f.passwords) == 0 {
 		return "", errors.New("no password value")
 	}
@@ -69,7 +71,7 @@ func TestRunWithPlatformCheck(t *testing.T) {
 		InstallClient: func() error { return nil },
 	})
 	if err == nil {
-		t.Fatal("非 Linux 平台应失败")
+		t.Fatal("non-Linux platform should fail")
 	}
 }
 
@@ -84,7 +86,7 @@ func TestRunWithTTYCheck(t *testing.T) {
 		InstallClient: func() error { return nil },
 	})
 	if err == nil {
-		t.Fatal("非 TTY 应失败")
+		t.Fatal("non-TTY should fail")
 	}
 }
 
@@ -95,7 +97,7 @@ func TestRunWithRoleDispatch(t *testing.T) {
 		HasTTY:     true,
 		UID:        0,
 		HasSystemd: true,
-		UI:         &fakeUI{selects: []int{1, 0}},
+		UI:         &fakeUI{selects: []int{0}},
 		InstallServer: func() error {
 			called = "server"
 			return nil
@@ -106,10 +108,10 @@ func TestRunWithRoleDispatch(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("RunWith() 不应失败: %v", err)
+		t.Fatalf("RunWith() should not fail: %v", err)
 	}
 	if called != "server" {
-		t.Fatalf("角色选择后应分发到 server，得到 %q", called)
+		t.Fatalf("selecting server role should dispatch to server, got %q", called)
 	}
 	called = ""
 	err = RunWith(Deps{
@@ -117,7 +119,7 @@ func TestRunWithRoleDispatch(t *testing.T) {
 		HasTTY:     true,
 		UID:        0,
 		HasSystemd: true,
-		UI:         &fakeUI{selects: []int{0, 1}},
+		UI:         &fakeUI{selects: []int{1}},
 		InstallServer: func() error {
 			called = "server"
 			return nil
@@ -128,9 +130,9 @@ func TestRunWithRoleDispatch(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("RunWith() 不应失败: %v", err)
+		t.Fatalf("RunWith() should not fail: %v", err)
 	}
 	if called != "client" {
-		t.Fatalf("角色选择后应分发到 client，得到 %q", called)
+		t.Fatalf("selecting client role should dispatch to client, got %q", called)
 	}
 }
