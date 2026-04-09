@@ -3,6 +3,7 @@ bin/
 netsgo
 *.exe
 tmp/
+dist
 
 # Go 相关
 vendor/
@@ -63,4 +64,5 @@ lerna-debug.log*
 .cache
 
 .omx
-/.omc
+.omc
+.alma-snapshots

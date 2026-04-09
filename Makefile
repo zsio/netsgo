@@ -6,6 +6,12 @@ BIN_DIR=bin
 # 完整构建：先前端、再后端，产出单文件二进制
 build: build-web build-go
 
+# 构建多平台发布包（Linux/macOS/Windows）
+build-release: build-web
+	@echo "📦 构建多平台发布包..."
+	goreleaser release --snapshot --clean
+	@echo "✅ 构建完成: dist/"
+
 # 仅构建前端
 build-web:
 	@echo "🌐 构建前端..."
