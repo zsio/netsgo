@@ -83,7 +83,7 @@ func RunWith(deps Deps) error {
 	serverState := serverInspection.State
 	clientState := clientInspection.State
 	if serverState == svcmgr.StateNotInstalled && clientState == svcmgr.StateNotInstalled {
-		deps.UI.PrintSummary("尚未安装任何服务", [][2]string{{"下一步", "请先运行 netsgo install"}})
+		deps.UI.PrintSummary("No services installed", [][2]string{{"Next step", "Run netsgo install first"}})
 		return nil
 	}
 	if serverState == svcmgr.StateInstalled && clientState == svcmgr.StateInstalled {
@@ -91,7 +91,7 @@ func RunWith(deps Deps) error {
 			return errors.New("manage dependencies are incomplete")
 		}
 
-		role, err := deps.UI.Select("选择管理角色", []string{"服务端 (server)", "客户端 (client)"})
+		role, err := deps.UI.Select("Select a role to manage", []string{"Server (server)", "Client (client)"})
 		if err != nil {
 			return err
 		}
@@ -126,30 +126,30 @@ func printDegradedSummary(ui uiProvider, inspection svcmgr.InstallInspection) {
 		return
 	}
 
-	rows := [][2]string{{"角色", roleLabel(inspection.Role)}, {"状态", inspection.State.String()}, {"建议", degradedAdvice(inspection.Role, inspection.State)}}
+	rows := [][2]string{{"Role", roleLabel(inspection.Role)}, {"State", inspection.State.String()}, {"Advice", degradedAdvice(inspection.Role, inspection.State)}}
 	for _, problem := range inspection.Problems {
-		rows = append(rows, [2]string{"问题", problem})
+		rows = append(rows, [2]string{"Problem", problem})
 	}
 	ui.PrintSummary(degradedTitle(inspection.Role, inspection.State), rows)
 }
 
 func degradedTitle(role svcmgr.Role, state svcmgr.InstallState) string {
 	if role == svcmgr.RoleServer && state == svcmgr.StateHistoricalDataOnly {
-		return "检测到服务端历史数据"
+		return "Recoverable server data detected"
 	}
-	return roleLabel(role) + "安装状态异常"
+	return roleLabel(role) + " installation is in an abnormal state"
 }
 
 func degradedAdvice(role svcmgr.Role, state svcmgr.InstallState) string {
 	if role == svcmgr.RoleServer && state == svcmgr.StateHistoricalDataOnly {
-		return "请运行 netsgo install 以恢复安装（会保留历史配置）"
+		return "Run netsgo install to restore the installation (existing configuration will be preserved)"
 	}
-	return "请先运行 netsgo install 修复安装，或手动清理残留文件后重新安装"
+	return "Run netsgo install to repair the installation, or manually clean up leftover files before reinstalling"
 }
 
 func roleLabel(role svcmgr.Role) string {
 	if role == svcmgr.RoleServer {
-		return "服务端"
+		return "Server"
 	}
-	return "客户端"
+	return "Client"
 }

@@ -13,8 +13,8 @@ import (
 
 const sessionCookieName = "netsgo_session"
 
-// extractToken 从请求中提取 JWT token
-// 优先级: Authorization header > Cookie
+// extractToken extracts the JWT token from the request.
+// Priority: Authorization header > Cookie
 func extractToken(r *http.Request) string {
 	// 1. Authorization: Bearer <token>
 	if auth := r.Header.Get("Authorization"); auth != "" {
@@ -23,7 +23,7 @@ func extractToken(r *http.Request) string {
 			return parts[1]
 		}
 	}
-	// 2. Cookie fallback (浏览器场景)
+	// 2. Cookie fallback (browser)
 	if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
 		return cookie.Value
 	}
@@ -112,7 +112,7 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		// 同一浏览器 session 内 UA 不会改变，变化说明 token 可能被盗用
 		if r.UserAgent() != session.UserAgent {
-			slog.Warn("Session UA 不匹配，疑似 Token 盗用",
+			slog.Warn("session UA mismatch, possible token theft",
 				"session_id", session.ID, "user", session.Username, "module", "security")
 			http.Error(w, `{"error":"session environment mismatch"}`, http.StatusUnauthorized)
 			return

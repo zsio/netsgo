@@ -7,7 +7,7 @@ import (
 	"netsgo/internal/svcmgr"
 )
 
-var manageActionOptions = []string{"状态", "详情", "日志", "启动", "停止", "重启", "卸载"}
+var manageActionOptions = []string{"Status", "Details", "Logs", "Start", "Stop", "Restart", "Uninstall"}
 
 type serviceMenuDeps struct {
 	UI        uiProvider
@@ -20,7 +20,7 @@ type serviceMenuDeps struct {
 }
 
 func runServiceMenu(deps serviceMenuDeps) error {
-	action, err := deps.UI.Select("选择操作", manageActionOptions)
+	action, err := deps.UI.Select("Select an action", manageActionOptions)
 	if err != nil {
 		return err
 	}
@@ -33,9 +33,9 @@ func runServiceMenu(deps serviceMenuDeps) error {
 	case 2:
 		return deps.Logs()
 	case 3:
-		return runLifecycleAction(deps.UI, "启动", "已启动", deps.Start)
+		return runLifecycleAction(deps.UI, "Start", "Started", deps.Start)
 	case 4:
-		return runLifecycleAction(deps.UI, "停止", "已停止", deps.Stop)
+		return runLifecycleAction(deps.UI, "Stop", "Stopped", deps.Stop)
 	case 5:
 		return runRestartAction(deps.UI, deps.Stop, deps.Start)
 	case 6:
@@ -50,7 +50,7 @@ func showStatusSummary(ui uiProvider, statusFn func() (string, error)) error {
 	if err != nil {
 		return err
 	}
-	ui.PrintSummary("服务状态", [][2]string{{"状态", status}})
+	ui.PrintSummary("Service status", [][2]string{{"State", status}})
 	return nil
 }
 
@@ -58,7 +58,7 @@ func runLifecycleAction(ui uiProvider, action, status string, fn func() error) e
 	if err := fn(); err != nil {
 		return err
 	}
-	ui.PrintSummary("操作成功", [][2]string{{"操作", action}, {"状态", status}})
+	ui.PrintSummary("Operation successful", [][2]string{{"Action", action}, {"State", status}})
 	return nil
 }
 
@@ -69,12 +69,12 @@ func runRestartAction(ui uiProvider, stop, start func() error) error {
 	if err := start(); err != nil {
 		return err
 	}
-	ui.PrintSummary("操作成功", [][2]string{{"操作", "重启"}, {"状态", "已重启"}})
+	ui.PrintSummary("Operation successful", [][2]string{{"Action", "Restart"}, {"State", "Restarted"}})
 	return nil
 }
 
 func printManageCancelled(ui uiProvider) {
-	ui.PrintSummary("已取消", [][2]string{{"下一步", "运行 netsgo manage 继续管理服务"}})
+	ui.PrintSummary("Cancelled", [][2]string{{"Next step", "Run netsgo manage to continue managing services"}})
 }
 
 func maybeRemoveSharedBinary(otherRoleState func() svcmgr.InstallState, removeBinary func() error) error {
@@ -93,9 +93,9 @@ func itoa(v int) string {
 
 func boolLabel(v bool) string {
 	if v {
-		return "是"
+		return "Yes"
 	}
-	return "否"
+	return "No"
 }
 
 func removePaths(paths ...string) error {

@@ -68,6 +68,14 @@ describe('TunnelListTable', () => {
     expect(markup).toContain('title="删除"');
   });
 
+  test('动作按钮默认直接展示，不再依赖行 hover', () => {
+    const markup = renderTable([createTunnel()]);
+
+    expect(markup).toContain('title="停止"');
+    expect(markup).not.toContain('group-hover:opacity-100');
+    expect(markup).not.toContain('opacity-0');
+  });
+
   test('缺失 capability projection 时渲染直接失败', () => {
     expect(() => renderTable([
       createTunnel({

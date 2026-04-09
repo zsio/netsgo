@@ -19,7 +19,7 @@ func TestTLSConfig_Validate_Custom_Valid(t *testing.T) {
 	tmpDir := t.TempDir()
 	cert, certPEM, keyPEM, err := generateSelfSignedCert()
 	if err != nil {
-		t.Fatalf("生成测试证书失败: %v", err)
+		t.Fatalf("Failed to generate test certificate: %v", err)
 	}
 	_ = cert
 
@@ -34,7 +34,7 @@ func TestTLSConfig_Validate_Custom_Valid(t *testing.T) {
 		KeyFile:  keyPath,
 	}
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("合法 custom 配置验证失败: %v", err)
+		t.Fatalf("Valid custom config validation failed: %v", err)
 	}
 }
 
@@ -46,10 +46,10 @@ func TestTLSConfig_Validate_Custom_MissingFiles(t *testing.T) {
 	}
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("缺少 cert_file/key_file 应返回错误")
+		t.Fatal("Missing cert_file/key_file should return error")
 	}
 	if !strings.Contains(err.Error(), "cert_file") {
-		t.Errorf("错误信息应提到 cert_file: %v", err)
+		t.Errorf("Error message should mention cert_file: %v", err)
 	}
 }
 
@@ -61,14 +61,14 @@ func TestTLSConfig_Validate_Custom_FileNotExist(t *testing.T) {
 	}
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("文件不存在应返回错误")
+		t.Fatal("Non-existent file should return error")
 	}
 }
 
 func TestTLSConfig_Validate_Auto(t *testing.T) {
 	cfg := &TLSConfig{Mode: TLSModeAuto}
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("auto 模式验证不应失败: %v", err)
+		t.Fatalf("Auto mode validation should not fail: %v", err)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestTLSConfig_Validate_Off_ValidCIDR(t *testing.T) {
 		TrustedProxies: []string{"127.0.0.1/32", "10.0.0.0/8"},
 	}
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("合法 CIDR 验证失败: %v", err)
+		t.Fatalf("Valid CIDR validation failed: %v", err)
 	}
 }
 
@@ -89,7 +89,7 @@ func TestTLSConfig_Validate_Off_InvalidCIDR(t *testing.T) {
 	}
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("非法 CIDR 应返回错误")
+		t.Fatal("Invalid CIDR should return error")
 	}
 }
 
@@ -99,7 +99,7 @@ func TestTLSConfig_Validate_Off_SingleIP(t *testing.T) {
 		TrustedProxies: []string{"192.168.1.1"},
 	}
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("单 IP 格式应被接受: %v", err)
+		t.Fatalf("Single IP format should be accepted: %v", err)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestTLSConfig_Validate_EmptyMode(t *testing.T) {
 	cfg := &TLSConfig{Mode: ""}
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("空 mode 应返回错误")
+		t.Fatal("Empty mode should return error")
 	}
 }
 
@@ -115,7 +115,7 @@ func TestTLSConfig_Validate_UnknownMode(t *testing.T) {
 	cfg := &TLSConfig{Mode: "mtls"}
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("未知 mode 应返回错误")
+		t.Fatal("Unknown mode should return error")
 	}
 }
 
@@ -131,7 +131,7 @@ func TestTLSConfig_IsEnabled(t *testing.T) {
 	for _, tt := range tests {
 		cfg := &TLSConfig{Mode: tt.mode}
 		if cfg.IsEnabled() != tt.enabled {
-			t.Errorf("mode=%s: IsEnabled() 期望 %v", tt.mode, tt.enabled)
+			t.Errorf("mode=%s: IsEnabled() expected %v", tt.mode, tt.enabled)
 		}
 	}
 }
@@ -143,23 +143,23 @@ func TestTLSConfig_IsEnabled(t *testing.T) {
 func TestGenerateSelfSignedCert_Basic(t *testing.T) {
 	cert, certPEM, keyPEM, err := generateSelfSignedCert()
 	if err != nil {
-		t.Fatalf("生成自签名证书失败: %v", err)
+		t.Fatalf("Failed to generate self-signed certificate: %v", err)
 	}
 
 	if len(certPEM) == 0 {
-		t.Error("证书 PEM 不应为空")
+		t.Error("Certificate PEM should not be empty")
 	}
 	if len(keyPEM) == 0 {
-		t.Error("私钥 PEM 不应为空")
+		t.Error("Private key PEM should not be empty")
 	}
 	if len(cert.Certificate) == 0 {
-		t.Error("证书 DER 不应为空")
+		t.Error("Certificate DER should not be empty")
 	}
 
 	// 解析证书检查字段
 	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		t.Fatalf("解析证书失败: %v", err)
+		t.Fatalf("Failed to parse certificate: %v", err)
 	}
 
 	// 应包含 localhost 作为 SAN
@@ -170,7 +170,7 @@ func TestGenerateSelfSignedCert_Basic(t *testing.T) {
 		}
 	}
 	if !foundLocalhost {
-		t.Error("证书 SAN 应包含 localhost")
+		t.Error("Certificate SAN should contain localhost")
 	}
 
 	// 应包含 127.0.0.1 作为 IP SAN
@@ -181,7 +181,7 @@ func TestGenerateSelfSignedCert_Basic(t *testing.T) {
 		}
 	}
 	if !found127 {
-		t.Error("证书 SAN 应包含 127.0.0.1")
+		t.Error("Certificate SAN should contain 127.0.0.1")
 	}
 
 	// 应有 Server Auth EKU
@@ -192,7 +192,7 @@ func TestGenerateSelfSignedCert_Basic(t *testing.T) {
 		}
 	}
 	if !foundServerAuth {
-		t.Error("证书应包含 ServerAuth EKU")
+		t.Error("Certificate should contain ServerAuth EKU")
 	}
 }
 
@@ -211,13 +211,13 @@ func TestAutoTLS_PersistAndReload(t *testing.T) {
 	// 第一次生成
 	tlsCfg1, fp1, err := cfg.loadOrBuildTLSConfig(tmpDir)
 	if err != nil {
-		t.Fatalf("首次生成自签证书失败: %v", err)
+		t.Fatalf("Failed to generate self-signed certificate on first attempt: %v", err)
 	}
 	if tlsCfg1 == nil {
-		t.Fatal("tlsConfig 不应为 nil")
+		t.Fatal("tlsConfig should not be nil")
 	}
 	if fp1 == "" {
-		t.Fatal("指纹不应为空")
+		t.Fatal("Fingerprint should not be empty")
 	}
 
 	// 验证文件已持久化
@@ -225,21 +225,21 @@ func TestAutoTLS_PersistAndReload(t *testing.T) {
 	keyPath := filepath.Join(tmpDir, "tls", "server.key")
 
 	if _, err := os.Stat(certPath); err != nil {
-		t.Fatalf("证书文件应已持久化: %v", err)
+		t.Fatalf("Certificate file should have been persisted: %v", err)
 	}
 	if _, err := os.Stat(keyPath); err != nil {
-		t.Fatalf("私钥文件应已持久化: %v", err)
+		t.Fatalf("Private key file should have been persisted: %v", err)
 	}
 
 	// 第二次加载应使用缓存
 	_, fp2, err := cfg.loadOrBuildTLSConfig(tmpDir)
 	if err != nil {
-		t.Fatalf("重新加载证书失败: %v", err)
+		t.Fatalf("Failed to reload certificate: %v", err)
 	}
 
 	// 指纹应一致（证书未重新生成）
 	if fp1 != fp2 {
-		t.Errorf("重启后指纹应保持稳定: %s != %s", fp1, fp2)
+		t.Errorf("Fingerprint should remain stable after restart: %s != %s", fp1, fp2)
 	}
 }
 
@@ -269,22 +269,22 @@ func TestAutoTLS_DefaultDir_UsesServerSubdir(t *testing.T) {
 func TestCertFingerprint_Format(t *testing.T) {
 	cert, _, _, err := generateSelfSignedCert()
 	if err != nil {
-		t.Fatalf("生成证书失败: %v", err)
+		t.Fatalf("Failed to generate certificate: %v", err)
 	}
 
 	fp := certFingerprint(cert.Certificate[0])
 	if fp == "" {
-		t.Fatal("指纹不应为空")
+		t.Fatal("Fingerprint should not be empty")
 	}
 
 	// 指纹格式应为 AA:BB:CC:... (SHA-256 = 64 hex chars + 31 colons = 95 chars)
 	if len(fp) != 95 {
-		t.Errorf("SHA-256 指纹长度应为 95，得到 %d: %s", len(fp), fp)
+		t.Errorf("SHA-256 fingerprint length should be 95, got %d: %s", len(fp), fp)
 	}
 
 	parts := strings.Split(fp, ":")
 	if len(parts) != 32 {
-		t.Errorf("指纹应有 32 个组，得到 %d", len(parts))
+		t.Errorf("Fingerprint should have 32 groups, got %d", len(parts))
 	}
 }
 
@@ -315,7 +315,7 @@ func TestIsTrustedProxy(t *testing.T) {
 	for _, tt := range tests {
 		result := cfg.isTrustedProxy(tt.ip)
 		if result != tt.trusted {
-			t.Errorf("isTrustedProxy(%q) = %v, 期望 %v", tt.ip, result, tt.trusted)
+			t.Errorf("isTrustedProxy(%q) = %v, expected %v", tt.ip, result, tt.trusted)
 		}
 	}
 }
@@ -326,7 +326,7 @@ func TestIsTrustedProxy_NotOffMode(t *testing.T) {
 		TrustedProxies: []string{"127.0.0.1/32"},
 	}
 	if cfg.isTrustedProxy("127.0.0.1") {
-		t.Error("非 off 模式不应匹配 trusted proxy")
+		t.Error("Non-off mode should not match trusted proxy")
 	}
 }
 
@@ -338,7 +338,7 @@ func TestCustomTLS_Load(t *testing.T) {
 	tmpDir := t.TempDir()
 	_, certPEM, keyPEM, err := generateSelfSignedCert()
 	if err != nil {
-		t.Fatalf("生成测试证书失败: %v", err)
+		t.Fatalf("Failed to generate test certificate: %v", err)
 	}
 
 	certPath := filepath.Join(tmpDir, "cert.pem")
@@ -354,15 +354,15 @@ func TestCustomTLS_Load(t *testing.T) {
 
 	tlsCfg, fp, err := cfg.loadCustomTLS()
 	if err != nil {
-		t.Fatalf("加载 custom TLS 失败: %v", err)
+		t.Fatalf("Failed to load custom TLS: %v", err)
 	}
 	if tlsCfg == nil {
-		t.Fatal("tlsConfig 不应为 nil")
+		t.Fatal("tlsConfig should not be nil")
 	}
 	if fp == "" {
-		t.Fatal("指纹不应为空")
+		t.Fatal("Fingerprint should not be empty")
 	}
 	if tlsCfg.MinVersion != tls.VersionTLS12 {
-		t.Errorf("MinVersion 应为 TLS 1.2")
+		t.Errorf("MinVersion should be TLS 1.2")
 	}
 }

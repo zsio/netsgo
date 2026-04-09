@@ -15,23 +15,23 @@ const (
 	TunnelBindingClientID = "client_id"
 )
 
-// StoredTunnel 持久化存储的隧道配置
+// StoredTunnel is a tunnel configuration persisted to storage.
 type StoredTunnel struct {
 	protocol.ProxyNewRequest
-	DesiredState string `json:"desired_state,omitempty"` // 用户目标状态
-	RuntimeState string `json:"runtime_state,omitempty"` // 实际运行状态
-	Error        string `json:"error,omitempty"`         // error 状态时的具体原因
-	ClientID     string `json:"client_id,omitempty"`     // 所属稳定 Client ID
-	Hostname     string `json:"hostname,omitempty"`      // 当前主机名（展示用）
-	Binding      string `json:"binding,omitempty"`       // 仅允许 client_id
+	DesiredState string `json:"desired_state,omitempty"` // User's desired state
+	RuntimeState string `json:"runtime_state,omitempty"` // Actual runtime state
+	Error        string `json:"error,omitempty"`         // Reason when in error state
+	ClientID     string `json:"client_id,omitempty"`     // Owning stable Client ID
+	Hostname     string `json:"hostname,omitempty"`      // Current hostname (for display)
+	Binding      string `json:"binding,omitempty"`       // Only client_id is allowed
 }
 
 func (t *StoredTunnel) normalize() error {
 	if t.Binding != TunnelBindingClientID {
-		return fmt.Errorf("隧道 %q 必须使用 %q 绑定", t.Name, TunnelBindingClientID)
+		return fmt.Errorf("tunnel %q must use %q binding", t.Name, TunnelBindingClientID)
 	}
 	if t.ClientID == "" {
-		return fmt.Errorf("隧道 %q 缺少稳定 client_id", t.Name)
+		return fmt.Errorf("tunnel %q is missing a stable client_id", t.Name)
 	}
 	if err := validateTunnelStates(t.DesiredState, t.RuntimeState, t.Error); err != nil {
 		return err
@@ -48,19 +48,19 @@ func (t StoredTunnel) matchesIdentifier(identifier, name string) bool {
 	return t.Name == name && t.Binding == TunnelBindingClientID && t.ClientID == identifier
 }
 
-// TunnelStore 基于 JSON 文件的隧道配置持久化存储
+// TunnelStore is a JSON-file-backed persistent store for tunnel configurations.
 type TunnelStore struct {
 	path    string
 	mu      sync.RWMutex
 	tunnels []StoredTunnel
 
-	// 仅供测试使用：注入下一次 save 失败，验证回滚路径。
+	// For testing only: inject a save failure to verify the rollback path.
 	failSaveErr   error
 	failSaveCount int
 }
 
-// NewTunnelStore 创建或加载一个隧道存储
-// 如果文件不存在则创建空存储
+// NewTunnelStore creates or loads a tunnel store.
+// An empty store is created if the file does not exist.
 func NewTunnelStore(path string) (*TunnelStore, error) {
 	store := &TunnelStore{
 		path:    path,
@@ -69,12 +69,12 @@ func NewTunnelStore(path string) (*TunnelStore, error) {
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("创建存储目录失败: %w", err)
+		return nil, fmt.Errorf("failed to create store directory: %w", err)
 	}
 
 	if _, err := os.Stat(path); err == nil {
 		if err := store.load(); err != nil {
-			return nil, fmt.Errorf("加载隧道配置失败: %w", err)
+			return nil, fmt.Errorf("failed to load tunnel config: %w", err)
 		}
 	}
 
@@ -91,7 +91,7 @@ func (s *TunnelStore) load() error {
 	}
 	for i := range s.tunnels {
 		if err := s.tunnels[i].normalize(); err != nil {
-			return fmt.Errorf("隧道 %q 状态无效: %w", s.tunnels[i].Name, err)
+			return fmt.Errorf("tunnel %q has invalid state: %w", s.tunnels[i].Name, err)
 		}
 	}
 	return nil
@@ -119,13 +119,13 @@ func cloneStoredTunnels(tunnels []StoredTunnel) []StoredTunnel {
 	return cloned
 }
 
-// AddTunnel 添加一条隧道配置并持久化
+// AddTunnel adds a tunnel configuration and persists it.
 func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
 	if err := tunnel.normalize(); err != nil {
 		return err
 	}
 	if tunnel.ClientID == "" || tunnel.Binding != TunnelBindingClientID {
-		return fmt.Errorf("新隧道必须使用稳定 client_id 绑定")
+		return fmt.Errorf("new tunnel must be bound with a stable client_id")
 	}
 
 	s.mu.Lock()
@@ -133,7 +133,7 @@ func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
 
 	for _, existing := range s.tunnels {
 		if existing.matchesClient(tunnel.ClientID, tunnel.Name) {
-			return fmt.Errorf("隧道 %q 已存在 (client_id: %s)", tunnel.Name, tunnel.ClientID)
+			return fmt.Errorf("tunnel %q already exists (client_id: %s)", tunnel.Name, tunnel.ClientID)
 		}
 	}
 
@@ -146,7 +146,7 @@ func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
 	return nil
 }
 
-// RemoveTunnel 删除一条隧道配置并持久化
+// RemoveTunnel deletes a tunnel configuration and persists the change.
 func (s *TunnelStore) RemoveTunnel(clientID, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -159,7 +159,7 @@ func (s *TunnelStore) RemoveTunnel(clientID, name string) error {
 		}
 	}
 	if idx == -1 {
-		return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
+		return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
 	}
 
 	previous := cloneStoredTunnels(s.tunnels)
@@ -171,7 +171,7 @@ func (s *TunnelStore) RemoveTunnel(clientID, name string) error {
 	return nil
 }
 
-// UpdateStates 直接更新双状态字段并持久化。
+// UpdateStates directly updates both state fields and persists the change.
 func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, errMsg string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -187,10 +187,10 @@ func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, e
 			return nil
 		}
 	}
-	return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
+	return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
 }
 
-// UpdateTunnel 更新隧道的可变配置（local_ip, local_port, remote_port, domain）并持久化
+// UpdateTunnel updates the mutable tunnel configuration (local_ip, local_port, remote_port, domain) and persists it.
 func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localPort, remotePort int, domain string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -209,10 +209,10 @@ func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localP
 			return nil
 		}
 	}
-	return fmt.Errorf("隧道 %q 不存在 (client_id: %s)", name, clientID)
+	return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
 }
 
-// UpdateHostname 更新某个 Client 的展示主机名
+// UpdateHostname updates the display hostname for a given Client.
 func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -235,7 +235,7 @@ func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 	return nil
 }
 
-// GetTunnelsByClientID 按稳定 client_id 查找所有隧道配置
+// GetTunnelsByClientID returns all tunnel configurations for the given stable client_id.
 func (s *TunnelStore) GetTunnelsByClientID(clientID string) []StoredTunnel {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -249,7 +249,7 @@ func (s *TunnelStore) GetTunnelsByClientID(clientID string) []StoredTunnel {
 	return result
 }
 
-// GetTunnelsByHostname 返回匹配 hostname 的全部隧道（展示/查询用途）。
+// GetTunnelsByHostname returns all tunnels matching the given hostname (for display/query purposes).
 func (s *TunnelStore) GetTunnelsByHostname(hostname string) []StoredTunnel {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -263,7 +263,7 @@ func (s *TunnelStore) GetTunnelsByHostname(hostname string) []StoredTunnel {
 	return result
 }
 
-// GetTunnel 按稳定 client_id 和 name 查找单条隧道
+// GetTunnel looks up a single tunnel by stable client_id and name.
 func (s *TunnelStore) GetTunnel(clientID, name string) (StoredTunnel, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -276,7 +276,7 @@ func (s *TunnelStore) GetTunnel(clientID, name string) (StoredTunnel, bool) {
 	return StoredTunnel{}, false
 }
 
-// GetAllTunnels 获取所有隧道配置
+// GetAllTunnels returns all tunnel configurations.
 func (s *TunnelStore) GetAllTunnels() []StoredTunnel {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

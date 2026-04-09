@@ -12,11 +12,11 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-// ProxyTunnel 代表一条活跃的代理隧道
+// ProxyTunnel represents an active proxy tunnel.
 type ProxyTunnel struct {
 	Config   protocol.ProxyConfig
-	Listener net.Listener   // 监听 RemotePort 的公网 listener（TCP 隧道使用）
-	UDPState *UDPProxyState // UDP 代理运行时状态（TCP 隧道为 nil）
+	Listener net.Listener   // public listener on RemotePort (TCP tunnels only)
+	UDPState *UDPProxyState // UDP proxy runtime state (nil for TCP tunnels)
 	done     chan struct{}
 	once     sync.Once
 }
@@ -72,24 +72,23 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 	}
 
 	if req.RemotePort <= 0 {
-		return newProxyRequestValidationError(fmt.Errorf("TCP/UDP 隧道必须填写明确的公网端口"), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
+		return newProxyRequestValidationError(fmt.Errorf("TCP/UDP tunnels require an explicit remote port"), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 	}
 	if req.RemotePort == 80 || req.RemotePort == 443 {
-		return newProxyRequestValidationError(fmt.Errorf("TCP/UDP 隧道不能使用保留端口 %d", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
+		return newProxyRequestValidationError(fmt.Errorf("TCP/UDP tunnels cannot use reserved port %d", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 	}
 	if listenPort := serverListenPort(s); listenPort > 0 && req.RemotePort == listenPort {
-		return newProxyRequestValidationError(fmt.Errorf("端口 %d 与 NetsGo 管理服务监听端口冲突", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
+		return newProxyRequestValidationError(fmt.Errorf("port %d conflicts with the NetsGo management service listen port", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
 
 	if s.auth.adminStore != nil {
-		// 校验端口白名单
-		if s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(req.RemotePort) {
-			return newProxyRequestValidationError(fmt.Errorf("端口 %d 不在允许范围内", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
+				if s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(req.RemotePort) {
+			return newProxyRequestValidationError(fmt.Errorf("port %d is not in the allowed range", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 		}
 	}
 
 	if conflicts := findTCPUDPPortConflictNames(req.RemotePort, excludeName, excludeClientID, s); len(conflicts) > 0 {
-		return newProxyRequestValidationError(fmt.Errorf("端口 %d 已被隧道占用", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
+		return newProxyRequestValidationError(fmt.Errorf("port %d is already in use by another tunnel", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
 
 	return nil
@@ -165,7 +164,7 @@ func (s *Server) ensureClientDataReady(client *ClientConn) error {
 	hasData := client.dataSession != nil && !client.dataSession.IsClosed()
 	client.dataMu.RUnlock()
 	if !hasData {
-		return fmt.Errorf("Client [%s] 数据通道未建立，无法创建代理", client.ID)
+		return fmt.Errorf("Client [%s] data channel not established, cannot create proxy", client.ID)
 	}
 	return nil
 }
@@ -182,14 +181,13 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 		return nil, err
 	}
 
-	// 检查是否已存在同名代理
-	client.proxyMu.Lock()
+		client.proxyMu.Lock()
 	if client.proxies == nil {
 		client.proxies = make(map[string]*ProxyTunnel)
 	}
 	if _, exists := client.proxies[req.Name]; exists {
 		client.proxyMu.Unlock()
-		return nil, fmt.Errorf("代理隧道 %q 已存在", req.Name)
+		return nil, fmt.Errorf("proxy tunnel %q already exists", req.Name)
 	}
 	if req.Type == protocol.ProxyTypeHTTP {
 		req.RemotePort = 0
@@ -222,8 +220,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	}
 
 	if tunnel.Config.Type == protocol.ProxyTypeHTTP {
-		// HTTP 隧道不绑定公网端口，通过 HTTP 路由层分发
-		setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+				setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 		return nil
 	}
 
@@ -241,7 +238,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("监听端口 %d 失败: %w", tunnel.Config.RemotePort, err)
+		return fmt.Errorf("failed to listen on port %d: %w", tunnel.Config.RemotePort, err)
 	}
 
 	actualPort := ln.Addr().(*net.TCPAddr).Port
@@ -251,7 +248,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	if !exists || current != tunnel {
 		client.proxyMu.Unlock()
 		ln.Close()
-		return fmt.Errorf("代理隧道 %q 不存在", tunnel.Config.Name)
+		return fmt.Errorf("proxy tunnel %q not found", tunnel.Config.Name)
 	}
 	tunnel.Listener = ln
 	tunnel.done = make(chan struct{})
@@ -265,7 +262,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	localPort := tunnel.Config.LocalPort
 	client.proxyMu.Unlock()
 
-	log.Printf("🚇 代理隧道已创建: %s [:%d → %s:%d] Client [%s]",
+	log.Printf("🚇 proxy tunnel created: %s [:%d → %s:%d] Client [%s]",
 		proxyName, actualPort, localIP, localPort, client.ID)
 
 	go s.proxyAcceptLoop(client, tunnel, listener, done)
@@ -313,7 +310,7 @@ func (s *Server) stageTunnelPending(client *ClientConn, name string) (protocol.P
 
 	tunnel, exists := client.proxies[name]
 	if !exists {
-		return protocol.ProxyConfig{}, fmt.Errorf("代理隧道 %q 不存在", name)
+		return protocol.ProxyConfig{}, fmt.Errorf("proxy tunnel %q not found", name)
 	}
 	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, "")
 	return tunnel.Config, nil
@@ -331,8 +328,7 @@ func (s *Server) setTunnelError(client *ClientConn, name, message string) (proto
 	return tunnel.Config, true
 }
 
-// StartProxy 启动一条新的代理隧道。
-// 在 RemotePort 上监听外部连接，每收到一个连接就通过 yamux 转发给 Client。
+// StartProxy starts a new proxy tunnel, listening on RemotePort and forwarding each connection to the client via yamux.
 func (s *Server) StartProxy(client *ClientConn, req protocol.ProxyNewRequest) error {
 	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending)
 	if err != nil {
@@ -367,16 +363,16 @@ func (s *Server) markTCPProxyRuntimeErrorIfCurrent(
 	client.proxyMu.Unlock()
 
 	if err := s.persistTunnelStates(client.ID, tunnel.Config.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message); err != nil {
-		log.Printf("⚠️ TCP 代理 [%s] 持久化 error 状态失败: %v", tunnel.Config.Name, err)
+		log.Printf("⚠️ TCP proxy [%s] failed to persist error state: %v", tunnel.Config.Name, err)
 	}
 	s.emitTunnelChanged(client.ID, config, "error")
 	if err := s.notifyClientProxyClose(client, tunnel.Config.Name, "runtime_error"); err != nil {
-		log.Printf("⚠️ TCP 代理 [%s] 通知 client 关闭失败: %v", tunnel.Config.Name, err)
+		log.Printf("⚠️ TCP proxy [%s] failed to notify client of close: %v", tunnel.Config.Name, err)
 	}
 }
 
-// proxyAcceptLoop 持续接受外部连接并通过 yamux 转发。
-// 它只持有本次激活对应的 listener/done 快照，避免旧 loop 误操作新一代 runtime。
+// proxyAcceptLoop continuously accepts external connections and forwards them via yamux.
+// It holds a snapshot of the listener/done for this activation to prevent stale loops from interfering with newer runtimes.
 func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, done <-chan struct{}) {
 	defer listener.Close()
 
@@ -385,10 +381,10 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listen
 		if err != nil {
 			select {
 			case <-done:
-				return // 正常关闭
+				return // normal shutdown
 			default:
-				log.Printf("⚠️ 代理 [%s] Accept 失败: %v", tunnel.Config.Name, err)
-				s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("TCP 代理监听失败: %v", err))
+				log.Printf("⚠️ proxy [%s] Accept failed: %v", tunnel.Config.Name, err)
+				s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("TCP proxy listener failed: %v", err))
 				return
 			}
 		}
@@ -397,42 +393,39 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listen
 	}
 }
 
-// handleProxyConn 处理单个外部连接：
-// 1. 在 yamux Session 上 OpenStream
-// 2. 向 Stream 写入 StreamHeader（proxyName）
-// 3. Relay(stream, extConn) 双向搬运
+// handleProxyConn handles a single external connection: opens a stream on the yamux session,
+// writes the StreamHeader (proxyName), then relays data bidirectionally.
 func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, extConn net.Conn) {
 	defer extConn.Close()
 
 	stream, err := s.openStreamToClient(client, tunnel.Config.Name)
 	if err != nil {
-		log.Printf("⚠️ 代理 [%s] 打开 Stream 失败: %v", tunnel.Config.Name, err)
-		s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("TCP 代理转发通道失败: %v", err))
+		log.Printf("⚠️ proxy [%s] open stream failed: %v", tunnel.Config.Name, err)
+		s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("TCP proxy forwarding channel failed: %v", err))
 		return
 	}
 
-	// Relay：双向搬运数据
-	atob, btoa := mux.Relay(stream, extConn)
+		atob, btoa := mux.Relay(stream, extConn)
 	if s.trafficStore != nil {
 		s.trafficStore.RecordBytes(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(btoa), uint64(atob))
 	}
 }
 
-// StopProxy 停止一条代理隧道
+// StopProxy stops a proxy tunnel.
 func (s *Server) StopProxy(client *ClientConn, name string) error {
 	client.proxyMu.RLock()
 	_, exists := client.proxies[name]
 	client.proxyMu.RUnlock()
 	if !exists {
-		return fmt.Errorf("代理隧道 %q 不存在", name)
+		return fmt.Errorf("proxy tunnel %q not found", name)
 	}
 	s.removeTunnelRuntime(client, name)
 
-	log.Printf("🛑 代理隧道已停止: %s", name)
+	log.Printf("🛑 proxy tunnel stopped: %s", name)
 	return nil
 }
 
-// StopAllProxies 停止 Client 的所有代理隧道
+// StopAllProxies stops all proxy tunnels for a client.
 func (s *Server) StopAllProxies(client *ClientConn) {
 	client.proxyMu.Lock()
 	proxies := client.proxies
@@ -444,45 +437,44 @@ func (s *Server) StopAllProxies(client *ClientConn) {
 	}
 }
 
-// PauseProxy 暂停一条代理隧道（只关闭运行时资源，业务状态由 manager 层写入）
+// PauseProxy pauses a proxy tunnel (closes runtime resources only; business state is written by the manager layer).
 func (s *Server) PauseProxy(client *ClientConn, name string) error {
 	client.proxyMu.Lock()
 	tunnel, exists := client.proxies[name]
 	if !exists {
 		client.proxyMu.Unlock()
-		return fmt.Errorf("代理隧道 %q 不存在", name)
+		return fmt.Errorf("proxy tunnel %q not found", name)
 	}
 	closeTunnelRuntimeResources(tunnel)
 	client.proxyMu.Unlock()
 
-	log.Printf("⏸️ 代理隧道已暂停: %s", name)
+	log.Printf("⏸️ proxy tunnel paused: %s", name)
 	return nil
 }
 
-// ResumeProxy 恢复一条暂停的代理隧道（重新监听端口）
+// ResumeProxy resumes a paused proxy tunnel by re-binding the port.
 func (s *Server) ResumeProxy(client *ClientConn, name string) error {
 	client.proxyMu.RLock()
 	tunnel, exists := client.proxies[name]
 	if !exists {
 		client.proxyMu.RUnlock()
-		return fmt.Errorf("代理隧道 %q 不存在", name)
+		return fmt.Errorf("proxy tunnel %q not found", name)
 	}
 	client.proxyMu.RUnlock()
 
-	// 检查端口是否仍在白名单范围内
-	if tunnel.Config.RemotePort != 0 && s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
-		return fmt.Errorf("端口 %d 不在当前允许范围内，无法恢复", tunnel.Config.RemotePort)
+		if tunnel.Config.RemotePort != 0 && s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
+		return fmt.Errorf("port %d is no longer in the allowed range, cannot resume", tunnel.Config.RemotePort)
 	}
 
 	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
 		return err
 	}
 
-	log.Printf("▶️ 代理隧道已恢复: %s [:%d]", name, tunnel.Config.RemotePort)
+	log.Printf("▶️ proxy tunnel resumed: %s [:%d]", name, tunnel.Config.RemotePort)
 	return nil
 }
 
-// PauseAllProxies 暂停 Client 的所有活跃代理隧道（保留配置，断连时使用）
+// PauseAllProxies pauses all active proxy tunnels for a client, retaining config (used on disconnect).
 func (s *Server) PauseAllProxies(client *ClientConn) {
 	client.proxyMu.Lock()
 	defer client.proxyMu.Unlock()

@@ -35,7 +35,7 @@ func InstallClientWith(deps clientDeps) error {
 	state := inspection.State
 	switch state {
 	case svcmgr.StateInstalled:
-		printInstalledSummary(deps.UI, "Client already installed")
+		printInstalledSummary(deps.UI, "Client already installed", svcmgr.RoleClient)
 		return nil
 	case svcmgr.StateHistoricalDataOnly:
 		deps.UI.PrintSummary("Client installation state is broken", [][2]string{
@@ -52,8 +52,12 @@ func InstallClientWith(deps clientDeps) error {
 	serverURL, err := deps.UI.Input("Server address", tui.InputOptions{
 		Placeholder: "e.g. wss://netsgo.example.com",
 		Description: "WebSocket URL of the NetsGo server (ws:// or wss://)",
+		Validate:    validateInstallClientServerURL,
 	})
 	if err != nil {
+		return err
+	}
+	if err := validateInstallClientServerURL(serverURL); err != nil {
 		return err
 	}
 	clientKey, err := deps.UI.Password("Client key", tui.InputOptions{
@@ -69,24 +73,31 @@ func InstallClientWith(deps clientDeps) error {
 	if err != nil {
 		return err
 	}
-	tlsSkipVerify, err := deps.UI.Confirm("Skip TLS certificate verification?")
-	if err != nil {
-		return err
-	}
-	tlsFingerprint, err := deps.UI.Input("TLS certificate fingerprint", tui.InputOptions{
-		Placeholder: "AA:BB:CC:...",
-		Description: "SHA-256 fingerprint for pinning a self-signed certificate (optional)",
-	})
-	if err != nil {
-		return err
+	usesTLS := strings.HasPrefix(serverURL, "wss://")
+	tlsSkipVerify := false
+	tlsFingerprint := ""
+	if usesTLS {
+		tlsSkipVerify, err = deps.UI.Confirm("Skip TLS certificate verification?")
+		if err != nil {
+			return err
+		}
+		if !tlsSkipVerify {
+			tlsFingerprint, err = deps.UI.Input("TLS certificate fingerprint", tui.InputOptions{
+				Placeholder: "AA:BB:CC:...",
+				Description: "SHA-256 fingerprint for pinning a self-signed certificate (optional)",
+			})
+			if err != nil {
+				return err
+			}
+		}
 	}
 
-	deps.UI.PrintSummary("Installation summary", [][2]string{
-		{"Role", "client"},
-		{"Server", serverURL},
-		{"Skip TLS verify", boolText(tlsSkipVerify)},
-		{"TLS fingerprint", tlsFingerprint},
-	})
+	deps.UI.PrintSummary("Installation summary", confirmSummaryRows(svcmgr.RoleClient,
+		[2]string{"Server", serverURL},
+		[2]string{"TLS", ternary(usesTLS, "wss", "ws")},
+		[2]string{"Skip TLS verify", ternary(usesTLS, boolText(tlsSkipVerify), "N/A")},
+		[2]string{"TLS fingerprint", ternary(tlsFingerprint != "", tlsFingerprint, "Not set")},
+	))
 	ok, err := deps.UI.Confirm("Proceed with installation?")
 	if err != nil {
 		return err
@@ -115,11 +126,7 @@ func InstallClientWith(deps clientDeps) error {
 	}); err != nil {
 		return err
 	}
-	deps.UI.PrintSummary("Client installation complete", [][2]string{
-		{"Status", "Running"},
-		{"Connected to", serverURL},
-		{"Next step", "Run netsgo manage to manage the service"},
-	})
+	deps.UI.PrintSummary("Client installation complete", completionSummaryRows(svcmgr.RoleClient, "Connected to", serverURL))
 	return nil
 }
 
@@ -170,6 +177,13 @@ func boolText(v bool) string {
 		return "Yes"
 	}
 	return "No"
+}
+
+func ternary(ok bool, a, b string) string {
+	if ok {
+		return a
+	}
+	return b
 }
 
 func firstProblem(problems []string) string {

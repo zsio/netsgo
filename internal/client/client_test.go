@@ -17,10 +17,10 @@ import (
 )
 
 // ============================================================
-// 测试辅助：模拟一个 Server 端 WebSocket 处理器
+// Test helper: simulate a server-side WebSocket handler
 // ============================================================
 
-// mockServer 模拟 Server 端行为，用于测试 Client
+// mockServer simulates server-side behavior for client tests
 func (ms *mockServer) writeControlJSON(conn *websocket.Conn, v any) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -38,7 +38,7 @@ type mockServer struct {
 	conns                []*websocket.Conn
 	dataConns            []*websocket.Conn
 	dataSessions         []io.Closer
-	onMessage            func(msg protocol.Message) *protocol.Message // 收到消息后的回调
+	onMessage            func(msg protocol.Message) *protocol.Message // Callback invoked after receiving a message
 }
 
 func newMockServer(authSuccess bool) *mockServer {
@@ -86,7 +86,7 @@ func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 		ms.receivedMsgs = append(ms.receivedMsgs, msg)
 		ms.mu.Unlock()
 
-		// 处理消息
+		// Handle messages
 		switch msg.Type {
 		case protocol.MsgTypeAuth:
 			resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, ms.authResp)
@@ -97,7 +97,7 @@ func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 			ms.writeControlJSON(conn, pong)
 
 		case protocol.MsgTypeProbeReport:
-			// 服务端不回复探针上报
+			// The server does not reply to probe reports
 
 		default:
 			if ms.onMessage != nil {
@@ -171,7 +171,7 @@ func (ms *mockServer) dataHandler(w http.ResponseWriter, r *http.Request) {
 	<-session.CloseChan()
 }
 
-// closeConns 主动关闭所有 WebSocket 连接
+// closeConns proactively closes all WebSocket connections
 func (ms *mockServer) closeConns() {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -225,7 +225,7 @@ func newMockHTTPServer(ms *mockServer) *httptest.Server {
 }
 
 // ============================================================
-// Client 集成测试
+// Client integration tests
 // ============================================================
 
 func TestClient_ConnectAndAuth(t *testing.T) {
@@ -237,27 +237,27 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 	c := New(wsURL, "test-key")
 	c.DisableReconnect = true
 
-	// 在后台启动 Client（Start 会阻塞在 controlLoop 里）
+	// Start the client in the background (Start blocks in controlLoop)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- c.Start()
 	}()
 
-	// 等 Client 完成认证
+	// Wait for the client to finish authentication
 	time.Sleep(500 * time.Millisecond)
 
-	// 验证 ClientID 被设置
+	// Verify that ClientID was set
 	if c.CurrentClientID() != "mock_client_1" {
-		t.Errorf("ClientID 期望 'mock_client_1'，得到 %q", c.CurrentClientID())
+		t.Errorf("ClientID: want 'mock_client_1', got %q", c.CurrentClientID())
 	}
 
-	// 验证 Server 收到了认证消息
+	// Verify that the server received the authentication message
 	msgs := ms.getReceivedMsgs()
 	if len(msgs) == 0 {
-		t.Fatal("Server 未收到任何消息")
+		t.Fatal("server did not receive any messages")
 	}
 	if msgs[0].Type != protocol.MsgTypeAuth {
-		t.Errorf("第一条消息应为 auth，得到 %s", msgs[0].Type)
+		t.Errorf("the first message should be auth, got %s", msgs[0].Type)
 	}
 }
 
@@ -277,14 +277,14 @@ func TestClientControlDial_SendsSubprotocol(t *testing.T) {
 		protocols := ms.getControlProtocols()
 		if len(protocols) > 0 {
 			if len(protocols[0]) != 1 || protocols[0][0] != protocol.WSSubProtocolControl {
-				t.Fatalf("控制通道应发送子协议 %q，得到 %v", protocol.WSSubProtocolControl, protocols[0])
+				t.Fatalf("control channel should send subprotocol %q, got %v", protocol.WSSubProtocolControl, protocols[0])
 			}
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	t.Fatal("未观察到控制通道握手")
+	t.Fatal("did not observe the control channel handshake")
 }
 
 func TestClient_HeartbeatSent(t *testing.T) {
@@ -298,7 +298,7 @@ func TestClient_HeartbeatSent(t *testing.T) {
 
 	go c.Start()
 
-	// 数据通道连接会快速失败（~1s），然后心跳间隔 5s，等 8s 应收到至少 1 次
+	// The data channel connection fails quickly (~1s), then the heartbeat interval is 5s, so waiting 8s should observe at least one heartbeat
 	time.Sleep(8 * time.Second)
 
 	msgs := ms.getReceivedMsgs()
@@ -310,7 +310,7 @@ func TestClient_HeartbeatSent(t *testing.T) {
 	}
 
 	if pingCount == 0 {
-		t.Errorf("等待 7 秒后应至少收到 1 次心跳，实际收到 %d 次", pingCount)
+		t.Errorf("after waiting 7 seconds, expected at least 1 heartbeat, got %d", pingCount)
 	}
 }
 
@@ -325,7 +325,7 @@ func TestClient_ProbeReportSent(t *testing.T) {
 
 	go c.Start()
 
-	// 探针在数据通道失败（~2s）后上报，CPU 采样约 1s，等 5s 足够
+	// Probe reporting happens after the data channel fails (~2s), and CPU sampling takes about 1s, so 5s is enough
 	time.Sleep(5 * time.Second)
 
 	msgs := ms.getReceivedMsgs()
@@ -337,21 +337,21 @@ func TestClient_ProbeReportSent(t *testing.T) {
 	}
 
 	if probeCount == 0 {
-		t.Error("应收到至少 1 次探针上报（启动时立即上报）")
+		t.Error("expected at least 1 probe report (it reports immediately on startup)")
 	}
 
-	// 验证探针数据内容
+	// Verify probe data contents
 	for _, msg := range msgs {
 		if msg.Type == protocol.MsgTypeProbeReport {
 			var stats protocol.SystemStats
 			if err := msg.ParsePayload(&stats); err != nil {
-				t.Fatalf("解析探针数据失败: %v", err)
+				t.Fatalf("failed to parse probe data: %v", err)
 			}
 			if stats.NumCPU == 0 {
-				t.Error("探针数据 NumCPU 不应为 0")
+				t.Error("probe data NumCPU should not be 0")
 			}
 			if stats.MemTotal == 0 {
-				t.Error("探针数据 MemTotal 不应为 0")
+				t.Error("probe data MemTotal should not be 0")
 			}
 			break
 		}
@@ -365,9 +365,9 @@ func TestClient_ServerDisconnect_WithReconnect(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
-	c.DisableReconnect = true // 测试中禁用重连避免阻塞
+	c.DisableReconnect = true // Disable reconnect in this test to avoid blocking
 
-	// 后台启动 Client
+	// Start the client in the background
 	started := make(chan struct{})
 	go func() {
 		close(started)
@@ -375,29 +375,29 @@ func TestClient_ServerDisconnect_WithReconnect(t *testing.T) {
 	}()
 	<-started
 
-	// 等 Client 完成认证和至少一次探针采集
+	// Wait for the client to finish authentication and complete at least one probe collection
 	time.Sleep(3 * time.Second)
 
-	// 验证连接正常
+	// Verify that the connection is healthy
 	if c.CurrentClientID() == "" {
-		t.Fatal("Client 应已完成认证")
+		t.Fatal("client should have completed authentication")
 	}
 
-	// 模拟 Server 断开
+	// Simulate a server disconnect
 	ms.closeConns()
 	ts.Close()
 
-	// 验证 done channel 被关闭（controlLoop 检测到断连后关闭）
+	// Verify that the done channel is closed (controlLoop closes it when it detects disconnect)
 	select {
 	case <-c.done:
-		// 成功：Client 检测到了断连
+		// Success: the client detected the disconnect
 	case <-time.After(5 * time.Second):
-		t.Error("Server 断开后 Client 的 done channel 应在合理时间内关闭")
+		t.Error("the client's done channel should close within a reasonable time after the server disconnects")
 	}
 }
 
 func TestClient_AuthFailed(t *testing.T) {
-	ms := newMockServer(false) // 模拟认证失败
+	ms := newMockServer(false) // Simulate authentication failure
 	ts := newMockHTTPServer(ms)
 	defer ts.Close()
 
@@ -405,22 +405,22 @@ func TestClient_AuthFailed(t *testing.T) {
 	c := New(wsURL, "wrong-key")
 
 	err := c.Start()
-	if err == nil || !strings.Contains(err.Error(), "认证失败") {
-		t.Errorf("期望因认证失败而 Start 报错，实际得到: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "authentication failed") {
+		t.Errorf("expected Start to fail due to authentication failure, got: %v", err)
 	}
 }
 
 func TestClient_DataChannelConnectErrorHandling(t *testing.T) {
-	// 创建一个没有提供 HTTP Server 而是直接关闭了监听的 mock
+	// Create a mock with no HTTP server and a closed listener
 	c := New("ws://127.0.0.1:11111", "key")
 	err := c.connectDataChannel()
 	if err == nil {
-		t.Error("期望连不上目标服务器时报错")
+		t.Error("expected an error when the target server cannot be reached")
 	}
 }
 
 // ============================================================
-// Reconnect 测试
+// Reconnect tests
 // ============================================================
 
 func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
@@ -433,7 +433,7 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 		Code:      protocol.AuthCodeOK,
 	}
 
-	// 统计认证次数
+	// Count authentication attempts
 	var authCount int
 	var authMu sync.Mutex
 
@@ -475,24 +475,24 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
-	// 不设 DisableReconnect，让 reconnect 生效
+	// Do not set DisableReconnect so reconnect can take effect
 
-	// 后台启动 Client
+	// Start the client in the background
 	go c.Start()
 	time.Sleep(1 * time.Second)
 
-	// 验证首次认证完成
+	// Verify that the first authentication completed
 	authMu.Lock()
 	firstAuth := authCount
 	authMu.Unlock()
 	if firstAuth == 0 {
-		t.Fatal("首次认证应已完成")
+		t.Fatal("the initial authentication should have completed")
 	}
 
-	// 断开连接
+	// Disconnect
 	ms.closeConns()
 
-	// 轮询等待重连成功，避免固定 sleep 导致测试偶发抖动。
+	// Poll until reconnect succeeds to avoid flaky timing from fixed sleeps.
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		authMu.Lock()
@@ -507,7 +507,7 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 	authMu.Lock()
 	finalAuth := authCount
 	authMu.Unlock()
-	t.Errorf("重连后认证次数应增加，首次: %d, 当前: %d", firstAuth, finalAuth)
+	t.Errorf("authentication count should increase after reconnect, initial: %d, current: %d", firstAuth, finalAuth)
 }
 
 func TestClient_RetryInterval(t *testing.T) {
@@ -515,17 +515,17 @@ func TestClient_RetryInterval(t *testing.T) {
 	old := time.Now().Add(-6 * time.Minute)
 
 	if interval := retryIntervalWithJitter(recent, 0); interval != retryShortInterval {
-		t.Errorf("断连 1 分钟内最小重试间隔应为 %v，得到 %v", retryShortInterval, interval)
+		t.Errorf("minimum retry interval within 1 minute after disconnect should be %v, got %v", retryShortInterval, interval)
 	}
 	if interval := retryIntervalWithJitter(old, 0); interval != retryLongInterval {
-		t.Errorf("断连超过 5 分钟最小重试间隔应为 %v，得到 %v", retryLongInterval, interval)
+		t.Errorf("minimum retry interval after more than 5 minutes disconnected should be %v, got %v", retryLongInterval, interval)
 	}
 
 	if interval := retryIntervalWithJitter(recent, 1); interval != 4500*time.Millisecond {
-		t.Errorf("断连 1 分钟内最大重试间隔应为 4.5s，得到 %v", interval)
+		t.Errorf("maximum retry interval within 1 minute after disconnect should be 4.5s, got %v", interval)
 	}
 	if interval := retryIntervalWithJitter(old, 1); interval != 15*time.Second {
-		t.Errorf("断连超过 5 分钟最大重试间隔应为 15s，得到 %v", interval)
+		t.Errorf("maximum retry interval after more than 5 minutes disconnected should be 15s, got %v", interval)
 	}
 }
 
@@ -534,27 +534,27 @@ func TestClient_Cleanup(t *testing.T) {
 	c.ClientID = "cleanup-test"
 	c.proxies.Store("proxy1", protocol.ProxyNewRequest{Name: "proxy1"})
 
-	// 模拟创建一个 dataSession
+	// Simulate creating a dataSession
 	clientConn, serverConn := net.Pipe()
 	session, _ := mux.NewClientSession(clientConn, mux.DefaultConfig())
 	c.dataSession = session
 
-	// 执行清理
+	// Run cleanup
 	c.cleanup()
 
-	// 验证清理结果
+	// Verify the cleanup results
 	if c.CurrentClientID() != "" {
-		t.Error("cleanup 后 ClientID 应为空")
+		t.Error("ClientID should be empty after cleanup")
 	}
 
 	_, ok := c.proxies.Load("proxy1")
 	if ok {
-		t.Error("cleanup 后 proxies 应被清空")
+		t.Error("proxies should be cleared after cleanup")
 	}
 
 	c.dataMu.RLock()
 	if c.dataSession != nil {
-		t.Error("cleanup 后 dataSession 应为 nil")
+		t.Error("dataSession should be nil after cleanup")
 	}
 	c.dataMu.RUnlock()
 
@@ -563,12 +563,12 @@ func TestClient_Cleanup(t *testing.T) {
 }
 
 // ============================================================
-// acceptStreamLoop 测试
+// acceptStreamLoop tests
 // ============================================================
 
 func TestClient_AcceptStreamLoop_NilSession(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
-	// dataSession = nil, 应该直接 return 不 panic
+	// dataSession = nil should return immediately without panicking
 	c.acceptStreamLoop()
 }
 
@@ -579,17 +579,17 @@ func TestClient_AcceptStreamLoop_SessionClosed(t *testing.T) {
 	session, _ := mux.NewClientSession(clientConn, mux.DefaultConfig())
 	c.dataSession = session
 
-	// 立即关闭 session，模拟断连
+	// Close the session immediately to simulate a disconnect
 	session.Close()
 	serverConn.Close()
 	clientConn.Close()
 
-	// 应当安全退出
+	// It should exit safely
 	c.acceptStreamLoop()
 }
 
 // ============================================================
-// requestProxy 测试
+// requestProxy tests
 // ============================================================
 
 func TestClient_RequestProxy(t *testing.T) {
@@ -613,11 +613,11 @@ func TestClient_RequestProxy(t *testing.T) {
 	c := New(wsURL, "test-key")
 	c.DisableReconnect = true
 
-	// 启动 Client（后台阻塞在 controlLoop）
+	// Start the client (it blocks in controlLoop in the background)
 	go c.Start()
-	time.Sleep(500 * time.Millisecond) // 等认证和数据通道尝试完成
+	time.Sleep(500 * time.Millisecond) // Wait for authentication and the data channel attempt to complete
 
-	// 手动调用 requestProxy
+	// Call requestProxy manually
 	cfg := protocol.ProxyNewRequest{
 		Name:       "test-proxy",
 		Type:       protocol.ProxyTypeTCP,
@@ -627,7 +627,7 @@ func TestClient_RequestProxy(t *testing.T) {
 	}
 	c.requestProxy(cfg)
 
-	// 验证 Server 收到了 proxy_create 消息
+	// Verify that the server received the proxy_create message
 	time.Sleep(200 * time.Millisecond)
 	msgs := ms.getReceivedMsgs()
 	found := false
@@ -638,18 +638,18 @@ func TestClient_RequestProxy(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("Server 应收到 proxy_create 消息")
+		t.Error("server should receive the proxy_create message")
 	}
 
-	// 验证 proxies sync.Map 已注册
+	// Verify that the config was registered in the proxies sync.Map
 	_, ok := c.proxies.Load("test-proxy")
 	if !ok {
-		t.Error("requestProxy 应在 proxies 中注册配置")
+		t.Error("requestProxy should register the config in proxies")
 	}
 }
 
 // ============================================================
-// controlLoop — create response 处理测试
+// controlLoop — create response handling tests
 // ============================================================
 
 func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
@@ -664,7 +664,7 @@ func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 	go c.Start()
 	time.Sleep(500 * time.Millisecond)
 
-	// Server 主动发送 proxy_create_resp (成功)
+	// The server proactively sends proxy_create_resp (success)
 	ms.mu.Lock()
 	var conn *websocket.Conn
 	if len(ms.conns) > 0 {
@@ -678,11 +678,11 @@ func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 			RemotePort: 19090,
 		})
 		if err := ms.writeControlJSON(conn, resp); err != nil {
-			t.Fatalf("服务端发送 proxy_create_resp 失败: %v", err)
+			t.Fatalf("server failed to send proxy_create_resp: %v", err)
 		}
 	}
 
-	// 等待 Client 处理，不崩溃即通过
+	// Wait for the client to handle it; not crashing is enough
 	time.Sleep(200 * time.Millisecond)
 }
 
@@ -698,7 +698,7 @@ func TestClient_ControlLoop_ProxyCreateResp_Failure(t *testing.T) {
 	go c.Start()
 	time.Sleep(500 * time.Millisecond)
 
-	// Server 主动发送 proxy_create_resp (失败)
+	// The server proactively sends proxy_create_resp (failure)
 	ms.mu.Lock()
 	var conn *websocket.Conn
 	if len(ms.conns) > 0 {
@@ -711,7 +711,7 @@ func TestClient_ControlLoop_ProxyCreateResp_Failure(t *testing.T) {
 			Message: "port conflict",
 		})
 		if err := ms.writeControlJSON(conn, resp); err != nil {
-			t.Fatalf("服务端发送 proxy_create_resp 失败: %v", err)
+			t.Fatalf("server failed to send proxy_create_resp: %v", err)
 		}
 	}
 
@@ -747,7 +747,7 @@ func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
 	ms.mu.Lock()
 	if len(ms.conns) == 0 {
 		ms.mu.Unlock()
-		t.Fatal("客户端控制连接未建立")
+		t.Fatal("client control connection was not established")
 	}
 	conn := ms.conns[len(ms.conns)-1]
 	ms.mu.Unlock()
@@ -760,21 +760,21 @@ func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
 	})
 	err := ms.writeControlJSON(conn, msg)
 	if err != nil {
-		t.Fatalf("服务端发送 proxy_provision 失败: %v", err)
+		t.Fatalf("server failed to send proxy_provision: %v", err)
 	}
 
 	select {
 	case err := <-ackErr:
-		t.Fatalf("解析 proxy_provision_ack 失败: %v", err)
+		t.Fatalf("failed to parse proxy_provision_ack: %v", err)
 	case resp := <-provisionAck:
 		if resp.Name != "server-pushed-proxy" {
-			t.Fatalf("provision ack name 错误: %s", resp.Name)
+			t.Fatalf("wrong provision ack name: %s", resp.Name)
 		}
 		if !resp.Accepted {
-			t.Fatal("provision ack 应标记为 accepted")
+			t.Fatal("provision ack should be marked accepted")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("未收到 client 返回的 proxy_provision_ack")
+		t.Fatal("did not receive proxy_provision_ack returned by the client")
 	}
 }
 
@@ -787,7 +787,7 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 		}
 		var payload map[string]any
 		if err := msg.ParsePayload(&payload); err != nil {
-			t.Fatalf("解析 proxy_provision_ack 失败: %v", err)
+			t.Fatalf("failed to parse proxy_provision_ack: %v", err)
 		}
 		ackPayload <- payload
 		return nil
@@ -805,7 +805,7 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 	ms.mu.Lock()
 	if len(ms.conns) == 0 {
 		ms.mu.Unlock()
-		t.Fatal("客户端控制连接未建立")
+		t.Fatal("client control connection was not established")
 	}
 	conn := ms.conns[len(ms.conns)-1]
 	ms.mu.Unlock()
@@ -818,27 +818,27 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 	})
 	err := ms.writeControlJSON(conn, msg)
 	if err != nil {
-		t.Fatalf("服务端发送 proxy_provision 失败: %v", err)
+		t.Fatalf("server failed to send proxy_provision: %v", err)
 	}
 
 	select {
 	case payload := <-ackPayload:
 		if payload["name"] != "unreachable-backend" {
-			t.Fatalf("ack name 错误: %v", payload["name"])
+			t.Fatalf("wrong ack name: %v", payload["name"])
 		}
 		accepted, ok := payload["accepted"].(bool)
 		if !ok || !accepted {
-			t.Fatalf("ack accepted 应为 true，得到 %#v", payload["accepted"])
+			t.Fatalf("ack accepted should be true, got %#v", payload["accepted"])
 		}
 		if _, exists := payload["remote_port"]; exists {
-			t.Fatalf("proxy_provision_ack 不应包含 remote_port: %v", payload)
+			t.Fatalf("proxy_provision_ack should not contain remote_port: %v", payload)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("未收到 client 返回的 proxy_provision_ack")
+		t.Fatal("did not receive proxy_provision_ack returned by the client")
 	}
 
 	if _, ok := c.proxies.Load("unreachable-backend"); !ok {
-		t.Fatal("provision 成功后应缓存隧道配置")
+		t.Fatal("tunnel config should be cached after successful provision")
 	}
 }
 
@@ -858,17 +858,17 @@ func TestClient_FailRuntime_DoesNotCloseNewRuntime(t *testing.T) {
 	select {
 	case <-oldClosed:
 	case <-time.After(time.Second):
-		t.Fatal("旧 runtime 应在 failRuntime 后关闭")
+		t.Fatal("the old runtime should be closed after failRuntime")
 	}
 
 	select {
 	case <-newRT.done:
-		t.Fatal("关闭旧 runtime 不应影响新 runtime")
+		t.Fatal("closing the old runtime should not affect the new runtime")
 	default:
 	}
 
 	if got := c.getCurrentRuntime(); got != newRT {
-		t.Fatal("当前 runtime 应保持为新 runtime")
+		t.Fatal("the current runtime should remain the new runtime")
 	}
 }
 
@@ -891,16 +891,16 @@ func TestClient_Cleanup_WaitsForRuntimeGoroutines(t *testing.T) {
 	select {
 	case <-exited:
 	case <-time.After(time.Second):
-		t.Fatal("cleanup 应等待 runtime goroutine 退出")
+		t.Fatal("cleanup should wait for the runtime goroutine to exit")
 	}
 
 	if time.Since(start) < 50*time.Millisecond {
-		t.Fatal("cleanup 应等待 WaitGroup，而不是立即返回")
+		t.Fatal("cleanup should wait on the WaitGroup instead of returning immediately")
 	}
 }
 
 // ============================================================
-// connectDataChannel 完整握手测试
+// connectDataChannel full handshake tests
 // ============================================================
 
 func TestClient_ConnectDataChannel_Success(t *testing.T) {
@@ -916,7 +916,7 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 
 	err := c.connectDataChannel()
 	if err != nil {
-		t.Fatalf("connectDataChannel 应成功: %v", err)
+		t.Fatalf("connectDataChannel should succeed: %v", err)
 	}
 
 	c.dataMu.RLock()
@@ -924,7 +924,7 @@ func TestClient_ConnectDataChannel_Success(t *testing.T) {
 	c.dataMu.RUnlock()
 
 	if !hasSession {
-		t.Error("成功握手后 dataSession 不应为 nil")
+		t.Error("dataSession should not be nil after a successful handshake")
 	}
 }
 
@@ -942,10 +942,10 @@ func TestClient_ConnectDataChannel_Rejected(t *testing.T) {
 
 	err := c.connectDataChannel()
 	if err == nil {
-		t.Error("Server 拒绝握手时应返回错误")
+		t.Error("should return an error when the server rejects the handshake")
 	}
-	if !strings.Contains(err.Error(), "握手被拒绝") {
-		t.Errorf("错误信息应包含'握手被拒绝'，实际得到: %v", err)
+	if !strings.Contains(err.Error(), "handshake rejected") {
+		t.Errorf("error should contain 'handshake rejected', got: %v", err)
 	}
 }
 
@@ -961,15 +961,15 @@ func TestClientDataDial_SendsSubprotocol(t *testing.T) {
 	c.dataToken = ms.authResp.DataToken
 
 	if err := c.connectDataChannel(); err != nil {
-		t.Fatalf("connectDataChannel 应成功: %v", err)
+		t.Fatalf("connectDataChannel should succeed: %v", err)
 	}
 
 	protocols := ms.getDataProtocols()
 	if len(protocols) == 0 {
-		t.Fatal("未观察到数据通道握手")
+		t.Fatal("did not observe the data channel handshake")
 	}
 	if len(protocols[0]) != 1 || protocols[0][0] != protocol.WSSubProtocolData {
-		t.Fatalf("数据通道应发送子协议 %q，得到 %v", protocol.WSSubProtocolData, protocols[0])
+		t.Fatalf("data channel should send subprotocol %q, got %v", protocol.WSSubProtocolData, protocols[0])
 	}
 }
 
@@ -986,18 +986,18 @@ func TestClient_ConnectDataChannel_HandlesCloseWithoutStatusByte(t *testing.T) {
 	c.dataToken = ms.authResp.DataToken
 
 	if err := c.connectDataChannel(); err == nil {
-		t.Fatal("握手阶段直接 close 时应返回错误")
+		t.Fatal("should return an error when the connection closes directly during the handshake")
 	}
 }
 
 func TestClient_ConnectDataChannel_NoPort(t *testing.T) {
-	// ServerAddr 没有端口的情况
+	// Case where ServerAddr has no port
 	c := New("ws://some-host-without-port-1234567.invalid", "key")
 	c.ClientID = "no-port-client"
 	c.dataToken = "some-token"
 	err := c.connectDataChannel()
 	if err == nil {
-		t.Error("无法连接时应返回错误")
+		t.Error("should return an error when connection is not possible")
 	}
 }
 
@@ -1025,10 +1025,10 @@ func TestNormalizeServerAddr(t *testing.T) {
 		c := New(tt.input, "key")
 		c.normalizeServerAddr()
 		if c.ServerAddr != tt.expected {
-			t.Errorf("normalizeServerAddr(%q) = %q, 期望 %q", tt.input, c.ServerAddr, tt.expected)
+			t.Errorf("normalizeServerAddr(%q) = %q, want %q", tt.input, c.ServerAddr, tt.expected)
 		}
 		if c.useTLS != tt.useTLS {
-			t.Errorf("normalizeServerAddr(%q): useTLS = %v, 期望 %v", tt.input, c.useTLS, tt.useTLS)
+			t.Errorf("normalizeServerAddr(%q): useTLS = %v, want %v", tt.input, c.useTLS, tt.useTLS)
 		}
 	}
 }
@@ -1049,7 +1049,7 @@ func TestDeriveControlURL(t *testing.T) {
 		c.normalizeServerAddr()
 		url := c.deriveControlURL()
 		if url != tt.expected {
-			t.Errorf("deriveControlURL() for %q = %q, 期望 %q", tt.input, url, tt.expected)
+			t.Errorf("deriveControlURL() for %q = %q, want %q", tt.input, url, tt.expected)
 		}
 	}
 }
@@ -1070,7 +1070,7 @@ func TestDeriveDataURL(t *testing.T) {
 		c.normalizeServerAddr()
 		url := c.deriveDataURL()
 		if url != tt.expected {
-			t.Errorf("deriveDataURL() for %q = %q, 期望 %q", tt.input, url, tt.expected)
+			t.Errorf("deriveDataURL() for %q = %q, want %q", tt.input, url, tt.expected)
 		}
 	}
 }

@@ -74,8 +74,8 @@ describe('summarizeConsoleClients', () => {
     expect(summary.inactive_tunnels).toBe(5);
     expect(summary.pending_tunnels).toBe(1);
     expect(summary.offline_tunnels).toBe(1);
-    expect(summary.paused_tunnels).toBe(1);
-    expect(summary.stopped_tunnels).toBe(1);
+    expect(summary.paused_tunnels).toBe(0);
+    expect(summary.stopped_tunnels).toBe(2);
     expect(summary.error_tunnels).toBe(1);
   });
 });

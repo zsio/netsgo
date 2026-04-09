@@ -55,7 +55,7 @@ func generateDataToken() string {
 func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := controlUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("❌ WebSocket 升级失败: %v", err)
+		log.Printf("❌ WebSocket upgrade failed: %v", err)
 		return
 	}
 	release := s.trackManagedConn(conn)
@@ -64,20 +64,20 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetReadLimit(wsMaxMessageSize)
 
-	log.Printf("📡 新的控制通道连接: %s", r.RemoteAddr)
+	log.Printf("📡 New control channel connection: %s", r.RemoteAddr)
 
 	client, err := s.handleAuth(conn, r.RemoteAddr)
 	if err != nil {
-		log.Printf("❌ Client 认证失败 [%s]: %v", r.RemoteAddr, err)
+		log.Printf("❌ Client authentication failed [%s]: %v", r.RemoteAddr, err)
 		return
 	}
 
 	info := client.GetInfo()
-	log.Printf("✅ Client 已认证: %s (%s/%s) [ID: %s, generation=%d]", info.Hostname, info.OS, info.Arch, client.ID, client.generation)
+	log.Printf("✅ Client authenticated: %s (%s/%s) [ID: %s, generation=%d]", info.Hostname, info.OS, info.Arch, client.ID, client.generation)
 
 	if s.store != nil {
 		if err := s.store.UpdateHostname(client.ID, info.Hostname); err != nil {
-			log.Printf("⚠️ 更新隧道展示主机名失败 [%s]: %v", client.ID, err)
+			log.Printf("⚠️ Failed to update tunnel display hostname [%s]: %v", client.ID, err)
 		}
 	}
 
@@ -90,15 +90,15 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 	ip := remoteIP(remoteAddr)
 	if s.auth.clientLimiter != nil {
 		if allowed, retryAfter := s.auth.clientLimiter.Allow(ip); !allowed {
-			log.Printf("🚫 Client 认证被限速 [%s]: 需等待 %v", remoteAddr, retryAfter)
-			slog.Warn("Client 认证被限速", "ip", ip, "module", "security")
+			log.Printf("🚫 Client authentication rate limited [%s]: wait %v", remoteAddr, retryAfter)
+			slog.Warn("Client authentication rate limited", "ip", ip, "module", "security")
 			_ = writeAuthResult(conn, protocol.AuthResponse{
 				Success:   false,
-				Message:   "认证失败",
+				Message:   "authentication failed",
 				Code:      protocol.AuthCodeRateLimited,
 				Retryable: true,
 			})
-			return nil, fmt.Errorf("认证失败")
+			return nil, fmt.Errorf("authentication failed")
 		}
 	}
 
@@ -110,20 +110,20 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 
 	var msg protocol.Message
 	if err := conn.ReadJSON(&msg); err != nil {
-		return nil, fmt.Errorf("读取认证消息失败: %w", err)
+		return nil, fmt.Errorf("failed to read authentication message: %w", err)
 	}
 
 	conn.SetReadDeadline(time.Time{})
 	if msg.Type != protocol.MsgTypeAuth {
-		return nil, fmt.Errorf("期望认证消息，收到: %s", msg.Type)
+		return nil, fmt.Errorf("expected authentication message, got: %s", msg.Type)
 	}
 
 	var authReq protocol.AuthRequest
 	if err := msg.ParsePayload(&authReq); err != nil {
-		return nil, fmt.Errorf("解析认证数据失败: %w", err)
+		return nil, fmt.Errorf("failed to parse authentication payload: %w", err)
 	}
 	if authReq.InstallID == "" {
-		return nil, fmt.Errorf("认证失败: install_id 不能为空")
+		return nil, fmt.Errorf("authentication failed: install_id cannot be empty")
 	}
 
 	var newToken string
@@ -131,24 +131,24 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 
 	if s.auth.adminStore != nil {
 		if !s.auth.adminStore.IsInitialized() {
-			log.Printf("⚠️ 服务未初始化，拒绝 Client 连接 [%s]", remoteAddr)
-			slog.Warn("服务未初始化时拒绝 Client 连接", "ip", ip, "module", "security")
+			log.Printf("⚠️ Server not initialized, rejecting client connection [%s]", remoteAddr)
+			slog.Warn("Rejected client connection because server is not initialized", "ip", ip, "module", "security")
 			if s.auth.clientLimiter != nil {
 				s.auth.clientLimiter.RecordFailure(ip)
 			}
 			_ = writeAuthResult(conn, protocol.AuthResponse{
 				Success:   false,
-				Message:   "认证失败",
+				Message:   "authentication failed",
 				Code:      protocol.AuthCodeServerUninitialized,
 				Retryable: true,
 			})
-			return nil, fmt.Errorf("认证失败")
+			return nil, fmt.Errorf("authentication failed")
 		}
 
 		if authReq.Token != "" {
 			clientToken, err := s.auth.adminStore.ValidateClientToken(authReq.Token, authReq.InstallID)
 			if err != nil {
-				log.Printf("⚠️ Client Token 验证失败 [%s]: %v", remoteAddr, err)
+				log.Printf("⚠️ Client token validation failed [%s]: %v", remoteAddr, err)
 				if s.auth.clientLimiter != nil {
 					s.auth.clientLimiter.RecordFailure(ip)
 				}
@@ -158,36 +158,36 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 				}
 				_ = writeAuthResult(conn, protocol.AuthResponse{
 					Success:    false,
-					Message:    "认证失败",
+					Message:    "authentication failed",
 					Code:       code,
 					ClearToken: true,
 				})
-				return nil, fmt.Errorf("认证失败")
+				return nil, fmt.Errorf("authentication failed")
 			}
 
 			clientID = clientToken.ClientID
 			if current, loaded := s.clients.Load(clientID); loaded {
 				currentClient := current.(*ClientConn)
 				if currentClient.getState() != clientStateClosing {
-					log.Printf("⚠️ Token 并发连接被拒: client_id=%s, install_id=%s, remote=%s", clientID, authReq.InstallID, remoteAddr)
+					log.Printf("⚠️ Concurrent token connection rejected: client_id=%s, install_id=%s, remote=%s", clientID, authReq.InstallID, remoteAddr)
 					_ = writeAuthResult(conn, protocol.AuthResponse{
 						Success:   false,
-						Message:   "认证失败",
+						Message:   "authentication failed",
 						Code:      protocol.AuthCodeConcurrentSession,
 						Retryable: true,
 					})
-					return nil, fmt.Errorf("认证失败")
+					return nil, fmt.Errorf("authentication failed")
 				}
 			}
 
-			log.Printf("🔑 Client Token 认证通过 [install_id=%s]", authReq.InstallID)
+			log.Printf("🔑 Client token authenticated [install_id=%s]", authReq.InstallID)
 			if s.auth.clientLimiter != nil {
 				s.auth.clientLimiter.ResetFailures(ip)
 			}
 		} else {
 			record, err := s.auth.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, remoteAddr)
 			if err != nil {
-				return nil, fmt.Errorf("登记 Client 失败: %w", err)
+				return nil, fmt.Errorf("failed to register client: %w", err)
 			}
 			clientID = record.ID
 
@@ -196,29 +196,29 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 				if currentClient.getState() != clientStateClosing {
 					_ = writeAuthResult(conn, protocol.AuthResponse{
 						Success:   false,
-						Message:   "认证失败",
+						Message:   "authentication failed",
 						Code:      protocol.AuthCodeConcurrentSession,
 						Retryable: true,
 					})
-					return nil, fmt.Errorf("认证失败")
+					return nil, fmt.Errorf("authentication failed")
 				}
 			}
 
 			tokenStr, _, err := s.auth.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, clientID, remoteAddr)
 			if err != nil {
-				log.Printf("❌ Client Key 兑换 Token 失败 [%s]: %v", remoteAddr, err)
+				log.Printf("❌ Failed to exchange client key for token [%s]: %v", remoteAddr, err)
 				if s.auth.clientLimiter != nil {
 					s.auth.clientLimiter.RecordFailure(ip)
 				}
 				_ = writeAuthResult(conn, protocol.AuthResponse{
 					Success: false,
-					Message: "认证失败",
+					Message: "authentication failed",
 					Code:    protocol.AuthCodeInvalidKey,
 				})
-				return nil, fmt.Errorf("认证失败")
+				return nil, fmt.Errorf("authentication failed")
 			}
 			newToken = tokenStr
-			log.Printf("🔑 Client Key 兑换 Token 成功 [install_id=%s]", authReq.InstallID)
+			log.Printf("🔑 Client key exchanged for token successfully [install_id=%s]", authReq.InstallID)
 			if s.auth.clientLimiter != nil {
 				s.auth.clientLimiter.ResetFailures(ip)
 			}
@@ -244,7 +244,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 
 	authResp := protocol.AuthResponse{
 		Success:   true,
-		Message:   "认证成功",
+		Message:   "authentication successful",
 		ClientID:  clientID,
 		Token:     newToken,
 		DataToken: client.dataToken,
@@ -254,7 +254,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 		if current, ok := s.clients.Load(clientID); ok && current == client {
 			_ = s.invalidateLogicalSessionIfCurrent(clientID, client.generation, "auth_response_failed")
 		}
-		return nil, fmt.Errorf("发送认证响应失败: %w", err)
+		return nil, fmt.Errorf("failed to send authentication response: %w", err)
 	}
 
 	s.startPendingDataTimer(client)

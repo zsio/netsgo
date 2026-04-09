@@ -88,7 +88,11 @@ func RunWith(deps Deps) error {
 	if role == 0 {
 		return deps.InstallServer()
 	}
-	return deps.InstallClient()
+	if role == 1 {
+		return deps.InstallClient()
+	}
+	printInstallCancelled(deps.UI)
+	return nil
 }
 
 func hasSystemd() bool {

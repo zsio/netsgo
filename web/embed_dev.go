@@ -4,13 +4,12 @@ package web
 
 import "io/fs"
 
-// DistFS 在开发模式下返回 nil，表示前端资源不可用
-// 此时前端应通过 Vite Dev Server (bun run dev) 独立运行
+// DistFS returns nil in dev mode; the frontend should run via the Vite dev server (bun run dev).
 func DistFS() (fs.FS, error) {
 	return nil, nil
 }
 
-// IsDevMode 返回当前是否为开发模式
+// IsDevMode reports whether the current build is in development mode.
 func IsDevMode() bool {
 	return true
 }

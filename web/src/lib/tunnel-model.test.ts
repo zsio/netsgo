@@ -65,7 +65,7 @@ describe('tunnel-model', () => {
     expect(view.status.description).toContain('等待 Client 上线');
   });
 
-  test('paused + idle 时展示已暂停', () => {
+  test('idle 时统一展示已停止', () => {
     const view = buildTunnelViewModel(
       createTunnel({
         desired_state: 'paused',
@@ -74,8 +74,8 @@ describe('tunnel-model', () => {
       false,
     );
 
-    expect(view.status.key).toBe('paused');
-    expect(view.status.label).toBe('已暂停');
+    expect(view.status.key).toBe('stopped');
+    expect(view.status.label).toBe('已停止');
   });
 
   test('动作能力直接消费 server capability projection', () => {

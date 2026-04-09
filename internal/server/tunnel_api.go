@@ -56,7 +56,7 @@ func tunnelMutationErrorStatusAndBody(err error) (int, tunnelMutationErrorRespon
 		payload.Error = "client not found"
 	case errors.Is(err, errManagedTunnelNotFound):
 		status = http.StatusNotFound
-		payload.Error = "隧道不存在"
+		payload.Error = "tunnel not found"
 	case errors.Is(err, errTunnelProvisionAckTimeout):
 		status = http.StatusGatewayTimeout
 	case errors.As(err, &rejected):
@@ -101,58 +101,13 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	encodeJSON(w, http.StatusCreated, map[string]any{
 		"success":     true,
-		"message":     "代理隧道创建成功",
+		"message":     "tunnel created successfully",
 		"remote_port": config.RemotePort,
 	})
 }
 
 func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
-	clientID := r.PathValue("id")
-	tunnelName := r.PathValue("name")
-
-	client, ok := s.loadLiveClient(clientID)
-	if !ok {
-		_, err := s.pauseOfflineManagedTunnel(clientID, tunnelName)
-		if err != nil {
-			switch {
-			case errors.Is(err, errManagedTunnelClientNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
-			case errors.Is(err, errManagedTunnelNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
-			case err.Error() == "只有 active 状态的隧道才能暂停":
-				encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-			default:
-				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			}
-			return
-		}
-
-		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已暂停"})
-		return
-	}
-
-	client.proxyMu.RLock()
-	tunnel, exists := client.proxies[tunnelName]
-	client.proxyMu.RUnlock()
-	if !exists {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
-		return
-	}
-	if !canPauseTunnel(tunnel.Config) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "只有 running/exposed 状态的隧道才能暂停"})
-		return
-	}
-
-	if err := s.pauseManagedTunnel(client, tunnelName); err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-
-	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已暂停"})
+	s.handleStopTunnel(w, r)
 }
 
 func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
@@ -166,8 +121,8 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 			case errors.Is(err, errManagedTunnelClientNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
 			case errors.Is(err, errManagedTunnelNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
-			case err.Error() == "只有 paused、stopped 或 error 状态的隧道才能恢复":
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+			case err.Error() == "only stopped or error tunnels can be resumed":
 				encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			default:
 				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -175,7 +130,7 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已恢复"})
+		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed"})
 		return
 	}
 
@@ -185,13 +140,13 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
+		json.NewEncoder(w).Encode(map[string]any{"error": "tunnel not found"})
 		return
 	}
 	if !canResumeTunnel(tunnel.Config) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "只有 paused/idle、stopped/idle 或 running/error 状态的隧道才能恢复"})
+		json.NewEncoder(w).Encode(map[string]any{"error": "only stopped/idle or running/error tunnels can be resumed"})
 		return
 	}
 
@@ -208,7 +163,7 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已恢复"})
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed"})
 }
 
 func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
@@ -222,14 +177,14 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 			case errors.Is(err, errManagedTunnelClientNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
 			case errors.Is(err, errManagedTunnelNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 			default:
 				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			}
 			return
 		}
 
-		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已停止"})
+		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel stopped"})
 		return
 	}
 
@@ -239,7 +194,7 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
+		json.NewEncoder(w).Encode(map[string]any{"error": "tunnel not found"})
 		return
 	}
 
@@ -248,7 +203,7 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "隧道已停止"})
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel stopped"})
 }
 
 func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +217,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 			case errors.Is(err, errManagedTunnelClientNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
 			case errors.Is(err, errManagedTunnelNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
+				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 			default:
 				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			}
@@ -279,7 +234,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": "隧道不存在"})
+		json.NewEncoder(w).Encode(map[string]any{"error": "tunnel not found"})
 		return
 	}
 
@@ -287,7 +242,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{
-			"error": fmt.Sprintf("隧道当前状态为 %s/%s，只有 paused/idle、stopped/idle 或 running/error 状态才能删除", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
+			"error": fmt.Sprintf("tunnel is currently in state %s/%s; only paused/idle, stopped/idle, or running/error tunnels can be deleted", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
 		})
 		return
 	}
@@ -311,7 +266,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		Domain     string `json:"domain"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体无效"})
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
 
@@ -326,7 +281,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 
 		encodeJSON(w, http.StatusOK, map[string]any{
 			"success": true,
-			"message": "隧道配置已更新",
+			"message": "tunnel configuration updated",
 			"tunnel":  updated,
 		})
 		return
@@ -336,13 +291,13 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 	tunnel, exists := client.proxies[tunnelName]
 	client.proxyMu.RUnlock()
 	if !exists {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "隧道不存在"})
+		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 		return
 	}
 
 	if !canEditOrDeleteLiveTunnel(tunnel.Config) {
 		encodeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": fmt.Sprintf("隧道当前状态为 %s/%s，只有 paused/idle、stopped/idle 或 running/error 状态才能编辑", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
+			"error": fmt.Sprintf("tunnel is currently in state %s/%s; only paused/idle, stopped/idle, or running/error tunnels can be edited", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
 		})
 		return
 	}
@@ -356,7 +311,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	encodeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
-		"message": "隧道配置已更新",
+		"message": "tunnel configuration updated",
 		"tunnel":  updated,
 	})
 }

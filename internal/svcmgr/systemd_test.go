@@ -16,25 +16,25 @@ func TestJournalArgs(t *testing.T) {
 
 func TestSystemdStub(t *testing.T) {
 	if runtime.GOOS == "linux" {
-		t.Skip("linux 平台下由真实实现覆盖")
+		t.Skip("covered by the real implementation on Linux")
 	}
 
 	if err := DaemonReload(); err != ErrUnsupportedPlatform {
-		t.Fatalf("DaemonReload() 应返回 ErrUnsupportedPlatform，得到 %v", err)
+		t.Fatalf("DaemonReload() should return ErrUnsupportedPlatform, got %v", err)
 	}
 	if err := EnableAndStart("netsgo-server.service"); err != ErrUnsupportedPlatform {
-		t.Fatalf("EnableAndStart() 应返回 ErrUnsupportedPlatform，得到 %v", err)
+		t.Fatalf("EnableAndStart() should return ErrUnsupportedPlatform, got %v", err)
 	}
 	if err := DisableAndStop("netsgo-server.service"); err != ErrUnsupportedPlatform {
-		t.Fatalf("DisableAndStop() 应返回 ErrUnsupportedPlatform，得到 %v", err)
+		t.Fatalf("DisableAndStop() should return ErrUnsupportedPlatform, got %v", err)
 	}
 	if _, err := IsActive("netsgo-server.service"); err != ErrUnsupportedPlatform {
-		t.Fatalf("IsActive() 应返回 ErrUnsupportedPlatform，得到 %v", err)
+		t.Fatalf("IsActive() should return ErrUnsupportedPlatform, got %v", err)
 	}
 	if _, err := IsEnabled("netsgo-server.service"); err != ErrUnsupportedPlatform {
-		t.Fatalf("IsEnabled() 应返回 ErrUnsupportedPlatform，得到 %v", err)
+		t.Fatalf("IsEnabled() should return ErrUnsupportedPlatform, got %v", err)
 	}
 	if _, err := Status("netsgo-server.service"); err != ErrUnsupportedPlatform {
-		t.Fatalf("Status() 应返回 ErrUnsupportedPlatform，得到 %v", err)
+		t.Fatalf("Status() should return ErrUnsupportedPlatform, got %v", err)
 	}
 }

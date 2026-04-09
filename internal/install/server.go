@@ -31,6 +31,7 @@ type serverDeps struct {
 	WriteServerSpec   func(svcmgr.ServiceSpec) error
 	WriteServerEnv    func(svcmgr.ServiceSpec, svcmgr.ServerEnv) error
 	WriteServerUnit   func(svcmgr.ServiceSpec) error
+	ValidateCustomTLS func(certPath, keyPath string) error
 	DaemonReload      func() error
 	EnableAndStart    func(string) error
 }
@@ -44,21 +45,45 @@ func InstallServerWith(deps serverDeps) error {
 	state := inspection.State
 	switch state {
 	case svcmgr.StateInstalled:
-		printInstalledSummary(deps.UI, "Server already installed")
+		printInstalledSummary(deps.UI, "Server already installed", svcmgr.RoleServer)
 		return nil
 	case svcmgr.StateBroken:
 		printBrokenSummary(deps.UI, "Server installation state is broken", inspection)
 		return errInstallBrokenState
 	}
 
+	serverAddr := ""
+	initParams := server.InitParams{}
+	installMode := "fresh"
+	if state == svcmgr.StateHistoricalDataOnly {
+		printRecoverableSummary(deps.UI, inspection)
+		ok, err := deps.UI.Confirm("Continue installation using existing data?")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			printInstallCancelled(deps.UI)
+			return nil
+		}
+		if deps.LoadRecoverable == nil {
+			return errors.New("install dependencies are incomplete")
+		}
+		initParams, err = deps.LoadRecoverable()
+		if err != nil {
+			return err
+		}
+		serverAddr = initParams.ServerAddr
+		installMode = "recover existing data"
+	}
+
 	portRaw, err := deps.UI.Input("Listening port", tui.InputOptions{
 		Placeholder: "e.g. 9527",
-		Description: "TCP port for the server to listen on (1–65535)",
+		Description: "TCP port for the server to listen on (1024–65535)",
 		Default:     "9527",
 		Validate: func(s string) error {
 			n, err := strconv.Atoi(s)
-			if err != nil || n < 1 || n > 65535 {
-				return fmt.Errorf("port must be a number between 1 and 65535")
+			if err != nil || n < 1024 || n > 65535 {
+				return fmt.Errorf("port must be a number between 1024 and 65535")
 			}
 			return nil
 		},
@@ -81,7 +106,9 @@ func InstallServerWith(deps serverDeps) error {
 		Placeholder: "e.g. 127.0.0.1/8,192.168.0.0/16",
 		Description: "Comma-separated list of trusted proxy CIDRs (leave empty if not behind a proxy)",
 	})
-	if err != nil {
+	if tlsMode != "off" {
+		trustedProxies = ""
+	} else if err != nil {
 		return err
 	}
 	tlsCert := ""
@@ -112,33 +139,7 @@ func InstallServerWith(deps serverDeps) error {
 			return err
 		}
 	}
-
-	serverAddr := ""
-	initParams := server.InitParams{}
-	if state == svcmgr.StateHistoricalDataOnly {
-		deps.UI.PrintSummary("Detected existing server data", [][2]string{
-			{"Status", "Recoverable"},
-			{"Note", "If you continue, existing admin credentials, ServerAddr, AllowedPorts, and runtime data will be reused"},
-		})
-		ok, err := deps.UI.Confirm("Continue installation using existing data?")
-		if err != nil {
-			return err
-		}
-		if !ok {
-			deps.UI.PrintSummary("Installation cancelled", [][2]string{
-				{"Next step", "To reinitialize, clear the existing server data directory and run install again"},
-			})
-			return nil
-		}
-		if deps.LoadRecoverable == nil {
-			return errors.New("install dependencies are incomplete")
-		}
-		initParams, err = deps.LoadRecoverable()
-		if err != nil {
-			return err
-		}
-		serverAddr = initParams.ServerAddr
-	} else {
+	if state != svcmgr.StateHistoricalDataOnly {
 		serverAddr, err = deps.UI.Input("Server external address", tui.InputOptions{
 			Placeholder: "e.g. https://netsgo.example.com",
 			Description: "Public URL used by clients to reach this server (http:// or https://)",
@@ -171,6 +172,20 @@ func InstallServerWith(deps serverDeps) error {
 		if err != nil {
 			return err
 		}
+		confirmPassword, err := deps.UI.Password("Confirm admin password", tui.InputOptions{
+			Validate: func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return fmt.Errorf("admin password confirmation cannot be empty")
+				}
+				return nil
+			},
+		})
+		if err != nil {
+			return err
+		}
+		if initParams.AdminPassword != confirmPassword {
+			return fmt.Errorf("admin password confirmation does not match")
+		}
 		initParams.AllowedPorts, err = deps.UI.Input("Allowed port ranges", tui.InputOptions{
 			Placeholder: "e.g. 10000-11000",
 			Description: "Comma-separated list of port ranges or single ports (e.g. 10000-11000,8080)",
@@ -182,13 +197,13 @@ func InstallServerWith(deps serverDeps) error {
 		}
 	}
 
-	deps.UI.PrintSummary("Installation summary", [][2]string{
-		{"Role", "server"},
-		{"Port", strconv.Itoa(port)},
-		{"TLS mode", tlsMode},
-		{"Server address", serverAddr},
-		{"Trusted proxies", trustedProxies},
-	})
+	deps.UI.PrintSummary("Installation summary", confirmSummaryRows(svcmgr.RoleServer,
+		[2]string{"Install mode", installMode},
+		[2]string{"Port", strconv.Itoa(port)},
+		[2]string{"TLS mode", tlsMode},
+		[2]string{"Server address", serverAddr},
+		[2]string{"Trusted proxies", trustedProxies},
+	))
 	ok, err := deps.UI.Confirm("Proceed with installation?")
 	if err != nil {
 		return err
@@ -198,6 +213,17 @@ func InstallServerWith(deps serverDeps) error {
 		return nil
 	}
 
+	if tlsMode == "custom" {
+		if deps.ValidateCustomTLS == nil {
+			return errors.New("install dependencies are incomplete")
+		}
+		if err := deps.EnsureUser(svcmgr.SystemUser); err != nil {
+			return err
+		}
+		if err := deps.ValidateCustomTLS(tlsCert, tlsKey); err != nil {
+			return err
+		}
+	}
 	if state != svcmgr.StateHistoricalDataOnly {
 		if err := deps.ApplyInit(svcmgr.ManagedDataDir, initParams); err != nil {
 			return err
@@ -224,11 +250,7 @@ func InstallServerWith(deps serverDeps) error {
 	}); err != nil {
 		return err
 	}
-	deps.UI.PrintSummary("Server installation complete", [][2]string{
-		{"Status", "Running"},
-		{"Panel URL", serverAddr},
-		{"Next step", "Run netsgo manage to manage the service"},
-	})
+	deps.UI.PrintSummary("Server installation complete", completionSummaryRows(svcmgr.RoleServer, "Panel URL", serverAddr))
 	return nil
 }
 
@@ -259,6 +281,9 @@ func defaultServerDeps() serverDeps {
 		WriteServerSpec:   svcmgr.WriteServerSpec,
 		WriteServerEnv:    svcmgr.WriteServerEnv,
 		WriteServerUnit:   svcmgr.WriteServerUnit,
+		ValidateCustomTLS: func(certPath, keyPath string) error {
+			return validateReadableCustomTLSFiles(certPath, keyPath, svcmgr.SystemUser)
+		},
 		DaemonReload:      svcmgr.DaemonReload,
 		EnableAndStart:    svcmgr.EnableAndStart,
 	}

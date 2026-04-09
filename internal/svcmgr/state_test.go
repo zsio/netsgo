@@ -44,7 +44,7 @@ func TestDetectWithPaths(t *testing.T) {
 		envPath := filepath.Join(root, "service.env")
 		dataDir := filepath.Join(root, "server")
 		if err := os.MkdirAll(dataDir, 0o755); err != nil {
-			t.Fatalf("创建 data dir 失败: %v", err)
+			t.Fatalf("failed to create data dir: %v", err)
 		}
 		writeStateTestFile(t, filepath.Join(dataDir, "admin.json"), 0o644)
 		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateHistoricalDataOnly {
@@ -62,7 +62,7 @@ func TestDetectWithPaths(t *testing.T) {
 	t.Run("server installed missing admin store is broken", func(t *testing.T) {
 		unitPath, specPath, envPath, dataDir := writeInstalledState(t, RoleServer)
 		if err := os.Remove(filepath.Join(dataDir, "admin.json")); err != nil {
-			t.Fatalf("删除 admin.json 失败: %v", err)
+			t.Fatalf("failed to remove admin.json: %v", err)
 		}
 		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateBroken {
 			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateBroken)
@@ -72,7 +72,7 @@ func TestDetectWithPaths(t *testing.T) {
 	t.Run("broken partial trio", func(t *testing.T) {
 		unitPath, specPath, envPath, dataDir := writeInstalledState(t, RoleServer)
 		if err := os.Remove(envPath); err != nil {
-			t.Fatalf("删除 env 文件失败: %v", err)
+			t.Fatalf("failed to remove env file: %v", err)
 		}
 		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateBroken {
 			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateBroken)
@@ -86,7 +86,7 @@ func TestDetectWithPaths(t *testing.T) {
 		envPath := filepath.Join(root, "service.env")
 		dataDir := filepath.Join(root, "client")
 		if err := os.MkdirAll(dataDir, 0o755); err != nil {
-			t.Fatalf("创建 data dir 失败: %v", err)
+			t.Fatalf("failed to create data dir: %v", err)
 		}
 		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, false); got != StateBroken {
 			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateBroken)
@@ -103,7 +103,7 @@ func TestInspectWithPathsReportsBrokenExecStart(t *testing.T) {
 		t.Fatalf("InspectWithPaths().State = %v, want %v", inspection.State, StateBroken)
 	}
 	if len(inspection.Problems) == 0 {
-		t.Fatal("broken inspection 应返回问题列表")
+		t.Fatal("broken inspection should return a problem list")
 	}
 }
 
@@ -115,7 +115,7 @@ func writeInstalledState(t *testing.T, role Role) (string, string, string, strin
 	binaryPath := filepath.Join(root, "bin", "netsgo")
 	writeStateTestFile(t, binaryPath, 0o755)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		t.Fatalf("创建 role data dir 失败: %v", err)
+		t.Fatalf("failed to create role data dir: %v", err)
 	}
 
 	spec := ServiceSpec{
@@ -134,24 +134,24 @@ func writeInstalledState(t *testing.T, role Role) (string, string, string, strin
 		spec.ServerURL = "https://panel.example.com"
 		writeStateTestFile(t, filepath.Join(dataDir, "admin.json"), 0o600)
 		if err := WriteServerSpec(spec); err != nil {
-			t.Fatalf("WriteServerSpec() 失败: %v", err)
+			t.Fatalf("WriteServerSpec() failed: %v", err)
 		}
 		if err := WriteServerEnv(spec, ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: "https://panel.example.com"}); err != nil {
-			t.Fatalf("WriteServerEnv() 失败: %v", err)
+			t.Fatalf("WriteServerEnv() failed: %v", err)
 		}
 		if err := WriteServerUnit(spec); err != nil {
-			t.Fatalf("WriteServerUnit() 失败: %v", err)
+			t.Fatalf("WriteServerUnit() failed: %v", err)
 		}
 	} else {
 		spec.ServerURL = "wss://panel.example.com"
 		if err := WriteClientSpec(spec); err != nil {
-			t.Fatalf("WriteClientSpec() 失败: %v", err)
+			t.Fatalf("WriteClientSpec() failed: %v", err)
 		}
 		if err := WriteClientEnv(spec, ClientEnv{Server: "wss://panel.example.com", Key: "sk-test-key"}); err != nil {
-			t.Fatalf("WriteClientEnv() 失败: %v", err)
+			t.Fatalf("WriteClientEnv() failed: %v", err)
 		}
 		if err := WriteClientUnit(spec); err != nil {
-			t.Fatalf("WriteClientUnit() 失败: %v", err)
+			t.Fatalf("WriteClientUnit() failed: %v", err)
 		}
 	}
 
@@ -161,9 +161,9 @@ func writeInstalledState(t *testing.T, role Role) (string, string, string, strin
 func writeStateTestFile(t *testing.T, path string, mode os.FileMode) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("创建测试目录失败: %v", err)
+		t.Fatalf("failed to create test directory: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("x"), mode); err != nil {
-		t.Fatalf("写入测试文件失败: %v", err)
+		t.Fatalf("failed to write test file: %v", err)
 	}
 }

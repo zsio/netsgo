@@ -2,12 +2,12 @@ package server
 
 import "time"
 
-// AuthService 持有认证与访问控制相关的全部状态：
-//   - AdminStore（系统初始化、管理员、会话、客户端 Token、API Key）
-//   - 两类速率限制器（登录、客户端接入）
-//   - authTimeout（WebSocket 认证阶段读超时）
+// AuthService holds all state related to authentication and access control:
+//   - AdminStore (system initialization, admin users, sessions, client tokens, API keys)
+//   - Two rate limiters (login, client connection)
+//   - authTimeout (read deadline during the WebSocket authentication phase)
 //
-// 同包内的其他文件通过 s.auth.* 直接访问；不对外暴露接口。
+// Other files in the same package access it via s.auth.*; no interface is exposed externally.
 type AuthService struct {
 	adminStore    *AdminStore
 	loginLimiter  *RateLimiter
@@ -15,12 +15,12 @@ type AuthService struct {
 	authTimeout   time.Duration
 }
 
-// newAuthService 创建空的 AuthService（字段在 Start() 阶段填充）。
+// newAuthService creates an empty AuthService (fields are populated during Start()).
 func newAuthService() *AuthService {
 	return &AuthService{}
 }
 
-// initRateLimiters 初始化服务端的三个速率限制器。
+// initRateLimiters initializes the server's rate limiters.
 func (a *AuthService) initRateLimiters() {
 	a.loginLimiter = NewRateLimiter(RateLimiterConfig{
 		WindowSize:      time.Minute,

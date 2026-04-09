@@ -24,14 +24,14 @@ func TestManageServerInspectRedactsSensitiveData(t *testing.T) {
 		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
 	})
 	if err != nil {
-		t.Fatalf("inspect 不应报错: %v", err)
+		t.Fatalf("inspect should not fail: %v", err)
 	}
 	if len(ui.summaries) == 0 {
-		t.Fatal("inspect 应输出 summary")
+		t.Fatal("inspect should output a summary")
 	}
 	for _, row := range ui.summaries[0].rows {
 		if strings.Contains(strings.ToLower(row[0]), "password") || strings.Contains(strings.ToLower(row[1]), "password") {
-			t.Fatalf("inspect 不应暴露敏感字段: %#v", ui.summaries[0].rows)
+			t.Fatalf("inspect should not expose sensitive fields: %#v", ui.summaries[0].rows)
 		}
 	}
 }
@@ -59,15 +59,15 @@ func TestManageServerUninstallKeepData(t *testing.T) {
 		DetectClient: func() svcmgr.InstallState { return svcmgr.StateInstalled },
 	})
 	if err != nil {
-		t.Fatalf("uninstall keep-data 不应报错: %v", err)
+		t.Fatalf("uninstall keep-data should not fail: %v", err)
 	}
 	for _, path := range removed {
 		if path == svcmgr.ManagedDataDir+"/server" {
-			t.Fatalf("keep-data 模式不应删除 server data dir: %v", removed)
+			t.Fatalf("keep-data mode should not remove the server data dir: %v", removed)
 		}
 	}
 	if binaryRemoved {
-		t.Fatal("client 仍安装时不应删除共享二进制")
+		t.Fatal("should not remove the shared binary while the client is still installed")
 	}
 }
 
@@ -89,13 +89,13 @@ func TestManageServerRestart(t *testing.T) {
 		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
 	})
 	if err != nil {
-		t.Fatalf("restart 不应报错: %v", err)
+		t.Fatalf("restart should not fail: %v", err)
 	}
 	if !stopped || !started {
-		t.Fatalf("restart 应先 stop 再 start, stopped=%v started=%v", stopped, started)
+		t.Fatalf("restart should stop before start, stopped=%v started=%v", stopped, started)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "操作成功" {
-		t.Fatalf("restart 成功后应输出成功提示，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Operation successful" {
+		t.Fatalf("restart should show a success message, got %#v", ui.summaries)
 	}
 }
 
@@ -116,10 +116,10 @@ func TestManageServerLogs(t *testing.T) {
 		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
 	})
 	if err != nil {
-		t.Fatalf("logs 不应报错: %v", err)
+		t.Fatalf("logs should not fail: %v", err)
 	}
 	if !called {
-		t.Fatal("logs 应转交给 journald 执行函数")
+		t.Fatal("logs should delegate to the journald execution function")
 	}
 }
 
@@ -138,10 +138,10 @@ func TestManageServerStartPrintsSuccess(t *testing.T) {
 		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
 	})
 	if err != nil {
-		t.Fatalf("start 不应报错: %v", err)
+		t.Fatalf("start should not fail: %v", err)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "操作成功" {
-		t.Fatalf("start 成功后应输出成功提示，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Operation successful" {
+		t.Fatalf("start should show a success message, got %#v", ui.summaries)
 	}
 }
 
@@ -160,9 +160,9 @@ func TestManageServerUninstallCancelPrintsCancelled(t *testing.T) {
 		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
 	})
 	if err != nil {
-		t.Fatalf("取消卸载不应报错: %v", err)
+		t.Fatalf("canceling uninstall should not fail: %v", err)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "已取消" {
-		t.Fatalf("取消卸载后应输出取消提示，得到 %#v", ui.summaries)
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Cancelled" {
+		t.Fatalf("canceling uninstall should show a canceled message, got %#v", ui.summaries)
 	}
 }

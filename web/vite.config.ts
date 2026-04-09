@@ -26,7 +26,9 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       allowedHosts: [
-        "xxx.com"
+        "xxx.com",
+        "d.iuv.me",
+        "d2.iuv.me"
       ],
       proxy: {
         '/api': {

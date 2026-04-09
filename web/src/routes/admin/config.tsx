@@ -545,7 +545,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                       <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
                         affectedTunnelStatus(t).key === 'exposed'
                           ? 'bg-emerald-500/10 text-emerald-600'
-                          : affectedTunnelStatus(t).key === 'paused'
+                          : affectedTunnelStatus(t).key === 'stopped'
                           ? 'bg-amber-500/10 text-amber-600'
                           : affectedTunnelStatus(t).key === 'error'
                           ? 'bg-destructive/10 text-destructive'

@@ -26,23 +26,23 @@ func TestServer_CreateTunnel_TCPWithoutRemotePortReturns400(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("create tunnel 请求失败: %v", err)
+		t.Fatalf("create tunnel request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("缺少 remote_port 时期望 400，得到 %d", resp.StatusCode)
+		t.Fatalf("expected 400 when remote_port missing, got %d", resp.StatusCode)
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
+		t.Fatalf("parse response failed: %v", err)
 	}
 	if success, _ := payload["success"].(bool); success {
-		t.Fatalf("缺少 remote_port 时不应返回 success=true，得到 %v", payload)
+		t.Fatalf("should not return success=true when remote_port missing, got %v", payload)
 	}
 	if payload["field"] != protocol.TunnelMutationFieldRemotePort {
-		t.Fatalf("缺少 remote_port 时 field 期望 %q，得到 %v", protocol.TunnelMutationFieldRemotePort, payload["field"])
+		t.Fatalf("field expected %q when remote_port missing, got %v", protocol.TunnelMutationFieldRemotePort, payload["field"])
 	}
 }
 
@@ -52,7 +52,7 @@ func TestServer_UpdateErrorHTTPTunnel_RestartFailureReturnsError(t *testing.T) {
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("create TunnelStore failed: %v", err)
 	}
 	s.store = store
 
@@ -69,7 +69,7 @@ func TestServer_UpdateErrorHTTPTunnel_RestartFailureReturnsError(t *testing.T) {
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatalf("client %s 不存在", authResp.ClientID)
+		t.Fatalf("client %s does not exist", authResp.ClientID)
 	}
 	client := value.(*ClientConn)
 	client.proxyMu.Lock()
@@ -104,33 +104,33 @@ func TestServer_UpdateErrorHTTPTunnel_RestartFailureReturnsError(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("update tunnel 请求失败: %v", err)
+		t.Fatalf("update tunnel request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 400 {
-		t.Fatalf("自动重启失败时接口必须返回失败，得到 %d", resp.StatusCode)
+		t.Fatalf("api must return failure when auto-restart failed, got %d", resp.StatusCode)
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
+		t.Fatalf("parse response failed: %v", err)
 	}
 	if success, _ := payload["success"].(bool); success {
-		t.Fatalf("自动重启失败时不应返回 success=true，得到 %v", payload)
+		t.Fatalf("should not return success=true when auto-restart failed, got %v", payload)
 	}
 	if _, ok := payload["error"].(string); !ok {
-		t.Fatalf("自动重启失败时应返回错误信息，得到 %v", payload)
+		t.Fatalf("should return error message when auto-restart failed, got %v", payload)
 	}
 
 	stored, exists := s.store.GetTunnel(authResp.ClientID, "broken-http")
 	if !exists {
-		t.Fatal("自动重启失败后 store 记录不应丢失")
+		t.Fatal("store record should not be lost after auto-restart failure")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("自动重启失败后 store 状态应保持 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("store status should remain running/error after auto-restart failure, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Domain != "fixed.example.com" {
-		t.Fatalf("自动重启失败后应保留新配置，得到 %s", stored.Domain)
+		t.Fatalf("should retain new config after auto-restart failure, got %s", stored.Domain)
 	}
 }

@@ -25,7 +25,7 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := dataUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("❌ 数据通道 WebSocket 升级失败: %v", err)
+		log.Printf("❌ data channel WebSocket upgrade failed: %v", err)
 		return
 	}
 	release := s.trackManagedConn(conn)
@@ -37,7 +37,7 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 
 	messageType, payload, err := conn.ReadMessage()
 	if err != nil {
-		log.Printf("❌ 数据通道读取握手失败: %v", err)
+		log.Printf("❌ data channel handshake read failed: %v", err)
 		return
 	}
 	if messageType != websocket.BinaryMessage {
@@ -51,14 +51,14 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 
 	clientID, dataToken, err := protocol.DecodeDataHandshake(payload)
 	if err != nil {
-		log.Printf("❌ 数据通道握手解析失败: %v", err)
+		log.Printf("❌ data channel handshake parse failed: %v", err)
 		s.writeDataHandshakeResult(conn, protocol.DataHandshakeFail)
 		return
 	}
 
 	value, ok := s.clients.Load(clientID)
 	if !ok {
-		log.Printf("❌ 数据通道: Client [%s] 未注册", clientID)
+		log.Printf("❌ data channel: Client [%s] not registered", clientID)
 		s.writeDataHandshakeResult(conn, protocol.DataHandshakeFail)
 		return
 	}
@@ -66,12 +66,12 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	generation := client.generation
 
 	if client.dataToken == "" || subtle.ConstantTimeCompare([]byte(client.dataToken), []byte(dataToken)) != 1 {
-		log.Printf("❌ 数据通道: DataToken 校验失败 [%s]", clientID)
+		log.Printf("❌ data channel: DataToken verification failed [%s]", clientID)
 		s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail)
 		return
 	}
 	if client.getState() == clientStateClosing {
-		log.Printf("❌ 数据通道: 会话已进入 closing [%s]", clientID)
+		log.Printf("❌ data channel: session already closing [%s]", clientID)
 		s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail)
 		return
 	}
@@ -82,7 +82,7 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.writeDataHandshakeResult(conn, protocol.DataHandshakeOK); err != nil {
-		log.Printf("❌ 数据通道: 返回握手结果失败 [%s]: %v", clientID, err)
+		log.Printf("❌ data channel: write handshake result failed [%s]: %v", clientID, err)
 		return
 	}
 
@@ -92,7 +92,7 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	wsConn := mux.NewWSConn(conn)
 	session, err := mux.NewServerSession(wsConn, mux.DefaultConfig())
 	if err != nil {
-		log.Printf("❌ 数据通道: 创建 yamux Session 失败 [%s]: %v", clientID, err)
+		log.Printf("❌ data channel: create yamux session failed [%s]: %v", clientID, err)
 		s.invalidateLogicalSessionIfCurrent(clientID, generation, "data_session_start_failed")
 		return
 	}
@@ -114,7 +114,7 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	promoted := s.promotePendingToLiveIfCurrent(client)
 	if promoted {
 		info := client.GetInfo()
-		log.Printf("🔗 数据通道已建立: Client [%s] generation=%d", clientID, generation)
+		log.Printf("🔗 data channel established: Client [%s] generation=%d", clientID, generation)
 		s.events.PublishJSON("client_online", map[string]any{
 			"client_id": client.ID,
 			"info":      info,
@@ -135,7 +135,7 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("🔌 数据通道已断开: Client [%s] generation=%d", clientID, generation)
+	log.Printf("🔌 data channel disconnected: Client [%s] generation=%d", clientID, generation)
 	s.invalidateLogicalSessionIfCurrent(clientID, generation, "data_session_closed")
 }
 
@@ -145,11 +145,11 @@ func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) err
 	return conn.WriteMessage(websocket.BinaryMessage, []byte{status})
 }
 
-// openStreamToClient 在 Client 的 yamux Session 上打开一个新 Stream，
-// 并写入 StreamHeader 告知 Client 这个 stream 属于哪条代理。
+// openStreamToClient opens a new stream on the client's yamux session and
+// writes a StreamHeader to tell the client which proxy this stream belongs to.
 func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.Conn, error) {
 	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
-		return nil, fmt.Errorf("Client [%s] 当前不在线", client.ID)
+		return nil, fmt.Errorf("Client [%s] is not online", client.ID)
 	}
 
 	client.dataMu.RLock()
@@ -157,25 +157,25 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 	client.dataMu.RUnlock()
 
 	if session == nil || session.IsClosed() {
-		return nil, fmt.Errorf("Client [%s] 数据通道未建立", client.ID)
+		return nil, fmt.Errorf("Client [%s] data channel not established", client.ID)
 	}
 
 	stream, err := session.Open()
 	if err != nil {
-		return nil, fmt.Errorf("OpenStream 失败: %w", err)
+		return nil, fmt.Errorf("OpenStream failed: %w", err)
 	}
 
-	// 写入 StreamHeader: [2B name长度] [NB proxy_name]
+	// Write StreamHeader: [2B name length] [NB proxy_name]
 	nameBytes := []byte(proxyName)
 	var lenBuf [2]byte
 	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
 	if _, err := stream.Write(lenBuf[:]); err != nil {
 		stream.Close()
-		return nil, fmt.Errorf("写入 StreamHeader 长度失败: %w", err)
+		return nil, fmt.Errorf("write StreamHeader length failed: %w", err)
 	}
 	if _, err := stream.Write(nameBytes); err != nil {
 		stream.Close()
-		return nil, fmt.Errorf("写入 StreamHeader 名称失败: %w", err)
+		return nil, fmt.Errorf("write StreamHeader name failed: %w", err)
 	}
 
 	return stream, nil

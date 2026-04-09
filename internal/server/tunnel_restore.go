@@ -26,8 +26,8 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			return
 		}
 		if st.RemotePort != 0 && s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(st.RemotePort) {
-			log.Printf("⚠️ 隧道 %s 端口 %d 不在当前允许范围内，标记为 error", st.Name, st.RemotePort)
-			errMsg := fmt.Sprintf("端口 %d 不在允许范围内", st.RemotePort)
+			log.Printf("⚠️ tunnel %s port %d is outside the currently allowed range, marking as error", st.Name, st.RemotePort)
+			errMsg := fmt.Sprintf("port %d is not within the allowed range", st.RemotePort)
 			client.proxyMu.Lock()
 			config := protocol.ProxyConfig{
 				Name:       st.Name,
@@ -61,9 +61,9 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 		switch {
 		case st.DesiredState == protocol.ProxyDesiredStateRunning &&
 			(st.RuntimeState == protocol.ProxyRuntimeStateExposed || st.RuntimeState == protocol.ProxyRuntimeStatePending || st.RuntimeState == protocol.ProxyRuntimeStateOffline):
-			log.Printf("🔄 恢复隧道: %s (:%d → %s:%d)", st.Name, st.RemotePort, st.LocalIP, st.LocalPort)
+			log.Printf("🔄 restoring tunnel: %s (:%d → %s:%d)", st.Name, st.RemotePort, st.LocalIP, st.LocalPort)
 			if err := s.restoreManagedTunnel(client, st); err != nil {
-				log.Printf("⚠️ 恢复隧道失败 [%s]: %v", st.Name, err)
+				log.Printf("⚠️ failed to restore tunnel [%s]: %v", st.Name, err)
 				continue
 			}
 			restoredCount++

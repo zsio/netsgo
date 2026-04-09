@@ -49,13 +49,13 @@ func LoadRecoverableInitParams(dataDir string) (InitParams, error) {
 		return InitParams{}, err
 	}
 	if !adminStore.IsInitialized() {
-		return InitParams{}, fmt.Errorf("server 历史数据未完成初始化")
+		return InitParams{}, fmt.Errorf("server historical data has not been initialized")
 	}
 
 	config := adminStore.GetServerConfig()
 	allowedPorts := formatAllowedPorts(config.AllowedPorts)
 	if strings.TrimSpace(config.ServerAddr) == "" || allowedPorts == "" {
-		return InitParams{}, fmt.Errorf("server 历史数据不完整")
+		return InitParams{}, fmt.Errorf("server historical data is incomplete")
 	}
 
 	return InitParams{

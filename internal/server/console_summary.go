@@ -63,6 +63,7 @@ func summarizeConsoleClients(clients []clientView) consoleSummaryView {
 
 func consoleTunnelStatusKey(tunnel protocol.ProxyConfig, clientOnline bool) string {
 	runtimeState := tunnel.RuntimeState
+	desiredState := canonicalDesiredState(tunnel.DesiredState)
 	if !clientOnline && tunnel.DesiredState == protocol.ProxyDesiredStateRunning && runtimeState != protocol.ProxyRuntimeStateError {
 		runtimeState = protocol.ProxyRuntimeStateOffline
 	}
@@ -74,9 +75,7 @@ func consoleTunnelStatusKey(tunnel protocol.ProxyConfig, clientOnline bool) stri
 		protocol.ProxyRuntimeStateError:
 		return runtimeState
 	case protocol.ProxyRuntimeStateIdle:
-		if tunnel.DesiredState == protocol.ProxyDesiredStatePaused {
-			return "paused"
-		}
+		_ = desiredState
 		return "stopped"
 	default:
 		return protocol.ProxyRuntimeStateError

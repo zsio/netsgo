@@ -8,7 +8,7 @@ import type {
   TunnelMutationErrorResponse,
 } from '@/types';
 
-type TunnelStatusKey = 'pending' | 'exposed' | 'offline' | 'paused' | 'stopped' | 'error';
+type TunnelStatusKey = 'pending' | 'exposed' | 'offline' | 'stopped' | 'error';
 
 export interface TunnelStatusPresentation {
   key: TunnelStatusKey;
@@ -131,7 +131,7 @@ export function resolveTunnelStatus(
 }
 
 function resolveTunnelStatusFromStates(
-  desiredState: ProxyDesiredState,
+  _desiredState: ProxyDesiredState,
   runtimeState: ProxyRuntimeState,
   error?: string,
 ): TunnelStatusPresentation {
@@ -154,12 +154,6 @@ function resolveTunnelStatusFromStates(
         description: '配置已保存，等待 Client 上线后恢复',
       };
     case 'idle':
-      if (desiredState === 'paused') {
-        return {
-          key: 'paused',
-          label: '已暂停',
-        };
-      }
       return {
         key: 'stopped',
         label: '已停止',

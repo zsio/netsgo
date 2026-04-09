@@ -25,7 +25,7 @@ func registerOfflineHTTPTestClient(t *testing.T, s *Server, hostname string) str
 		"127.0.0.1:12345",
 	)
 	if err != nil {
-		t.Fatalf("注册离线 client 失败: %v", err)
+		t.Fatalf("failed to register offline client: %v", err)
 	}
 	return record.ID
 }
@@ -44,48 +44,48 @@ func TestOfflineHTTPTunnel_Update_StoreFirst(t *testing.T) {
 	}, protocol.ProxyStatusActive)
 
 	if err := checkDomainConflict("old.example.com", "", "", s); err == nil {
-		t.Fatal("更新前 old.example.com 应被既有 HTTP 隧道声明")
+		t.Fatal("before update, old.example.com should be claimed by the existing HTTP tunnel")
 	}
 
 	body := []byte(`{"local_ip":"192.168.1.50","local_port":8080,"remote_port":19090,"domain":"new.example.com"}`)
 	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-http", clientID), token, body)
 	if resp.Code != http.StatusOK {
-		t.Fatalf("离线 HTTP update 期望 200，得到 %d, body=%s", resp.Code, resp.Body.String())
+		t.Fatalf("offline HTTP update: want 200, got %d, body=%s", resp.Code, resp.Body.String())
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("解析 update 响应失败: %v", err)
+		t.Fatalf("failed to parse update response: %v", err)
 	}
 	if success, _ := payload["success"].(bool); !success {
-		t.Fatalf("update 响应应返回 success=true，得到 %v", payload)
+		t.Fatalf("update response should return success=true, got %v", payload)
 	}
 
 	stored, exists := s.store.GetTunnel(clientID, "offline-http")
 	if !exists {
-		t.Fatal("update 后 store 中的 HTTP 隧道不应丢失")
+		t.Fatal("HTTP tunnel should still exist in the store after update")
 	}
 	if stored.LocalIP != "192.168.1.50" {
-		t.Fatalf("update 后 LocalIP 期望 192.168.1.50，得到 %s", stored.LocalIP)
+		t.Fatalf("LocalIP after update: want 192.168.1.50, got %s", stored.LocalIP)
 	}
 	if stored.LocalPort != 8080 {
-		t.Fatalf("update 后 LocalPort 期望 8080，得到 %d", stored.LocalPort)
+		t.Fatalf("LocalPort after update: want 8080, got %d", stored.LocalPort)
 	}
 	if stored.RemotePort != 0 {
-		t.Fatalf("HTTP 隧道 update 后 RemotePort 应归零，得到 %d", stored.RemotePort)
+		t.Fatalf("RemotePort should be zeroed after HTTP tunnel update, got %d", stored.RemotePort)
 	}
 	if stored.Domain != "new.example.com" {
-		t.Fatalf("update 后 Domain 期望 new.example.com，得到 %s", stored.Domain)
+		t.Fatalf("Domain after update: want new.example.com, got %s", stored.Domain)
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateOffline {
-		t.Fatalf("离线 running HTTP 隧道 update 后应保持 running/offline，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("offline running HTTP tunnel should remain running/offline after update, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 
 	if err := checkDomainConflict("old.example.com", "", "", s); err != nil {
-		t.Fatalf("update 后旧域名应已释放，得到 %v", err)
+		t.Fatalf("old domain should be released after update, got %v", err)
 	}
 	if err := checkDomainConflict("new.example.com", "", "", s); err == nil {
-		t.Fatal("update 后新域名应被声明")
+		t.Fatal("new domain should be claimed after update")
 	}
 }
 
@@ -104,18 +104,18 @@ func TestOfflineHTTPTunnel_Pause_StoreFirst(t *testing.T) {
 
 	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-http/pause", clientID), token, []byte(`{}`))
 	if resp.Code != http.StatusOK {
-		t.Fatalf("离线 HTTP pause 期望 200，得到 %d, body=%s", resp.Code, resp.Body.String())
+		t.Fatalf("offline HTTP pause: want 200, got %d, body=%s", resp.Code, resp.Body.String())
 	}
 
 	stored, exists := s.store.GetTunnel(clientID, "offline-http")
 	if !exists {
-		t.Fatal("pause 后 store 中的 HTTP 隧道不应丢失")
+		t.Fatal("HTTP tunnel should still exist in the store after pause")
 	}
-	if stored.DesiredState != protocol.ProxyDesiredStatePaused || stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Fatalf("pause 后 store 状态期望 paused/idle，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+	if stored.DesiredState != protocol.ProxyDesiredStateStopped || stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Fatalf("store state after pause: want stopped/idle, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Domain != "pause.example.com" {
-		t.Fatalf("pause 后 Domain 应保留，得到 %s", stored.Domain)
+		t.Fatalf("Domain should be preserved after pause, got %s", stored.Domain)
 	}
 }
 
@@ -134,14 +134,14 @@ func TestOfflineHTTPTunnel_Delete_StoreFirst(t *testing.T) {
 
 	resp := doMuxRequest(t, handler, http.MethodDelete, fmt.Sprintf("/api/clients/%s/tunnels/offline-http", clientID), token, nil)
 	if resp.Code != http.StatusNoContent {
-		t.Fatalf("离线 HTTP delete 期望 204，得到 %d, body=%s", resp.Code, resp.Body.String())
+		t.Fatalf("offline HTTP delete: want 204, got %d, body=%s", resp.Code, resp.Body.String())
 	}
 
 	if _, exists := s.store.GetTunnel(clientID, "offline-http"); exists {
-		t.Fatal("delete 后 store 中的 HTTP 隧道应被移除")
+		t.Fatal("HTTP tunnel should be removed from the store after delete")
 	}
 	if err := checkDomainConflict("delete.example.com", "", "", s); err != nil {
-		t.Fatalf("delete 后域名应已释放，得到 %v", err)
+		t.Fatalf("domain should be released after delete, got %v", err)
 	}
 }
 
@@ -160,18 +160,18 @@ func TestOfflineHTTPTunnel_Resume_StoreFirst(t *testing.T) {
 
 	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-http/resume", clientID), token, []byte(`{}`))
 	if resp.Code != http.StatusOK {
-		t.Fatalf("离线 HTTP resume 期望 200，得到 %d, body=%s", resp.Code, resp.Body.String())
+		t.Fatalf("offline HTTP resume: want 200, got %d, body=%s", resp.Code, resp.Body.String())
 	}
 
 	stored, exists := s.store.GetTunnel(clientID, "offline-http")
 	if !exists {
-		t.Fatal("离线 resume 后 store 记录不应丢失")
+		t.Fatal("store record should still exist after offline resume")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning {
-		t.Fatalf("离线 resume 后 desired_state 期望 running，得到 %s", stored.DesiredState)
+		t.Fatalf("desired_state after offline resume: want running, got %s", stored.DesiredState)
 	}
 	if stored.RuntimeState != protocol.ProxyRuntimeStateOffline {
-		t.Fatalf("离线 resume 后 runtime_state 期望 offline，得到 %s", stored.RuntimeState)
+		t.Fatalf("runtime_state after offline resume: want offline, got %s", stored.RuntimeState)
 	}
 }
 
@@ -190,18 +190,18 @@ func TestOfflineHTTPTunnel_Stop_StoreFirst(t *testing.T) {
 
 	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-http/stop", clientID), token, []byte(`{}`))
 	if resp.Code != http.StatusOK {
-		t.Fatalf("离线 HTTP stop 期望 200，得到 %d, body=%s", resp.Code, resp.Body.String())
+		t.Fatalf("offline HTTP stop: want 200, got %d, body=%s", resp.Code, resp.Body.String())
 	}
 
 	stored, exists := s.store.GetTunnel(clientID, "offline-http")
 	if !exists {
-		t.Fatal("离线 stop 后 store 记录不应丢失")
+		t.Fatal("store record should still exist after offline stop")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateStopped {
-		t.Fatalf("离线 stop 后 desired_state 期望 stopped，得到 %s", stored.DesiredState)
+		t.Fatalf("desired_state after offline stop: want stopped, got %s", stored.DesiredState)
 	}
 	if stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Fatalf("离线 stop 后 runtime_state 期望 idle，得到 %s", stored.RuntimeState)
+		t.Fatalf("runtime_state after offline stop: want idle, got %s", stored.RuntimeState)
 	}
 }
 
@@ -211,7 +211,7 @@ func TestLifecycle_ClientDisconnect_DoesNotRewriteStoreState(t *testing.T) {
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 	s.store = store
 
@@ -231,7 +231,7 @@ func TestLifecycle_ClientDisconnect_DoesNotRewriteStoreState(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if liveClient == nil {
-		t.Fatal("等待 live client 超时")
+		t.Fatal("timed out waiting for live client")
 	}
 
 	liveClient.proxyMu.Lock()
@@ -265,17 +265,17 @@ func TestLifecycle_ClientDisconnect_DoesNotRewriteStoreState(t *testing.T) {
 	})
 
 	if !s.invalidateLogicalSessionIfCurrent(authResp.ClientID, liveClient.generation, "test_disconnect") {
-		t.Fatal("断连应成功失效当前逻辑会话")
+		t.Fatal("disconnect should successfully invalidate the current logical session")
 	}
 
 	stored, exists := s.store.GetTunnel(authResp.ClientID, "active-http")
 	if !exists {
-		t.Fatal("断连后 store 中的 HTTP 隧道记录不应丢失")
+		t.Fatal("HTTP tunnel record in the store should remain after disconnect")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("client 断连不应改写 store 目标状态，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("client disconnect should not rewrite the store target state, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Domain != "keep-active.example.com" {
-		t.Fatalf("client 断连后 Domain 应保留，得到 %s", stored.Domain)
+		t.Fatalf("Domain should be preserved after client disconnect, got %s", stored.Domain)
 	}
 }

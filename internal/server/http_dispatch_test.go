@@ -26,7 +26,7 @@ func newDispatchTestServer(t *testing.T, initialized bool, serverAddr string) (*
 
 	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.db"))
 	if err != nil {
-		t.Fatalf("创建 AdminStore 失败: %v", err)
+		t.Fatalf("Failed to create AdminStore: %v", err)
 	}
 	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if initialized {
@@ -34,13 +34,13 @@ func newDispatchTestServer(t *testing.T, initialized bool, serverAddr string) (*
 			serverAddr = "https://panel.example.com"
 		}
 		if err := adminStore.Initialize("admin", "password123", serverAddr, nil); err != nil {
-			t.Fatalf("初始化 AdminStore 失败: %v", err)
+			t.Fatalf("Failed to initialize AdminStore: %v", err)
 		}
 	}
 
 	tunnelStore, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("Failed to create TunnelStore: %v", err)
 	}
 
 	s := New(0)
@@ -89,7 +89,7 @@ func addLiveHTTPDispatchTunnel(t *testing.T, s *Server, clientID, tunnelName, do
 	}()
 	clientSession, err := mux.NewClientSession(pipeClient, mux.DefaultConfig())
 	if err != nil {
-		t.Fatalf("创建 client yamux session 失败: %v", err)
+		t.Fatalf("Failed to create client yamux session: %v", err)
 	}
 	wg.Wait()
 
@@ -187,7 +187,7 @@ func dialWSWithHost(t *testing.T, ts *httptest.Server, host, path string, subpro
 
 	conn, resp, err := dialer.Dial("ws://"+host+path, nil)
 	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	return conn, resp
 }
@@ -202,7 +202,7 @@ func TestDispatch_InternalControl_ValidSubprotocol_OnNonManagementHost(t *testin
 	defer conn.Close()
 
 	if got := conn.Subprotocol(); got != protocol.WSSubProtocolControl {
-		t.Fatalf("控制通道协商子协议应为 %q，得到 %q", protocol.WSSubProtocolControl, got)
+		t.Fatalf("Control channel negotiated subprotocol should be %q, got %q", protocol.WSSubProtocolControl, got)
 	}
 }
 
@@ -216,7 +216,7 @@ func TestDispatch_InternalData_ValidSubprotocol_OnNonManagementHost(t *testing.T
 	defer conn.Close()
 
 	if got := conn.Subprotocol(); got != protocol.WSSubProtocolData {
-		t.Fatalf("数据通道协商子协议应为 %q，得到 %q", protocol.WSSubProtocolData, got)
+		t.Fatalf("Data channel negotiated subprotocol should be %q, got %q", protocol.WSSubProtocolData, got)
 	}
 }
 
@@ -237,21 +237,21 @@ func TestDispatch_InternalControl_MissingSubprotocol_RoutesToBusinessTunnel(t *t
 
 	req, err := http.NewRequest(http.MethodGet, ts.URL+"/ws/control", nil)
 	if err != nil {
-		t.Fatalf("创建请求失败: %v", err)
+		t.Fatalf("Failed to create request: %v", err)
 	}
 	req.Host = "app.example.com"
 
 	resp, err := ts.Client().Do(req)
 	if err != nil {
-		t.Fatalf("发送请求失败: %v", err)
+		t.Fatalf("Failed to send request: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("缺失子协议时应继续走业务代理，得到 %d", resp.StatusCode)
+		t.Fatalf("Should continue to business proxy when subprotocol is missing, got %d", resp.StatusCode)
 	}
 	if got := resp.Header.Get("X-Upstream-Path"); got != "/ws/control" {
-		t.Fatalf("业务服务应收到原始 path，得到 %q", got)
+		t.Fatalf("Business service should receive original path, got %q", got)
 	}
 }
 
@@ -272,21 +272,21 @@ func TestDispatch_HTTPTunnel_ManagementAPI_Blocked(t *testing.T) {
 
 	req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/admin/config", nil)
 	if err != nil {
-		t.Fatalf("创建请求失败: %v", err)
+		t.Fatalf("Failed to create request: %v", err)
 	}
 	req.Host = "app.example.com"
 
 	resp, err := ts.Client().Do(req)
 	if err != nil {
-		t.Fatalf("发送请求失败: %v", err)
+		t.Fatalf("Failed to send request: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("业务域名命中时不应进入管理 API，得到 %d", resp.StatusCode)
+		t.Fatalf("Should not enter admin API when business domain matches, got %d", resp.StatusCode)
 	}
 	if got := resp.Header.Get("X-Backend"); got != "hit" {
-		t.Fatalf("业务域名命中时应进入业务后端，得到 %q", got)
+		t.Fatalf("Should enter business backend when business domain matches, got %q", got)
 	}
 }
 
@@ -319,7 +319,7 @@ func TestDispatch_HTTPTunnel_UnavailableStatuses_Return503(t *testing.T) {
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
 			if w.Code != http.StatusServiceUnavailable {
-				t.Fatalf("命中已声明但不可服务的 HTTP 隧道应返回 503，得到 %d", w.Code)
+				t.Fatalf("HTTP tunnel declared but not servicable should return 503, got %d", w.Code)
 			}
 		})
 	}
@@ -339,7 +339,7 @@ func TestDispatch_HTTPTunnel_ProxyFail_Returns502(t *testing.T) {
 	s.StartHTTPOnly().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadGateway {
-		t.Fatalf("代理拨号失败应返回 502，得到 %d", w.Code)
+		t.Fatalf("Proxy dial failure should return 502, got %d", w.Code)
 	}
 }
 
@@ -352,7 +352,7 @@ func TestDispatch_UninitializedServer_DoesNotExposeManagementHostOnRandomHost(t 
 	s.StartHTTPOnly().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
-		t.Fatalf("未初始化且无管理 Host 时，随机 Host 不应回落到管理前端，得到 %d", w.Code)
+		t.Fatalf("Random Host should not fall back to admin frontend when uninitialized and no admin Host, got %d", w.Code)
 	}
 }
 
@@ -365,7 +365,7 @@ func TestDispatch_UnknownAPIPath_DoesNotFallbackToWebIndex(t *testing.T) {
 	s.StartHTTPOnly().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
-		t.Fatalf("已删除 API 不应 fallback 到前端页面，得到 %d", w.Code)
+		t.Fatalf("Deleted API should not fallback to frontend page, got %d", w.Code)
 	}
 }
 
@@ -378,10 +378,10 @@ func TestDispatch_ManagementHost_AdminAPI_WithSecurityHeaders(t *testing.T) {
 	s.StartHTTPOnly().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("管理 Host 访问管理 API 应成功，得到 %d", w.Code)
+		t.Fatalf("Admin Host accessing admin API should succeed, got %d", w.Code)
 	}
 	if got := w.Header().Get("X-Frame-Options"); got != "DENY" {
-		t.Fatalf("管理面响应应带安全头，得到 %q", got)
+		t.Fatalf("Admin plane response should have security headers, got %q", got)
 	}
 }
 
@@ -406,7 +406,7 @@ func TestDispatch_ExplicitLoopbackManagementHosts_AllowManagementAPI(t *testing.
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
 			if w.Code != http.StatusOK {
-				t.Fatalf("显式配置 loopback 管理地址时应允许访问，得到 %d", w.Code)
+				t.Fatalf("Should allow access when loopback admin address is explicitly configured, got %d", w.Code)
 			}
 		})
 	}
@@ -435,10 +435,10 @@ func TestDispatch_ExplicitLoopbackManagementHostWithoutPort_AllowsLoopbackEquiva
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
 			if tc.wantAllow && w.Code != http.StatusOK {
-				t.Fatalf("显式无端口 loopback 管理地址时，%s 应允许访问，得到 %d", tc.reqHost, w.Code)
+				t.Fatalf("Explicit no-port loopback admin address should allow %s access, got %d", tc.reqHost, w.Code)
 			}
 			if !tc.wantAllow && w.Code != http.StatusNotFound {
-				t.Fatalf("不同端口 %s 不应匹配管理面，得到 %d", tc.reqHost, w.Code)
+				t.Fatalf("Different port %s should not match admin plane, got %d", tc.reqHost, w.Code)
 			}
 		})
 	}
@@ -457,7 +457,7 @@ func TestDispatch_LoopbackHostsDoNotBypassManagementHostByDefault(t *testing.T) 
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
 			if w.Code != http.StatusNotFound {
-				t.Fatalf("非 loopback 管理地址下，%s 不应再作为隐含入口，得到 %d", host, w.Code)
+				t.Fatalf("Non-loopback admin address should not treat %s as implicit entry, got %d", host, w.Code)
 			}
 		})
 	}
@@ -477,7 +477,7 @@ func TestDispatch_AllowLoopbackManagementHostFallbackFlag(t *testing.T) {
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
 			if w.Code != http.StatusOK {
-				t.Fatalf("显式开启 loopback Host 兜底后应允许访问，得到 %d", w.Code)
+				t.Fatalf("Should allow access after explicitly enabling loopback Host fallback, got %d", w.Code)
 			}
 		})
 	}
@@ -492,7 +492,7 @@ func TestDispatch_NonManagementHost_NoTunnel_Returns404(t *testing.T) {
 	s.StartHTTPOnly().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
-		t.Fatalf("未知 Host 不应回落到管理面，得到 %d", w.Code)
+		t.Fatalf("Unknown Host should not fall back to admin plane, got %d", w.Code)
 	}
 }
 
@@ -513,10 +513,10 @@ func TestSecurityHeaders_NotOnHTTPTunnel(t *testing.T) {
 	s.StartHTTPOnly().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("业务域名命中代理应返回 200，得到 %d", w.Code)
+		t.Fatalf("Business domain hitting proxy should return 200, got %d", w.Code)
 	}
 	if got := w.Header().Get("X-Frame-Options"); got != "" {
-		t.Fatalf("业务代理响应不应注入管理面安全头，得到 %q", got)
+		t.Fatalf("Business proxy response should not inject admin plane security headers, got %q", got)
 	}
 }
 
@@ -548,14 +548,14 @@ func TestDispatch_BusinessWebSocket_CanUpgrade(t *testing.T) {
 	defer conn.Close()
 
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
-		t.Fatalf("发送业务 WebSocket 消息失败: %v", err)
+		t.Fatalf("Failed to send business WebSocket message: %v", err)
 	}
 	_, payload, err := conn.ReadMessage()
 	if err != nil {
-		t.Fatalf("读取业务 WebSocket echo 失败: %v", err)
+		t.Fatalf("Failed to read business WebSocket echo: %v", err)
 	}
 	if string(payload) != "ping" {
-		t.Fatalf("业务 WebSocket echo 期望 ping，得到 %q", payload)
+		t.Fatalf("Business WebSocket echo expected ping, got %q", payload)
 	}
 }
 
@@ -582,18 +582,18 @@ func TestDispatch_SSE_ImmediateFlush(t *testing.T) {
 
 	req, err := http.NewRequest(http.MethodGet, ts.URL+"/events", nil)
 	if err != nil {
-		t.Fatalf("创建请求失败: %v", err)
+		t.Fatalf("Failed to create request: %v", err)
 	}
 	req.Host = "app.example.com"
 
 	resp, err := ts.Client().Do(req)
 	if err != nil {
-		t.Fatalf("发送请求失败: %v", err)
+		t.Fatalf("Failed to send request: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("SSE 代理状态码期望 200，得到 %d", resp.StatusCode)
+		t.Fatalf("SSE proxy status code expected 200, got %d", resp.StatusCode)
 	}
 
 	reader := bufio.NewReader(resp.Body)
@@ -606,10 +606,10 @@ func TestDispatch_SSE_ImmediateFlush(t *testing.T) {
 	select {
 	case line := <-done:
 		if strings.TrimSpace(line) != "data: hello" {
-			t.Fatalf("SSE 首行期望立即收到 data: hello，得到 %q", line)
+			t.Fatalf("SSE first line expected immediate data: hello, got %q", line)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("SSE 首条事件未能及时 flush 到客户端")
+		t.Fatal("SSE first event failed to flush to client in time")
 	}
 }
 
@@ -630,14 +630,14 @@ func TestDispatch_LoopbackEquivalence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.db"))
 			if err != nil {
-				t.Fatalf("创建 AdminStore 失败: %v", err)
+				t.Fatalf("Failed to create AdminStore: %v", err)
 			}
 			if err := adminStore.Initialize("admin", "password123", "", nil); err != nil {
-				t.Fatalf("初始化失败: %v", err)
+				t.Fatalf("Initialization failed: %v", err)
 			}
 			tunnelStore, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 			if err != nil {
-				t.Fatalf("创建 TunnelStore 失败: %v", err)
+				t.Fatalf("Failed to create TunnelStore: %v", err)
 			}
 			s := New(8080)
 			s.auth.adminStore = adminStore
@@ -649,10 +649,10 @@ func TestDispatch_LoopbackEquivalence(t *testing.T) {
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
 			if tc.wantAllow && w.Code == http.StatusNotFound {
-				t.Fatalf("loopback 等价地址 %s 应能访问管理面，得到 404", tc.reqHost)
+				t.Fatalf("Loopback equivalent address %s should be able to access admin plane, got 404", tc.reqHost)
 			}
 			if !tc.wantAllow && w.Code != http.StatusNotFound {
-				t.Fatalf("不同端口 %s 不应匹配管理面，得到 %d", tc.reqHost, w.Code)
+				t.Fatalf("Different port %s should not match admin plane, got %d", tc.reqHost, w.Code)
 			}
 		})
 	}

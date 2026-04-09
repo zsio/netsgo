@@ -22,35 +22,35 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// AdminData 包含所有持久化的管理数据
+// AdminData contains all persisted admin data
 type AdminData struct {
 	APIKeys      []APIKey           `json:"api_keys"`
 	AdminUsers   []AdminUser        `json:"admin_users"`
 	Clients      []RegisteredClient `json:"clients"`
-	ClientTokens []ClientToken      `json:"client_tokens"` // 客户端连接密钥
-	ServerConfig ServerConfig       `json:"server_config"` // 服务配置（初始化时设置）
-	Initialized  bool               `json:"initialized"`   // 是否已完成初始化
-	JWTSecret    string             `json:"jwt_secret"`    // 随机生成的 JWT 签名密钥
-	Sessions     []AdminSession     `json:"sessions"`      // 服务端 session 列表
+	ClientTokens []ClientToken      `json:"client_tokens"` // client connection tokens
+	ServerConfig ServerConfig       `json:"server_config"` // server configuration (set during initialization)
+	Initialized  bool               `json:"initialized"`   // whether initialization has been completed
+	JWTSecret    string             `json:"jwt_secret"`    // randomly generated JWT signing secret
+	Sessions     []AdminSession     `json:"sessions"`      // list of server-side sessions
 }
 
-// AdminStore 负责管理员账号、API Key 和 Session 的持久化
+// AdminStore manages persistence of admin accounts, API Keys, and sessions
 type AdminStore struct {
 	path       string
 	mu         sync.RWMutex
 	data       AdminData
-	bcryptCost int // 0 表示使用 bcrypt.DefaultCost
+	bcryptCost int // 0 means use bcrypt.DefaultCost
 
-	// timing-safe dummy hash，与 bcryptCost 匹配，懒初始化。
+	// timing-safe dummy hash matching bcryptCost; lazily initialized.
 	dummyHashOnce sync.Once
 	dummyHash     []byte
 
-	// 仅供测试使用：注入下一次 save 失败，验证回滚路径。
+	// for testing only: inject a save failure on the next call to verify rollback paths.
 	failSaveErr   error
 	failSaveCount int
 }
 
-const tokenExpiryDuration = 7 * 24 * time.Hour // Token 不活跃过期时间
+const tokenExpiryDuration = 7 * 24 * time.Hour // token inactivity expiry duration
 const sessionDefaultTTL = 24 * time.Hour
 
 var (
@@ -72,7 +72,7 @@ func generateUUID() string {
 		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
 
-// NewAdminStore 创建一个新的管理存储
+// NewAdminStore creates a new admin store
 func NewAdminStore(path string) (*AdminStore, error) {
 	store := &AdminStore{
 		path:       path,
@@ -88,13 +88,13 @@ func NewAdminStore(path string) (*AdminStore, error) {
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("创建 admin 存储目录失败: %w", err)
+		return nil, fmt.Errorf("failed to create admin store directory: %w", err)
 	}
 
-	// 尝试加载已有数据
+	// attempt to load existing data
 	if _, err := os.Stat(path); err == nil {
 		if err := store.load(); err != nil {
-			return nil, fmt.Errorf("加载 admin 配置失败: %w", err)
+			return nil, fmt.Errorf("failed to load admin config: %w", err)
 		}
 	}
 
@@ -102,13 +102,13 @@ func NewAdminStore(path string) (*AdminStore, error) {
 		return nil, err
 	}
 
-	// 启动后清理过期 session
+	// clean up expired sessions on startup
 	if err := store.CleanExpiredSessions(); err != nil {
-		return nil, fmt.Errorf("清理过期 session 失败: %w", err)
+		return nil, fmt.Errorf("failed to clean expired sessions: %w", err)
 	}
 
 	if !store.data.Initialized {
-		log.Printf("⚠️ 服务尚未初始化，请使用 install 或 init 参数完成初始化")
+		log.Printf("⚠️ Service not yet initialized; please use the install or init command to complete initialization")
 	}
 
 	return store, nil
@@ -173,33 +173,33 @@ func (s *AdminStore) validateLoadedState() error {
 	return nil
 }
 
-// ========== 初始化 ==========
+// ========== Initialization ==========
 
-// IsInitialized 检查服务是否已初始化
+// IsInitialized checks whether the service has been initialized
 func (s *AdminStore) IsInitialized() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.Initialized
 }
 
-// Initialize 执行一次性初始化
+// Initialize performs one-time initialization
 func (s *AdminStore) Initialize(username, password, serverAddr string, allowedPorts []PortRange) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.data.Initialized {
-		return fmt.Errorf("服务已初始化，不可重复操作")
+		return fmt.Errorf("service is already initialized; cannot initialize again")
 	}
 
-	// 密码强度校验
+	// validate password strength
 	if err := validatePassword(password); err != nil {
-		return fmt.Errorf("密码不符合要求: %w", err)
+		return fmt.Errorf("password does not meet requirements: %w", err)
 	}
 
-	// 创建管理员账号
+	// create admin account
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.bcryptCost)
 	if err != nil {
-		return fmt.Errorf("密码加密失败: %w", err)
+		return fmt.Errorf("failed to hash password: %w", err)
 	}
 	s.data.AdminUsers = []AdminUser{{
 		ID:           generateUUID(),
@@ -209,14 +209,14 @@ func (s *AdminStore) Initialize(username, password, serverAddr string, allowedPo
 		CreatedAt:    time.Now(),
 	}}
 
-	// 生成随机 JWT Secret (32 字节 = 256 bit)
+	// generate random JWT secret (32 bytes = 256 bits)
 	secretBytes := make([]byte, 32)
 	if _, err := rand.Read(secretBytes); err != nil {
-		return fmt.Errorf("生成 JWT Secret 失败: %w", err)
+		return fmt.Errorf("failed to generate JWT secret: %w", err)
 	}
 	s.data.JWTSecret = hex.EncodeToString(secretBytes)
 
-	// 设置服务配置
+	// set server configuration
 	s.data.ServerConfig = ServerConfig{
 		ServerAddr:   serverAddr,
 		AllowedPorts: allowedPorts,
@@ -224,14 +224,14 @@ func (s *AdminStore) Initialize(username, password, serverAddr string, allowedPo
 
 	s.data.Initialized = true
 
-	log.Printf("✅ 服务初始化完成，管理员: %s", username)
+	log.Printf("✅ Service initialization complete, admin user: %s", username)
 	return s.save()
 }
 
-// validatePassword 验证密码强度（至少 8 位，包含字母和数字）
+// validatePassword validates password strength (at least 8 characters, must contain letters and digits)
 func validatePassword(password string) error {
 	if len(password) < 8 {
-		return fmt.Errorf("密码至少需要 8 个字符")
+		return fmt.Errorf("password must be at least 8 characters")
 	}
 	hasLetter := false
 	hasDigit := false
@@ -244,14 +244,14 @@ func validatePassword(password string) error {
 		}
 	}
 	if !hasLetter || !hasDigit {
-		return fmt.Errorf("密码必须同时包含字母和数字")
+		return fmt.Errorf("password must contain both letters and digits")
 	}
 	return nil
 }
 
 // ========== JWT Secret ==========
 
-// GetJWTSecret 获取 JWT 签名密钥
+// GetJWTSecret returns the JWT signing secret
 func (s *AdminStore) GetJWTSecret() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -267,14 +267,14 @@ func (s *AdminStore) GetJWTSecret() ([]byte, error) {
 
 // ========== Server Config ==========
 
-// GetServerConfig 获取服务端配置
+// GetServerConfig returns the current server configuration
 func (s *AdminStore) GetServerConfig() ServerConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.ServerConfig
 }
 
-// UpdateServerConfig 更新服务端配置（初始化后可修改）
+// UpdateServerConfig updates the server configuration (can be modified after initialization)
 func (s *AdminStore) UpdateServerConfig(config ServerConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -284,14 +284,14 @@ func (s *AdminStore) UpdateServerConfig(config ServerConfig) error {
 
 // ========== Port Whitelist ==========
 
-// IsPortAllowed 检查端口是否在白名单范围内
-// 如果白名单为空（未初始化），返回 true（向后兼容）
+// IsPortAllowed checks whether a port is within the allowed range.
+// If the allowlist is empty (uninitialized), returns true (backward-compatible).
 func (s *AdminStore) IsPortAllowed(port int) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	if len(s.data.ServerConfig.AllowedPorts) == 0 {
-		return true // 白名单为空 → 不限制
+		return true // empty allowlist → no restriction
 	}
 
 	for _, pr := range s.data.ServerConfig.AllowedPorts {
@@ -304,8 +304,8 @@ func (s *AdminStore) IsPortAllowed(port int) bool {
 
 // ========== AdminUsers ==========
 
-// getDummyHash 返回与当前 bcryptCost 匹配的 timing-safe dummy hash，
-// 懒初始化，同一个 AdminStore 实例只计算一次。
+// getDummyHash returns a timing-safe dummy hash matching the current bcryptCost;
+// lazily initialized, computed only once per AdminStore instance.
 func (s *AdminStore) getDummyHash() []byte {
 	s.dummyHashOnce.Do(func() {
 		h, _ := bcrypt.GenerateFromPassword([]byte("timing-safe-dummy"), s.bcryptCost)
@@ -321,15 +321,15 @@ func (s *AdminStore) ValidateAdminPassword(username, password string) (*AdminUse
 	for i, u := range s.data.AdminUsers {
 		if u.Username == username {
 			if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
-				return nil, fmt.Errorf("用户名或密码错误")
+				return nil, fmt.Errorf("incorrect username or password")
 			}
 			userCopy := s.data.AdminUsers[i]
 			return &userCopy, nil
 		}
 	}
-	// 用户不存在时也执行 bcrypt 比较，保持一致的时间开销，防计时侧信道
+	// also run bcrypt compare when user is not found to maintain consistent timing and prevent timing side-channel attacks
 	_ = bcrypt.CompareHashAndPassword(s.getDummyHash(), []byte(password))
-	return nil, fmt.Errorf("用户名或密码错误")
+	return nil, fmt.Errorf("incorrect username or password")
 }
 
 func (s *AdminStore) UpdateAdminLoginTime(id string) error {
@@ -351,7 +351,7 @@ func (s *AdminStore) UpdateAdminLoginTime(id string) error {
 
 func (s *AdminStore) GetOrCreateClient(installID string, info protocol.ClientInfo, remoteAddr string) (*RegisteredClient, error) {
 	if installID == "" {
-		return nil, fmt.Errorf("install_id 不能为空")
+		return nil, fmt.Errorf("install_id must not be empty")
 	}
 
 	lastIP := remoteIP(remoteAddr)
@@ -404,7 +404,7 @@ func (s *AdminStore) TouchClient(clientID string, info protocol.ClientInfo, remo
 		}
 	}
 
-	return fmt.Errorf("client %q 不存在", clientID)
+	return fmt.Errorf("client %q not found", clientID)
 }
 
 func cloneSystemStats(stats *protocol.SystemStats) *protocol.SystemStats {
@@ -437,7 +437,7 @@ func (s *AdminStore) UpdateClientStats(clientID string, info protocol.ClientInfo
 		}
 	}
 
-	return fmt.Errorf("client %q 不存在", clientID)
+	return fmt.Errorf("client %q not found", clientID)
 }
 
 func (s *AdminStore) GetRegisteredClients() []RegisteredClient {
@@ -466,7 +466,7 @@ func (s *AdminStore) GetRegisteredClient(clientID string) (RegisteredClient, boo
 
 // ========== Display Name ==========
 
-// UpdateClientDisplayName 更新 Client 的自定义展示名
+// UpdateClientDisplayName updates the custom display name for a Client
 func (s *AdminStore) UpdateClientDisplayName(clientID, displayName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -478,19 +478,19 @@ func (s *AdminStore) UpdateClientDisplayName(clientID, displayName string) error
 			return s.saveWithRollbackLocked(previous)
 		}
 	}
-	return fmt.Errorf("client %q 不存在", clientID)
+	return fmt.Errorf("client %q not found", clientID)
 }
 
 // ========== Sessions ==========
 
-// CreateSession 创建新 session（会先删除同用户旧 session → 单端登录）
+// CreateSession creates a new session (removes existing sessions for the same user → single active session)
 func (s *AdminStore) CreateSession(userID, username, role, ip, ua string) (*AdminSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	previous := cloneAdminData(s.data)
 
-	// 删除该用户的所有旧 session（实现单端登录）
+	// remove all existing sessions for this user (enforce single active session)
 	filtered := make([]AdminSession, 0, len(s.data.Sessions))
 	for _, sess := range s.data.Sessions {
 		if sess.UserID != userID {
@@ -523,7 +523,7 @@ func (s *AdminStore) CreateSession(userID, username, role, ip, ua string) (*Admi
 	return &session, nil
 }
 
-// GetSession 获取指定 session（不存在或已过期返回 nil）
+// GetSession retrieves the specified session (returns nil if not found or expired)
 func (s *AdminStore) GetSession(sessionID string) *AdminSession {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -531,7 +531,7 @@ func (s *AdminStore) GetSession(sessionID string) *AdminSession {
 	for i, sess := range s.data.Sessions {
 		if sess.ID == sessionID {
 			if time.Now().After(sess.ExpiresAt) {
-				return nil // 已过期
+				return nil // expired
 			}
 			copy := s.data.Sessions[i]
 			return &copy
@@ -540,7 +540,7 @@ func (s *AdminStore) GetSession(sessionID string) *AdminSession {
 	return nil
 }
 
-// DeleteSession 删除指定 session
+// DeleteSession removes the specified session.
 func (s *AdminStore) DeleteSession(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -556,7 +556,7 @@ func (s *AdminStore) DeleteSession(sessionID string) error {
 	return s.saveWithRollbackLocked(previous)
 }
 
-// DeleteSessionsByUserID 删除该用户的所有 session
+// DeleteSessionsByUserID removes all sessions belonging to the specified user.
 func (s *AdminStore) DeleteSessionsByUserID(userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -572,7 +572,7 @@ func (s *AdminStore) DeleteSessionsByUserID(userID string) error {
 	return s.saveWithRollbackLocked(previous)
 }
 
-// CleanExpiredSessions 清理过期 session
+// CleanExpiredSessions removes all expired sessions.
 func (s *AdminStore) CleanExpiredSessions() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -593,53 +593,53 @@ func (s *AdminStore) CleanExpiredSessions() error {
 		if err := s.saveWithRollbackLocked(previous); err != nil {
 			return err
 		}
-		log.Printf("🧹 清理了 %d 个过期 session", cleaned)
+		log.Printf("🧹 Cleaned up %d expired sessions", cleaned)
 	}
 	return nil
 }
 
 // ========== API Keys ==========
 
-// ValidateClientKey 检查 Key 是否存在且处于启用状态并且没有过期
-// 仅做验证，不消耗使用次数（计数在 ExchangeToken 中消耗）
+// ValidateClientKey checks whether the given key exists, is enabled, and has not expired.
+// This only validates the key — it does not consume a use count (that happens in ExchangeToken).
 func (s *AdminStore) ValidateClientKey(key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.validateClientKeyLocked(key)
 }
 
-// validateClientKeyLocked 内部方法，调用时需要已持有 mu 锁
+// validateClientKeyLocked is an internal method; caller must already hold mu.
 func (s *AdminStore) validateClientKeyLocked(key string) (bool, error) {
 	if len(s.data.APIKeys) == 0 {
 		if !s.data.Initialized {
-			return false, fmt.Errorf("服务未初始化，暂不接受 Client 连接")
+			return false, fmt.Errorf("server not initialized; client connections are not accepted yet")
 		}
-		return false, fmt.Errorf("未配置可用 API Key")
+		return false, fmt.Errorf("no API keys configured")
 	}
 
 	if key == "" {
-		return false, fmt.Errorf("无有效 API Key 提供且已开启权限验证")
+		return false, fmt.Errorf("no valid API key provided and authentication is required")
 	}
 
 	for _, k := range s.data.APIKeys {
 		if err := bcrypt.CompareHashAndPassword([]byte(k.KeyHash), []byte(key)); err == nil {
 			if !k.IsActive {
-				return false, fmt.Errorf("API Key 已被禁用")
+				return false, fmt.Errorf("API key is disabled")
 			}
 			if k.ExpiresAt != nil && k.ExpiresAt.Before(time.Now()) {
-				return false, fmt.Errorf("API Key 已过期")
+				return false, fmt.Errorf("API key has expired")
 			}
 			if k.MaxUses > 0 && k.UseCount >= k.MaxUses {
-				return false, fmt.Errorf("API Key 已达到最大使用次数")
+				return false, fmt.Errorf("API key has reached its maximum use count")
 			}
 			return true, nil
 		}
 	}
 
-	return false, fmt.Errorf("API Key 无效")
+	return false, fmt.Errorf("API key is invalid")
 }
 
-// findKeyIndexByRaw 查找匹配的 Key 索引，调用时需已持有 mu 锁
+// findKeyIndexByRaw returns the index of the matching key, or -1 if not found. Caller must hold mu.
 func (s *AdminStore) findKeyIndexByRaw(key string) int {
 	for i, k := range s.data.APIKeys {
 		if err := bcrypt.CompareHashAndPassword([]byte(k.KeyHash), []byte(key)); err == nil {
@@ -651,35 +651,35 @@ func (s *AdminStore) findKeyIndexByRaw(key string) int {
 
 // ========== Client Tokens ==========
 
-// hashToken 对 Token 做 SHA-256 hash
+// hashToken computes a SHA-256 hash of the given token.
 func hashToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
 }
 
-// generateToken 生成一个随机 Token (256-bit)
+// generateToken creates a random 256-bit token.
 func generateToken() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("生成 Token 失败: %w", err)
+		return "", fmt.Errorf("failed to generate token: %w", err)
 	}
 	return "tk-" + hex.EncodeToString(buf), nil
 }
 
-// ExchangeToken 用 Key 兑换一个客户端 Token
-// 如果该 install_id 已有有效 Token，则直接返回既有 Token 的原始值（不重复消耗 Key）
-// 否则验证 Key → 消耗 use_count → 生成新 Token
+// ExchangeToken exchanges a Key for a client token.
+// If the given install_id already has a valid token, the existing token is refreshed
+// and returned without consuming a key use count.
+// Otherwise the key is validated, a use count is consumed, and a new token is issued.
 func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) (string, *ClientToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	ip := remoteIP(remoteAddr)
 
-	// 查找该 install_id 是否已有未过期、未吊销的 Token
+	// Check whether this install_id already has a valid (non-expired, non-revoked) token.
 	for i, t := range s.data.ClientTokens {
 		if t.InstallID == installID && !t.IsRevoked && time.Since(t.LastActiveAt) < tokenExpiryDuration {
-			// 已有有效 Token，无需消耗 Key，但无法返回原始 Token
-			// 需要生成新 Token 并替换旧 hash
+			// Existing valid token found; refresh its hash instead of consuming the key.
 			newToken, err := generateToken()
 			if err != nil {
 				return "", nil, err
@@ -693,25 +693,25 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 				return "", nil, err
 			}
 			copy := s.data.ClientTokens[i]
-			log.Printf("🔑 Token 已刷新 [install_id=%s]: 已有有效 Token，未消耗 Key", installID)
+			log.Printf("🔑 Token refreshed [install_id=%s]: reused existing valid token without consuming key", installID)
 			return newToken, &copy, nil
 		}
 	}
 
-	// 没有有效 Token，需要验证 Key
+	// No valid token; validate the key.
 	valid, err := s.validateClientKeyLocked(key)
 	if !valid {
-		return "", nil, fmt.Errorf("Key 验证失败: %w", err)
+		return "", nil, fmt.Errorf("key validation failed: %w", err)
 	}
 
-	// 消耗 Key 的使用次数
+	// Consume a use count from the key.
 	idx := s.findKeyIndexByRaw(key)
 	previous := cloneAdminData(s.data)
 	if idx >= 0 {
 		s.data.APIKeys[idx].UseCount++
 	}
 
-	// 生成新 Token
+	// Generate new token.
 	newToken, err := generateToken()
 	if err != nil {
 		return "", nil, err
@@ -733,7 +733,7 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 		LastIP:       ip,
 	}
 
-	// 吊销该 install_id 的旧 Token（同一客户端只保留一个有效 Token）
+	// Revoke all previous tokens for this install_id; only one active token per client is allowed.
 	for i, t := range s.data.ClientTokens {
 		if t.InstallID == installID && !t.IsRevoked {
 			s.data.ClientTokens[i].IsRevoked = true
@@ -745,12 +745,12 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 		return "", nil, err
 	}
 
-	log.Printf("🔑 Token 已兑换 [install_id=%s, key_id=%s]", installID, keyID)
+	log.Printf("🔑 Token exchanged [install_id=%s, key_id=%s]", installID, keyID)
 	return newToken, &clientToken, nil
 }
 
-// ValidateClientToken 验证客户端 Token 是否有效
-// 返回匹配的 ClientToken 记录（如果有效），否则返回 error
+// ValidateClientToken verifies whether a client token is valid.
+// Returns the matching ClientToken record if valid, otherwise returns an error.
 func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken, error) {
 	if token == "" {
 		return nil, ErrClientTokenInvalid
@@ -763,18 +763,18 @@ func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken,
 
 	for i, t := range s.data.ClientTokens {
 		if subtle.ConstantTimeCompare([]byte(t.TokenHash), []byte(tokenHash)) == 1 {
-			// Token hash 匹配
+			// Token hash matched.
 			if t.IsRevoked {
 				return nil, ErrClientTokenRevoked
 			}
 			if t.InstallID != installID {
-				log.Printf("⚠️ Token install_id 不匹配: token_install=%s, req_install=%s", t.InstallID, installID)
+				log.Printf("⚠️ Token install_id mismatch: token_install=%s, req_install=%s", t.InstallID, installID)
 				return nil, ErrClientTokenInstallMismatch
 			}
 			if time.Since(t.LastActiveAt) >= tokenExpiryDuration {
 				return nil, ErrClientTokenExpired
 			}
-			// 验证通过，更新最后活跃时间
+			// Validation passed; update last active time.
 			previous := cloneAdminData(s.data)
 			s.data.ClientTokens[i].LastActiveAt = time.Now()
 			if err := s.saveWithRollbackLocked(previous); err != nil {
@@ -788,7 +788,7 @@ func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken,
 	return nil, ErrClientTokenInvalid
 }
 
-// TouchToken 更新 Token 的最后活跃时间和 IP
+// TouchToken updates the last-active time and IP address for the specified token.
 func (s *AdminStore) TouchToken(tokenID, remoteAddr string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -806,7 +806,7 @@ func (s *AdminStore) TouchToken(tokenID, remoteAddr string) error {
 	return nil
 }
 
-// RevokeToken 吊销指定 Token
+// RevokeToken revokes the specified token.
 func (s *AdminStore) RevokeToken(tokenID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -817,10 +817,10 @@ func (s *AdminStore) RevokeToken(tokenID string) error {
 			return s.save()
 		}
 	}
-	return fmt.Errorf("Token %q 不存在", tokenID)
+	return fmt.Errorf("token %q not found", tokenID)
 }
 
-// RevokeTokensByKeyID 吊销某 Key 下所有 Token，返回吊销数量
+// RevokeTokensByKeyID revokes all tokens associated with the given key ID, returning the count revoked.
 func (s *AdminStore) RevokeTokensByKeyID(keyID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -841,7 +841,7 @@ func (s *AdminStore) RevokeTokensByKeyID(keyID string) (int, error) {
 	return count, nil
 }
 
-// CleanExpiredTokens 清理不活跃超过 7 天的 Token 和已吊销的 Token
+// CleanExpiredTokens removes tokens that have been inactive for more than 7 days and revoked tokens.
 func (s *AdminStore) CleanExpiredTokens() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -862,12 +862,12 @@ func (s *AdminStore) CleanExpiredTokens() error {
 		if err := s.saveWithRollbackLocked(previous); err != nil {
 			return err
 		}
-		log.Printf("🧹 清理了 %d 个过期/已吊销 Token", cleaned)
+		log.Printf("🧹 Cleaned up %d expired/revoked tokens", cleaned)
 	}
 	return nil
 }
 
-// GetTokensByKeyID 查询某 Key 兑换的所有 Token
+// GetTokensByKeyID returns all tokens exchanged by a given key.
 func (s *AdminStore) GetTokensByKeyID(keyID string) []ClientToken {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -881,7 +881,7 @@ func (s *AdminStore) GetTokensByKeyID(keyID string) []ClientToken {
 	return result
 }
 
-// GetClientTokenByInstallID 查找某 install_id 对应的有效 Token
+// GetClientTokenByInstallID returns the active token for a given install_id, if any.
 func (s *AdminStore) GetClientTokenByInstallID(installID string) *ClientToken {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -945,7 +945,7 @@ func (s *AdminStore) SetAPIKeyActive(id string, active bool) error {
 			return s.save()
 		}
 	}
-	return fmt.Errorf("API Key %q 不存在", id)
+	return fmt.Errorf("API key %q not found", id)
 }
 
 func (s *AdminStore) DeleteAPIKey(id string) error {
@@ -962,14 +962,14 @@ func (s *AdminStore) DeleteAPIKey(id string) error {
 		filtered = append(filtered, key)
 	}
 	if !found {
-		return fmt.Errorf("API Key %q 不存在", id)
+		return fmt.Errorf("API key %q not found", id)
 	}
 
 	s.data.APIKeys = filtered
 	return s.save()
 }
 
-// SetAPIKeyMaxUses 设置 API Key 的最大使用次数
+// SetAPIKeyMaxUses sets the maximum use count for an API key.
 func (s *AdminStore) SetAPIKeyMaxUses(id string, maxUses int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -980,7 +980,7 @@ func (s *AdminStore) SetAPIKeyMaxUses(id string, maxUses int) error {
 			return s.save()
 		}
 	}
-	return fmt.Errorf("API Key %q 不存在", id)
+	return fmt.Errorf("API key %q not found", id)
 }
 
 func normalizeKeyPermissions(permissions []string) ([]string, error) {
@@ -992,7 +992,7 @@ func normalizeKeyPermissions(permissions []string) ([]string, error) {
 	seen := map[string]struct{}{}
 	for _, permission := range permissions {
 		if permission != "connect" {
-			return nil, fmt.Errorf("不支持的 API Key 权限: %s", permission)
+			return nil, fmt.Errorf("unsupported API key permission: %s", permission)
 		}
 		if _, ok := seen[permission]; ok {
 			continue

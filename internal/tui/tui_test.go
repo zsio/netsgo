@@ -19,14 +19,14 @@ func capturePrintSummary(title string, rows [][2]string) string {
 }
 
 func TestPrintSummary(t *testing.T) {
-	output := capturePrintSummary("安装配置", [][2]string{{"角色", "server"}, {"端口", "8080"}})
-	if !strings.Contains(output, "安装配置") {
-		t.Fatalf("summary 输出缺少标题: %q", output)
+	output := capturePrintSummary("Installation Config", [][2]string{{"Role", "server"}, {"Port", "8080"}})
+	if !strings.Contains(output, "Installation Config") {
+		t.Fatalf("summary output missing title: %q", output)
 	}
-	if !strings.Contains(output, "角色") || !strings.Contains(output, "server") {
-		t.Fatalf("summary 输出缺少角色行: %q", output)
+	if !strings.Contains(output, "Role") || !strings.Contains(output, "server") {
+		t.Fatalf("summary output missing role row: %q", output)
 	}
-	if !strings.Contains(output, "端口") || !strings.Contains(output, "8080") {
-		t.Fatalf("summary 输出缺少端口行: %q", output)
+	if !strings.Contains(output, "Port") || !strings.Contains(output, "8080") {
+		t.Fatalf("summary output missing port row: %q", output)
 	}
 }

@@ -230,7 +230,7 @@ func (s *Server) refreshPublicIPs() {
 	}
 	s.publicIPMu.Unlock()
 	if ipv4 != "" || ipv6 != "" {
-		log.Printf("🌐 公网 IP 已刷新: IPv4=%s IPv6=%s", ipv4, ipv6)
+		log.Printf("🌐 Public IP refreshed: IPv4=%s IPv6=%s", ipv4, ipv6)
 	}
 }
 
@@ -254,12 +254,11 @@ func (s *Server) collectServerStatus() serverStatusView {
 		clientCount++
 		a := value.(*ClientConn)
 		a.RangeProxies(func(_ string, t *ProxyTunnel) bool {
+			desiredState := canonicalDesiredState(t.Config.DesiredState)
 			switch {
 			case isTunnelExposed(t.Config):
 				tunnelActive++
-			case t.Config.DesiredState == protocol.ProxyDesiredStatePaused && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
-				tunnelPaused++
-			case t.Config.DesiredState == protocol.ProxyDesiredStateStopped && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
+			case desiredState == protocol.ProxyDesiredStateStopped && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
 				tunnelStopped++
 			}
 			return true

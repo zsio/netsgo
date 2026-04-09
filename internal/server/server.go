@@ -13,7 +13,7 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-// Server 是服务端的核心结构体
+// Server is the core server struct.
 type Server struct {
 	Port                        int
 	DataDir                     string
@@ -21,27 +21,27 @@ type Server struct {
 	TLS                         *TLSConfig
 	TLSFingerprint              string
 	clients                     sync.Map          // stable clientID -> *ClientConn
-	events                      *EventBus         // SSE 事件总线
-	store                       *TunnelStore      // 隧道持久化存储
-	trafficStore                *TrafficStore     // 流量历史存储
-	startTime                   time.Time         // 服务器启动时间
-	auth                        *AuthService      // 认证与访问控制（adminStore、速率限制）
-	webFS                       fs.FS             // 嵌入的前端静态资源 (nil 表示开发模式)
-	webHandler                  http.Handler      // 缓存的 FileServer (nil 表示开发模式)
-	cachedStatus                *serverStatusView // 后台采集的最新服务端状态
-	cachedStatusMu              sync.RWMutex      // 保护 cachedStatus
-	sessions                    *SessionManager   // 连接生命周期（managedConns、longLivedHandlers、代际、data 超时）
+	events                      *EventBus         // SSE event bus
+	store                       *TunnelStore      // tunnel persistent store
+	trafficStore                *TrafficStore     // traffic history store
+	startTime                   time.Time         // server start time
+	auth                        *AuthService      // auth and access control (adminStore, rate limiting)
+	webFS                       fs.FS             // embedded frontend static assets (nil in dev mode)
+	webHandler                  http.Handler      // cached FileServer (nil in dev mode)
+	cachedStatus                *serverStatusView // latest server status collected in background
+	cachedStatusMu              sync.RWMutex      // protects cachedStatus
+	sessions                    *SessionManager   // connection lifecycle (managedConns, longLivedHandlers, generations, data timeout)
 	httpServer                  *http.Server
 	listener                    net.Listener
 	done                        chan struct{}
 	tlsEnabled                  bool
-	publicIPv4                  string          // 缓存的公网 IPv4
-	publicIPv6                  string          // 缓存的公网 IPv6
-	publicIPMu                  sync.RWMutex    // 保护公网 IP 缓存
-	tunnels                     *TunnelRegistry // 隧道 provision 等待与超时
+	publicIPv4                  string          // cached public IPv4
+	publicIPv6                  string          // cached public IPv6
+	publicIPMu                  sync.RWMutex    // protects public IP cache
+	tunnels                     *TunnelRegistry // tunnel provision wait and timeout
 }
 
-// ClientConn 代表一个已连接的 Client
+// ClientConn represents a connected client.
 type ClientConn struct {
 	ID           string
 	InstallID    string
@@ -49,23 +49,23 @@ type ClientConn struct {
 	infoMu       sync.RWMutex
 	RemoteAddr   string
 	stats        *protocol.SystemStats
-	prevStats    *protocol.SystemStats // 上一次探针快照（用于计算速率）
-	prevStatsAt  time.Time             // 上一次快照时间
-	statsMu      sync.RWMutex          // 保护 stats / prevStats
+	prevStats    *protocol.SystemStats // previous probe snapshot (used to compute rates)
+	prevStatsAt  time.Time             // time of previous snapshot
+	statsMu      sync.RWMutex          // protects stats / prevStats
 	conn         *websocket.Conn
 	mu           sync.Mutex
-	dataSession  *yamux.Session // 数据通道 yamux Session
-	dataMu       sync.RWMutex   // 保护 dataSession
+	dataSession  *yamux.Session // data channel yamux session
+	dataMu       sync.RWMutex   // protects dataSession
 	dataToken    string
 	generation   uint64
 	state        clientState
 	stateMu      sync.RWMutex
 	pendingTimer *time.Timer
-	proxies      map[string]*ProxyTunnel // 代理隧道 name -> tunnel
-	proxyMu      sync.RWMutex            // 保护 proxies
+	proxies      map[string]*ProxyTunnel // proxy tunnels: name -> tunnel
+	proxyMu      sync.RWMutex            // protects proxies
 }
 
-// New 创建一个新的 Server 实例
+// New creates a new Server instance.
 func New(port int) *Server {
 	return &Server{
 		Port:      port,
@@ -78,7 +78,7 @@ func New(port int) *Server {
 	}
 }
 
-// RangeClients 遍历所有已连接的 Client
+// RangeClients iterates over all connected clients.
 func (s *Server) RangeClients(fn func(id string, client *ClientConn) bool) {
 	s.clients.Range(func(key, value any) bool {
 		return fn(key.(string), value.(*ClientConn))

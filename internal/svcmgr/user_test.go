@@ -8,27 +8,27 @@ import (
 func TestUserExists(t *testing.T) {
 	exists, err := UserExists("root")
 	if err != nil {
-		t.Fatalf("UserExists(root) 不应报错: %v", err)
+		t.Fatalf("UserExists(root) should not return an error: %v", err)
 	}
 	if !exists {
-		t.Fatal("root 用户应存在")
+		t.Fatal("root user should exist")
 	}
 
 	exists, err = UserExists("netsgo-user-should-not-exist-xyz")
 	if err != nil {
-		t.Fatalf("UserExists(nonexistent) 不应报错: %v", err)
+		t.Fatalf("UserExists(nonexistent) should not return an error: %v", err)
 	}
 	if exists {
-		t.Fatal("随机不存在用户不应存在")
+		t.Fatal("a random nonexistent user should not exist")
 	}
 }
 
 func TestEnsureUserStub(t *testing.T) {
 	if runtime.GOOS == "linux" {
-		t.Skip("linux 平台下由真实实现覆盖")
+		t.Skip("covered by the real implementation on Linux")
 	}
 
 	if err := EnsureUser("netsgo"); err != ErrUnsupportedPlatform {
-		t.Fatalf("非 linux 平台应返回 ErrUnsupportedPlatform，得到 %v", err)
+		t.Fatalf("non-Linux platforms should return ErrUnsupportedPlatform, got %v", err)
 	}
 }

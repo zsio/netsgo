@@ -77,16 +77,16 @@ func showServerDetails(deps serverDeps) error {
 	if err != nil {
 		return err
 	}
-	deps.UI.PrintSummary("服务端详情", [][2]string{{"服务名", spec.ServiceName}, {"监听端口", itoa(env.Port)}, {"TLS 模式", env.TLSMode}, {"服务地址", env.ServerAddr}})
+	deps.UI.PrintSummary("Server details", [][2]string{{"Service name", spec.ServiceName}, {"Listen port", itoa(env.Port)}, {"TLS mode", env.TLSMode}, {"Server address", env.ServerAddr}})
 	return nil
 }
 
 func uninstallServer(deps serverDeps) error {
-	mode, err := deps.UI.Select("卸载模式", []string{"仅移除服务，保留数据", "移除服务并删除数据"})
+	mode, err := deps.UI.Select("Uninstall mode", []string{"Remove service only, keep data", "Remove service and delete data"})
 	if err != nil {
 		return err
 	}
-	ok, err := deps.UI.Confirm("确认卸载?")
+	ok, err := deps.UI.Confirm("Confirm uninstall?")
 	if err != nil {
 		return err
 	}

@@ -58,11 +58,11 @@ type readSeeker interface {
 }
 
 const devModeHTML = `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetsGo — 开发模式</title>
+    <title>NetsGo — Dev Mode</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -96,10 +96,10 @@ const devModeHTML = `<!DOCTYPE html>
 <body>
     <div class="container">
         <h1>🚀 <span>NetsGo</span></h1>
-        <p>服务端已启动 — 开发模式</p>
-        <p>前端资源未嵌入，请独立启动 Vite 开发服务器：</p>
+        <p>Server is running — Dev Mode</p>
+        <p>Frontend assets are not embedded. Start the Vite dev server separately:</p>
         <code>cd web && bun run dev</code>
-        <p>然后访问 Vite 管理面板地址（默认 <a href="http://localhost:5173" style="color:#a78bfa">localhost:5173</a>）。</p>
+        <p>Then open the Vite admin panel at <a href="http://localhost:5173" style="color:#a78bfa">localhost:5173</a> (default).</p>
         <div class="badge">Dev Mode 🔧</div>
     </div>
 </body>

@@ -38,18 +38,18 @@ type provisionAckResult struct {
 	message  string
 }
 
-// TunnelRegistry 持有隧道供应（provisioning）等待状态与超时配置：
-//   - pendingProvisionAcks：注册等待 client 回应 tunnel provision 结果的 channel 集合
-//   - tunnelReadyTimeout：等待 provision ack 的最大超时时间
+// TunnelRegistry holds tunnel provisioning wait state and timeout configuration:
+//   - pendingProvisionAcks: the set of channels waiting for client tunnel provision ack responses
+//   - tunnelReadyTimeout: maximum timeout duration for waiting on a provision ack
 //
-// 同包内的其他文件通过 s.tunnels.* 直接访问；不对外暴露接口。
+// Other files in the same package access it directly via s.tunnels.*; no external interface is exposed.
 type TunnelRegistry struct {
 	pendingProvisionAckMu sync.Mutex
 	pendingProvisionAcks  map[pendingTunnelProvisionAckKey]chan provisionAckResult
 	tunnelReadyTimeout    time.Duration
 }
 
-// newTunnelRegistry 创建 TunnelRegistry 并设置默认超时。
+// newTunnelRegistry creates a TunnelRegistry with default timeout.
 func newTunnelRegistry() *TunnelRegistry {
 	return &TunnelRegistry{
 		pendingProvisionAcks: make(map[pendingTunnelProvisionAckKey]chan provisionAckResult),
@@ -68,7 +68,7 @@ func (tr *TunnelRegistry) registerProvisionAckWaiter(client *ClientConn, name st
 	defer tr.pendingProvisionAckMu.Unlock()
 
 	if _, exists := tr.pendingProvisionAcks[key]; exists {
-		return nil, fmt.Errorf("隧道 %q 已存在未完成的 provisioning ack 等待", name)
+		return nil, fmt.Errorf("tunnel %q already has a pending provisioning ack waiter", name)
 	}
 
 	ch := make(chan provisionAckResult, 1)

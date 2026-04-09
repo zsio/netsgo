@@ -27,25 +27,25 @@ func defaultTestRequestHost() string {
 	return "localhost"
 }
 
-// setupTestServerWithDB 创建用于 API 测试的 Server
+// setupTestServerWithDB creates a server for API tests
 func setupTestServerWithDB(t *testing.T, initialized bool) (*Server, func()) {
 	t.Helper()
 	tmpDir, err := os.MkdirTemp("", "api_test_*")
 	if err != nil {
-		t.Fatalf("创建临时目录失败: %v", err)
+		t.Fatalf("failed to create temp directory: %v", err)
 	}
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, err := NewAdminStore(dbPath)
 	if err != nil {
-		t.Fatalf("创建 AdminStore 失败: %v", err)
+		t.Fatalf("failed to create AdminStore: %v", err)
 	}
-	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
+	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 
 	if initialized {
 		err = store.Initialize("admin", "password123", "http://localhost", nil)
 		if err != nil {
-			t.Fatalf("初始化 AdminStore 失败: %v", err)
+			t.Fatalf("failed to initialize AdminStore: %v", err)
 		}
 	}
 
@@ -65,28 +65,28 @@ func loginAdminToken(t *testing.T, ts *httptest.Server, username, password strin
 	body := []byte(`{"username":"` + username + `","password":"` + password + `"}`)
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/login", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("创建登录请求失败: %v", err)
+		t.Fatalf("failed to create login request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("登录请求失败: %v", err)
+		t.Fatalf("login request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("登录期望 200，得到 %d", resp.StatusCode)
+		t.Fatalf("login: want 200, got %d", resp.StatusCode)
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("解析登录响应失败: %v", err)
+		t.Fatalf("failed to parse login response: %v", err)
 	}
 
 	token, _ := payload["token"].(string)
 	if token == "" {
-		t.Fatal("登录响应未返回 token")
+		t.Fatal("login response did not return a token")
 	}
 	return token
 }
@@ -96,7 +96,7 @@ func doAuthorizedRequest(t *testing.T, client *http.Client, method, url, token s
 
 	req, err := http.NewRequest(method, url, bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("创建请求失败: %v", err)
+		t.Fatalf("failed to create request: %v", err)
 	}
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
@@ -107,7 +107,7 @@ func doAuthorizedRequest(t *testing.T, client *http.Client, method, url, token s
 
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("请求失败: %v", err)
+		t.Fatalf("request failed: %v", err)
 	}
 	return resp
 }
@@ -136,7 +136,7 @@ func setupTestServerWithStores(t *testing.T, initialized bool) (*Server, http.Ha
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 	s.store = store
 
@@ -153,7 +153,7 @@ func seedStoredTunnel(t *testing.T, s *Server, clientID string, req protocol.Pro
 	t.Helper()
 
 	if s.store == nil {
-		t.Fatal("测试前置错误：s.store 不能为空")
+		t.Fatal("test setup error: s.store must not be nil")
 	}
 	if req.LocalIP == "" {
 		req.LocalIP = "127.0.0.1"
@@ -178,7 +178,7 @@ func seedStoredTunnel(t *testing.T, s *Server, clientID string, req protocol.Pro
 	case protocol.ProxyStatusError:
 		runtimeState = protocol.ProxyRuntimeStateError
 	default:
-		t.Fatalf("未知测试状态: %s", status)
+		t.Fatalf("unknown test status: %s", status)
 	}
 
 	err := s.store.AddTunnel(StoredTunnel{
@@ -190,7 +190,7 @@ func seedStoredTunnel(t *testing.T, s *Server, clientID string, req protocol.Pro
 		Binding:         TunnelBindingClientID,
 	})
 	if err != nil {
-		t.Fatalf("写入测试隧道失败: %v", err)
+		t.Fatalf("failed to write test tunnel: %v", err)
 	}
 }
 
@@ -200,17 +200,17 @@ func loginAdminTokenLocal(t *testing.T, handler http.Handler, username, password
 	body := []byte(`{"username":"` + username + `","password":"` + password + `"}`)
 	resp := doMuxRequest(t, handler, http.MethodPost, "/api/auth/login", "", body)
 	if resp.Code != http.StatusOK {
-		t.Fatalf("登录期望 200，得到 %d", resp.Code)
+		t.Fatalf("login: want 200, got %d", resp.Code)
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("解析登录响应失败: %v", err)
+		t.Fatalf("failed to parse login response: %v", err)
 	}
 
 	token, _ := payload["token"].(string)
 	if token == "" {
-		t.Fatal("登录响应未返回 token")
+		t.Fatal("login response did not return a token")
 	}
 	return token
 }
@@ -227,13 +227,13 @@ func TestAPI_Login_Success(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("期望登录成功 200，得到 %d", w.Code)
+		t.Fatalf("expected successful login with 200, got %d", w.Code)
 	}
 
 	var resp map[string]any
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp["token"] == nil || resp["token"] == "" {
-		t.Errorf("登录成功未返回 token")
+		t.Errorf("successful login did not return a token")
 	}
 }
 
@@ -249,7 +249,7 @@ func TestAPI_Login_WrongPassword(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("密码错误应返回 401，得到 %d", w.Code)
+		t.Fatalf("wrong password should return 401, got %d", w.Code)
 	}
 }
 
@@ -268,7 +268,7 @@ func TestAPI_Login_PersistSessionFailure(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("session 持久化失败应返回 500，得到 %d", w.Code)
+		t.Fatalf("session persistence failure should return 500, got %d", w.Code)
 	}
 }
 
@@ -288,7 +288,7 @@ func TestAPI_ProtectedRoutes_LoginLogoutAndSingleSession(t *testing.T) {
 	for _, path := range protected {
 		resp := doMuxRequest(t, mux, http.MethodGet, path, "", nil)
 		if resp.Code != http.StatusUnauthorized {
-			t.Fatalf("%s 匿名访问应返回 401，得到 %d", path, resp.Code)
+			t.Fatalf("anonymous access to %s should return 401, got %d", path, resp.Code)
 		}
 	}
 
@@ -296,29 +296,29 @@ func TestAPI_ProtectedRoutes_LoginLogoutAndSingleSession(t *testing.T) {
 
 	statusResp := doMuxRequest(t, mux, http.MethodGet, "/api/status", token1, nil)
 	if statusResp.Code != http.StatusOK {
-		t.Fatalf("登录后访问 /api/status 应成功，得到 %d", statusResp.Code)
+		t.Fatalf("accessing /api/status after login should succeed, got %d", statusResp.Code)
 	}
 
 	token2 := loginAdminTokenLocal(t, mux, "admin", "password123")
 
 	oldSessionResp := doMuxRequest(t, mux, http.MethodGet, "/api/status", token1, nil)
 	if oldSessionResp.Code != http.StatusUnauthorized {
-		t.Fatalf("单端登录后旧 token 应失效，得到 %d", oldSessionResp.Code)
+		t.Fatalf("after single-session login, the old token should be invalidated, got %d", oldSessionResp.Code)
 	}
 
 	currentSessionResp := doMuxRequest(t, mux, http.MethodGet, "/api/clients", token2, nil)
 	if currentSessionResp.Code != http.StatusOK {
-		t.Fatalf("新 token 应可访问受保护路由，得到 %d", currentSessionResp.Code)
+		t.Fatalf("the new token should be able to access protected routes, got %d", currentSessionResp.Code)
 	}
 
 	logoutResp := doMuxRequest(t, mux, http.MethodPost, "/api/auth/logout", token2, nil)
 	if logoutResp.Code != http.StatusOK {
-		t.Fatalf("logout 应返回 200，得到 %d", logoutResp.Code)
+		t.Fatalf("logout should return 200, got %d", logoutResp.Code)
 	}
 
 	revokedResp := doMuxRequest(t, mux, http.MethodGet, "/api/status", token2, nil)
 	if revokedResp.Code != http.StatusUnauthorized {
-		t.Fatalf("logout 后 token 应立即失效，得到 %d", revokedResp.Code)
+		t.Fatalf("the token should be invalid immediately after logout, got %d", revokedResp.Code)
 	}
 }
 
@@ -326,34 +326,34 @@ func TestAPI_AdminKeys_CreateAndList(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
 
-	// 1. 创建 API Key (POST)
+	// 1. Create API key (POST)
 	body := []byte(`{"name":"test-key","permissions":["connect"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/keys", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	s.handleAPIAdminKeys(w, req)
 
 	if w.Code != http.StatusCreated {
-		t.Fatalf("期望创建 Key 成功 201，得到 %d", w.Code)
+		t.Fatalf("expected key creation success with 201, got %d", w.Code)
 	}
 
 	var resp map[string]any
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp["raw_key"] == nil || resp["raw_key"] == "" {
-		t.Errorf("创建 Key 应返回 raw_key 等前端展示")
+		t.Errorf("creating a key should return raw_key and other frontend-facing fields")
 	}
 	if keyPayload, ok := resp["key"].(map[string]any); ok {
 		if _, exists := keyPayload["key_hash"]; exists {
-			t.Error("API 响应不应泄露 key_hash")
+			t.Error("API response should not leak key_hash")
 		}
 	}
 
-	// 2. 获取 API Keys (GET)
+	// 2. Get API keys (GET)
 	req2 := httptest.NewRequest(http.MethodGet, "/api/admin/keys", nil)
 	w2 := httptest.NewRecorder()
 	s.handleAPIAdminKeys(w2, req2)
 
 	if w2.Code != http.StatusOK {
-		t.Fatalf("获取 Keys 期望 200，得到 %d", w2.Code)
+		t.Fatalf("getting keys: want 200, got %d", w2.Code)
 	}
 
 	var keys []map[string]any
@@ -361,11 +361,11 @@ func TestAPI_AdminKeys_CreateAndList(t *testing.T) {
 
 	// test-key = 1
 	if len(keys) != 1 {
-		t.Errorf("期望有 1 个 API Key（新创建），得到 %d", len(keys))
+		t.Errorf("expected 1 API key (the newly created one), got %d", len(keys))
 	}
 	if len(keys) == 1 {
 		if _, exists := keys[0]["key_hash"]; exists {
-			t.Error("Key 列表不应返回 key_hash")
+			t.Error("key list should not return key_hash")
 		}
 	}
 }
@@ -384,7 +384,7 @@ func TestAPI_AdminKeys_CreateFailsWhenPersistFails(t *testing.T) {
 	s.handleAPIAdminKeys(w, req)
 
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("Key 持久化失败应返回 400，得到 %d", w.Code)
+		t.Fatalf("API key persistence failure should return 400, got %d", w.Code)
 	}
 }
 
@@ -392,32 +392,32 @@ func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
 
-	// GET: 应返回初始化时设置的配置
+	// GET: should return the configuration set at initialization
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/config", nil)
 	w := httptest.NewRecorder()
 	s.handleAPIAdminConfig(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("获取配置期望 200，得到 %d", w.Code)
+		t.Fatalf("getting config: want 200, got %d", w.Code)
 	}
 
 	var config map[string]any
 	json.NewDecoder(w.Body).Decode(&config)
 	if config["server_addr"] != "http://localhost" {
-		t.Errorf("初始 server_addr 应为 http://localhost，得到 %v", config["server_addr"])
+		t.Errorf("initial server_addr should be http://localhost, got %v", config["server_addr"])
 	}
 
-	// PUT: 更新配置
+	// PUT: update configuration
 	updateBody := []byte(`{"server_addr":"https://tunnel.example.com","allowed_ports":[{"start":10000,"end":20000},{"start":30000,"end":30000}]}`)
 	req2 := httptest.NewRequest(http.MethodPut, "/api/admin/config", bytes.NewReader(updateBody))
 	w2 := httptest.NewRecorder()
 	s.handleAPIAdminConfig(w2, req2)
 
 	if w2.Code != http.StatusOK {
-		t.Fatalf("更新配置期望 200，得到 %d", w2.Code)
+		t.Fatalf("updating config: want 200, got %d", w2.Code)
 	}
 
-	// GET: 验证更新后的值
+	// GET: verify the updated values
 	req3 := httptest.NewRequest(http.MethodGet, "/api/admin/config", nil)
 	w3 := httptest.NewRecorder()
 	s.handleAPIAdminConfig(w3, req3)
@@ -425,21 +425,21 @@ func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 	var updated map[string]any
 	json.NewDecoder(w3.Body).Decode(&updated)
 	if updated["server_addr"] != "https://tunnel.example.com" {
-		t.Errorf("更新后 server_addr 应为 https://tunnel.example.com，得到 %v", updated["server_addr"])
+		t.Errorf("updated server_addr should be https://tunnel.example.com, got %v", updated["server_addr"])
 	}
 	ports, ok := updated["allowed_ports"].([]any)
 	if !ok || len(ports) != 2 {
-		t.Errorf("更新后 allowed_ports 应有 2 个范围，得到 %v", updated["allowed_ports"])
+		t.Errorf("updated allowed_ports should have 2 ranges, got %v", updated["allowed_ports"])
 	}
 
-	// PUT: 无效端口范围应返回 400
+	// PUT: invalid port range should return 400
 	invalidBody := []byte(`{"server_addr":"test","allowed_ports":[{"start":70000,"end":80000}]}`)
 	req4 := httptest.NewRequest(http.MethodPut, "/api/admin/config", bytes.NewReader(invalidBody))
 	w4 := httptest.NewRecorder()
 	s.handleAPIAdminConfig(w4, req4)
 
 	if w4.Code != http.StatusBadRequest {
-		t.Fatalf("无效端口范围应返回 400，得到 %d", w4.Code)
+		t.Fatalf("invalid port range should return 400, got %d", w4.Code)
 	}
 }
 
@@ -455,7 +455,7 @@ func TestAPI_AdminConfig_ServerAddrValidation(t *testing.T) {
 	s.handleAPIAdminConfig(w, req)
 
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("非法 server_addr 应返回 400，得到 %d", w.Code)
+		t.Fatalf("invalid server_addr should return 400, got %d", w.Code)
 	}
 }
 
@@ -471,11 +471,11 @@ func TestAPI_AdminConfig_ServerAddrNormalization(t *testing.T) {
 	s.handleAPIAdminConfig(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("带根路径的 server_addr 应返回 200，得到 %d, body: %s", w.Code, w.Body.String())
+		t.Fatalf("server_addr with a root path should return 200, got %d, body: %s", w.Code, w.Body.String())
 	}
 
 	if got := s.auth.adminStore.GetServerConfig().ServerAddr; got != "https://example.com" {
-		t.Fatalf("server_addr 应规范化为无尾斜杠，得到 %q", got)
+		t.Fatalf("server_addr should be normalized without a trailing slash, got %q", got)
 	}
 }
 
@@ -484,7 +484,7 @@ func TestAPI_AdminConfig_AllowsUpdatingPortsWithLegacyServerAddr(t *testing.T) {
 	defer cleanup()
 
 	if err := s.auth.adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
-		t.Fatalf("初始化 legacy server_addr 失败: %v", err)
+		t.Fatalf("failed to initialize legacy server_addr: %v", err)
 	}
 
 	body := []byte(`{"server_addr":"localhost","allowed_ports":[{"start":20000,"end":20010}]}`)
@@ -495,41 +495,41 @@ func TestAPI_AdminConfig_AllowsUpdatingPortsWithLegacyServerAddr(t *testing.T) {
 	s.handleAPIAdminConfig(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("legacy server_addr 未修改时应允许仅更新端口，得到 %d, body: %s", w.Code, w.Body.String())
+		t.Fatalf("when legacy server_addr is unchanged, updating only the port should be allowed, got %d, body: %s", w.Code, w.Body.String())
 	}
 
 	if got := s.auth.adminStore.GetServerConfig().ServerAddr; got != "localhost" {
-		t.Fatalf("legacy server_addr 应保持原值，得到 %q", got)
+		t.Fatalf("legacy server_addr should keep its original value, got %q", got)
 	}
 }
 
 func TestAdminConfigResponse(t *testing.T) {
-	t.Run("无环境变量时返回生效地址与未锁定状态", func(t *testing.T) {
+	t.Run("returns effective address and unlocked state when no environment variable is set", func(t *testing.T) {
 		_, handler, token, cleanup := setupTestServerWithStores(t, true)
 		defer cleanup()
 
 		resp := doMuxRequest(t, handler, http.MethodGet, "/api/admin/config", token, nil)
 		if resp.Code != http.StatusOK {
-			t.Fatalf("GET /api/admin/config 期望 200，得到 %d", resp.Code)
+			t.Fatalf("GET /api/admin/config: want 200, got %d", resp.Code)
 		}
 
 		var payload map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			t.Fatalf("解析响应失败: %v", err)
+			t.Fatalf("failed to parse response: %v", err)
 		}
 
 		if payload["server_addr"] != "http://localhost" {
-			t.Fatalf("server_addr 期望 http://localhost，得到 %v", payload["server_addr"])
+			t.Fatalf("server_addr: want http://localhost, got %v", payload["server_addr"])
 		}
 		if payload["effective_server_addr"] != "localhost" {
-			t.Fatalf("effective_server_addr 期望 localhost，得到 %v", payload["effective_server_addr"])
+			t.Fatalf("effective_server_addr: want localhost, got %v", payload["effective_server_addr"])
 		}
 		if locked, ok := payload["server_addr_locked"].(bool); !ok || locked {
-			t.Fatalf("server_addr_locked 期望 false，得到 %v", payload["server_addr_locked"])
+			t.Fatalf("server_addr_locked: want false, got %v", payload["server_addr_locked"])
 		}
 	})
 
-	t.Run("环境变量存在时返回锁定状态与环境生效地址", func(t *testing.T) {
+	t.Run("returns locked state and env effective address when the environment variable exists", func(t *testing.T) {
 		t.Setenv("NETSGO_SERVER_ADDR", "https://Locked.EXAMPLE.com:443")
 
 		_, handler, token, cleanup := setupTestServerWithStores(t, true)
@@ -537,28 +537,28 @@ func TestAdminConfigResponse(t *testing.T) {
 
 		resp := doMuxRequest(t, handler, http.MethodGet, "/api/admin/config", token, nil)
 		if resp.Code != http.StatusOK {
-			t.Fatalf("GET /api/admin/config 期望 200，得到 %d", resp.Code)
+			t.Fatalf("GET /api/admin/config: want 200, got %d", resp.Code)
 		}
 
 		var payload map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			t.Fatalf("解析响应失败: %v", err)
+			t.Fatalf("failed to parse response: %v", err)
 		}
 
 		if payload["server_addr"] != "http://localhost" {
-			t.Fatalf("server_addr 应保持持久化值 http://localhost，得到 %v", payload["server_addr"])
+			t.Fatalf("server_addr should keep the persisted value http://localhost, got %v", payload["server_addr"])
 		}
 		if payload["effective_server_addr"] != "locked.example.com" {
-			t.Fatalf("effective_server_addr 期望 locked.example.com，得到 %v", payload["effective_server_addr"])
+			t.Fatalf("effective_server_addr: want locked.example.com, got %v", payload["effective_server_addr"])
 		}
 		if locked, ok := payload["server_addr_locked"].(bool); !ok || !locked {
-			t.Fatalf("server_addr_locked 期望 true，得到 %v", payload["server_addr_locked"])
+			t.Fatalf("server_addr_locked: want true, got %v", payload["server_addr_locked"])
 		}
 	})
 }
 
 func TestAdminConfigDryRun(t *testing.T) {
-	t.Run("无域名冲突时仍返回 affected_tunnels 与空冲突数组", func(t *testing.T) {
+	t.Run("returns affected_tunnels and an empty conflict array when there is no domain conflict", func(t *testing.T) {
 		s, handler, token, cleanup := setupTestServerWithStores(t, true)
 		defer cleanup()
 
@@ -571,26 +571,26 @@ func TestAdminConfigDryRun(t *testing.T) {
 		body := []byte(`{"server_addr":"https://mgmt.example.com","allowed_ports":[{"start":30000,"end":30010}]}`)
 		resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/config?dry_run=true", token, body)
 		if resp.Code != http.StatusOK {
-			t.Fatalf("PUT /api/admin/config?dry_run=true 期望 200，得到 %d", resp.Code)
+			t.Fatalf("PUT /api/admin/config?dry_run=true: want 200, got %d", resp.Code)
 		}
 
 		var payload map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			t.Fatalf("解析响应失败: %v", err)
+			t.Fatalf("failed to parse response: %v", err)
 		}
 
 		affected, ok := payload["affected_tunnels"].([]any)
 		if !ok || len(affected) != 1 {
-			t.Fatalf("affected_tunnels 期望 1 条，得到 %v", payload["affected_tunnels"])
+			t.Fatalf("affected_tunnels: want 1 entry, got %v", payload["affected_tunnels"])
 		}
 
 		conflicts, ok := payload["conflicting_http_tunnels"].([]any)
 		if !ok || len(conflicts) != 0 {
-			t.Fatalf("conflicting_http_tunnels 期望空数组，得到 %v", payload["conflicting_http_tunnels"])
+			t.Fatalf("conflicting_http_tunnels: want an empty array, got %v", payload["conflicting_http_tunnels"])
 		}
 	})
 
-	t.Run("管理地址与 HTTP 域名冲突时返回冲突隧道", func(t *testing.T) {
+	t.Run("returns conflicting tunnels when the management address conflicts with an HTTP domain", func(t *testing.T) {
 		s, handler, token, cleanup := setupTestServerWithStores(t, true)
 		defer cleanup()
 
@@ -605,20 +605,20 @@ func TestAdminConfigDryRun(t *testing.T) {
 		body := []byte(`{"server_addr":"https://app.example.com","allowed_ports":[]}`)
 		resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/config?dry_run=true", token, body)
 		if resp.Code != http.StatusOK {
-			t.Fatalf("PUT /api/admin/config?dry_run=true 期望 200，得到 %d", resp.Code)
+			t.Fatalf("PUT /api/admin/config?dry_run=true: want 200, got %d", resp.Code)
 		}
 
 		var payload map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			t.Fatalf("解析响应失败: %v", err)
+			t.Fatalf("failed to parse response: %v", err)
 		}
 
 		conflicts, ok := payload["conflicting_http_tunnels"].([]any)
 		if !ok || len(conflicts) != 1 {
-			t.Fatalf("conflicting_http_tunnels 期望返回 1 条冲突，得到 %v", payload["conflicting_http_tunnels"])
+			t.Fatalf("conflicting_http_tunnels: expected 1 conflict, got %v", payload["conflicting_http_tunnels"])
 		}
 		if conflicts[0] != "client-1:http-app" {
-			t.Fatalf("冲突隧道期望 client-1:http-app，得到 %v", conflicts[0])
+			t.Fatalf("conflicting tunnel: want client-1:http-app, got %v", conflicts[0])
 		}
 	})
 }
@@ -632,19 +632,19 @@ func TestAdminConfigUpdateRejectsWhenLocked(t *testing.T) {
 	body := []byte(`{"server_addr":"https://new.example.com","allowed_ports":[]}`)
 	resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/config", token, body)
 	if resp.Code != http.StatusConflict {
-		t.Fatalf("server_addr 被锁定时期望 409，得到 %d", resp.Code)
+		t.Fatalf("when server_addr is locked, want 409, got %d", resp.Code)
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
+		t.Fatalf("failed to parse response: %v", err)
 	}
 
 	if _, ok := payload["error"].(string); !ok {
-		t.Fatalf("锁定冲突应返回结构化 error，得到 %v", payload)
+		t.Fatalf("locked conflict should return structured error, got %v", payload)
 	}
 	if locked, ok := payload["server_addr_locked"].(bool); !ok || !locked {
-		t.Fatalf("锁定冲突应返回 server_addr_locked=true，得到 %v", payload["server_addr_locked"])
+		t.Fatalf("locked conflict should return server_addr_locked=true, got %v", payload["server_addr_locked"])
 	}
 }
 
@@ -653,7 +653,7 @@ func TestAdminConfigUpdateAllowsDefaultPortNormalizationWhenLocked(t *testing.T)
 	defer cleanup()
 
 	if err := s.auth.adminStore.Initialize("admin", "password123", "https://example.com:443", nil); err != nil {
-		t.Fatalf("初始化带默认端口的 server_addr 失败: %v", err)
+		t.Fatalf("failed to initialize server_addr with default port: %v", err)
 	}
 	t.Setenv("NETSGO_SERVER_ADDR", "https://locked.example.com")
 
@@ -665,7 +665,7 @@ func TestAdminConfigUpdateAllowsDefaultPortNormalizationWhenLocked(t *testing.T)
 	s.handleAPIAdminConfig(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("默认端口规范化后应允许在锁定下保存非 server_addr 变更，得到 %d, body: %s", w.Code, w.Body.String())
+		t.Fatalf("after default-port normalization, non-server_addr changes should still be savable while locked, got %d, body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -677,19 +677,19 @@ func TestAdminConfigResponse_InvalidEnvDoesNotOverrideOrLock(t *testing.T) {
 
 	resp := doMuxRequest(t, handler, http.MethodGet, "/api/admin/config", token, nil)
 	if resp.Code != http.StatusOK {
-		t.Fatalf("GET /api/admin/config 期望 200，得到 %d", resp.Code)
+		t.Fatalf("GET /api/admin/config: want 200, got %d", resp.Code)
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
+		t.Fatalf("failed to parse response: %v", err)
 	}
 
 	if payload["effective_server_addr"] != "localhost" {
-		t.Fatalf("非法环境变量不应覆盖 effective_server_addr，得到 %v", payload["effective_server_addr"])
+		t.Fatalf("invalid environment variable should not override effective_server_addr, got %v", payload["effective_server_addr"])
 	}
 	if locked, ok := payload["server_addr_locked"].(bool); !ok || locked {
-		t.Fatalf("非法环境变量不应锁定 server_addr，得到 %v", payload["server_addr_locked"])
+		t.Fatalf("invalid environment variable should not lock server_addr, got %v", payload["server_addr_locked"])
 	}
 }
 
@@ -708,24 +708,24 @@ func TestAdminConfigUpdateRejectsWhenHTTPDomainConflicts(t *testing.T) {
 	body := []byte(`{"server_addr":"https://app.example.com","allowed_ports":[]}`)
 	resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/config", token, body)
 	if resp.Code != http.StatusConflict {
-		t.Fatalf("server_addr 与 HTTP 域名冲突时期望 409，得到 %d", resp.Code)
+		t.Fatalf("server_addr conflict with HTTP domain: want 409, got %d", resp.Code)
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
+		t.Fatalf("failed to parse response: %v", err)
 	}
 
 	conflicts, ok := payload["conflicting_http_tunnels"].([]any)
 	if !ok || len(conflicts) != 1 {
-		t.Fatalf("conflicting_http_tunnels 期望返回 1 条冲突，得到 %v", payload["conflicting_http_tunnels"])
+		t.Fatalf("conflicting_http_tunnels: expected 1 conflict, got %v", payload["conflicting_http_tunnels"])
 	}
 	if conflicts[0] != "client-1:http-app" {
-		t.Fatalf("冲突隧道期望 client-1:http-app，得到 %v", conflicts[0])
+		t.Fatalf("conflicting tunnel: want client-1:http-app, got %v", conflicts[0])
 	}
 }
 
-// ========== P5: Cookie 设置/清除测试 ==========
+// ========== P5: Cookie set/clear tests ==========
 
 func TestAPI_Login_SetsCookie(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
@@ -739,10 +739,10 @@ func TestAPI_Login_SetsCookie(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("期望登录成功 200，得到 %d", w.Code)
+		t.Fatalf("expected successful login with 200, got %d", w.Code)
 	}
 
-	// 检查 Set-Cookie 头
+	// Check the Set-Cookie header
 	cookies := w.Result().Cookies()
 	var sessionCookie *http.Cookie
 	for _, c := range cookies {
@@ -752,22 +752,22 @@ func TestAPI_Login_SetsCookie(t *testing.T) {
 		}
 	}
 	if sessionCookie == nil {
-		t.Fatal("登录响应中缺少 netsgo_session cookie")
+		t.Fatal("login response is missing the netsgo_session cookie")
 	}
 	if !sessionCookie.HttpOnly {
-		t.Error("session cookie 应设置 HttpOnly")
+		t.Error("session cookie should set HttpOnly")
 	}
 	if sessionCookie.SameSite != http.SameSiteStrictMode {
-		t.Errorf("session cookie SameSite 应为 Strict，得到 %v", sessionCookie.SameSite)
+		t.Errorf("session cookie SameSite should be Strict, got %v", sessionCookie.SameSite)
 	}
 	if sessionCookie.Path != "/api" {
-		t.Errorf("session cookie Path 应为 /api，得到 %s", sessionCookie.Path)
+		t.Errorf("session cookie Path should be /api, got %s", sessionCookie.Path)
 	}
 	if sessionCookie.Value == "" {
-		t.Error("session cookie 值不应为空")
+		t.Error("session cookie value should not be empty")
 	}
 	if sessionCookie.Secure {
-		t.Error("普通 HTTP 登录默认不应设置 Secure")
+		t.Error("plain HTTP login should not set Secure by default")
 	}
 }
 
@@ -775,11 +775,11 @@ func TestAPI_Logout_ClearsCookie(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
 
-	// 先登录获取 session
+	// First log in to obtain a session
 	session := mustCreateSession(t, s.auth.adminStore, "user-1", "admin", "admin", "127.0.0.1", "")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 token 失败: %v", err)
+		t.Fatalf("failed to generate token: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
@@ -789,10 +789,10 @@ func TestAPI_Logout_ClearsCookie(t *testing.T) {
 	s.RequireAuth(s.handleAPILogout).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("期望登出成功 200，得到 %d", w.Code)
+		t.Fatalf("expected logout success with 200, got %d", w.Code)
 	}
 
-	// 检查 Set-Cookie 头是否清除了 cookie
+	// Check whether the Set-Cookie header cleared the cookie
 	cookies := w.Result().Cookies()
 	var sessionCookie *http.Cookie
 	for _, c := range cookies {
@@ -802,10 +802,10 @@ func TestAPI_Logout_ClearsCookie(t *testing.T) {
 		}
 	}
 	if sessionCookie == nil {
-		t.Fatal("登出响应中缺少清除 netsgo_session cookie 的 Set-Cookie 头")
+		t.Fatal("logout response is missing the Set-Cookie header that clears the netsgo_session cookie")
 	}
 	if sessionCookie.MaxAge != -1 {
-		t.Errorf("清除 cookie 的 MaxAge 应为 -1，得到 %d", sessionCookie.MaxAge)
+		t.Errorf("clearing cookie MaxAge should be -1, got %d", sessionCookie.MaxAge)
 	}
 }
 
@@ -822,7 +822,7 @@ func TestAPI_Login_SetsSecureCookie_WhenRequestIsTLS(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("期望登录成功 200，得到 %d", w.Code)
+		t.Fatalf("expected successful login with 200, got %d", w.Code)
 	}
 
 	var sessionCookie *http.Cookie
@@ -833,10 +833,10 @@ func TestAPI_Login_SetsSecureCookie_WhenRequestIsTLS(t *testing.T) {
 		}
 	}
 	if sessionCookie == nil {
-		t.Fatal("登录响应中缺少 netsgo_session cookie")
+		t.Fatal("login response is missing the netsgo_session cookie")
 	}
 	if !sessionCookie.Secure {
-		t.Error("TLS 请求下应设置 Secure cookie")
+		t.Error("TLS requests should set a Secure cookie")
 	}
 }
 
@@ -858,7 +858,7 @@ func TestAPI_Login_SetsSecureCookie_WhenTrustedProxyReportsHTTPS(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("期望登录成功 200，得到 %d", w.Code)
+		t.Fatalf("expected successful login with 200, got %d", w.Code)
 	}
 
 	var sessionCookie *http.Cookie
@@ -869,10 +869,10 @@ func TestAPI_Login_SetsSecureCookie_WhenTrustedProxyReportsHTTPS(t *testing.T) {
 		}
 	}
 	if sessionCookie == nil {
-		t.Fatal("登录响应中缺少 netsgo_session cookie")
+		t.Fatal("login response is missing the netsgo_session cookie")
 	}
 	if !sessionCookie.Secure {
-		t.Error("受信反代声明 HTTPS 时应设置 Secure cookie")
+		t.Error("should set a Secure cookie when a trusted reverse proxy declares HTTPS")
 	}
 }
 
@@ -894,7 +894,7 @@ func TestAPI_Login_IgnoresUntrustedProxyHTTPSForSecureCookie(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("期望登录成功 200，得到 %d", w.Code)
+		t.Fatalf("expected successful login with 200, got %d", w.Code)
 	}
 
 	var sessionCookie *http.Cookie
@@ -905,9 +905,9 @@ func TestAPI_Login_IgnoresUntrustedProxyHTTPSForSecureCookie(t *testing.T) {
 		}
 	}
 	if sessionCookie == nil {
-		t.Fatal("登录响应中缺少 netsgo_session cookie")
+		t.Fatal("login response is missing the netsgo_session cookie")
 	}
 	if sessionCookie.Secure {
-		t.Error("不应信任非受信代理伪造的 HTTPS 头")
+		t.Error("should not trust forged HTTPS headers from an untrusted proxy")
 	}
 }

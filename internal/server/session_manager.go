@@ -9,13 +9,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// SessionManager 持有客户端连接生命周期相关的全部状态：
-//   - managedConns：当前所有受管 WebSocket 连接（用于优雅关闭）
-//   - longLivedHandlers：长连接 goroutine 计数（用于 Shutdown 等待）
-//   - nextGeneration：单调递增的客户端代际计数器
-//   - 数据通道三个阶段的超时时间
+// SessionManager holds all state related to client connection lifecycles:
+//   - managedConns: all currently managed WebSocket connections (for graceful shutdown)
+//   - longLivedHandlers: goroutine count for long-lived connections (waited on during Shutdown)
+//   - nextGeneration: monotonically increasing client generation counter
+//   - timeout durations for the three phases of the data channel
 //
-// 同包内的其他文件通过 s.sessions.* 直接访问；不对外暴露接口。
+// Other files in the same package access this directly via s.sessions.*; no interface is exported.
 type SessionManager struct {
 	managedConnMu     sync.Mutex
 	managedConns      map[*websocket.Conn]struct{}
@@ -27,7 +27,7 @@ type SessionManager struct {
 	dataHandshakeAckTimeout time.Duration
 }
 
-// newSessionManager 创建 SessionManager 并设置默认超时。
+// newSessionManager creates a SessionManager with default timeouts.
 func newSessionManager() *SessionManager {
 	return &SessionManager{
 		managedConns:            make(map[*websocket.Conn]struct{}),
@@ -37,14 +37,14 @@ func newSessionManager() *SessionManager {
 	}
 }
 
-// beginLongLivedHandler 注册一个长连接 goroutine，返回完成回调。
+// beginLongLivedHandler registers a long-lived connection goroutine and returns a done callback.
 func (sm *SessionManager) beginLongLivedHandler() func() {
 	sm.longLivedHandlers.Add(1)
 	return sm.longLivedHandlers.Done
 }
 
-// trackManagedConn 记录 conn 到受管连接集合，并注册 longLivedHandler；
-// 返回的函数应在 handler goroutine 退出时调用。
+// trackManagedConn adds conn to the managed connection set and registers a longLivedHandler.
+// The returned function should be called when the handler goroutine exits.
 func (sm *SessionManager) trackManagedConn(conn *websocket.Conn) func() {
 	release := sm.beginLongLivedHandler()
 	sm.managedConnMu.Lock()
@@ -62,7 +62,7 @@ func (sm *SessionManager) trackManagedConn(conn *websocket.Conn) func() {
 	}
 }
 
-// closeManagedConns 向所有受管连接发送 CloseGoingAway 并关闭。
+// closeManagedConns sends CloseGoingAway to all managed connections and closes them.
 func (sm *SessionManager) closeManagedConns(reason string) {
 	sm.managedConnMu.Lock()
 	conns := make([]*websocket.Conn, 0, len(sm.managedConns))
@@ -82,7 +82,7 @@ func (sm *SessionManager) closeManagedConns(reason string) {
 	}
 }
 
-// waitForLongLivedHandlers 等待所有长连接 goroutine 退出，直到 ctx 超时。
+// waitForLongLivedHandlers waits for all long-lived goroutines to exit until ctx times out.
 func (sm *SessionManager) waitForLongLivedHandlers(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
@@ -98,7 +98,7 @@ func (sm *SessionManager) waitForLongLivedHandlers(ctx context.Context) error {
 	}
 }
 
-// nextClientGeneration 返回下一个单调递增的客户端代际编号。
+// nextClientGeneration returns the next monotonically increasing client generation number.
 func (sm *SessionManager) nextClientGeneration() uint64 {
 	return sm.nextGeneration.Add(1)
 }

@@ -21,12 +21,12 @@ func TestWriteReadServerEnvRoundTrip(t *testing.T) {
 	}
 
 	if err := WriteServerEnv(spec, want); err != nil {
-		t.Fatalf("WriteServerEnv() 失败: %v", err)
+		t.Fatalf("WriteServerEnv() failed: %v", err)
 	}
 
 	got, err := ReadServerEnv(spec)
 	if err != nil {
-		t.Fatalf("ReadServerEnv() 失败: %v", err)
+		t.Fatalf("ReadServerEnv() failed: %v", err)
 	}
 	if got != want {
 		t.Fatalf("server env round trip = %#v, want %#v", got, want)
@@ -45,12 +45,12 @@ func TestWriteReadClientEnvRoundTrip(t *testing.T) {
 	}
 
 	if err := WriteClientEnv(spec, want); err != nil {
-		t.Fatalf("WriteClientEnv() 失败: %v", err)
+		t.Fatalf("WriteClientEnv() failed: %v", err)
 	}
 
 	got, err := ReadClientEnv(spec)
 	if err != nil {
-		t.Fatalf("ReadClientEnv() 失败: %v", err)
+		t.Fatalf("ReadClientEnv() failed: %v", err)
 	}
 	if got != want {
 		t.Fatalf("client env round trip = %#v, want %#v", got, want)
@@ -62,23 +62,23 @@ func TestWriteServerEnvSparseAndPermissions(t *testing.T) {
 	spec.EnvPath = filepath.Join(t.TempDir(), "server.env")
 
 	if err := WriteServerEnv(spec, ServerEnv{}); err != nil {
-		t.Fatalf("WriteServerEnv() 失败: %v", err)
+		t.Fatalf("WriteServerEnv() failed: %v", err)
 	}
 
 	content, err := os.ReadFile(spec.EnvPath)
 	if err != nil {
-		t.Fatalf("读取 env 文件失败: %v", err)
+		t.Fatalf("failed to read env file: %v", err)
 	}
 	if len(content) != 0 {
-		t.Fatalf("零值 env 不应写出任何内容，得到 %q", string(content))
+		t.Fatalf("zero-value env should not write any content, got %q", string(content))
 	}
 
 	info, err := os.Stat(spec.EnvPath)
 	if err != nil {
-		t.Fatalf("读取 env 文件状态失败: %v", err)
+		t.Fatalf("failed to stat env file: %v", err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("env 文件权限 = %v, want 0600", info.Mode().Perm())
+		t.Fatalf("env file permissions = %v, want 0600", info.Mode().Perm())
 	}
 }
 
@@ -88,6 +88,6 @@ func TestWriteRawEnvRejectsForbiddenKeys(t *testing.T) {
 		"NETSGO_INIT_ADMIN_PASSWORD": "Password123",
 	})
 	if err == nil {
-		t.Fatal("包含 NETSGO_INIT_* 的 env 写入应失败")
+		t.Fatal("writing env with NETSGO_INIT_* entries should fail")
 	}
 }

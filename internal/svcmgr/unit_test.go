@@ -12,12 +12,12 @@ func TestWriteServerUnit(t *testing.T) {
 	spec.UnitPath = filepath.Join(t.TempDir(), "netsgo-server.service")
 
 	if err := WriteServerUnit(spec); err != nil {
-		t.Fatalf("WriteServerUnit() 失败: %v", err)
+		t.Fatalf("WriteServerUnit() failed: %v", err)
 	}
 
 	content, err := os.ReadFile(spec.UnitPath)
 	if err != nil {
-		t.Fatalf("读取 server unit 失败: %v", err)
+		t.Fatalf("failed to read server unit: %v", err)
 	}
 	text := string(content)
 
@@ -34,16 +34,16 @@ func TestWriteServerUnit(t *testing.T) {
 	}
 	for _, fragment := range required {
 		if !strings.Contains(text, fragment) {
-			t.Fatalf("server unit 缺少 %q\n%s", fragment, text)
+			t.Fatalf("server unit is missing %q\n%s", fragment, text)
 		}
 	}
 
 	info, err := os.Stat(spec.UnitPath)
 	if err != nil {
-		t.Fatalf("读取 server unit 状态失败: %v", err)
+		t.Fatalf("failed to stat server unit: %v", err)
 	}
 	if info.Mode().Perm() != 0o644 {
-		t.Fatalf("server unit 权限 = %v, want 0644", info.Mode().Perm())
+		t.Fatalf("server unit permissions = %v, want 0644", info.Mode().Perm())
 	}
 }
 
@@ -52,12 +52,12 @@ func TestWriteClientUnit(t *testing.T) {
 	spec.UnitPath = filepath.Join(t.TempDir(), "netsgo-client.service")
 
 	if err := WriteClientUnit(spec); err != nil {
-		t.Fatalf("WriteClientUnit() 失败: %v", err)
+		t.Fatalf("WriteClientUnit() failed: %v", err)
 	}
 
 	content, err := os.ReadFile(spec.UnitPath)
 	if err != nil {
-		t.Fatalf("读取 client unit 失败: %v", err)
+		t.Fatalf("failed to read client unit: %v", err)
 	}
 	text := string(content)
 
@@ -71,7 +71,7 @@ func TestWriteClientUnit(t *testing.T) {
 	}
 	for _, fragment := range required {
 		if !strings.Contains(text, fragment) {
-			t.Fatalf("client unit 缺少 %q\n%s", fragment, text)
+			t.Fatalf("client unit is missing %q\n%s", fragment, text)
 		}
 	}
 }
@@ -80,12 +80,12 @@ func TestReadUnitExecStart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "netsgo.service")
 	content := "[Service]\nExecStart=/usr/local/bin/netsgo server --data-dir /var/lib/netsgo\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("写入测试 unit 失败: %v", err)
+		t.Fatalf("failed to write test unit: %v", err)
 	}
 
 	got, err := ReadUnitExecStart(path)
 	if err != nil {
-		t.Fatalf("ReadUnitExecStart() 失败: %v", err)
+		t.Fatalf("ReadUnitExecStart() failed: %v", err)
 	}
 	want := "/usr/local/bin/netsgo server --data-dir /var/lib/netsgo"
 	if got != want {

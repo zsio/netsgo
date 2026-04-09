@@ -31,20 +31,20 @@ func baseDiskName(device string) string {
 	return device
 }
 
-// CollectSystemStats 采集当前系统的运行状态
-// processStart 为程序启动时间，用于计算 NetsGo 进程运行时长。
+// CollectSystemStats collects the current system runtime status.
+// processStart is the program start time, used to calculate the NetsGo process uptime.
 func CollectSystemStats(processStart time.Time) (*protocol.SystemStats, error) {
 	stats := &protocol.SystemStats{
 		NumCPU: runtime.NumCPU(),
 	}
 
-	// CPU 使用率（采样 1 秒）
+	// CPU usage (sampled over 1 second)
 	cpuPercent, err := cpu.Percent(1*time.Second, false)
 	if err == nil && len(cpuPercent) > 0 {
 		stats.CPUUsage = cpuPercent[0]
 	}
 
-	// 内存信息
+	// Memory information
 	memInfo, err := mem.VirtualMemory()
 	if err == nil {
 		stats.MemTotal = memInfo.Total
@@ -52,7 +52,7 @@ func CollectSystemStats(processStart time.Time) (*protocol.SystemStats, error) {
 		stats.MemUsage = memInfo.UsedPercent
 	}
 
-	// 磁盘信息 — 聚合所有物理分区，APFS 按物理磁盘去重
+	// Disk information — aggregate all physical partitions; for APFS, deduplicate by physical disk.
 	partitions, err := disk.Partitions(false)
 	if err == nil {
 		seenDevices := map[string]bool{}
@@ -86,7 +86,7 @@ func CollectSystemStats(processStart time.Time) (*protocol.SystemStats, error) {
 		}
 	}
 
-	// Fallback: 如果没有获取到任何有效分区
+	// Fallback: if no valid partition was found.
 	if len(stats.DiskPartitions) == 0 {
 		diskRoot := "/"
 		if runtime.GOOS == "windows" {
@@ -104,33 +104,33 @@ func CollectSystemStats(processStart time.Time) (*protocol.SystemStats, error) {
 		}
 	}
 
-	// 计算聚合使用率
+	// Calculate aggregate usage.
 	if stats.DiskTotal > 0 {
 		stats.DiskUsage = float64(stats.DiskUsed) / float64(stats.DiskTotal) * 100
 	}
 
-	// 网络 IO（所有网卡累计）
+	// Network I/O (aggregated across all interfaces)
 	netIO, err := psnet.IOCounters(false)
 	if err == nil && len(netIO) > 0 {
 		stats.NetSent = netIO[0].BytesSent
 		stats.NetRecv = netIO[0].BytesRecv
 	}
 
-	// 系统运行时间
+	// System uptime
 	uptime, err := host.Uptime()
 	if err == nil {
 		stats.Uptime = uptime
 	}
 
-	// 程序运行时间
+	// Program uptime
 	if !processStart.IsZero() {
 		stats.ProcessUptime = uint64(time.Since(processStart).Seconds())
 	}
 
-	// 系统安装时间
+	// OS installation time
 	stats.OSInstallTime = sysinfo.GetOSInstallTime()
 
-	// 程序（NetsGo Client）自身内存占用
+	// Memory usage of the program itself (NetsGo Client)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	stats.AppMemUsed = m.Alloc

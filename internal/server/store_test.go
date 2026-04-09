@@ -16,7 +16,7 @@ func newTestTunnelStore(t *testing.T) *TunnelStore {
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("NewTunnelStore 失败: %v", err)
+		t.Fatalf("NewTunnelStore failed: %v", err)
 	}
 	return store
 }
@@ -26,7 +26,7 @@ func mustAddStableTunnel(t *testing.T, store *TunnelStore, tunnel StoredTunnel) 
 
 	tunnel.Binding = TunnelBindingClientID
 	if tunnel.ClientID == "" {
-		t.Fatal("测试隧道必须提供 ClientID")
+		t.Fatal("test tunnel must provide ClientID")
 	}
 	if tunnel.DesiredState == "" {
 		tunnel.DesiredState = protocol.ProxyDesiredStateRunning
@@ -35,14 +35,14 @@ func mustAddStableTunnel(t *testing.T, store *TunnelStore, tunnel StoredTunnel) 
 		tunnel.RuntimeState = protocol.ProxyRuntimeStateExposed
 	}
 	if err := store.AddTunnel(tunnel); err != nil {
-		t.Fatalf("AddTunnel 失败: %v", err)
+		t.Fatalf("AddTunnel failed: %v", err)
 	}
 }
 
 func TestTunnelStore_NewEmpty(t *testing.T) {
 	store := newTestTunnelStore(t)
 	if len(store.GetAllTunnels()) != 0 {
-		t.Errorf("新建的 store 应该为空，得到 %d 条记录", len(store.GetAllTunnels()))
+		t.Errorf("new store should be empty, got %d records", len(store.GetAllTunnels()))
 	}
 }
 
@@ -52,7 +52,7 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 
 	store1, err := NewTunnelStore(path)
 	if err != nil {
-		t.Fatalf("NewTunnelStore 失败: %v", err)
+		t.Fatalf("NewTunnelStore failed: %v", err)
 	}
 	mustAddStableTunnel(t, store1, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
@@ -66,17 +66,17 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 
 	store2, err := NewTunnelStore(path)
 	if err != nil {
-		t.Fatalf("重新加载失败: %v", err)
+		t.Fatalf("reload failed: %v", err)
 	}
 	tunnels := store2.GetAllTunnels()
 	if len(tunnels) != 1 {
-		t.Fatalf("期望加载 1 条记录，得到 %d", len(tunnels))
+		t.Fatalf("expected to load 1 record, got %d", len(tunnels))
 	}
 	if tunnels[0].Name != "t1" {
-		t.Errorf("加载的隧道名期望 t1，得到 %s", tunnels[0].Name)
+		t.Errorf("expected loaded tunnel name to be t1, got %s", tunnels[0].Name)
 	}
 	if tunnels[0].Binding != TunnelBindingClientID {
-		t.Errorf("Binding 期望 %s，得到 %s", TunnelBindingClientID, tunnels[0].Binding)
+		t.Errorf("expected Binding to be %s, got %s", TunnelBindingClientID, tunnels[0].Binding)
 	}
 }
 
@@ -86,7 +86,7 @@ func TestTunnelStore_LoadExistingStatesKeepsDesiredAndRuntimeState(t *testing.T)
 
 	store1, err := NewTunnelStore(path)
 	if err != nil {
-		t.Fatalf("NewTunnelStore 失败: %v", err)
+		t.Fatalf("NewTunnelStore failed: %v", err)
 	}
 	mustAddStableTunnel(t, store1, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
@@ -110,32 +110,32 @@ func TestTunnelStore_LoadExistingStatesKeepsDesiredAndRuntimeState(t *testing.T)
 
 	store2, err := NewTunnelStore(path)
 	if err != nil {
-		t.Fatalf("重新加载失败: %v", err)
+		t.Fatalf("reload failed: %v", err)
 	}
 
 	active, ok := store2.GetTunnel("client-1", "legacy-active")
 	if !ok {
-		t.Fatal("应找到 legacy-active")
+		t.Fatal("should find legacy-active")
 	}
 	if active.DesiredState != protocol.ProxyDesiredStateRunning {
-		t.Fatalf("legacy active desired_state 期望 running，得到 %s", active.DesiredState)
+		t.Fatalf("legacy active desired_state expected running, got %s", active.DesiredState)
 	}
 	if active.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("legacy active runtime_state 期望 exposed，得到 %s", active.RuntimeState)
+		t.Fatalf("legacy active runtime_state expected exposed, got %s", active.RuntimeState)
 	}
 
 	errored, ok := store2.GetTunnel("client-1", "legacy-error")
 	if !ok {
-		t.Fatal("应找到 legacy-error")
+		t.Fatal("should find legacy-error")
 	}
 	if errored.DesiredState != protocol.ProxyDesiredStateRunning {
-		t.Fatalf("legacy error desired_state 期望 running，得到 %s", errored.DesiredState)
+		t.Fatalf("legacy error desired_state expected running, got %s", errored.DesiredState)
 	}
 	if errored.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("legacy error runtime_state 期望 error，得到 %s", errored.RuntimeState)
+		t.Fatalf("legacy error runtime_state expected error, got %s", errored.RuntimeState)
 	}
 	if errored.Error != "restore failed" {
-		t.Fatalf("legacy error 错误原因期望保留 restore failed，得到 %q", errored.Error)
+		t.Fatalf("legacy error error_reason expected to retain 'restore failed', got %q", errored.Error)
 	}
 }
 
@@ -154,11 +154,11 @@ func TestTunnelStore_LoadLegacyHostnameBindingFallsBackToEmptyStore(t *testing.T
 	  }
 	]`
 	if err := os.WriteFile(path, []byte(legacyJSON), 0o644); err != nil {
-		t.Fatalf("写入 legacy store 文件失败: %v", err)
+		t.Fatalf("failed to write legacy store file: %v", err)
 	}
 
 	if _, err := NewTunnelStore(path); err == nil {
-		t.Fatal("旧格式/无效状态文件应导致 NewTunnelStore 失败")
+		t.Fatal("old format/invalid state file should cause NewTunnelStore to fail")
 	}
 }
 
@@ -167,11 +167,11 @@ func TestTunnelStore_CorruptedFile(t *testing.T) {
 	path := filepath.Join(dir, "tunnels.json")
 
 	if err := os.WriteFile(path, []byte(`{{{invalid json`), 0o644); err != nil {
-		t.Fatalf("写入损坏文件失败: %v", err)
+		t.Fatalf("failed to write corrupted file: %v", err)
 	}
 
 	if _, err := NewTunnelStore(path); err == nil {
-		t.Fatal("损坏文件应导致 NewTunnelStore 返回错误")
+		t.Fatal("corrupted file should cause NewTunnelStore to return an error")
 	}
 }
 
@@ -188,13 +188,13 @@ func TestTunnelStore_AddTunnel_Success(t *testing.T) {
 
 	tunnels := store.GetAllTunnels()
 	if len(tunnels) != 1 {
-		t.Fatalf("期望 1 条，得到 %d", len(tunnels))
+		t.Fatalf("expected 1, got %d", len(tunnels))
 	}
 	if tunnels[0].ClientID != "client-1" {
-		t.Errorf("ClientID 期望 client-1，得到 %s", tunnels[0].ClientID)
+		t.Errorf("expected ClientID to be client-1, got %s", tunnels[0].ClientID)
 	}
 	if tunnels[0].Binding != TunnelBindingClientID {
-		t.Errorf("Binding 期望 %s，得到 %s", TunnelBindingClientID, tunnels[0].Binding)
+		t.Errorf("expected Binding to be %s, got %s", TunnelBindingClientID, tunnels[0].Binding)
 	}
 }
 
@@ -210,7 +210,7 @@ func TestTunnelStore_AddTunnel_DuplicateRejected(t *testing.T) {
 	mustAddStableTunnel(t, store, tunnel)
 
 	if err := store.AddTunnel(tunnel); err == nil {
-		t.Error("相同 client_id+name 的重复添加应被拒绝")
+		t.Error("duplicate addition with same client_id+name should be rejected")
 	}
 }
 
@@ -230,10 +230,10 @@ func TestTunnelStore_AddTunnel_DiffClientSameNameAllowed(t *testing.T) {
 		DesiredState:    protocol.ProxyDesiredStateRunning,
 		RuntimeState:    protocol.ProxyRuntimeStateExposed,
 	}); err != nil {
-		t.Errorf("不同 client_id 同 name 应允许: %v", err)
+		t.Errorf("same name with different client_id should be allowed: %v", err)
 	}
 	if len(store.GetAllTunnels()) != 2 {
-		t.Error("应有 2 条记录")
+		t.Error("should have 2 records")
 	}
 }
 
@@ -247,17 +247,17 @@ func TestTunnelStore_RemoveTunnel_Success(t *testing.T) {
 	})
 
 	if err := store.RemoveTunnel("client-1", "rm-me"); err != nil {
-		t.Fatalf("RemoveTunnel 失败: %v", err)
+		t.Fatalf("RemoveTunnel failed: %v", err)
 	}
 	if len(store.GetAllTunnels()) != 0 {
-		t.Error("删除后应为空")
+		t.Error("should be empty after deletion")
 	}
 }
 
 func TestTunnelStore_RemoveTunnel_NotFound(t *testing.T) {
 	store := newTestTunnelStore(t)
 	if err := store.RemoveTunnel("ghost", "not-exist"); err == nil {
-		t.Error("删除不存在的隧道应返回错误")
+		t.Error("deleting non-existent tunnel should return an error")
 	}
 }
 
@@ -273,26 +273,26 @@ func TestTunnelStore_UpdateStates(t *testing.T) {
 	})
 
 	if err := store.UpdateStates("client-1", "t1", protocol.ProxyDesiredStatePaused, protocol.ProxyRuntimeStateIdle, ""); err != nil {
-		t.Fatalf("UpdateStates 失败: %v", err)
+		t.Fatalf("UpdateStates failed: %v", err)
 	}
 	st, _ := store.GetTunnel("client-1", "t1")
-	if st.DesiredState != protocol.ProxyDesiredStatePaused || st.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Errorf("状态期望 paused/idle，得到 %s/%s", st.DesiredState, st.RuntimeState)
+	if st.DesiredState != protocol.ProxyDesiredStateStopped || st.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Errorf("expected state stopped/idle, got %s/%s", st.DesiredState, st.RuntimeState)
 	}
 
 	if err := store.UpdateStates("client-1", "t1", protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, ""); err != nil {
-		t.Fatalf("UpdateStates 失败: %v", err)
+		t.Fatalf("UpdateStates failed: %v", err)
 	}
 	st2, _ := store.GetTunnel("client-1", "t1")
 	if st2.DesiredState != protocol.ProxyDesiredStateStopped || st2.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Errorf("状态期望 stopped/idle，得到 %s/%s", st2.DesiredState, st2.RuntimeState)
+		t.Errorf("expected state stopped/idle, got %s/%s", st2.DesiredState, st2.RuntimeState)
 	}
 }
 
 func TestTunnelStore_UpdateStates_NotFound(t *testing.T) {
 	store := newTestTunnelStore(t)
 	if err := store.UpdateStates("ghost", "no-tunnel", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, ""); err == nil {
-		t.Error("更新不存在的隧道应返回错误")
+		t.Error("updating non-existent tunnel should return an error")
 	}
 }
 
@@ -308,25 +308,25 @@ func TestTunnelStore_UpdateState_ErrorRoundTrip(t *testing.T) {
 	})
 
 	if err := store.UpdateStates("client-1", "t-error", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, "restore failed"); err != nil {
-		t.Fatalf("UpdateStates 设置 error 失败: %v", err)
+		t.Fatalf("UpdateStates setting error failed: %v", err)
 	}
 	st, _ := store.GetTunnel("client-1", "t-error")
 	if st.DesiredState != protocol.ProxyDesiredStateRunning || st.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("状态期望 running/error，得到 %s/%s", st.DesiredState, st.RuntimeState)
+		t.Fatalf("expected state running/error, got %s/%s", st.DesiredState, st.RuntimeState)
 	}
 	if st.Error != "restore failed" {
-		t.Fatalf("错误原因期望 %q，得到 %q", "restore failed", st.Error)
+		t.Fatalf("expected error reason %q, got %q", "restore failed", st.Error)
 	}
 
 	if err := store.UpdateStates("client-1", "t-error", protocol.ProxyDesiredStatePaused, protocol.ProxyRuntimeStateIdle, ""); err != nil {
-		t.Fatalf("UpdateStates 清理 error 失败: %v", err)
+		t.Fatalf("UpdateStates clearing error failed: %v", err)
 	}
 	st, _ = store.GetTunnel("client-1", "t-error")
-	if st.DesiredState != protocol.ProxyDesiredStatePaused || st.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Fatalf("状态期望 paused/idle，得到 %s/%s", st.DesiredState, st.RuntimeState)
+	if st.DesiredState != protocol.ProxyDesiredStateStopped || st.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Fatalf("expected state stopped/idle, got %s/%s", st.DesiredState, st.RuntimeState)
 	}
 	if st.Error != "" {
-		t.Fatalf("paused 状态下错误原因应清空，得到 %q", st.Error)
+		t.Fatalf("error reason should be cleared in stopped state, got %q", st.Error)
 	}
 }
 
@@ -347,23 +347,23 @@ func TestTunnelStore_UpdateState_RollbackOnSaveFailure(t *testing.T) {
 	store.mu.Unlock()
 
 	if err := store.UpdateStates("client-1", "t-rollback", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, "boom"); err == nil {
-		t.Fatal("预期 UpdateStates 在注入 save 失败时返回错误")
+		t.Fatal("expected UpdateStates to return error when injected save fails")
 	}
 
 	st, _ := store.GetTunnel("client-1", "t-rollback")
 	if st.DesiredState != protocol.ProxyDesiredStateRunning || st.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("save 失败时状态应回滚为 running/exposed，得到 %s/%s", st.DesiredState, st.RuntimeState)
+		t.Fatalf("state should rollback to running/exposed when save fails, got %s/%s", st.DesiredState, st.RuntimeState)
 	}
 	if st.Error != "" {
-		t.Fatalf("save 失败时错误字段应保持为空，得到 %q", st.Error)
+		t.Fatalf("error field should remain empty when save fails, got %q", st.Error)
 	}
 
 	if err := store.UpdateStates("client-1", "t-rollback", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, "boom"); err != nil {
-		t.Fatalf("注入失败耗尽后 UpdateStates 应成功，得到: %v", err)
+		t.Fatalf("UpdateStates should succeed after injected failures are exhausted, got: %v", err)
 	}
 	st, _ = store.GetTunnel("client-1", "t-rollback")
 	if st.DesiredState != protocol.ProxyDesiredStateRunning || st.RuntimeState != protocol.ProxyRuntimeStateError || st.Error != "boom" {
-		t.Fatalf("最终状态应为 running/error + boom，得到 state=%s/%s error=%q", st.DesiredState, st.RuntimeState, st.Error)
+		t.Fatalf("final state should be running/error + boom, got state=%s/%s error=%q", st.DesiredState, st.RuntimeState, st.Error)
 	}
 }
 
@@ -378,14 +378,14 @@ func TestTunnelStore_GetTunnel(t *testing.T) {
 
 	st, found := store.GetTunnel("client-1", "find-me")
 	if !found {
-		t.Fatal("应找到隧道")
+		t.Fatal("should find tunnel")
 	}
 	if st.RemotePort != 9090 {
-		t.Errorf("RemotePort 期望 9090，得到 %d", st.RemotePort)
+		t.Errorf("expected RemotePort to be 9090, got %d", st.RemotePort)
 	}
 
 	if _, found := store.GetTunnel("client-1", "not-exist"); found {
-		t.Error("不存在的隧道不应被找到")
+		t.Error("non-existent tunnel should not be found")
 	}
 }
 
@@ -410,12 +410,12 @@ func TestTunnelStore_GetTunnelsByHostname(t *testing.T) {
 
 	result := store.GetTunnelsByHostname("host-A")
 	if len(result) != 2 {
-		t.Errorf("期望 2 条，得到 %d", len(result))
+		t.Errorf("expected 2, got %d", len(result))
 	}
 
 	empty := store.GetTunnelsByHostname("no-host")
 	if len(empty) != 0 {
-		t.Errorf("不存在的 host 应返回空，得到 %d", len(empty))
+		t.Errorf("non-existent host should return empty, got %d", len(empty))
 	}
 }
 
@@ -433,7 +433,7 @@ func TestTunnelStore_GetAllTunnels_ReturnsCopy(t *testing.T) {
 
 	original := store.GetAllTunnels()
 	if original[0].Name != "original" {
-		t.Error("GetAllTunnels 应返回副本，修改不应影响原始数据")
+		t.Error("GetAllTunnels should return a copy, modifications should not affect original data")
 	}
 }
 

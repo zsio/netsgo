@@ -13,7 +13,7 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-// setupRateLimitedServer 创建一个带有自定义速率限制器的测试 Server
+// setupRateLimitedServer creates a test server with a custom rate limiter
 func setupRateLimitedServer(t *testing.T, loginCfg, setupCfg RateLimiterConfig) (*Server, func()) {
 	t.Helper()
 	s, cleanup := setupTestServerWithDB(t, true)
@@ -30,13 +30,13 @@ func setupRateLimitedServer(t *testing.T, loginCfg, setupCfg RateLimiterConfig) 
 }
 
 // ============================================================
-// Login 速率限制集成测试
+// Login rate limiting integration tests
 // ============================================================
 
 func TestLogin_RateLimitBlocksAfterMaxRequests(t *testing.T) {
 	s, cleanup := setupRateLimitedServer(t, RateLimiterConfig{
 		WindowSize:    time.Minute,
-		MaxRequests:   3, // 窗口内最多 3 次
+		MaxRequests:   3, // At most 3 requests in the window
 		MaxFailures:   100,
 		LockoutPeriod: time.Hour,
 	}, RateLimiterConfig{
@@ -49,7 +49,7 @@ func TestLogin_RateLimitBlocksAfterMaxRequests(t *testing.T) {
 
 	loginBody := []byte(`{"username":"admin","password":"password123"}`)
 
-	// 前 3 次应该成功
+	// The first 3 attempts should succeed
 	for i := 0; i < 3; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 		req.Header.Set("Content-Type", "application/json")
@@ -58,11 +58,11 @@ func TestLogin_RateLimitBlocksAfterMaxRequests(t *testing.T) {
 		s.handleAPILogin(w, req)
 
 		if w.Code != http.StatusOK {
-			t.Fatalf("第 %d 次登录期望 200，得到 %d", i+1, w.Code)
+			t.Fatalf("login attempt #%d: want 200, got %d", i+1, w.Code)
 		}
 	}
 
-	// 第 4 次应被限速
+	// The 4th attempt should be rate limited
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "10.0.0.1:12345"
@@ -70,19 +70,19 @@ func TestLogin_RateLimitBlocksAfterMaxRequests(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("超过窗口限制后期望 429，得到 %d", w.Code)
+		t.Fatalf("after exceeding the window limit, want 429, got %d", w.Code)
 	}
 	if retryAfter := w.Header().Get("Retry-After"); retryAfter == "" {
-		t.Error("429 响应应包含 Retry-After 头")
+		t.Error("429 response should include a Retry-After header")
 	}
 }
 
 func TestLogin_RateLimitLockoutAfterFailures(t *testing.T) {
 	s, cleanup := setupRateLimitedServer(t, RateLimiterConfig{
 		WindowSize:    time.Minute,
-		MaxRequests:   100,                    // 不受请求总数限制
-		MaxFailures:   3,                      // 3 次失败触发锁定
-		LockoutPeriod: 200 * time.Millisecond, // 短锁定方便测试
+		MaxRequests:   100,                    // Not limited by total request count
+		MaxFailures:   3,                      // 3 failures trigger lockout
+		LockoutPeriod: 200 * time.Millisecond, // Short lockout period for easier testing
 	}, RateLimiterConfig{
 		WindowSize:    time.Minute,
 		MaxRequests:   100,
@@ -93,7 +93,7 @@ func TestLogin_RateLimitLockoutAfterFailures(t *testing.T) {
 
 	wrongBody := []byte(`{"username":"admin","password":"wrong"}`)
 
-	// 连续 3 次错误密码
+	// Three consecutive wrong passwords
 	for i := 0; i < 3; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(wrongBody))
 		req.Header.Set("Content-Type", "application/json")
@@ -102,11 +102,11 @@ func TestLogin_RateLimitLockoutAfterFailures(t *testing.T) {
 		s.handleAPILogin(w, req)
 
 		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("第 %d 次错误密码期望 401，得到 %d", i+1, w.Code)
+			t.Fatalf("wrong-password attempt #%d: want 401, got %d", i+1, w.Code)
 		}
 	}
 
-	// 第 4 次应被锁定（即使用了正确密码）
+	// The 4th attempt should be locked out (even with the correct password)
 	correctBody := []byte(`{"username":"admin","password":"password123"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(correctBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -115,10 +115,10 @@ func TestLogin_RateLimitLockoutAfterFailures(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("连续失败后期望 429 锁定，得到 %d", w.Code)
+		t.Fatalf("after consecutive failures, expected 429 lockout, got %d", w.Code)
 	}
 
-	// 不同 IP 不受影响
+	// A different IP should be unaffected
 	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(correctBody))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.RemoteAddr = "10.0.0.99:12345"
@@ -126,10 +126,10 @@ func TestLogin_RateLimitLockoutAfterFailures(t *testing.T) {
 	s.handleAPILogin(w2, req2)
 
 	if w2.Code != http.StatusOK {
-		t.Fatalf("不同 IP 不应受锁定影响，得到 %d", w2.Code)
+		t.Fatalf("a different IP should not be affected by the lockout, got %d", w2.Code)
 	}
 
-	// 等待锁定过期后恢复
+	// Wait for the lockout to expire and recover
 	time.Sleep(250 * time.Millisecond)
 
 	req3 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(correctBody))
@@ -139,7 +139,7 @@ func TestLogin_RateLimitLockoutAfterFailures(t *testing.T) {
 	s.handleAPILogin(w3, req3)
 
 	if w3.Code != http.StatusOK {
-		t.Fatalf("锁定过期后应恢复，得到 %d", w3.Code)
+		t.Fatalf("after lockout expiry, it should recover, got %d", w3.Code)
 	}
 }
 
@@ -160,7 +160,7 @@ func TestLogin_RateLimitResetOnSuccess(t *testing.T) {
 	wrongBody := []byte(`{"username":"admin","password":"wrong"}`)
 	correctBody := []byte(`{"username":"admin","password":"password123"}`)
 
-	// 2 次失败（未达阈值 3）
+	// 2 failures (below the threshold of 3)
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(wrongBody))
 		req.Header.Set("Content-Type", "application/json")
@@ -169,7 +169,7 @@ func TestLogin_RateLimitResetOnSuccess(t *testing.T) {
 		s.handleAPILogin(w, req)
 	}
 
-	// 成功登录，重置计数
+	// Successful login resets the counters
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(correctBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "10.0.0.3:12345"
@@ -177,10 +177,10 @@ func TestLogin_RateLimitResetOnSuccess(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("成功登录期望 200，得到 %d", w.Code)
+		t.Fatalf("successful login: want 200, got %d", w.Code)
 	}
 
-	// 再连续 2 次失败（从 0 开始，不应触发锁定）
+	// Then 2 more consecutive failures (starting from 0, should not trigger lockout)
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(wrongBody))
 		req.Header.Set("Content-Type", "application/json")
@@ -189,7 +189,7 @@ func TestLogin_RateLimitResetOnSuccess(t *testing.T) {
 		s.handleAPILogin(w, req)
 	}
 
-	// 再次成功登录（不应被锁定，因为之前重置了计数）
+	// Successful login again (should not be locked because the counter was reset earlier)
 	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(correctBody))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.RemoteAddr = "10.0.0.3:12345"
@@ -197,12 +197,12 @@ func TestLogin_RateLimitResetOnSuccess(t *testing.T) {
 	s.handleAPILogin(w2, req2)
 
 	if w2.Code != http.StatusOK {
-		t.Fatalf("重置后再次失败未达阈值，不应被锁定，得到 %d", w2.Code)
+		t.Fatalf("after reset, failing again below the threshold should not trigger lockout, got %d", w2.Code)
 	}
 }
 
 // ============================================================
-// Client 认证速率限制集成测试
+// Client authentication rate limiting integration tests
 // ============================================================
 
 func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
@@ -212,7 +212,7 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	s.auth.clientLimiter = NewRateLimiter(RateLimiterConfig{
 		WindowSize:    time.Minute,
 		MaxRequests:   100,
-		MaxFailures:   3, // 3 次失败触发锁定
+		MaxFailures:   3, // 3 failures trigger lockout
 		LockoutPeriod: 200 * time.Millisecond,
 	})
 	defer s.auth.clientLimiter.Stop()
@@ -222,11 +222,11 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 
-	// 连续 3 次使用错误 Key 认证
+	// Authenticate three times in a row with the wrong key
 	for i := 0; i < 3; i++ {
 		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
-			t.Fatalf("第 %d 次 WebSocket 连接失败: %v", i+1, err)
+			t.Fatalf("WebSocket connection #%d failed: %v", i+1, err)
 		}
 
 		authReq := protocol.AuthRequest{
@@ -245,34 +245,34 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		var resp protocol.Message
 		if err := conn.ReadJSON(&resp); err != nil {
-			t.Fatalf("第 %d 次错误 Key 认证读取响应失败: %v", i+1, err)
+			t.Fatalf("failed to read auth response for wrong-key attempt #%d: %v", i+1, err)
 		}
 		if resp.Type != protocol.MsgTypeAuthResp {
-			t.Fatalf("第 %d 次错误 Key 期望 auth_resp，得到 %s", i+1, resp.Type)
+			t.Fatalf("wrong-key attempt #%d: want auth_resp, got %s", i+1, resp.Type)
 		}
 		var authResp protocol.AuthResponse
 		if err := resp.ParsePayload(&authResp); err != nil {
-			t.Fatalf("第 %d 次错误 Key 解析 auth_resp 失败: %v", i+1, err)
+			t.Fatalf("failed to parse auth_resp for wrong-key attempt #%d: %v", i+1, err)
 		}
 		if authResp.Success {
-			t.Fatalf("第 %d 次错误 Key 不应认证成功", i+1)
+			t.Fatalf("wrong-key attempt #%d should not authenticate successfully", i+1)
 		}
 		if authResp.Code != protocol.AuthCodeInvalidKey {
-			t.Fatalf("第 %d 次错误 Key 错误码应为 invalid_key，得到 %s", i+1, authResp.Code)
+			t.Fatalf("wrong-key attempt #%d: error code should be invalid_key, got %s", i+1, authResp.Code)
 		}
 		if authResp.Retryable {
-			t.Fatalf("第 %d 次错误 Key 不应标记为 retryable", i+1)
+			t.Fatalf("wrong-key attempt #%d should not be marked retryable", i+1)
 		}
 		if authResp.ClearToken {
-			t.Fatalf("第 %d 次错误 Key 不应要求清除 token", i+1)
+			t.Fatalf("wrong-key attempt #%d should not request token clearing", i+1)
 		}
 		conn.Close()
 	}
 
-	// 第 4 次连接：即使用了正确 Key，也应被限速拒绝
+	// 4th connection: even with the correct key, it should be rejected due to rate limiting
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	defer conn.Close()
 
@@ -292,34 +292,34 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("读取限速认证响应失败: %v", err)
+		t.Fatalf("failed to read rate-limited auth response: %v", err)
 	}
 	if resp.Type != protocol.MsgTypeAuthResp {
-		t.Fatalf("被限速时期望 auth_resp，得到 %s", resp.Type)
+		t.Fatalf("when rate limited, want auth_resp, got %s", resp.Type)
 	}
 	var authResp protocol.AuthResponse
 	if err := resp.ParsePayload(&authResp); err != nil {
-		t.Fatalf("解析限速认证响应失败: %v", err)
+		t.Fatalf("failed to parse rate-limited auth response: %v", err)
 	}
 	if authResp.Success {
-		t.Fatal("被锁定的 IP 不应认证成功")
+		t.Fatal("a locked IP should not authenticate successfully")
 	}
 	if authResp.Code != protocol.AuthCodeRateLimited {
-		t.Fatalf("被限速时错误码应为 rate_limited，得到 %s", authResp.Code)
+		t.Fatalf("when rate limited, error code should be rate_limited, got %s", authResp.Code)
 	}
 	if !authResp.Retryable {
-		t.Fatal("rate_limited 应标记为 retryable")
+		t.Fatal("rate_limited should be marked retryable")
 	}
 	if authResp.ClearToken {
-		t.Fatal("rate_limited 不应要求清除 token")
+		t.Fatal("rate_limited should not require token clearing")
 	}
 
-	// 等待锁定过期后恢复
+	// Wait for the lockout to expire and recover
 	time.Sleep(250 * time.Millisecond)
 
 	conn2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("锁定过期后 WebSocket 连接失败: %v", err)
+		t.Fatalf("WebSocket connection failed after lockout expiry: %v", err)
 	}
 	defer conn2.Close()
 
@@ -339,17 +339,17 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var recoveryResp protocol.Message
 	if err := conn2.ReadJSON(&recoveryResp); err != nil {
-		t.Fatalf("锁定过期后认证应成功: %v", err)
+		t.Fatalf("authentication should succeed after lockout expiry: %v", err)
 	}
 	if recoveryResp.Type != protocol.MsgTypeAuthResp {
-		t.Fatalf("期望 auth_resp，得到 %s", recoveryResp.Type)
+		t.Fatalf("want auth_resp, got %s", recoveryResp.Type)
 	}
 	var recoveredAuth protocol.AuthResponse
 	if err := recoveryResp.ParsePayload(&recoveredAuth); err != nil {
-		t.Fatalf("解析恢复后的 auth_resp 失败: %v", err)
+		t.Fatalf("failed to parse recovered auth_resp: %v", err)
 	}
 	if !recoveredAuth.Success {
-		t.Fatalf("锁定过期后认证应成功，得到 code=%s message=%s", recoveredAuth.Code, recoveredAuth.Message)
+		t.Fatalf("authentication should succeed after lockout expiry, got code=%s message=%s", recoveredAuth.Code, recoveredAuth.Message)
 	}
 }
 
@@ -367,7 +367,7 @@ func TestLogin_RateLimitXForwardedFor(t *testing.T) {
 	})
 	defer cleanup()
 
-	// 配置反代模式：tls.mode=off + 代理 IP 10.0.0.0/8 受信任
+	// Configure reverse proxy mode: tls.mode=off + proxy IP 10.0.0.0/8 is trusted
 	s.TLS = &TLSConfig{
 		Mode:           TLSModeOff,
 		TrustedProxies: []string{"10.0.0.0/8"},
@@ -375,21 +375,21 @@ func TestLogin_RateLimitXForwardedFor(t *testing.T) {
 
 	loginBody := []byte(`{"username":"admin","password":"password123"}`)
 
-	// 通过 XFF 头识别真实 IP（来源 10.0.0.1 在受信任列表中）
+	// Identify the real IP through the XFF header (source 10.0.0.1 is in the trusted list)
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Forwarded-For", "203.0.113.50")
-		req.RemoteAddr = "10.0.0.1:80" // 受信任代理 IP
+		req.RemoteAddr = "10.0.0.1:80" // Trusted proxy IP
 		w := httptest.NewRecorder()
 		s.handleAPILogin(w, req)
 
 		if w.Code != http.StatusOK {
-			t.Fatalf("第 %d 次请求期望 200，得到 %d", i+1, w.Code)
+			t.Fatalf("request #%d: want 200, got %d", i+1, w.Code)
 		}
 	}
 
-	// 同一真实 IP 的第 3 次请求应被限速
+	// The 3rd request from the same real IP should be rate limited
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Forwarded-For", "203.0.113.50")
@@ -398,10 +398,10 @@ func TestLogin_RateLimitXForwardedFor(t *testing.T) {
 	s.handleAPILogin(w, req)
 
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("XFF 相同 IP 超限后期望 429，得到 %d", w.Code)
+		t.Fatalf("after the same XFF IP exceeds the limit, want 429, got %d", w.Code)
 	}
 
-	// 不同真实 IP 不受影响
+	// A different real IP should be unaffected
 	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("X-Forwarded-For", "198.51.100.1")
@@ -410,19 +410,19 @@ func TestLogin_RateLimitXForwardedFor(t *testing.T) {
 	s.handleAPILogin(w2, req2)
 
 	if w2.Code != http.StatusOK {
-		t.Fatalf("不同真实 IP 不应受限速影响，得到 %d", w2.Code)
+		t.Fatalf("a different real IP should not be affected by rate limiting, got %d", w2.Code)
 	}
 
-	// 来自非受信任代理的请求，即使带了 XFF 也应使用 RemoteAddr
+	// Requests from an untrusted proxy should use RemoteAddr even if they include XFF
 	req3 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 	req3.Header.Set("Content-Type", "application/json")
-	req3.Header.Set("X-Forwarded-For", "203.0.113.50") // 尝试伪造
-	req3.RemoteAddr = "1.2.3.4:80"                     // 非受信任 IP
+	req3.Header.Set("X-Forwarded-For", "203.0.113.50") // Attempted spoofing
+	req3.RemoteAddr = "1.2.3.4:80"                     // Untrusted IP
 	w3 := httptest.NewRecorder()
 	s.handleAPILogin(w3, req3)
 
-	// 应该使用 RemoteAddr (1.2.3.4) 作为限速 key，而不是 XFF 中的地址
+	// RemoteAddr (1.2.3.4) should be used as the rate-limit key instead of the address in XFF
 	if w3.Code != http.StatusOK {
-		t.Fatalf("非受信来源应使用 RemoteAddr 限速，得到 %d", w3.Code)
+		t.Fatalf("untrusted sources should be rate limited by RemoteAddr, got %d", w3.Code)
 	}
 }

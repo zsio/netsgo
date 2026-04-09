@@ -8,113 +8,113 @@ import (
 )
 
 // ============================================================
-// 探针基本功能 (3)
+// Basic probe functionality (3)
 // ============================================================
 
 func TestProbe_NotNil(t *testing.T) {
 	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
-		t.Fatalf("CollectSystemStats 失败: %v", err)
+		t.Fatalf("CollectSystemStats failed: %v", err)
 	}
 	if stats == nil {
-		t.Fatal("返回的 stats 不应为 nil")
+		t.Fatal("returned stats should not be nil")
 	}
 }
 
 func TestProbe_CPURange(t *testing.T) {
 	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
-		t.Fatalf("CollectSystemStats 失败: %v", err)
+		t.Fatalf("CollectSystemStats failed: %v", err)
 	}
 	if stats.CPUUsage < 0 || stats.CPUUsage > 100 {
-		t.Errorf("CPU 使用率应在 0-100，得到 %f", stats.CPUUsage)
+		t.Errorf("CPU usage should be in the range 0-100, got %f", stats.CPUUsage)
 	}
 }
 
 func TestProbe_NumCPU(t *testing.T) {
 	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
-		t.Fatalf("CollectSystemStats 失败: %v", err)
+		t.Fatalf("CollectSystemStats failed: %v", err)
 	}
 	expected := runtime.NumCPU()
 	if stats.NumCPU != expected {
-		t.Errorf("NumCPU 期望 %d，得到 %d", expected, stats.NumCPU)
+		t.Errorf("NumCPU: want %d, got %d", expected, stats.NumCPU)
 	}
 }
 
 // ============================================================
-// 各字段验证 (4)
+// Field validation (4)
 // ============================================================
 
 func TestProbe_MemValid(t *testing.T) {
 	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
-		t.Fatalf("CollectSystemStats 失败: %v", err)
+		t.Fatalf("CollectSystemStats failed: %v", err)
 	}
 	if stats.MemTotal == 0 {
-		t.Error("MemTotal 不应为 0")
+		t.Error("MemTotal should not be 0")
 	}
 	if stats.MemUsed > stats.MemTotal {
-		t.Errorf("MemUsed (%d) 不应大于 MemTotal (%d)", stats.MemUsed, stats.MemTotal)
+		t.Errorf("MemUsed (%d) should not be greater than MemTotal (%d)", stats.MemUsed, stats.MemTotal)
 	}
 	if stats.MemUsage < 0 || stats.MemUsage > 100 {
-		t.Errorf("MemUsage 应在 0-100，得到 %f", stats.MemUsage)
+		t.Errorf("MemUsage should be in the range 0-100, got %f", stats.MemUsage)
 	}
 }
 
 func TestProbe_DiskValid(t *testing.T) {
 	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
-		t.Fatalf("CollectSystemStats 失败: %v", err)
+		t.Fatalf("CollectSystemStats failed: %v", err)
 	}
 	if stats.DiskTotal == 0 {
-		t.Error("DiskTotal 不应为 0")
+		t.Error("DiskTotal should not be 0")
 	}
 	if stats.DiskUsed > stats.DiskTotal {
-		t.Errorf("DiskUsed (%d) 不应大于 DiskTotal (%d)", stats.DiskUsed, stats.DiskTotal)
+		t.Errorf("DiskUsed (%d) should not be greater than DiskTotal (%d)", stats.DiskUsed, stats.DiskTotal)
 	}
 	if stats.DiskUsage < 0 || stats.DiskUsage > 100 {
-		t.Errorf("DiskUsage 应在 0-100，得到 %f", stats.DiskUsage)
+		t.Errorf("DiskUsage should be in the range 0-100, got %f", stats.DiskUsage)
 	}
 }
 
 func TestProbe_UptimePositive(t *testing.T) {
 	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
-		t.Fatalf("CollectSystemStats 失败: %v", err)
+		t.Fatalf("CollectSystemStats failed: %v", err)
 	}
 	if stats.Uptime == 0 {
-		t.Error("Uptime 不应为 0（机器至少运行了几秒）")
+		t.Error("Uptime should not be 0 (the machine should have been running for at least a few seconds)")
 	}
 }
 
 func TestProbe_NetCounters(t *testing.T) {
 	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
-		t.Fatalf("CollectSystemStats 失败: %v", err)
+		t.Fatalf("CollectSystemStats failed: %v", err)
 	}
-	// 网络计数器应 ≥ 0（刚启动的机器也不会是负数）
-	// 运行测试本身就会产生网络流量，所以至少有一个 > 0
+	// Network counters should be >= 0 (even on a freshly started machine they should not be negative)
+	// Running the test itself generates network traffic, so at least one should be > 0
 	if stats.NetSent == 0 && stats.NetRecv == 0 {
-		t.Log("⚠️ NetSent 和 NetRecv 都为 0，可能是隔离环境（不报错但记录）")
+		t.Log("warning: both NetSent and NetRecv are 0, possibly due to an isolated environment (logged, not treated as a failure)")
 	}
 }
 
 // ============================================================
-// 稳定性 & 序列化 (2)
+// Stability & serialization (2)
 // ============================================================
 
 func TestProbe_MultipleCollections(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		stats, err := CollectSystemStats(time.Time{})
 		if err != nil {
-			t.Fatalf("第 %d 次采集失败: %v", i, err)
+			t.Fatalf("collection #%d failed: %v", i, err)
 		}
 		if stats == nil {
-			t.Fatalf("第 %d 次采集返回 nil", i)
+			t.Fatalf("collection #%d returned nil", i)
 		}
 		if stats.NumCPU <= 0 {
-			t.Errorf("第 %d 次: NumCPU 应为正数，得到 %d", i, stats.NumCPU)
+			t.Errorf("collection #%d: NumCPU should be positive, got %d", i, stats.NumCPU)
 		}
 	}
 }
@@ -122,16 +122,16 @@ func TestProbe_MultipleCollections(t *testing.T) {
 func TestProbe_JSONRoundTrip(t *testing.T) {
 	stats, err := CollectSystemStats(time.Time{})
 	if err != nil {
-		t.Fatalf("CollectSystemStats 失败: %v", err)
+		t.Fatalf("CollectSystemStats failed: %v", err)
 	}
 
-	// 序列化
+	// Serialize
 	data, err := json.Marshal(stats)
 	if err != nil {
-		t.Fatalf("Marshal 失败: %v", err)
+		t.Fatalf("Marshal failed: %v", err)
 	}
 
-	// 反序列化
+	// Deserialize
 	var restored struct {
 		CPUUsage  float64 `json:"cpu_usage"`
 		MemTotal  uint64  `json:"mem_total"`
@@ -146,24 +146,24 @@ func TestProbe_JSONRoundTrip(t *testing.T) {
 		NumCPU    int     `json:"num_cpu"`
 	}
 	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("Unmarshal 失败: %v", err)
+		t.Fatalf("Unmarshal failed: %v", err)
 	}
 
-	// 验证所有字段在 JSON 往返后不丢失
+	// Verify that all fields survive the JSON round trip
 	if restored.NumCPU != stats.NumCPU {
-		t.Errorf("NumCPU 不匹配: %d vs %d", restored.NumCPU, stats.NumCPU)
+		t.Errorf("NumCPU mismatch: %d vs %d", restored.NumCPU, stats.NumCPU)
 	}
 	if restored.MemTotal != stats.MemTotal {
-		t.Errorf("MemTotal 不匹配: %d vs %d", restored.MemTotal, stats.MemTotal)
+		t.Errorf("MemTotal mismatch: %d vs %d", restored.MemTotal, stats.MemTotal)
 	}
 	if restored.CPUUsage != stats.CPUUsage {
-		t.Errorf("CPUUsage 不匹配: %f vs %f", restored.CPUUsage, stats.CPUUsage)
+		t.Errorf("CPUUsage mismatch: %f vs %f", restored.CPUUsage, stats.CPUUsage)
 	}
 	if restored.Uptime != stats.Uptime {
-		t.Errorf("Uptime 不匹配: %d vs %d", restored.Uptime, stats.Uptime)
+		t.Errorf("Uptime mismatch: %d vs %d", restored.Uptime, stats.Uptime)
 	}
 
-	// 验证 JSON 中包含所有 11 个字段
+	// Verify that the JSON contains all 11 fields
 	var m map[string]any
 	json.Unmarshal(data, &m)
 	expectedKeys := []string{
@@ -173,7 +173,7 @@ func TestProbe_JSONRoundTrip(t *testing.T) {
 	}
 	for _, key := range expectedKeys {
 		if _, ok := m[key]; !ok {
-			t.Errorf("JSON 缺少字段 %q", key)
+			t.Errorf("JSON is missing field %q", key)
 		}
 	}
 }

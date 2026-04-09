@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import {
-  Search, Play, Pause, Square, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft,
+  Search, Play, Square, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -20,7 +20,7 @@ import {
 } from '@/lib/tunnel-model';
 import { cn } from '@/lib/utils';
 import {
-  usePauseTunnel, useResumeTunnel, useStopTunnel, useDeleteTunnel,
+  useResumeTunnel, useStopTunnel, useDeleteTunnel,
 } from '@/hooks/use-tunnel-mutations';
 import type { ProxyConfig } from '@/types';
 import { formatBytes } from '@/lib/format';
@@ -70,7 +70,6 @@ export function TunnelListTable({
   emptyAction,
   renderRowAction,
 }: TunnelListTableProps) {
-  const pauseTunnel = usePauseTunnel();
   const resumeTunnel = useResumeTunnel();
   const stopTunnel = useStopTunnel();
   const deleteTunnel = useDeleteTunnel();
@@ -101,7 +100,6 @@ export function TunnelListTable({
   /** 根据隧道状态渲染操作按钮 */
   const renderActionButtons = (tunnel: TunnelEntry) => {
     const {
-      canPause,
       canResume,
       canStop,
       canEdit,
@@ -109,19 +107,7 @@ export function TunnelListTable({
     } = getTunnelActionAvailability(tunnel);
 
     return (
-      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        {canPause && (
-          <button
-            className="p-1.5 hover:bg-amber-500/10 rounded text-amber-500"
-            title="暂停"
-            onClick={() => pauseTunnel.mutate(args(tunnel.clientId, tunnel.name), {
-              onSuccess: () => toast.success(`隧道「${tunnel.name}」已暂停`),
-              onError: (err) => toast.error((err as Error).message),
-            })}
-          >
-            <Pause className="h-4 w-4" />
-          </button>
-        )}
+      <div className="flex items-center justify-end gap-1">
         {canResume && (
           <button
             className="p-1.5 hover:bg-emerald-500/10 rounded text-emerald-500"
@@ -294,7 +280,7 @@ function TunnelTableRow({
   const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
 
   return (
-    <tr className="hover:bg-muted/30 transition-colors group">
+    <tr className="hover:bg-muted/30 transition-colors">
       <td className="px-6 py-3 font-medium text-foreground">{tunnel.name}</td>
 
       <td className="px-6 py-3">
@@ -356,7 +342,6 @@ function TunnelStatusBadge({
     status.key === 'exposed' && 'bg-emerald-500',
     status.key === 'pending' && 'bg-sky-500',
     status.key === 'offline' && 'bg-amber-500',
-    status.key === 'paused' && 'bg-amber-500',
     status.key === 'stopped' && 'bg-muted-foreground',
     status.key === 'error' && 'bg-destructive',
   );
@@ -366,7 +351,6 @@ function TunnelStatusBadge({
     status.key === 'exposed' && 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
     status.key === 'pending' && 'bg-sky-500/10 text-sky-600 border-sky-500/20',
     status.key === 'offline' && 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-    status.key === 'paused' && 'bg-amber-500/10 text-amber-600 border-amber-500/20',
     status.key === 'stopped' && 'bg-muted text-muted-foreground border-border/60',
     status.key === 'error' && 'bg-destructive/10 text-destructive border-destructive/20',
   );

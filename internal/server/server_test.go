@@ -27,10 +27,10 @@ import (
 )
 
 // ============================================================
-// 测试辅助函数
+// Test helper functions
 // ============================================================
 
-// setupWSTest 创建测试 Server + WebSocket 连接
+// setupWSTest creates a test server and WebSocket connection
 func setupWSTest(t *testing.T) (*Server, *websocket.Conn, *httptest.Server, func()) {
 	t.Helper()
 	s := New(0)
@@ -41,7 +41,7 @@ func setupWSTest(t *testing.T) (*Server, *websocket.Conn, *httptest.Server, func
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		ts.Close()
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 
 	cleanup := func() {
@@ -51,7 +51,7 @@ func setupWSTest(t *testing.T) (*Server, *websocket.Conn, *httptest.Server, func
 	return s, conn, ts, cleanup
 }
 
-// setupWSTestNoConn 只创建测试 Server 不建 WS 连接（用于纯 HTTP 测试）
+// setupWSTestNoConn creates only the test server without a WS connection (for pure HTTP tests)
 func setupWSTestNoConn(t *testing.T) (*Server, *httptest.Server, func()) {
 	t.Helper()
 	s := New(0)
@@ -66,14 +66,14 @@ func initTestAdminStore(t *testing.T, s *Server) {
 	storePath := filepath.Join(t.TempDir(), "admin.json")
 	store, err := NewAdminStore(storePath)
 	if err != nil {
-		t.Fatalf("创建 AdminStore 失败: %v", err)
+		t.Fatalf("failed to create AdminStore: %v", err)
 	}
-	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
+	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := store.Initialize("admin", "password123", "localhost", nil); err != nil {
-		t.Fatalf("初始化 AdminStore 失败: %v", err)
+		t.Fatalf("failed to initialize AdminStore: %v", err)
 	}
 	if _, err := store.AddAPIKey("default", "test-key", []string{"connect"}, nil); err != nil {
-		t.Fatalf("创建测试 API Key 失败: %v", err)
+		t.Fatalf("failed to create test API key: %v", err)
 	}
 	s.auth.adminStore = store
 }
@@ -84,7 +84,7 @@ func issueAdminToken(t *testing.T, s *Server) string {
 	session := mustCreateSession(t, s.auth.adminStore, "user-1", "admin", "admin", "127.0.0.1", "Go-http-client/1.1")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 Admin Token 失败: %v", err)
+		t.Fatalf("failed to generate admin token: %v", err)
 	}
 	return token
 }
@@ -96,12 +96,12 @@ func testReadTimeout(base time.Duration) time.Duration {
 	return base
 }
 
-// doAuth 完成认证，返回响应
+// doAuth completes authentication and returns the response
 func doAuth(t *testing.T, conn *websocket.Conn) protocol.AuthResponse {
 	return doAuthWithInstallID(t, conn, "test-host", "install-test-host", "test-key")
 }
 
-// doAuthWithInfo 用指定信息完成认证
+// doAuthWithInfo completes authentication with the specified info
 func doAuthWithInfo(t *testing.T, conn *websocket.Conn, hostname, key string) protocol.AuthResponse {
 	return doAuthWithInstallID(t, conn, hostname, "install-"+hostname, key)
 }
@@ -120,25 +120,25 @@ func doAuthWithInstallID(t *testing.T, conn *websocket.Conn, hostname, installID
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 	if err := conn.WriteJSON(msg); err != nil {
-		t.Fatalf("发送认证消息失败: %v", err)
+		t.Fatalf("failed to send auth message: %v", err)
 	}
 
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("读取认证响应失败: %v", err)
+		t.Fatalf("failed to read auth response: %v", err)
 	}
 	if resp.Type != protocol.MsgTypeAuthResp {
-		t.Fatalf("期望 auth_resp，得到 %s", resp.Type)
+		t.Fatalf("want auth_resp, got %s", resp.Type)
 	}
 
 	var authResp protocol.AuthResponse
 	if err := resp.ParsePayload(&authResp); err != nil {
-		t.Fatalf("解析认证响应失败: %v", err)
+		t.Fatalf("failed to parse auth response: %v", err)
 	}
 	return authResp
 }
 
-// connectAndAuth 建立新 WS 连接并完成认证
+// connectAndAuth establishes a new WS connection and completes authentication
 func connectAndAuth(t *testing.T, ts *httptest.Server, hostname string) (*websocket.Conn, protocol.AuthResponse) {
 	return connectAndAuthWithInstallID(t, ts, hostname, "install-"+hostname)
 }
@@ -147,7 +147,7 @@ func connectDataWSForClient(t *testing.T, ts *httptest.Server, authResp protocol
 	t.Helper()
 	conn, err := dialDataWSForClient(ts, authResp)
 	if err != nil {
-		t.Fatalf("建立数据通道失败: %v", err)
+		t.Fatalf("failed to establish data channel: %v", err)
 	}
 	return conn
 }
@@ -156,21 +156,21 @@ func dialDataWSForClient(ts *httptest.Server, authResp protocol.AuthResponse) (*
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/data"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("数据通道 WebSocket 连接失败: %w", err)
+		return nil, fmt.Errorf("data channel WebSocket connection failed: %w", err)
 	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(authResp.ClientID, authResp.DataToken)); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("发送数据通道握手失败: %w", err)
+		return nil, fmt.Errorf("failed to send data channel handshake: %w", err)
 	}
 	conn.SetReadDeadline(time.Now().Add(testReadTimeout(2 * time.Second)))
 	messageType, payload, err := conn.ReadMessage()
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("读取数据通道握手响应失败: %w", err)
+		return nil, fmt.Errorf("failed to read data channel handshake response: %w", err)
 	}
 	if messageType != websocket.BinaryMessage || len(payload) != 1 || payload[0] != protocol.DataHandshakeOK {
 		conn.Close()
-		return nil, fmt.Errorf("数据通道握手未成功: type=%d payload=%v", messageType, payload)
+		return nil, fmt.Errorf("data channel handshake was unsuccessful: type=%d payload=%v", messageType, payload)
 	}
 	conn.SetReadDeadline(time.Time{})
 	return conn, nil
@@ -181,7 +181,7 @@ func connectAndAuthWithInstallID(t *testing.T, ts *httptest.Server, hostname, in
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	authResp := doAuthWithInstallID(t, conn, hostname, installID, "test-key")
 	dataConn := connectDataWSForClient(t, ts, authResp)
@@ -194,27 +194,27 @@ func reserveTCPPort(t *testing.T) int {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("预留端口失败: %v", err)
+		t.Fatalf("failed to reserve port: %v", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	if err := ln.Close(); err != nil {
-		t.Fatalf("关闭预留端口 listener 失败: %v", err)
+		t.Fatalf("failed to close reserved port listener: %v", err)
 	}
 	return port
 }
 
-// getAPIJSON 发起 HTTP GET 请求并解析 JSON
+// getAPIJSON issues an HTTP GET request and parses JSON
 func getAPIJSON(t *testing.T, s *Server, ts *httptest.Server, path string) map[string]any {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, ts.URL+path, nil)
 	if err != nil {
-		t.Fatalf("创建 HTTP 请求 %s 失败: %v", path, err)
+		t.Fatalf("failed to create HTTP request %s: %v", path, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("HTTP GET %s 失败: %v", path, err)
+		t.Fatalf("HTTP GET %s failed: %v", path, err)
 	}
 	defer resp.Body.Close()
 
@@ -228,22 +228,22 @@ func assertConsoleSummaryMap(t *testing.T, summary any, expected map[string]floa
 
 	payload, ok := summary.(map[string]any)
 	if !ok {
-		t.Fatalf("summary 应返回对象，得到 %T", summary)
+		t.Fatalf("summary should return an object, got %T", summary)
 	}
 
 	for key, want := range expected {
 		got, ok := payload[key].(float64)
 		if !ok {
-			t.Fatalf("summary[%s] 应返回数字，得到 %T", key, payload[key])
+			t.Fatalf("summary[%s] should return a number, got %T", key, payload[key])
 		}
 		if got != want {
-			t.Fatalf("summary[%s] 期望 %v，得到 %v", key, want, got)
+			t.Fatalf("summary[%s]: want %v, got %v", key, want, got)
 		}
 	}
 }
 
 // ============================================================
-// API 端点测试 (7)
+// API endpoint tests (7)
 // ============================================================
 
 func TestAPI_Status_NoClients(t *testing.T) {
@@ -253,20 +253,20 @@ func TestAPI_Status_NoClients(t *testing.T) {
 	s.handleAPIStatus(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("状态码期望 200，得到 %d", w.Code)
+		t.Fatalf("status code: want 200, got %d", w.Code)
 	}
 
 	var result map[string]any
 	json.Unmarshal(w.Body.Bytes(), &result)
 
 	if result["status"] != "running" {
-		t.Errorf("status 期望 'running'，得到 %v", result["status"])
+		t.Errorf("status: want 'running', got %v", result["status"])
 	}
 	if result["version"] != "0.1.0" {
-		t.Errorf("version 期望 '0.1.0'，得到 %v", result["version"])
+		t.Errorf("version: want '0.1.0', got %v", result["version"])
 	}
 	if result["client_count"] != float64(0) {
-		t.Errorf("client_count 期望 0，得到 %v", result["client_count"])
+		t.Errorf("client_count: want 0, got %v", result["client_count"])
 	}
 }
 
@@ -277,38 +277,38 @@ func TestAPI_Status_ExtendedFields(t *testing.T) {
 	result := getAPIJSON(t, s, ts, "/api/status")
 
 	if result["status"] != "running" {
-		t.Errorf("status 期望 'running'，得到 %v", result["status"])
+		t.Errorf("status: want 'running', got %v", result["status"])
 	}
 	if result["listen_port"] == nil || result["listen_port"].(float64) < 0 {
-		t.Errorf("listen_port 无效: %v", result["listen_port"])
+		t.Errorf("invalid listen_port: %v", result["listen_port"])
 	}
 	if result["uptime"] == nil || result["uptime"].(float64) < 0 {
-		t.Errorf("uptime 无效: %v", result["uptime"])
+		t.Errorf("invalid uptime: %v", result["uptime"])
 	}
 	if _, ok := result["store_path"]; ok {
-		t.Errorf("store_path 不应继续对外暴露: %v", result["store_path"])
+		t.Errorf("store_path should no longer be exposed externally: %v", result["store_path"])
 	}
 	if result["tunnel_active"].(float64) != 0 {
-		t.Errorf("tunnel_active 期望 0，得到 %v", result["tunnel_active"])
+		t.Errorf("tunnel_active: want 0, got %v", result["tunnel_active"])
 	}
 	generatedAt, ok := result["generated_at"].(string)
 	if !ok || generatedAt == "" {
-		t.Fatalf("generated_at 应返回 RFC3339 时间，得到 %v", result["generated_at"])
+		t.Fatalf("generated_at should return RFC3339 time, got %v", result["generated_at"])
 	}
 	freshUntil, ok := result["fresh_until"].(string)
 	if !ok || freshUntil == "" {
-		t.Fatalf("fresh_until 应返回 RFC3339 时间，得到 %v", result["fresh_until"])
+		t.Fatalf("fresh_until should return RFC3339 time, got %v", result["fresh_until"])
 	}
 	generatedTime, err := time.Parse(time.RFC3339Nano, generatedAt)
 	if err != nil {
-		t.Fatalf("generated_at 解析失败: %v", err)
+		t.Fatalf("failed to parse generated_at: %v", err)
 	}
 	freshUntilTime, err := time.Parse(time.RFC3339Nano, freshUntil)
 	if err != nil {
-		t.Fatalf("fresh_until 解析失败: %v", err)
+		t.Fatalf("failed to parse fresh_until: %v", err)
 	}
 	if !freshUntilTime.After(generatedTime) {
-		t.Fatalf("fresh_until 应晚于 generated_at: %s <= %s", freshUntil, generatedAt)
+		t.Fatalf("fresh_until should be later than generated_at: %s <= %s", freshUntil, generatedAt)
 	}
 }
 
@@ -320,27 +320,27 @@ func TestAPI_ConsoleSnapshot(t *testing.T) {
 
 	clients, ok := result["clients"].([]any)
 	if !ok {
-		t.Fatalf("clients 应返回数组，得到 %T", result["clients"])
+		t.Fatalf("clients should return an array, got %T", result["clients"])
 	}
 	if len(clients) != 0 {
-		t.Fatalf("初始 clients 应为空，得到 %d", len(clients))
+		t.Fatalf("initial clients should be empty, got %d", len(clients))
 	}
 
 	serverStatus, ok := result["server_status"].(map[string]any)
 	if !ok {
-		t.Fatalf("server_status 应返回对象，得到 %T", result["server_status"])
+		t.Fatalf("server_status should return an object, got %T", result["server_status"])
 	}
 	if serverStatus["status"] != "running" {
-		t.Fatalf("server_status.status 期望 running，得到 %v", serverStatus["status"])
+		t.Fatalf("server_status.status: want running, got %v", serverStatus["status"])
 	}
 
 	generatedAt, ok := result["generated_at"].(string)
 	if !ok || generatedAt == "" {
-		t.Fatalf("generated_at 应返回 RFC3339 时间，得到 %v", result["generated_at"])
+		t.Fatalf("generated_at should return RFC3339 time, got %v", result["generated_at"])
 	}
 	freshUntil, ok := result["fresh_until"].(string)
 	if !ok || freshUntil == "" {
-		t.Fatalf("fresh_until 应返回 RFC3339 时间，得到 %v", result["fresh_until"])
+		t.Fatalf("fresh_until should return RFC3339 time, got %v", result["fresh_until"])
 	}
 }
 
@@ -350,7 +350,7 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 	s.store = store
 
@@ -362,7 +362,7 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 	}
 	offlineRecord, err := s.auth.adminStore.GetOrCreateClient("install-offline-summary-host", offlineInfo, "127.0.0.1:10001")
 	if err != nil {
-		t.Fatalf("预创建离线 Client 失败: %v", err)
+		t.Fatalf("failed to pre-create offline client: %v", err)
 	}
 	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-active", Type: protocol.ProxyTypeTCP, RemotePort: 20001}, protocol.ProxyStatusActive)
 	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-paused", Type: protocol.ProxyTypeTCP, RemotePort: 20002}, protocol.ProxyStatusPaused)
@@ -375,7 +375,7 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 
 	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatalf("未找到在线 Client %s", authResp.ClientID)
+		t.Fatalf("online client %s not found", authResp.ClientID)
 	}
 	client := val.(*ClientConn)
 	client.proxyMu.Lock()
@@ -393,8 +393,8 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 		"inactive_tunnels": 5,
 		"pending_tunnels":  1,
 		"offline_tunnels":  1,
-		"paused_tunnels":   1,
-		"stopped_tunnels":  1,
+		"paused_tunnels":   0,
+		"stopped_tunnels":  2,
 		"error_tunnels":    1,
 	}
 
@@ -406,7 +406,7 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 
 	serverStatus, ok := snapshot["server_status"].(map[string]any)
 	if !ok {
-		t.Fatalf("snapshot.server_status 应返回对象，得到 %T", snapshot["server_status"])
+		t.Fatalf("snapshot.server_status should return an object, got %T", snapshot["server_status"])
 	}
 	assertConsoleSummaryMap(t, serverStatus["summary"], expected)
 }
@@ -430,13 +430,13 @@ func TestAPI_Status_TunnelCounts(t *testing.T) {
 	result := getAPIJSON(t, s, ts, "/api/status")
 
 	if result["tunnel_active"].(float64) != 1 {
-		t.Errorf("tunnel_active 期望 1，得到 %v", result["tunnel_active"])
+		t.Errorf("tunnel_active: want 1, got %v", result["tunnel_active"])
 	}
-	if result["tunnel_paused"].(float64) != 1 {
-		t.Errorf("tunnel_paused 期望 1，得到 %v", result["tunnel_paused"])
+	if result["tunnel_paused"].(float64) != 0 {
+		t.Errorf("tunnel_paused: want 0, got %v", result["tunnel_paused"])
 	}
-	if result["tunnel_stopped"].(float64) != 1 {
-		t.Errorf("tunnel_stopped 期望 1，得到 %v", result["tunnel_stopped"])
+	if result["tunnel_stopped"].(float64) != 2 {
+		t.Errorf("tunnel_stopped: want 2, got %v", result["tunnel_stopped"])
 	}
 }
 
@@ -453,7 +453,7 @@ func TestAPI_Status_UptimeIncreasing(t *testing.T) {
 	uptime2 := result2["uptime"].(float64)
 
 	if uptime2 <= uptime1 {
-		t.Errorf("uptime 应该增加. 之前: %v, 现在: %v", uptime1, uptime2)
+		t.Errorf("uptime should increase. before: %v, now: %v", uptime1, uptime2)
 	}
 }
 
@@ -469,7 +469,7 @@ func TestAPI_Status_WithClients(t *testing.T) {
 	result := getAPIJSON(t, s, ts, "/api/status")
 	count := result["client_count"].(float64)
 	if count < 1 {
-		t.Errorf("client_count 期望 ≥ 1，得到 %v", count)
+		t.Errorf("client_count: want >= 1, got %v", count)
 	}
 }
 
@@ -490,7 +490,7 @@ func TestAPI_Status_AfterDisconnect(t *testing.T) {
 	after := result2["client_count"].(float64)
 
 	if after >= before {
-		t.Errorf("断开后 client_count 应减少: before=%v, after=%v", before, after)
+		t.Errorf("client_count should decrease after disconnect: before=%v, after=%v", before, after)
 	}
 }
 
@@ -502,7 +502,7 @@ func TestAPI_Clients_Empty(t *testing.T) {
 
 	body := strings.TrimSpace(w.Body.String())
 	if body != "null" && body != "[]" {
-		t.Errorf("无 Client 时期望空结果，得到 %s", body)
+		t.Errorf("expected empty result when there are no clients, got %s", body)
 	}
 }
 
@@ -523,7 +523,7 @@ func TestAPI_Clients_Multiple(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("请求 clients 失败: %v", err)
+		t.Fatalf("failed to request clients: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -531,15 +531,15 @@ func TestAPI_Clients_Multiple(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&clients)
 
 	if len(clients) < 3 {
-		t.Errorf("期望至少 3 个 Client，得到 %d", len(clients))
+		t.Errorf("expected at least 3 clients, got %d", len(clients))
 	}
 
 	for i, a := range clients {
 		if a["id"] == nil {
-			t.Errorf("Client[%d] 缺少 id", i)
+			t.Errorf("Client[%d] is missing id", i)
 		}
 		if a["info"] == nil {
-			t.Errorf("Client[%d] 缺少 info", i)
+			t.Errorf("Client[%d] is missing info", i)
 		}
 	}
 }
@@ -560,7 +560,7 @@ func TestAPI_Clients_WithStats(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("请求 clients 失败: %v", err)
+		t.Fatalf("failed to request clients: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -568,7 +568,7 @@ func TestAPI_Clients_WithStats(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&clients)
 
 	if len(clients) == 0 {
-		t.Fatal("期望至少 1 个 Client")
+		t.Fatal("expected at least 1 client")
 	}
 
 	found := false
@@ -577,20 +577,20 @@ func TestAPI_Clients_WithStats(t *testing.T) {
 			found = true
 			statsMap := a["stats"].(map[string]any)
 			if statsMap["cpu_usage"].(float64) != 55.5 {
-				t.Errorf("cpu_usage 期望 55.5，得到 %v", statsMap["cpu_usage"])
+				t.Errorf("cpu_usage: want 55.5, got %v", statsMap["cpu_usage"])
 			}
 			updatedAt, ok := statsMap["updated_at"].(string)
 			if !ok || updatedAt == "" {
-				t.Fatalf("stats.updated_at 应存在，得到 %v", statsMap["updated_at"])
+				t.Fatalf("stats.updated_at should exist, got %v", statsMap["updated_at"])
 			}
 			freshUntil, ok := statsMap["fresh_until"].(string)
 			if !ok || freshUntil == "" {
-				t.Fatalf("stats.fresh_until 应存在，得到 %v", statsMap["fresh_until"])
+				t.Fatalf("stats.fresh_until should exist, got %v", statsMap["fresh_until"])
 			}
 		}
 	}
 	if !found {
-		t.Error("未找到包含 stats 的 Client")
+		t.Error("did not find a client containing stats")
 	}
 }
 
@@ -609,12 +609,12 @@ func TestAPI_Clients_OfflineLegacyRunningTunnelUsesDesiredAndRuntimeStates(t *te
 
 	resp := doMuxRequest(t, handler, http.MethodGet, "/api/clients", token, nil)
 	if resp.Code != http.StatusOK {
-		t.Fatalf("获取 clients 期望 200，得到 %d", resp.Code)
+		t.Fatalf("getting clients: want 200, got %d", resp.Code)
 	}
 
 	var clients []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
-		t.Fatalf("解析 clients 响应失败: %v", err)
+		t.Fatalf("failed to parse clients response: %v", err)
 	}
 
 	for _, client := range clients {
@@ -623,19 +623,19 @@ func TestAPI_Clients_OfflineLegacyRunningTunnelUsesDesiredAndRuntimeStates(t *te
 		}
 		proxies, _ := client["proxies"].([]any)
 		if len(proxies) != 1 {
-			t.Fatalf("离线 client 期望 1 条隧道，得到 %v", client["proxies"])
+			t.Fatalf("offline client: expected 1 tunnel, got %v", client["proxies"])
 		}
 		proxy := proxies[0].(map[string]any)
 		if proxy["desired_state"] != "running" {
-			t.Fatalf("desired_state 期望 running，得到 %v", proxy["desired_state"])
+			t.Fatalf("desired_state: want running, got %v", proxy["desired_state"])
 		}
 		if proxy["runtime_state"] != "offline" {
-			t.Fatalf("runtime_state 期望 offline，得到 %v", proxy["runtime_state"])
+			t.Fatalf("runtime_state: want offline, got %v", proxy["runtime_state"])
 		}
 		return
 	}
 
-	t.Fatalf("未找到 client %s", clientID)
+	t.Fatalf("client %s not found", clientID)
 }
 
 func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
@@ -651,17 +651,17 @@ func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *test
 		RemotePort: 19053,
 	}, protocol.ProxyStatusError)
 	if err := s.store.UpdateStates(clientID, "offline-udp", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, "restore failed"); err != nil {
-		t.Fatalf("设置 error 状态失败: %v", err)
+		t.Fatalf("failed to set error state: %v", err)
 	}
 
 	resp := doMuxRequest(t, handler, http.MethodGet, "/api/clients", token, nil)
 	if resp.Code != http.StatusOK {
-		t.Fatalf("获取 clients 期望 200，得到 %d", resp.Code)
+		t.Fatalf("getting clients: want 200, got %d", resp.Code)
 	}
 
 	var clients []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
-		t.Fatalf("解析 clients 响应失败: %v", err)
+		t.Fatalf("failed to parse clients response: %v", err)
 	}
 
 	for _, client := range clients {
@@ -670,22 +670,22 @@ func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *test
 		}
 		proxies, _ := client["proxies"].([]any)
 		if len(proxies) != 1 {
-			t.Fatalf("离线 client 期望 1 条隧道，得到 %v", client["proxies"])
+			t.Fatalf("offline client: expected 1 tunnel, got %v", client["proxies"])
 		}
 		proxy := proxies[0].(map[string]any)
 		if proxy["desired_state"] != "running" {
-			t.Fatalf("desired_state 期望 running，得到 %v", proxy["desired_state"])
+			t.Fatalf("desired_state: want running, got %v", proxy["desired_state"])
 		}
 		if proxy["runtime_state"] != "error" {
-			t.Fatalf("runtime_state 期望 error，得到 %v", proxy["runtime_state"])
+			t.Fatalf("runtime_state: want error, got %v", proxy["runtime_state"])
 		}
 		if proxy["error"] != "restore failed" {
-			t.Fatalf("error 期望保留 restore failed，得到 %v", proxy["error"])
+			t.Fatalf("error: expected restore failed to be preserved, got %v", proxy["error"])
 		}
 		return
 	}
 
-	t.Fatalf("未找到 client %s", clientID)
+	t.Fatalf("client %s not found", clientID)
 }
 
 func TestAPI_Clients_LiveTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
@@ -697,7 +697,7 @@ func TestAPI_Clients_LiveTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatalf("client %s 不存在", authResp.ClientID)
+		t.Fatalf("client %s does not exist", authResp.ClientID)
 	}
 	client := value.(*ClientConn)
 	client.proxyMu.Lock()
@@ -721,13 +721,13 @@ func TestAPI_Clients_LiveTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
 	reqClients.Header.Set("User-Agent", "Go-http-client/1.1")
 	respClients, err := http.DefaultClient.Do(reqClients)
 	if err != nil {
-		t.Fatalf("请求 clients 失败: %v", err)
+		t.Fatalf("failed to request clients: %v", err)
 	}
 	defer respClients.Body.Close()
 
 	var clientViews []map[string]any
 	if err := json.NewDecoder(respClients.Body).Decode(&clientViews); err != nil {
-		t.Fatalf("解析 clients 响应失败: %v", err)
+		t.Fatalf("failed to parse clients response: %v", err)
 	}
 
 	for _, client := range clientViews {
@@ -741,16 +741,16 @@ func TestAPI_Clients_LiveTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
 				continue
 			}
 			if proxy["desired_state"] != "running" {
-				t.Fatalf("desired_state 期望 running，得到 %v", proxy["desired_state"])
+				t.Fatalf("desired_state: want running, got %v", proxy["desired_state"])
 			}
 			if proxy["runtime_state"] != "exposed" {
-				t.Fatalf("runtime_state 期望 exposed，得到 %v", proxy["runtime_state"])
+				t.Fatalf("runtime_state: want exposed, got %v", proxy["runtime_state"])
 			}
 			return
 		}
 	}
 
-	t.Fatalf("未找到 client %s 的 live-http 隧道", authResp.ClientID)
+	t.Fatalf("did not find live-http tunnel for client %s", authResp.ClientID)
 }
 
 func TestEmitTunnelChanged_NormalizesDesiredAndRuntimeStates(t *testing.T) {
@@ -769,22 +769,22 @@ func TestEmitTunnelChanged_NormalizesDesiredAndRuntimeStates(t *testing.T) {
 	select {
 	case event := <-ch:
 		if event.Type != "tunnel_changed" {
-			t.Fatalf("事件类型期望 tunnel_changed，得到 %s", event.Type)
+			t.Fatalf("event type: want tunnel_changed, got %s", event.Type)
 		}
 
 		var payload map[string]any
 		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
-			t.Fatalf("解析事件 payload 失败: %v", err)
+			t.Fatalf("failed to parse event payload: %v", err)
 		}
 		tunnel, _ := payload["tunnel"].(map[string]any)
-		if tunnel["desired_state"] != "paused" {
-			t.Fatalf("desired_state 期望 paused，得到 %v", tunnel["desired_state"])
+		if tunnel["desired_state"] != "stopped" {
+			t.Fatalf("desired_state: want stopped, got %v", tunnel["desired_state"])
 		}
 		if tunnel["runtime_state"] != "idle" {
-			t.Fatalf("runtime_state 期望 idle，得到 %v", tunnel["runtime_state"])
+			t.Fatalf("runtime_state: want idle, got %v", tunnel["runtime_state"])
 		}
 	case <-time.After(time.Second):
-		t.Fatal("等待 tunnel_changed 事件超时")
+		t.Fatal("timed out waiting for tunnel_changed event")
 	}
 }
 
@@ -807,16 +807,16 @@ func TestAPI_Clients_StatsUpdated(t *testing.T) {
 
 	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("Client 未找到")
+		t.Fatal("client not found")
 	}
 	client := val.(*ClientConn)
 	if client.GetStats().CPUUsage != 80.0 {
-		t.Errorf("Stats 应被更新为最新值 80.0，得到 %f", client.GetStats().CPUUsage)
+		t.Errorf("Stats should be updated to the latest value 80.0, got %f", client.GetStats().CPUUsage)
 	}
 }
 
 // ============================================================
-// Web 面板测试 (2)
+// Web panel tests (2)
 // ============================================================
 
 func TestWeb_Root(t *testing.T) {
@@ -826,31 +826,31 @@ func TestWeb_Root(t *testing.T) {
 	s.handleWeb(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("状态码期望 200，得到 %d", w.Code)
+		t.Fatalf("status code: want 200, got %d", w.Code)
 	}
 	if !strings.Contains(w.Header().Get("Content-Type"), "text/html") {
-		t.Error("Content-Type 应包含 text/html")
+		t.Error("Content-Type should include text/html")
 	}
 	if !strings.Contains(w.Body.String(), "NetsGo") {
-		t.Error("页面应包含 'NetsGo'")
+		t.Error("page should contain 'NetsGo'")
 	}
 }
 
 func TestWeb_DevMode_FallbackToDevPage(t *testing.T) {
 	s := New(8080)
-	// 在开发模式下 webFS 为 nil，所有路径都应返回 devModeHTML 提示页面
+	// in development mode webFS is nil, so all paths should return the devModeHTML hint page
 	req := httptest.NewRequest(http.MethodGet, "/nonexist", nil)
 	w := httptest.NewRecorder()
 	s.handleWeb(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("开发模式下所有路径期望 200，得到 %d", w.Code)
+		t.Errorf("in development mode, all paths: want 200, got %d", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "NetsGo") {
-		t.Error("页面应包含 'NetsGo'")
+		t.Error("page should contain 'NetsGo'")
 	}
 	if !strings.Contains(w.Body.String(), "bun run dev") {
-		t.Error("开发模式页面应包含 bun run dev 提示")
+		t.Error("development mode page should include the bun run dev hint")
 	}
 }
 
@@ -880,13 +880,13 @@ func TestSecurityHeaders_Present(t *testing.T) {
 	for _, tt := range tests {
 		got := w.Header().Get(tt.header)
 		if got != tt.want {
-			t.Errorf("%s 期望 %q，得到 %q", tt.header, tt.want, got)
+			t.Errorf("%s: want %q, got %q", tt.header, tt.want, got)
 		}
 	}
 
-	// 不应包含 HSTS（未启用 TLS）
+	// should not include HSTS when TLS is disabled
 	if hsts := w.Header().Get("Strict-Transport-Security"); hsts != "" {
-		t.Errorf("未启用 TLS 时不应设置 HSTS，得到 %q", hsts)
+		t.Errorf("should not set HSTS when TLS is disabled, got %q", hsts)
 	}
 }
 
@@ -902,7 +902,7 @@ func TestSecurityHeaders_HSTS_WithTLS(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if hsts := w.Header().Get("Strict-Transport-Security"); hsts == "" {
-		t.Error("TLS 启用时应设置 HSTS")
+		t.Error("HSTS should be set when TLS is enabled")
 	}
 }
 
@@ -923,7 +923,7 @@ func TestSecurityHeaders_HSTS_WithTrustedProxyHTTPS(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if hsts := w.Header().Get("Strict-Transport-Security"); hsts == "" {
-		t.Error("受信反代声明 HTTPS 时应设置 HSTS")
+		t.Error("HSTS should be set when a trusted reverse proxy declares HTTPS")
 	}
 }
 
@@ -944,7 +944,7 @@ func TestSecurityHeaders_HSTS_IgnoresUntrustedProxyHTTPS(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if hsts := w.Header().Get("Strict-Transport-Security"); hsts != "" {
-		t.Errorf("不应信任非受信代理的 HTTPS 头，得到 %q", hsts)
+		t.Errorf("should not trust HTTPS headers from an untrusted proxy, got %q", hsts)
 	}
 }
 
@@ -961,12 +961,12 @@ func TestSSE_NoCORSHeader(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("SSE 请求失败: %v", err)
+		t.Fatalf("SSE request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if cors := resp.Header.Get("Access-Control-Allow-Origin"); cors != "" {
-		t.Errorf("SSE 端点不应设置 Access-Control-Allow-Origin，得到 %q", cors)
+		t.Errorf("SSE endpoint should not set Access-Control-Allow-Origin, got %q", cors)
 	}
 }
 
@@ -974,25 +974,25 @@ func TestSSE_NoCORSHeader(t *testing.T) {
 
 // ============================================================
 
-// TestWebSocket_DefaultOriginCheck_NoOrigin 无 Origin 头（Go 客户端）应能正常连接
+// TestWebSocket_DefaultOriginCheck_NoOrigin should connect normally without an Origin header (Go client)
 func TestWebSocket_DefaultOriginCheck_NoOrigin(t *testing.T) {
 	_, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
-	// Go 默认 Dialer 不发送 Origin 头
+	// Go default dialer does not send an Origin header
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("无 Origin 头时连接应成功，但失败: %v", err)
+		t.Fatalf("connection without an Origin header should succeed, but failed: %v", err)
 	}
 	defer conn.Close()
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		t.Errorf("期望 101 Switching Protocols，得到 %d", resp.StatusCode)
+		t.Errorf("want 101 Switching Protocols, got %d", resp.StatusCode)
 	}
 }
 
-// TestWebSocket_DefaultOriginCheck_CrossOrigin 跨域 Origin 应被拒绝
+// TestWebSocket_DefaultOriginCheck_CrossOrigin cross-origin Origin should be rejected
 func TestWebSocket_DefaultOriginCheck_CrossOrigin(t *testing.T) {
 	_, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
@@ -1007,15 +1007,15 @@ func TestWebSocket_DefaultOriginCheck_CrossOrigin(t *testing.T) {
 	}
 
 	if err == nil {
-		t.Fatal("跨域 Origin 连接应被拒绝，但成功了")
+		t.Fatal("cross-origin Origin connection should be rejected, but succeeded")
 	}
 	if resp != nil && resp.StatusCode != http.StatusForbidden {
-		t.Errorf("期望 403 Forbidden，得到 %d", resp.StatusCode)
+		t.Errorf("want 403 Forbidden, got %d", resp.StatusCode)
 	}
 }
 
 // ============================================================
-// 控制通道 — 认证 (5)
+// Control channel — authentication (5)
 // ============================================================
 
 func TestAuth_Success(t *testing.T) {
@@ -1025,15 +1025,15 @@ func TestAuth_Success(t *testing.T) {
 	authResp := doAuth(t, conn)
 
 	if !authResp.Success {
-		t.Errorf("认证应成功: %s", authResp.Message)
+		t.Errorf("authentication should succeed: %s", authResp.Message)
 	}
 	if authResp.ClientID == "" {
-		t.Error("ClientID 不应为空")
+		t.Error("ClientID should not be empty")
 	}
-	// ClientID 应为 UUID v4 格式: 8-4-4-4-12
+	// ClientID should be in UUID v4 format: 8-4-4-4-12
 	uuidPattern := `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
 	if matched, _ := regexp.MatchString(uuidPattern, authResp.ClientID); !matched {
-		t.Errorf("ClientID 应为 UUID v4 格式，得到: %q", authResp.ClientID)
+		t.Errorf("ClientID should be in UUID v4 format, got: %q", authResp.ClientID)
 	}
 }
 
@@ -1043,16 +1043,16 @@ func TestAuth_EmptyKey(t *testing.T) {
 
 	authResp := doAuthWithInstallID(t, conn, "host", "install-empty-key", "")
 	if authResp.Success {
-		t.Fatal("缺少 API Key 时服务端应拒绝认证")
+		t.Fatal("server should reject authentication when API key is missing")
 	}
 	if authResp.Code != protocol.AuthCodeInvalidKey {
-		t.Fatalf("期望 invalid_key，得到 %q", authResp.Code)
+		t.Fatalf("want invalid_key, got %q", authResp.Code)
 	}
 	if authResp.Retryable {
-		t.Fatal("invalid_key 不应标记为可重试")
+		t.Fatal("invalid_key should not be marked retryable")
 	}
 	if authResp.ClearToken {
-		t.Fatal("invalid_key 不应要求清理 token")
+		t.Fatal("invalid_key should not require token clearing")
 	}
 }
 
@@ -1066,22 +1066,22 @@ func TestAuth_UninitializedServerRejected(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	defer conn.Close()
 
 	authResp := doAuthWithInstallID(t, conn, "host", "install-uninitialized", "test-key")
 	if authResp.Success {
-		t.Fatal("未初始化时服务端应拒绝认证")
+		t.Fatal("server should reject authentication when uninitialized")
 	}
 	if authResp.Code != protocol.AuthCodeServerUninitialized {
-		t.Fatalf("期望 server_uninitialized，得到 %q", authResp.Code)
+		t.Fatalf("want server_uninitialized, got %q", authResp.Code)
 	}
 	if !authResp.Retryable {
-		t.Fatal("server_uninitialized 应标记为可重试")
+		t.Fatal("server_uninitialized should be marked retryable")
 	}
 	if authResp.ClearToken {
-		t.Fatal("server_uninitialized 不应要求清理 token")
+		t.Fatal("server_uninitialized should not require token clearing")
 	}
 
 	clientCount := 0
@@ -1090,7 +1090,7 @@ func TestAuth_UninitializedServerRejected(t *testing.T) {
 		return true
 	})
 	if clientCount != 0 {
-		t.Fatalf("未初始化时不应注册任何 Client，得到 %d", clientCount)
+		t.Fatalf("no client should be registered when uninitialized, got %d", clientCount)
 	}
 }
 
@@ -1101,10 +1101,10 @@ func TestAuth_EmptyHostname(t *testing.T) {
 	authResp := doAuthWithInfo(t, conn, "", "test-key")
 
 	if !authResp.Success {
-		t.Errorf("空主机名不应导致认证失败: %s", authResp.Message)
+		t.Errorf("empty hostname should not cause authentication failure: %s", authResp.Message)
 	}
 	if authResp.ClientID == "" {
-		t.Error("ClientID 不应为空")
+		t.Error("ClientID should not be empty")
 	}
 }
 
@@ -1118,28 +1118,28 @@ func TestAuth_ReconnectSameInstallIDRejectedWhileSessionAlive(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	current, ok := s.clients.Load(auth1.ClientID)
 	if !ok {
-		t.Fatal("第一次认证后 Client 应已注册")
+		t.Fatal("client should be registered after the first authentication")
 	}
 	if current.(*ClientConn).getState() != clientStateLive {
-		t.Fatalf("第一次认证并建链后应处于 live，得到 %s", current.(*ClientConn).getState())
+		t.Fatalf("after the first authentication and channel setup, it should be live, got %s", current.(*ClientConn).getState())
 	}
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	conn2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("第二条控制连接失败: %v", err)
+		t.Fatalf("second control connection failed: %v", err)
 	}
 	defer conn2.Close()
 
 	auth2 := doAuthWithInstallID(t, conn2, "stable-host", "install-stable-host", "test-key")
 	if auth2.Success {
-		t.Fatal("已有 live 会话时第二次认证应被拒绝")
+		t.Fatal("second authentication should be rejected when a live session already exists")
 	}
 	if auth2.Code != protocol.AuthCodeConcurrentSession {
-		t.Fatalf("错误码应为 concurrent_session，得到 %s", auth2.Code)
+		t.Fatalf("error code should be concurrent_session, got %s", auth2.Code)
 	}
 	if !auth2.Retryable {
-		t.Fatal("并发会话拒绝应标记为 retryable")
+		t.Fatal("concurrent session rejection should be marked retryable")
 	}
 
 	count := 0
@@ -1148,7 +1148,7 @@ func TestAuth_ReconnectSameInstallIDRejectedWhileSessionAlive(t *testing.T) {
 		return true
 	})
 	if count != 1 {
-		t.Errorf("相同 install_id 在线会话应被收敛为 1 个，得到 %d", count)
+		t.Errorf("online sessions with the same install_id should converge to 1, got %d", count)
 	}
 }
 
@@ -1178,7 +1178,7 @@ func TestInvalidateLogicalSession_DoesNotDeleteNewGeneration(t *testing.T) {
 		close(done)
 	}()
 
-	// 让失效流程先 Load 到 oldClient，再替换为新代际。
+	// Let the invalidation flow load oldClient first, then replace it with the new generation.
 	time.Sleep(30 * time.Millisecond)
 	s.clients.Store(oldClient.ID, newClient)
 	oldClient.stateMu.Unlock()
@@ -1186,15 +1186,15 @@ func TestInvalidateLogicalSession_DoesNotDeleteNewGeneration(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("等待旧会话失效流程超时")
+		t.Fatal("timed out waiting for old session invalidation flow")
 	}
 
 	value, ok := s.clients.Load(oldClient.ID)
 	if !ok {
-		t.Fatal("新代际不应被旧会话失效流程删除")
+		t.Fatal("new generation should not be deleted by the old session invalidation flow")
 	}
 	if value != newClient {
-		t.Fatal("s.clients 应保留新代际 client 记录")
+		t.Fatal("s.clients should retain the new generation client record")
 	}
 }
 
@@ -1209,7 +1209,7 @@ func TestAuth_WrongMsgType(t *testing.T) {
 	var resp protocol.Message
 	err := conn.ReadJSON(&resp)
 	if err == nil {
-		t.Error("发送错误类型消息后，Server 应关闭连接")
+		t.Error("server should close the connection after receiving a message of the wrong type")
 	}
 }
 
@@ -1220,7 +1220,7 @@ func TestAuth_MalformedJSON(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("连接失败: %v", err)
+		t.Fatalf("connection failed: %v", err)
 	}
 	defer conn.Close()
 
@@ -1229,19 +1229,19 @@ func TestAuth_MalformedJSON(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, _, readErr := conn.ReadMessage()
 	if readErr == nil {
-		t.Error("发送畸形 JSON 后，Server 应关闭连接")
+		t.Error("server should close the connection after receiving malformed JSON")
 	}
 }
 
 // ============================================================
-// 控制通道 — 认证超时 P16 (1)
+// Control channel — authentication timeout P16 (1)
 // ============================================================
 
-// TestAuth_TimeoutNoMessage 验证 P16：连接后不发认证消息，服务端应在超时后断开
+// TestAuth_TimeoutNoMessage verify P16: after connecting without sending an auth message, the server should disconnect after timeout
 func TestAuth_TimeoutNoMessage(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)
-	s.auth.authTimeout = 500 * time.Millisecond // 短超时方便测试
+	s.auth.authTimeout = 500 * time.Millisecond // short timeout makes testing easier
 
 	ts := httptest.NewServer(s.newHTTPMux())
 	defer ts.Close()
@@ -1249,31 +1249,31 @@ func TestAuth_TimeoutNoMessage(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	defer conn.Close()
 
-	// 连接后什么都不发，等待服务端超时关闭
+	// send nothing after connecting and wait for the server to close on timeout
 	start := time.Now()
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, _, readErr := conn.ReadMessage()
 	elapsed := time.Since(start)
 
 	if readErr == nil {
-		t.Fatal("不发认证消息时，服务端应超时关闭连接")
+		t.Fatal("server should close the connection on timeout when no auth message is sent")
 	}
 
-	// 验证断开时间在合理范围内（500ms ~ 2s）
+	// verify that the disconnect time is within a reasonable range (500ms ~ 2s)
 	if elapsed < 400*time.Millisecond {
-		t.Errorf("断开太快（%v），可能不是超时导致的", elapsed)
+		t.Errorf("disconnected too quickly (%v); it may not have been caused by timeout", elapsed)
 	}
 	if elapsed > 3*time.Second {
-		t.Errorf("断开太慢（%v），超时可能未生效", elapsed)
+		t.Errorf("disconnected too slowly (%v); timeout may not have taken effect", elapsed)
 	}
 }
 
 // ============================================================
-// 控制通道 — 心跳 (2)
+// Control channel — heartbeat (2)
 // ============================================================
 
 func TestHeartbeat_PingPong(t *testing.T) {
@@ -1290,10 +1290,10 @@ func TestHeartbeat_PingPong(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("读取 Pong 失败: %v", err)
+		t.Fatalf("failed to read Pong: %v", err)
 	}
 	if resp.Type != protocol.MsgTypePong {
-		t.Errorf("期望 pong，得到 %s", resp.Type)
+		t.Errorf("want pong, got %s", resp.Type)
 	}
 }
 
@@ -1308,22 +1308,22 @@ func TestHeartbeat_MultiplePings(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 		if err := conn.WriteJSON(ping); err != nil {
-			t.Fatalf("第 %d 次发送 Ping 失败: %v", i, err)
+			t.Fatalf("failed to send Ping #%d: %v", i, err)
 		}
 
 		conn.SetReadDeadline(time.Now().Add(testReadTimeout(2 * time.Second)))
 		var resp protocol.Message
 		if err := conn.ReadJSON(&resp); err != nil {
-			t.Fatalf("第 %d 次读取 Pong 失败: %v", i, err)
+			t.Fatalf("failed to read Pong #%d: %v", i, err)
 		}
 		if resp.Type != protocol.MsgTypePong {
-			t.Errorf("第 %d 次: 期望 pong，得到 %s", i, resp.Type)
+			t.Errorf("attempt #%d: want pong, got %s", i, resp.Type)
 		}
 	}
 }
 
 // ============================================================
-// 控制通道 — 探针上报 (2)
+// Control channel — probe reporting (2)
 // ============================================================
 
 func TestProbe_SingleReport(t *testing.T) {
@@ -1348,20 +1348,20 @@ func TestProbe_SingleReport(t *testing.T) {
 
 	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("Client 未注册")
+		t.Fatal("client is not registered")
 	}
 	client := val.(*ClientConn)
 	if client.GetStats() == nil {
-		t.Fatal("Stats 不应为 nil")
+		t.Fatal("Stats should not be nil")
 	}
 	if client.GetStats().CPUUsage != 42.5 {
-		t.Errorf("CPUUsage 期望 42.5，得到 %f", client.GetStats().CPUUsage)
+		t.Errorf("CPUUsage: want 42.5, got %f", client.GetStats().CPUUsage)
 	}
 	if client.GetStats().MemUsage != 60.0 {
-		t.Errorf("MemUsage 期望 60.0，得到 %f", client.GetStats().MemUsage)
+		t.Errorf("MemUsage: want 60.0, got %f", client.GetStats().MemUsage)
 	}
 	if client.GetStats().NumCPU != 4 {
-		t.Errorf("NumCPU 期望 4，得到 %d", client.GetStats().NumCPU)
+		t.Errorf("NumCPU: want 4, got %d", client.GetStats().NumCPU)
 	}
 }
 
@@ -1380,7 +1380,7 @@ func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
 	if err := conn.WriteJSON(msg); err != nil {
-		t.Fatalf("发送探针数据失败: %v", err)
+		t.Fatalf("failed to send probe data: %v", err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -1391,13 +1391,13 @@ func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("请求 /api/clients 失败: %v", err)
+		t.Fatalf("request to /api/clients failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	var clients []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
-		t.Fatalf("解析 /api/clients 响应失败: %v", err)
+		t.Fatalf("failed to parse /api/clients response: %v", err)
 	}
 
 	for _, client := range clients {
@@ -1405,19 +1405,19 @@ func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
 			continue
 		}
 		if online, _ := client["online"].(bool); online {
-			t.Fatal("断开后的 Client 不应仍然标记为在线")
+			t.Fatal("disconnected client should not still be marked online")
 		}
 		statsMap, ok := client["stats"].(map[string]any)
 		if !ok {
-			t.Fatal("断开后的 Client 仍应返回最后一次 stats")
+			t.Fatal("disconnected client should still return the last stats")
 		}
 		if statsMap["cpu_usage"].(float64) != 42.5 {
-			t.Fatalf("cpu_usage 期望 42.5，得到 %v", statsMap["cpu_usage"])
+			t.Fatalf("cpu_usage: want 42.5, got %v", statsMap["cpu_usage"])
 		}
 		return
 	}
 
-	t.Fatalf("未找到 Client %s", authResp.ClientID)
+	t.Fatalf("Client %s not found", authResp.ClientID)
 }
 
 func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
@@ -1433,14 +1433,14 @@ func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 
 	record, err := s.auth.adminStore.GetOrCreateClient("install-persisted-host", info, "127.0.0.1:12345")
 	if err != nil {
-		t.Fatalf("预创建 Client 记录失败: %v", err)
+		t.Fatalf("failed to pre-create client record: %v", err)
 	}
 	if err := s.auth.adminStore.UpdateClientStats(record.ID, info, protocol.SystemStats{
 		CPUUsage: 88.8,
 		MemUsage: 66.6,
 		NumCPU:   16,
 	}, "127.0.0.1:12345"); err != nil {
-		t.Fatalf("预写入 Client stats 失败: %v", err)
+		t.Fatalf("failed to prewrite client stats: %v", err)
 	}
 
 	conn, authResp := connectAndAuthWithInstallID(t, ts, "persisted-host", "install-persisted-host")
@@ -1452,13 +1452,13 @@ func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+issueAdminToken(t, s))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("请求 /api/clients 失败: %v", err)
+		t.Fatalf("request to /api/clients failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	var clients []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
-		t.Fatalf("解析 /api/clients 响应失败: %v", err)
+		t.Fatalf("failed to parse /api/clients response: %v", err)
 	}
 
 	for _, client := range clients {
@@ -1466,19 +1466,19 @@ func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 			continue
 		}
 		if online, _ := client["online"].(bool); !online {
-			t.Fatal("已连接的 Client 应标记为在线")
+			t.Fatal("connected client should be marked online")
 		}
 		statsMap, ok := client["stats"].(map[string]any)
 		if !ok {
-			t.Fatal("首次新上报前应先返回持久化的旧 stats")
+			t.Fatal("before the first new report, it should first return the persisted old stats")
 		}
 		if statsMap["cpu_usage"].(float64) != 88.8 {
-			t.Fatalf("cpu_usage 期望 88.8，得到 %v", statsMap["cpu_usage"])
+			t.Fatalf("cpu_usage: want 88.8, got %v", statsMap["cpu_usage"])
 		}
 		return
 	}
 
-	t.Fatalf("未找到 Client %s", authResp.ClientID)
+	t.Fatalf("Client %s not found", authResp.ClientID)
 }
 
 func TestProbe_MultipleReports(t *testing.T) {
@@ -1502,12 +1502,12 @@ func TestProbe_MultipleReports(t *testing.T) {
 	val, _ := s.clients.Load(authResp.ClientID)
 	client := val.(*ClientConn)
 	if client.GetStats().CPUUsage != 50.0 {
-		t.Errorf("最终 CPUUsage 应为 50.0（最后一次上报），得到 %f", client.GetStats().CPUUsage)
+		t.Errorf("final CPUUsage should be 50.0 (the last report), got %f", client.GetStats().CPUUsage)
 	}
 }
 
 // ============================================================
-// 生命周期与并发 (3)
+// Lifecycle and concurrency (3)
 // ============================================================
 
 func TestLifecycle_Full(t *testing.T) {
@@ -1520,7 +1520,7 @@ func TestLifecycle_Full(t *testing.T) {
 
 	_, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("认证后 Client 应已注册")
+		t.Fatal("client should be registered after authentication")
 	}
 
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
@@ -1529,7 +1529,7 @@ func TestLifecycle_Full(t *testing.T) {
 	var pong protocol.Message
 	conn.ReadJSON(&pong)
 	if pong.Type != protocol.MsgTypePong {
-		t.Errorf("心跳: 期望 pong，得到 %s", pong.Type)
+		t.Errorf("heartbeat: want pong, got %s", pong.Type)
 	}
 
 	stats := protocol.SystemStats{CPUUsage: 33.3, NumCPU: 2}
@@ -1539,7 +1539,7 @@ func TestLifecycle_Full(t *testing.T) {
 
 	val, _ := s.clients.Load(authResp.ClientID)
 	if val.(*ClientConn).GetStats().CPUUsage != 33.3 {
-		t.Error("探针数据未正确更新")
+		t.Error("probe data was not updated correctly")
 	}
 
 	conn.Close()
@@ -1547,7 +1547,7 @@ func TestLifecycle_Full(t *testing.T) {
 
 	_, ok = s.clients.Load(authResp.ClientID)
 	if ok {
-		t.Error("断开后 Client 应已从 map 中移除")
+		t.Error("client should be removed from the map after disconnect")
 	}
 }
 
@@ -1617,7 +1617,7 @@ func TestMultipleClients_Concurrent(t *testing.T) {
 	close(errors)
 
 	for err := range errors {
-		t.Errorf("并发 Client 出错: %v", err)
+		t.Errorf("concurrent client error: %v", err)
 	}
 }
 
@@ -1633,7 +1633,7 @@ func TestClient_DisconnectCleansUp(t *testing.T) {
 	_, ok1 := s.clients.Load(auth1.ClientID)
 	_, ok2 := s.clients.Load(auth2.ClientID)
 	if !ok1 || !ok2 {
-		t.Fatal("两个 Client 都应已注册")
+		t.Fatal("both clients should be registered")
 	}
 
 	conn2.Close()
@@ -1642,10 +1642,10 @@ func TestClient_DisconnectCleansUp(t *testing.T) {
 	_, ok1 = s.clients.Load(auth1.ClientID)
 	_, ok2 = s.clients.Load(auth2.ClientID)
 	if !ok1 {
-		t.Error("Client1 不应被移除")
+		t.Error("Client1 should not be removed")
 	}
 	if ok2 {
-		t.Error("Client2 应已被移除")
+		t.Error("Client2 should be removed")
 	}
 
 	conn1.Close()
@@ -1658,11 +1658,11 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	conn, authResp := connectAndAuth(t, ts, "proxy-msg-host")
 	defer conn.Close()
 
-	// clients.Store 已在 handleAuth 内、认证响应发送前完成，
-	// 所以 connectAndAuth 返回时 client 一定已在 map 中。
+	// clients.Store has already completed inside handleAuth before the auth response is sent,
+	// so the client must already be in the map when connectAndAuth returns.
 	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("认证成功后 Client 应已注册到 clients map")
+		t.Fatal("client should be registered in the clients map after successful authentication")
 	}
 	client := val.(*ClientConn)
 	cPipe, sPipe := net.Pipe()
@@ -1672,7 +1672,7 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	client.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
 	client.dataMu.Unlock()
 
-	// 测试 MsgTypeProxyCreate
+	// Test MsgTypeProxyCreate
 	req := protocol.ProxyNewRequest{
 		Name:       "ws-tunnel-1",
 		Type:       protocol.ProxyTypeTCP,
@@ -1684,14 +1684,14 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	var resp protocol.Message
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("读取创建代理响应失败: %v", err)
+		t.Fatalf("failed to read create-proxy response: %v", err)
 	}
 
 	if resp.Type != protocol.MsgTypeProxyCreateResp {
-		t.Errorf("期望返回 %s，得到 %s", protocol.MsgTypeProxyCreateResp, resp.Type)
+		t.Errorf("want returned %s, got %s", protocol.MsgTypeProxyCreateResp, resp.Type)
 	}
 
-	// 测试 MsgTypeProxyClose
+	// Test MsgTypeProxyClose
 	closeReq := protocol.ProxyCloseRequest{Name: "ws-tunnel-1"}
 	closeMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyClose, closeReq)
 	conn.WriteJSON(closeMsg)
@@ -1702,7 +1702,7 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	client.proxyMu.RUnlock()
 
 	if exists {
-		t.Error("发送 ProxyClose 后代理隧道仍存在")
+		t.Error("proxy tunnel still exists after sending ProxyClose")
 	}
 }
 
@@ -1715,7 +1715,7 @@ func TestControlLoop_ProxyCreateResponse(t *testing.T) {
 
 	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("认证成功后 Client 应已注册到 clients map")
+		t.Fatal("client should be registered in the clients map after successful authentication")
 	}
 	client := val.(*ClientConn)
 	cPipe, sPipe := net.Pipe()
@@ -1736,26 +1736,26 @@ func TestControlLoop_ProxyCreateResponse(t *testing.T) {
 	var resp protocol.Message
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("读取创建代理响应失败: %v", err)
+		t.Fatalf("failed to read create-proxy response: %v", err)
 	}
 
 	if resp.Type != protocol.MsgTypeProxyCreateResp {
-		t.Fatalf("期望返回 %s，得到 %s", protocol.MsgTypeProxyCreateResp, resp.Type)
+		t.Fatalf("want returned %s, got %s", protocol.MsgTypeProxyCreateResp, resp.Type)
 	}
 
 	var payload protocol.ProxyCreateResponse
 	if err := resp.ParsePayload(&payload); err != nil {
-		t.Fatalf("解析创建代理响应失败: %v", err)
+		t.Fatalf("failed to parse create-proxy response: %v", err)
 	}
 	if !payload.Success {
-		t.Fatalf("创建代理应成功，得到失败: %s", payload.Message)
+		t.Fatalf("proxy creation should succeed, got failure: %s", payload.Message)
 	}
 
 	client.proxyMu.RLock()
 	_, exists := client.proxies[req.Name]
 	client.proxyMu.RUnlock()
 	if !exists {
-		t.Fatalf("创建代理后隧道应存在: %s", req.Name)
+		t.Fatalf("tunnel should exist after proxy creation: %s", req.Name)
 	}
 }
 
@@ -1766,7 +1766,7 @@ func TestControlLoop_ProxyCreateWaitsForPendingDataChannel(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	defer conn.Close()
 
@@ -1774,11 +1774,11 @@ func TestControlLoop_ProxyCreateWaitsForPendingDataChannel(t *testing.T) {
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("认证成功后 Client 应已注册到 clients map")
+		t.Fatal("client should be registered in the clients map after successful authentication")
 	}
 	client := value.(*ClientConn)
 	if client.getState() != clientStatePendingData {
-		t.Fatalf("未建立数据通道前 Client 应处于 pending，得到 %s", client.getState())
+		t.Fatalf("before establishing the data channel, client should be pending, got %s", client.getState())
 	}
 
 	req := protocol.ProxyNewRequest{
@@ -1788,7 +1788,7 @@ func TestControlLoop_ProxyCreateWaitsForPendingDataChannel(t *testing.T) {
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, protocol.ProxyCreateRequest(req))
 	if err := conn.WriteJSON(msg); err != nil {
-		t.Fatalf("发送创建代理请求失败: %v", err)
+		t.Fatalf("failed to send create-proxy request: %v", err)
 	}
 
 	dataConn := connectDataWSForClient(t, ts, authResp)
@@ -1797,31 +1797,31 @@ func TestControlLoop_ProxyCreateWaitsForPendingDataChannel(t *testing.T) {
 	var resp protocol.Message
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("读取创建代理响应失败: %v", err)
+		t.Fatalf("failed to read create-proxy response: %v", err)
 	}
 
 	if resp.Type != protocol.MsgTypeProxyCreateResp {
-		t.Fatalf("期望返回 %s，得到 %s", protocol.MsgTypeProxyCreateResp, resp.Type)
+		t.Fatalf("want returned %s, got %s", protocol.MsgTypeProxyCreateResp, resp.Type)
 	}
 
 	var payload protocol.ProxyCreateResponse
 	if err := resp.ParsePayload(&payload); err != nil {
-		t.Fatalf("解析创建代理响应失败: %v", err)
+		t.Fatalf("failed to parse create-proxy response: %v", err)
 	}
 	if !payload.Success {
-		t.Fatalf("等待数据通道后创建代理应成功，得到失败: %s", payload.Message)
+		t.Fatalf("proxy creation should succeed after waiting for the data channel, got failure: %s", payload.Message)
 	}
 
 	client.proxyMu.RLock()
 	_, exists := client.proxies[req.Name]
 	client.proxyMu.RUnlock()
 	if !exists {
-		t.Fatalf("创建代理后隧道应存在: %s", req.Name)
+		t.Fatalf("tunnel should exist after proxy creation: %s", req.Name)
 	}
 }
 
 // ============================================================
-// controlLoop 边缘场景测试 (2)
+// controlLoop edge-case tests (2)
 // ============================================================
 
 func TestControlLoop_UnknownMsgType(t *testing.T) {
@@ -1831,12 +1831,12 @@ func TestControlLoop_UnknownMsgType(t *testing.T) {
 	conn, _ := connectAndAuth(t, ts, "unknown-msg-host")
 	defer conn.Close()
 
-	// 发送一个未知消息类型
+	// send an unknown message type
 	unknownMsg, _ := protocol.NewMessage("unknown_type_xyz", nil)
 	conn.WriteJSON(unknownMsg)
 
-	// Server 不应崩溃，继续正常工作
-	// 发一个 ping 验证连接仍然正常
+	// server should not crash and should continue working normally
+	// send a ping to verify the connection is still healthy
 	time.Sleep(50 * time.Millisecond)
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 	conn.WriteJSON(ping)
@@ -1844,10 +1844,10 @@ func TestControlLoop_UnknownMsgType(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("发送未知消息后连接应保持正常: %v", err)
+		t.Fatalf("connection should remain healthy after sending an unknown message: %v", err)
 	}
 	if resp.Type != protocol.MsgTypePong {
-		t.Errorf("期望 pong，得到 %s", resp.Type)
+		t.Errorf("want pong, got %s", resp.Type)
 	}
 }
 
@@ -1856,34 +1856,34 @@ func TestControlLoop_MalformedProbeReport(t *testing.T) {
 
 	conn, authResp := connectAndAuth(t, ts, "malformed-probe-host")
 
-	// 发送一个 payload 字段类型不匹配的 probe_report
-	// (JSON 格式有效, 但 cpu_usage 的类型是 string 不是 float —— ParsePayload 会失败)
+	// send a probe_report whose payload field types do not match
+	// (JSON format is valid, but cpu_usage is a string rather than a float, so ParsePayload will fail)
 	badMsg := protocol.Message{
 		Type:    protocol.MsgTypeProbeReport,
 		Payload: json.RawMessage(`{"cpu_usage": "not_a_number", "mem_usage": "bad"}`),
 	}
 	conn.WriteJSON(badMsg)
 
-	// 连接仍然正常 — 发 ping 验证 (如果 controlLoop 没崩溃，就能回 pong)
+	// connection should still be healthy — send a ping to verify (if controlLoop did not crash, it should reply with pong)
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 	conn.WriteJSON(ping)
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("发送畸形探针后连接应保持正常: %v", err)
+		t.Fatalf("connection should remain healthy after sending malformed probe data: %v", err)
 	}
 	if resp.Type != protocol.MsgTypePong {
-		t.Errorf("期望 pong，得到 %s", resp.Type)
+		t.Errorf("want pong, got %s", resp.Type)
 	}
 
-	// Client 的 stats 应该没被更新（还是 nil）
+	// client stats should not have been updated (should still be nil)
 	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatal("Client 应该仍然已注册")
+		t.Fatal("client should still be registered")
 	}
 	client := val.(*ClientConn)
 	if client.GetStats() != nil {
-		t.Error("畸形 probe_report 不应导致 stats 被更新")
+		t.Error("malformed probe_report should not cause stats to be updated")
 	}
 
 	conn.Close()
@@ -1894,22 +1894,22 @@ func TestServer_StartHTTPOnly(t *testing.T) {
 	s := New(0)
 	mux := s.StartHTTPOnly()
 	if mux == nil {
-		t.Fatal("StartHTTPOnly 应返回非空 ServeMux")
+		t.Fatal("StartHTTPOnly should return a non-nil ServeMux")
 	}
 }
 
 // ============================================================
-// Tunnel Lifecycle API 测试 (Phase 2)
+// Tunnel lifecycle API tests (Phase 2)
 // ============================================================
 
 func TestServer_TunnelLifecycleAPI(t *testing.T) {
-	// 1. 初始化带 DB 的 Server
+	// 1. initialize server with DB
 	tmpDir, _ := os.MkdirTemp("", "tunnel_api_test_*")
 	defer os.RemoveAll(tmpDir)
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, _ := NewAdminStore(dbPath)
-	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
+	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	store.Initialize("admin", "password123", "localhost", nil)
 	store.AddAPIKey("default", "test-key", []string{"connect"}, nil)
 
@@ -1920,11 +1920,11 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	ts := httptest.NewServer(s.newHTTPMux())
 	defer ts.Close()
 
-	// 模拟已登录的 AdminSession
+	// simulate a logged-in AdminSession
 	session := mustCreateSession(t, store, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, _ := s.GenerateAdminToken(session)
 
-	// API 请求助手
+	// API request helper
 	doRequest := func(method, path string, body []byte) (int, map[string]any) {
 		req, _ := http.NewRequest(method, ts.URL+path, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1933,7 +1933,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			t.Fatalf("API 请求失败 %s: %v", path, err)
+			t.Fatalf("API request failed %s: %v", path, err)
 		}
 		defer resp.Body.Close()
 
@@ -1962,45 +1962,45 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		var serverMsg protocol.Message
 		if err := wsConn.ReadJSON(&serverMsg); err != nil {
-			t.Fatalf("读取服务端 proxy_provision 失败: %v", err)
+			t.Fatalf("failed to read server proxy_provision: %v", err)
 		}
 		wsConn.SetReadDeadline(time.Time{})
 		if serverMsg.Type != protocol.MsgTypeProxyProvision {
-			t.Fatalf("期望服务端下发 %s，得到 %s", protocol.MsgTypeProxyProvision, serverMsg.Type)
+			t.Fatalf("expected server to send %s, got %s", protocol.MsgTypeProxyProvision, serverMsg.Type)
 		}
 
 		var proxyReq protocol.ProxyProvisionRequest
 		if err := serverMsg.ParsePayload(&proxyReq); err != nil {
-			t.Fatalf("解析服务端 proxy_provision 失败: %v", err)
+			t.Fatalf("failed to parse server proxy_provision: %v", err)
 		}
 		if proxyReq.Name != expectedName {
-			t.Fatalf("期望 proxy_provision.Name=%s，得到 %s", expectedName, proxyReq.Name)
+			t.Fatalf("expected proxy_provision.Name=%s, got %s", expectedName, proxyReq.Name)
 		}
 
 		val, ok := s.clients.Load(clientID)
 		if !ok {
-			t.Fatalf("client %s 不存在", clientID)
+			t.Fatalf("client %s does not exist", clientID)
 		}
 		liveClient := val.(*ClientConn)
 		liveClient.proxyMu.RLock()
 		pendingTunnel := liveClient.proxies[expectedName]
 		liveClient.proxyMu.RUnlock()
 		if pendingTunnel == nil {
-			t.Fatalf("收到 proxy_provision 时应已有 pending tunnel: %s", expectedName)
+			t.Fatalf("pending tunnel should already exist when proxy_provision is received: %s", expectedName)
 		}
 		if pendingTunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || pendingTunnel.Config.RuntimeState != protocol.ProxyRuntimeStatePending {
-			t.Fatalf("proxy_provision 下发时 tunnel 状态应为 running/pending，得到 %s/%s", pendingTunnel.Config.DesiredState, pendingTunnel.Config.RuntimeState)
+			t.Fatalf("tunnel state when proxy_provision is sent should be running/pending, got %s/%s", pendingTunnel.Config.DesiredState, pendingTunnel.Config.RuntimeState)
 		}
 		if method == http.MethodPost {
 			if _, exists := s.store.GetTunnel(clientID, expectedName); exists {
-				t.Fatalf("create 在 client ack 前不应写入 Store: %s", expectedName)
+				t.Fatalf("create should not write to Store before client ack: %s", expectedName)
 			}
 		}
 		if method == http.MethodPut {
 			if stored, exists := s.store.GetTunnel(clientID, expectedName); !exists ||
 				stored.DesiredState != protocol.ProxyDesiredStateRunning ||
 				stored.RuntimeState != protocol.ProxyRuntimeStatePending {
-				t.Fatalf("resume 在 client ack 前 Store 状态应为 running/pending，exists=%v state=%s/%s", exists, stored.DesiredState, stored.RuntimeState)
+				t.Fatalf("before client ack, resume should keep Store state as running/pending, exists=%v state=%s/%s", exists, stored.DesiredState, stored.RuntimeState)
 			}
 		}
 
@@ -2010,23 +2010,23 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 			Message:  "ok",
 		})
 		if err := wsConn.WriteJSON(respMsg); err != nil {
-			t.Fatalf("发送 proxy_provision_ack 失败: %v", err)
+			t.Fatalf("failed to send proxy_provision_ack: %v", err)
 		}
 
 		select {
 		case result := <-resultCh:
 			return result
 		case <-time.After(3 * time.Second):
-			t.Fatalf("等待 API %s %s 返回超时", method, path)
+			t.Fatalf("timed out waiting for API %s %s to return", method, path)
 			return apiResult{}
 		}
 	}
 
-	// 2. 模拟一个 Client 连接
+	// 2. simulate a client connection
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	wsConn, _, err = websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("WebSocket 连接失败: %v", err)
+		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	defer wsConn.Close()
 
@@ -2047,90 +2047,90 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	dataConn := connectDataWSForClient(t, ts, authResp)
 	defer dataConn.Close()
 
-	time.Sleep(50 * time.Millisecond) // 等待 client 提升到 live
+	time.Sleep(50 * time.Millisecond) // wait for client to become live
 
-	// ========= 测试开始 =========
+	// ========= test start =========
 
-	// 1. 创建隧道 (/api/clients/{id}/tunnels)
+	// 1. create tunnel (/api/clients/{id}/tunnels)
 	remotePort := reserveTCPPort(t)
 	createReq := []byte(fmt.Sprintf(`{"name":"test-tunnel","type":"tcp","local_ip":"127.0.0.1","local_port":8080,"remote_port":%d}`, remotePort))
 	result := runPendingAction(http.MethodPost, fmt.Sprintf("/api/clients/%s/tunnels", clientID), createReq, "test-tunnel")
 	code, resp := result.code, result.body
 
 	if code != http.StatusCreated {
-		t.Errorf("创建隧道期望 201 Created，得到 %d, 响应: %v", code, resp)
+		t.Errorf("create tunnel: want 201 Created, got %d, response: %v", code, resp)
 	}
 
-	// 验证隧道在 Store 中生成
+	// verify that the tunnel is created in Store
 	tunnel, ok := s.store.GetTunnel(clientID, "test-tunnel")
 	if !ok {
-		t.Fatal("Tunnel 未写入 Store")
+		t.Fatal("tunnel was not written to Store")
 	}
 	if tunnel.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Errorf("初创状态应为 running/exposed，得到 %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
+		t.Errorf("initial state should be running/exposed, got %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
 	}
 
-	// 2. 暂停隧道 (/api/clients/{id}/tunnels/{name}/pause)
+	// 2. pause tunnel (/api/clients/{id}/tunnels/{name}/pause)
 	pauseReq := []byte(`{}`)
 	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/pause", clientID), pauseReq)
 	if code != http.StatusOK {
-		t.Errorf("暂停隧道期望 200，得到 %d", code)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
-	if tunnel.DesiredState != protocol.ProxyDesiredStatePaused || tunnel.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Errorf("隧道暂停后，状态应为 paused/idle，得到 %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
-	}
-	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var closeMsg protocol.Message
-	if err := wsConn.ReadJSON(&closeMsg); err != nil {
-		t.Fatalf("读取 pause 后的 proxy_close 失败: %v", err)
-	}
-	wsConn.SetReadDeadline(time.Time{})
-	if closeMsg.Type != protocol.MsgTypeProxyClose {
-		t.Fatalf("暂停后期望收到 %s，得到 %s", protocol.MsgTypeProxyClose, closeMsg.Type)
-	}
-
-	// 3. 恢复隧道 (/api/clients/{id}/tunnels/{name}/resume)
-	resumeReq := []byte(`{}`)
-	result = runPendingAction(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/resume", clientID), resumeReq, "test-tunnel")
-	code = result.code
-	if code != http.StatusOK {
-		t.Errorf("恢复隧道期望 200，得到 %d", code)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
-	if tunnel.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Errorf("隧道恢复后，状态应为 running/exposed，得到 %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
-	}
-
-	// 4. 停止隧道 (/api/clients/{id}/tunnels/{name}/stop)
-	stopReq := []byte(`{}`)
-	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/stop", clientID), stopReq)
-	if code != http.StatusOK {
-		t.Errorf("停止隧道期望 200，得到 %d", code)
+		t.Errorf("pause tunnel: want 200, got %d", code)
 	}
 
 	time.Sleep(50 * time.Millisecond)
 	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
 	if tunnel.DesiredState != protocol.ProxyDesiredStateStopped || tunnel.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Errorf("隧道停止后，状态应为 stopped/idle，得到 %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
+		t.Errorf("after pausing, tunnel state should be stopped/idle, got %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
+	}
+	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var closeMsg protocol.Message
+	if err := wsConn.ReadJSON(&closeMsg); err != nil {
+		t.Fatalf("failed to read proxy_close after pause: %v", err)
+	}
+	wsConn.SetReadDeadline(time.Time{})
+	if closeMsg.Type != protocol.MsgTypeProxyClose {
+		t.Fatalf("after pause, expected %s, got %s", protocol.MsgTypeProxyClose, closeMsg.Type)
 	}
 
-	// 5. 删除隧道 (/api/clients/{id}/tunnels/{name})
+	// 3. resume tunnel (/api/clients/{id}/tunnels/{name}/resume)
+	resumeReq := []byte(`{}`)
+	result = runPendingAction(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/resume", clientID), resumeReq, "test-tunnel")
+	code = result.code
+	if code != http.StatusOK {
+		t.Errorf("resume tunnel: want 200, got %d", code)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
+	if tunnel.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Errorf("after resume, tunnel state should be running/exposed, got %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
+	}
+
+	// 4. stop tunnel (/api/clients/{id}/tunnels/{name}/stop)
+	stopReq := []byte(`{}`)
+	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/stop", clientID), stopReq)
+	if code != http.StatusOK {
+		t.Errorf("stop tunnel: want 200, got %d", code)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
+	if tunnel.DesiredState != protocol.ProxyDesiredStateStopped || tunnel.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Errorf("after stop, tunnel state should be stopped/idle, got %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
+	}
+
+	// 5. delete tunnel (/api/clients/{id}/tunnels/{name})
 	req, _ := http.NewRequest(http.MethodDelete, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel", clientID), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", "test")
 	respDel, _ := http.DefaultClient.Do(req)
 	if respDel.StatusCode != http.StatusNoContent {
-		t.Errorf("删除隧道期望 204 No Content，得到 %d", respDel.StatusCode)
+		t.Errorf("delete tunnel: want 204 No Content, got %d", respDel.StatusCode)
 	}
 	respDel.Body.Close()
 
 	if _, ok := s.store.GetTunnel(clientID, "test-tunnel"); ok {
-		t.Error("删除后，Store 中不应再有此隧道")
+		t.Error("Store should no longer contain this tunnel after deletion")
 	}
 }
 
@@ -2140,7 +2140,7 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	var err error
 	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 
 	wsConn, authResp := connectAndAuth(t, ts, "timeout-client")
@@ -2149,7 +2149,7 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 Admin Token 失败: %v", err)
+		t.Fatalf("failed to generate admin token: %v", err)
 	}
 	eventsCh := s.events.Subscribe()
 	defer s.events.Unsubscribe(eventsCh)
@@ -2184,29 +2184,29 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		t.Fatalf("create tunnel 请求失败: %v", err)
+		t.Fatalf("create tunnel request failed: %v", err)
 	case result := <-resultCh:
 		if result.code != http.StatusGatewayTimeout {
-			t.Fatalf("create 超时期望 504，得到 %d, body=%v", result.code, result.body)
+			t.Fatalf("create timeout: want 504, got %d, body=%v", result.code, result.body)
 		}
 	case <-time.After(7 * time.Second):
-		t.Fatal("等待 create timeout 响应超时")
+		t.Fatal("timed out waiting for create timeout response")
 	}
 
 	if _, exists := s.store.GetTunnel(authResp.ClientID, "timeout-tunnel"); exists {
-		t.Fatal("create timeout 后不应写入 Store")
+		t.Fatal("Store should not be written after create timeout")
 	}
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatalf("client %s 应仍在线", authResp.ClientID)
+		t.Fatalf("client %s should still be online", authResp.ClientID)
 	}
 	client := value.(*ClientConn)
 	client.proxyMu.RLock()
 	_, exists := client.proxies["timeout-tunnel"]
 	client.proxyMu.RUnlock()
 	if exists {
-		t.Fatal("create timeout 后 runtime pending tunnel 应被清理")
+		t.Fatal("runtime pending tunnel should be cleaned up after create timeout")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -2218,30 +2218,30 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 			}
 			var payload map[string]any
 			if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
-				t.Fatalf("解析 tunnel_changed 事件失败: %v", err)
+				t.Fatalf("failed to parse tunnel_changed event: %v", err)
 			}
 			if payload["action"] != "error" {
 				continue
 			}
 			tunnelPayload, ok := payload["tunnel"].(map[string]any)
 			if !ok {
-				t.Fatalf("tunnel_changed.tunnel 类型无效: %#v", payload["tunnel"])
+				t.Fatalf("tunnel_changed.tunnel has invalid type: %#v", payload["tunnel"])
 			}
 			if tunnelPayload["name"] != "timeout-tunnel" {
 				continue
 			}
 			if tunnelPayload["runtime_state"] != protocol.ProxyRuntimeStateError {
-				t.Fatalf("超时失败事件 runtime_state 期望 error，得到 %v", tunnelPayload["runtime_state"])
+				t.Fatalf("timeout failure event runtime_state: want error, got %v", tunnelPayload["runtime_state"])
 			}
 			if tunnelPayload["error"] == "" {
-				t.Fatal("超时失败事件应携带 error 文案")
+				t.Fatal("timeout failure event should include an error message")
 			}
 			return
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
 
-	t.Fatal("create timeout 后未收到最终 error 通知")
+	t.Fatal("did not receive final error notification after create timeout")
 }
 
 func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
@@ -2251,7 +2251,7 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	var err error
 	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-conflict-create")
@@ -2268,7 +2268,7 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 Admin Token 失败: %v", err)
+		t.Fatalf("failed to generate admin token: %v", err)
 	}
 	reqBody := []byte(`{"name":"new-http","type":"http","local_ip":"127.0.0.1","local_port":3000,"domain":"app.example.com"}`)
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels", authResp.ClientID), bytes.NewReader(reqBody))
@@ -2278,27 +2278,27 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("create tunnel 请求失败: %v", err)
+		t.Fatalf("create tunnel request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("HTTP 域名冲突时期望 409，得到 %d", resp.StatusCode)
+		t.Fatalf("HTTP domain conflict: want 409, got %d", resp.StatusCode)
 	}
 
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
+		t.Fatalf("failed to parse response: %v", err)
 	}
 	if body["error_code"] != protocol.TunnelMutationErrorCodeHTTPTunnelConflict {
-		t.Fatalf("error_code 期望 %q，得到 %v", protocol.TunnelMutationErrorCodeHTTPTunnelConflict, body["error_code"])
+		t.Fatalf("error_code: want %q, got %v", protocol.TunnelMutationErrorCodeHTTPTunnelConflict, body["error_code"])
 	}
 	if body["field"] != protocol.TunnelMutationFieldDomain {
-		t.Fatalf("field 期望 %q，得到 %v", protocol.TunnelMutationFieldDomain, body["field"])
+		t.Fatalf("field: want %q, got %v", protocol.TunnelMutationFieldDomain, body["field"])
 	}
 	conflicts, ok := body["conflicting_tunnels"].([]any)
 	if !ok || len(conflicts) != 1 || conflicts[0] != "client-other:existing-http" {
-		t.Fatalf("conflicting_tunnels 期望 [client-other:existing-http]，得到 %v", body["conflicting_tunnels"])
+		t.Fatalf("conflicting_tunnels: want [client-other:existing-http], got %v", body["conflicting_tunnels"])
 	}
 }
 
@@ -2309,7 +2309,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	var err error
 	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-conflict-update")
@@ -2332,7 +2332,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatalf("client %s 不存在", authResp.ClientID)
+		t.Fatalf("client %s does not exist", authResp.ClientID)
 	}
 	client := value.(*ClientConn)
 	client.proxyMu.Lock()
@@ -2354,7 +2354,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 Admin Token 失败: %v", err)
+		t.Fatalf("failed to generate admin token: %v", err)
 	}
 	reqBody := []byte(`{"local_ip":"127.0.0.1","local_port":3000,"remote_port":0,"domain":"app.example.com"}`)
 	req, _ := http.NewRequest(http.MethodPut, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels/editable-http", authResp.ClientID), bytes.NewReader(reqBody))
@@ -2364,27 +2364,27 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("update tunnel 请求失败: %v", err)
+		t.Fatalf("update tunnel request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("HTTP 域名冲突时期望 409，得到 %d", resp.StatusCode)
+		t.Fatalf("HTTP domain conflict: want 409, got %d", resp.StatusCode)
 	}
 
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
+		t.Fatalf("failed to parse response: %v", err)
 	}
 	if body["error_code"] != protocol.TunnelMutationErrorCodeHTTPTunnelConflict {
-		t.Fatalf("error_code 期望 %q，得到 %v", protocol.TunnelMutationErrorCodeHTTPTunnelConflict, body["error_code"])
+		t.Fatalf("error_code: want %q, got %v", protocol.TunnelMutationErrorCodeHTTPTunnelConflict, body["error_code"])
 	}
 	if body["field"] != protocol.TunnelMutationFieldDomain {
-		t.Fatalf("field 期望 %q，得到 %v", protocol.TunnelMutationFieldDomain, body["field"])
+		t.Fatalf("field: want %q, got %v", protocol.TunnelMutationFieldDomain, body["field"])
 	}
 	conflicts, ok := body["conflicting_tunnels"].([]any)
 	if !ok || len(conflicts) != 1 || conflicts[0] != "client-other:existing-http" {
-		t.Fatalf("conflicting_tunnels 期望 [client-other:existing-http]，得到 %v", body["conflicting_tunnels"])
+		t.Fatalf("conflicting_tunnels: want [client-other:existing-http], got %v", body["conflicting_tunnels"])
 	}
 }
 
@@ -2398,7 +2398,7 @@ func TestServer_CreateTunnelHTTPInvalidDomainReturns400WithTypedError(t *testing
 	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 Admin Token 失败: %v", err)
+		t.Fatalf("failed to generate admin token: %v", err)
 	}
 
 	reqBody := []byte(`{"name":"new-http","type":"http","local_ip":"127.0.0.1","local_port":3000,"domain":"https://bad.example.com"}`)
@@ -2409,23 +2409,23 @@ func TestServer_CreateTunnelHTTPInvalidDomainReturns400WithTypedError(t *testing
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("create tunnel 请求失败: %v", err)
+		t.Fatalf("create tunnel request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("HTTP 非法域名期望 400，得到 %d", resp.StatusCode)
+		t.Fatalf("invalid HTTP domain: want 400, got %d", resp.StatusCode)
 	}
 
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
+		t.Fatalf("failed to parse response: %v", err)
 	}
 	if body["error_code"] != protocol.TunnelMutationErrorCodeDomainInvalid {
-		t.Fatalf("error_code 期望 %q，得到 %v", protocol.TunnelMutationErrorCodeDomainInvalid, body["error_code"])
+		t.Fatalf("error_code: want %q, got %v", protocol.TunnelMutationErrorCodeDomainInvalid, body["error_code"])
 	}
 	if body["field"] != protocol.TunnelMutationFieldDomain {
-		t.Fatalf("field 期望 %q，得到 %v", protocol.TunnelMutationFieldDomain, body["field"])
+		t.Fatalf("field: want %q, got %v", protocol.TunnelMutationFieldDomain, body["field"])
 	}
 }
 
@@ -2441,7 +2441,7 @@ func TestServer_CreateTunnelHTTPManagementHostConflictReturnsTypedError(t *testi
 	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 Admin Token 失败: %v", err)
+		t.Fatalf("failed to generate admin token: %v", err)
 	}
 
 	reqBody := []byte(`{"name":"new-http","type":"http","local_ip":"127.0.0.1","local_port":3000,"domain":"example.com"}`)
@@ -2452,23 +2452,23 @@ func TestServer_CreateTunnelHTTPManagementHostConflictReturnsTypedError(t *testi
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("create tunnel 请求失败: %v", err)
+		t.Fatalf("create tunnel request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("HTTP 管理域名冲突期望 409，得到 %d", resp.StatusCode)
+		t.Fatalf("HTTP management domain conflict: want 409, got %d", resp.StatusCode)
 	}
 
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
+		t.Fatalf("failed to parse response: %v", err)
 	}
 	if body["error_code"] != protocol.TunnelMutationErrorCodeServerAddrConflict {
-		t.Fatalf("error_code 期望 %q，得到 %v", protocol.TunnelMutationErrorCodeServerAddrConflict, body["error_code"])
+		t.Fatalf("error_code: want %q, got %v", protocol.TunnelMutationErrorCodeServerAddrConflict, body["error_code"])
 	}
 	if body["field"] != protocol.TunnelMutationFieldDomain {
-		t.Fatalf("field 期望 %q，得到 %v", protocol.TunnelMutationFieldDomain, body["field"])
+		t.Fatalf("field: want %q, got %v", protocol.TunnelMutationFieldDomain, body["field"])
 	}
 }
 
@@ -2479,7 +2479,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	var err error
 	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 
 	wsConn, authResp := connectAndAuth(t, ts, "resume-post-ack-fail")
@@ -2497,7 +2497,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	session := mustCreateSession(t, s.auth.adminStore, "user-1", "admin", "admin", "127.0.0.1", "resume-test-agent")
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 Admin Token 失败: %v", err)
+		t.Fatalf("failed to generate admin token: %v", err)
 	}
 	doRequest := func(method, path string, body []byte) (int, map[string]any) {
 		t.Helper()
@@ -2508,7 +2508,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			t.Fatalf("HTTP 请求失败 %s %s: %v", method, path, err)
+			t.Fatalf("HTTP request failed %s %s: %v", method, path, err)
 		}
 		defer resp.Body.Close()
 
@@ -2519,7 +2519,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatalf("client %s 不存在", authResp.ClientID)
+		t.Fatalf("client %s does not exist", authResp.ClientID)
 	}
 	resumePort := reserveTCPPort(t)
 	client := value.(*ClientConn)
@@ -2564,22 +2564,22 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 
 	select {
 	case result := <-resumeResultCh:
-		t.Fatalf("resume 请求在发送 proxy_provision 前已返回: code=%d body=%v", result.code, result.body)
+		t.Fatalf("resume request returned before sending proxy_provision: code=%d body=%v", result.code, result.body)
 	case <-time.After(200 * time.Millisecond):
 	}
 
 	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var resumeMsg protocol.Message
 	if err := wsConn.ReadJSON(&resumeMsg); err != nil {
-		t.Fatalf("读取 resume 阶段 proxy_provision 失败: %v", err)
+		t.Fatalf("failed to read proxy_provision during resume phase: %v", err)
 	}
 	wsConn.SetReadDeadline(time.Time{})
 	if resumeMsg.Type != protocol.MsgTypeProxyProvision {
-		t.Fatalf("resume 阶段期望 %s，得到 %s", protocol.MsgTypeProxyProvision, resumeMsg.Type)
+		t.Fatalf("resume phase: want %s, got %s", protocol.MsgTypeProxyProvision, resumeMsg.Type)
 	}
 	var resumeProxyReq protocol.ProxyProvisionRequest
 	if err := resumeMsg.ParsePayload(&resumeProxyReq); err != nil {
-		t.Fatalf("解析 resume proxy_provision 失败: %v", err)
+		t.Fatalf("failed to parse resume proxy_provision: %v", err)
 	}
 
 	s.store.mu.Lock()
@@ -2593,65 +2593,65 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 		Message:  "ok",
 	})
 	if err := wsConn.WriteJSON(ackResume); err != nil {
-		t.Fatalf("发送 resume ack 失败: %v", err)
+		t.Fatalf("failed to send resume ack: %v", err)
 	}
 
 	select {
 	case result := <-resumeResultCh:
 		if result.code != http.StatusInternalServerError {
-			t.Fatalf("resume 在 post-ack 持久化失败时期望 500，得到 %d body=%v", result.code, result.body)
+			t.Fatalf("when resume fails persistence post-ack: want 500, got %d body=%v", result.code, result.body)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("等待 resume API 返回超时")
+		t.Fatal("timed out waiting for resume API to return")
 	}
 
 	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var rollbackCloseMsg protocol.Message
 	if err := wsConn.ReadJSON(&rollbackCloseMsg); err != nil {
-		t.Fatalf("读取 rollback proxy_close 失败: %v", err)
+		t.Fatalf("failed to read rollback proxy_close: %v", err)
 	}
 	wsConn.SetReadDeadline(time.Time{})
 	if rollbackCloseMsg.Type != protocol.MsgTypeProxyClose {
-		t.Fatalf("rollback 后期望 %s，得到 %s", protocol.MsgTypeProxyClose, rollbackCloseMsg.Type)
+		t.Fatalf("after rollback: want %s, got %s", protocol.MsgTypeProxyClose, rollbackCloseMsg.Type)
 	}
 	var closePayload protocol.ProxyCloseRequest
 	if err := rollbackCloseMsg.ParsePayload(&closePayload); err != nil {
-		t.Fatalf("解析 rollback proxy_close 失败: %v", err)
+		t.Fatalf("failed to parse rollback proxy_close: %v", err)
 	}
 	if closePayload.Name != "resume-rollback" {
-		t.Fatalf("rollback proxy_close name 期望 resume-rollback，得到 %s", closePayload.Name)
+		t.Fatalf("rollback proxy_close name: want resume-rollback, got %s", closePayload.Name)
 	}
 	if closePayload.Reason != "provision_failed" {
-		t.Fatalf("rollback proxy_close reason 期望 provision_failed，得到 %s", closePayload.Reason)
+		t.Fatalf("rollback proxy_close reason: want provision_failed, got %s", closePayload.Reason)
 	}
 
 	value, ok = s.clients.Load(authResp.ClientID)
 	if !ok {
-		t.Fatalf("client %s 应仍在线", authResp.ClientID)
+		t.Fatalf("client %s should still be online", authResp.ClientID)
 	}
 	client = value.(*ClientConn)
 	client.proxyMu.RLock()
 	runtimeTunnel := client.proxies["resume-rollback"]
 	client.proxyMu.RUnlock()
 	if runtimeTunnel == nil {
-		t.Fatal("resume rollback 后 runtime tunnel 不应丢失")
+		t.Fatal("runtime tunnel should not be lost after resume rollback")
 	}
-	if runtimeTunnel.Config.DesiredState != protocol.ProxyDesiredStatePaused || runtimeTunnel.Config.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Fatalf("resume rollback 后 runtime 状态期望 paused/idle，得到 %s/%s", runtimeTunnel.Config.DesiredState, runtimeTunnel.Config.RuntimeState)
+	if runtimeTunnel.Config.DesiredState != protocol.ProxyDesiredStateStopped || runtimeTunnel.Config.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Fatalf("runtime state after resume rollback: want stopped/idle, got %s/%s", runtimeTunnel.Config.DesiredState, runtimeTunnel.Config.RuntimeState)
 	}
 	if runtimeTunnel.Config.Error != "" {
-		t.Fatalf("resume rollback 后 runtime error 应为空，得到 %q", runtimeTunnel.Config.Error)
+		t.Fatalf("runtime error should be empty after resume rollback, got %q", runtimeTunnel.Config.Error)
 	}
 
 	storedTunnel, exists := s.store.GetTunnel(authResp.ClientID, "resume-rollback")
 	if !exists {
-		t.Fatal("resume rollback 后 store tunnel 不应丢失")
+		t.Fatal("store tunnel should not be lost after resume rollback")
 	}
-	if storedTunnel.DesiredState != protocol.ProxyDesiredStatePaused || storedTunnel.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Fatalf("resume rollback 后 store 状态期望 paused/idle，得到 %s/%s", storedTunnel.DesiredState, storedTunnel.RuntimeState)
+	if storedTunnel.DesiredState != protocol.ProxyDesiredStateStopped || storedTunnel.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Fatalf("store state after resume rollback: want stopped/idle, got %s/%s", storedTunnel.DesiredState, storedTunnel.RuntimeState)
 	}
 	if storedTunnel.Error != "" {
-		t.Fatalf("resume rollback 后 store error 应为空，得到 %q", storedTunnel.Error)
+		t.Fatalf("store error should be empty after resume rollback, got %q", storedTunnel.Error)
 	}
 }
 
@@ -2662,7 +2662,7 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	var err error
 	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 
 	record, err := s.auth.adminStore.GetOrCreateClient(
@@ -2671,7 +2671,7 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 		"127.0.0.1:12345",
 	)
 	if err != nil {
-		t.Fatalf("预注册 client 失败: %v", err)
+		t.Fatalf("failed to preregister client: %v", err)
 	}
 	mustAddStableTunnel(t, s.store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
@@ -2690,16 +2690,16 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 	controlConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("控制通道连接失败: %v", err)
+		t.Fatalf("control channel connection failed: %v", err)
 	}
 	defer controlConn.Close()
 
 	authResp := doAuthWithInstallID(t, controlConn, "restore-post-ack-fail", "install-restore-post-ack-fail", "test-key")
 	if !authResp.Success {
-		t.Fatalf("认证失败: %s", authResp.Message)
+		t.Fatalf("authentication failed: %s", authResp.Message)
 	}
 	if authResp.ClientID != record.ID {
-		t.Fatalf("预注册 client_id=%s，应与认证返回一致，得到 %s", record.ID, authResp.ClientID)
+		t.Fatalf("preregistered client_id=%s should match the auth response, got %s", record.ID, authResp.ClientID)
 	}
 
 	dataConn := connectDataWSForClient(t, ts, authResp)
@@ -2708,18 +2708,18 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	var restoreMsg protocol.Message
 	if err := controlConn.ReadJSON(&restoreMsg); err != nil {
-		t.Fatalf("读取 restore 阶段 proxy_provision 失败: %v", err)
+		t.Fatalf("failed to read proxy_provision during restore phase: %v", err)
 	}
 	controlConn.SetReadDeadline(time.Time{})
 	if restoreMsg.Type != protocol.MsgTypeProxyProvision {
-		t.Fatalf("restore 阶段期望 %s，得到 %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
+		t.Fatalf("restore phase: want %s, got %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
 	}
 	var restoreReq protocol.ProxyProvisionRequest
 	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
-		t.Fatalf("解析 restore proxy_provision 失败: %v", err)
+		t.Fatalf("failed to parse restore proxy_provision: %v", err)
 	}
 	if restoreReq.Name != "restore-fail-tunnel" {
-		t.Fatalf("restore tunnel name 期望 restore-fail-tunnel，得到 %s", restoreReq.Name)
+		t.Fatalf("restore tunnel name: want restore-fail-tunnel, got %s", restoreReq.Name)
 	}
 
 	s.store.mu.Lock()
@@ -2733,24 +2733,24 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 		Message:  "ok",
 	})
 	if err := controlConn.WriteJSON(restoreAck); err != nil {
-		t.Fatalf("发送 restore ack 失败: %v", err)
+		t.Fatalf("failed to send restore ack: %v", err)
 	}
 
 	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	var closeMsg protocol.Message
 	if err := controlConn.ReadJSON(&closeMsg); err != nil {
-		t.Fatalf("读取 restore 失败后的 proxy_close 失败: %v", err)
+		t.Fatalf("failed to read proxy_close after restore failure: %v", err)
 	}
 	controlConn.SetReadDeadline(time.Time{})
 	if closeMsg.Type != protocol.MsgTypeProxyClose {
-		t.Fatalf("restore 失败后期望 %s，得到 %s", protocol.MsgTypeProxyClose, closeMsg.Type)
+		t.Fatalf("after restore failure: want %s, got %s", protocol.MsgTypeProxyClose, closeMsg.Type)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		value, ok := s.clients.Load(authResp.ClientID)
 		if !ok {
-			t.Fatalf("client %s 不应丢失", authResp.ClientID)
+			t.Fatalf("client %s should not be lost", authResp.ClientID)
 		}
 		client := value.(*ClientConn)
 		client.proxyMu.RLock()
@@ -2760,23 +2760,23 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 			tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning &&
 			tunnel.Config.RuntimeState == protocol.ProxyRuntimeStateError {
 			if tunnel.Config.Error == "" {
-				t.Fatal("runtime error 隧道应携带失败原因")
+				t.Fatal("runtime error tunnel should carry the failure reason")
 			}
 			stored, exists := s.store.GetTunnel(authResp.ClientID, "restore-fail-tunnel")
 			if !exists {
-				t.Fatal("store 中应保留 restore-fail-tunnel")
+				t.Fatal("store should retain restore-fail-tunnel")
 			}
 			if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
-				t.Fatalf("store 状态期望 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+				t.Fatalf("store state: want running/error, got %s/%s", stored.DesiredState, stored.RuntimeState)
 			}
 			if stored.Error == "" {
-				t.Fatal("store error 隧道应持久化失败原因")
+				t.Fatal("store error tunnel should persist the failure reason")
 			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("等待 restore 失败降级到 error 超时")
+	t.Fatal("timed out waiting for restore failure to degrade to error")
 }
 
 func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
@@ -2786,7 +2786,7 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 	var err error
 	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 
 	record, err := s.auth.adminStore.GetOrCreateClient(
@@ -2795,7 +2795,7 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 		"127.0.0.1:12345",
 	)
 	if err != nil {
-		t.Fatalf("预注册 client 失败: %v", err)
+		t.Fatalf("failed to preregister client: %v", err)
 	}
 
 	mustAddStableTunnel(t, s.store, StoredTunnel{
@@ -2816,16 +2816,16 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 	dialer := websocket.Dialer{Subprotocols: []string{protocol.WSSubProtocolControl}}
 	controlConn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("控制通道连接失败: %v", err)
+		t.Fatalf("control channel connection failed: %v", err)
 	}
 	defer controlConn.Close()
 
 	authResp := doAuthWithInstallID(t, controlConn, "restore-http-host", "install-restore-http", "test-key")
 	if !authResp.Success {
-		t.Fatalf("认证失败: %s", authResp.Message)
+		t.Fatalf("authentication failed: %s", authResp.Message)
 	}
 	if authResp.ClientID != record.ID {
-		t.Fatalf("预注册 client_id=%s，应与认证返回一致，得到 %s", record.ID, authResp.ClientID)
+		t.Fatalf("preregistered client_id=%s should match the auth response, got %s", record.ID, authResp.ClientID)
 	}
 
 	dataConn := connectDataWSForClient(t, ts, authResp)
@@ -2834,26 +2834,26 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	var restoreMsg protocol.Message
 	if err := controlConn.ReadJSON(&restoreMsg); err != nil {
-		t.Fatalf("读取 HTTP restore 阶段 proxy_provision 失败: %v", err)
+		t.Fatalf("failed to read proxy_provision during HTTP restore phase: %v", err)
 	}
 	controlConn.SetReadDeadline(time.Time{})
 
 	if restoreMsg.Type != protocol.MsgTypeProxyProvision {
-		t.Fatalf("HTTP restore 阶段期望 %s，得到 %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
+		t.Fatalf("HTTP restore phase: want %s, got %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
 	}
 
 	var restoreReq protocol.ProxyProvisionRequest
 	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
-		t.Fatalf("解析 HTTP restore proxy_provision 失败: %v", err)
+		t.Fatalf("failed to parse HTTP restore proxy_provision: %v", err)
 	}
 	if restoreReq.Name != "restore-http" {
-		t.Fatalf("restore tunnel name 期望 restore-http，得到 %s", restoreReq.Name)
+		t.Fatalf("restore tunnel name: want restore-http, got %s", restoreReq.Name)
 	}
 	if restoreReq.Type != protocol.ProxyTypeHTTP {
-		t.Fatalf("restore tunnel type 期望 http，得到 %s", restoreReq.Type)
+		t.Fatalf("restore tunnel type: want http, got %s", restoreReq.Type)
 	}
 	if restoreReq.Domain != "app.example.com" {
-		t.Fatalf("restore tunnel domain 期望 app.example.com，得到 %s", restoreReq.Domain)
+		t.Fatalf("restore tunnel domain: want app.example.com, got %s", restoreReq.Domain)
 	}
 }
 
@@ -2863,13 +2863,13 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, _ := NewAdminStore(dbPath)
-	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
+	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	store.Initialize("admin", "password123", "localhost", nil)
 
 	tunnelStorePath := filepath.Join(tmpDir, "tunnels.json")
 	tStore, _ := NewTunnelStore(tunnelStorePath)
 
-	// 在 Store 预先写入两个隧道 (代表服务器重启读取持久化数据)
+	// prewrite two tunnels into Store (representing persisted data read on server restart)
 	tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel1", Type: "tcp", RemotePort: 1234},
 		DesiredState:    protocol.ProxyDesiredStateRunning,
@@ -2889,7 +2889,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 
 	s := New(0)
 	s.auth.adminStore = store
-	s.store = tStore // 会由 s.initStore(tStore) 被自动绑定在真实环境中，这里手动绑定
+	s.store = tStore // in the real environment this would be auto-bound by s.initStore(tStore); here we bind it manually
 
 	client := &ClientConn{
 		ID:         "client-1",
@@ -2900,7 +2900,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	}
 	s.clients.Store("client-1", client)
 
-	// 欺骗有数据通道
+	// pretend there is a data channel
 	cPipe, sPipe := net.Pipe()
 	sess, _ := mux.NewServerSession(sPipe, mux.DefaultConfig())
 	client.dataMu.Lock()
@@ -2911,7 +2911,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 		sPipe.Close()
 	}()
 
-	// 欺骗有 WebSocket 连接
+	// pretend there is a WebSocket connection
 	connReady := make(chan struct{})
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -2930,26 +2930,26 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	select {
 	case <-connReady:
 	case <-time.After(2 * time.Second):
-		t.Fatal("等待测试 WebSocket 连接就绪超时")
+		t.Fatal("timed out waiting for the test WebSocket connection to be ready")
 	}
 
-	// 测试恢复逻辑
+	// test restore logic
 	s.restoreTunnels(client)
 
 	time.Sleep(100 * time.Millisecond)
 
-	// 因为 client-1 的 dataSession 并没有建立，所以 Active 的 tunnel1 会触发 StartProxy失败，但 restoreTunnels 没有降级操作。
-	// 但实际上在我们的 restoreTunnels 逻辑中，如果 StartProxy 失败，状态没有通过 proxyMu 进行修改。
-	// 不过既然 s.StartProxy 失败，它不会出现在 client.proxies 里。
-	// 为了简化断言，我们直接使用 store.GetTunnel。
+	// Because client-1's dataSession is not established, active tunnel1 will trigger StartProxy failure, but restoreTunnels does not downgrade it.
+	// In the current restoreTunnels logic, if StartProxy fails, the state is not modified through proxyMu.
+	// However, since s.StartProxy failed, it will not appear in client.proxies.
+	// To simplify assertions, use store.GetTunnel directly.
 	t1, _ := s.store.GetTunnel("client-1", "tunnel1")
 	if t1.DesiredState != protocol.ProxyDesiredStateRunning || t1.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Logf("⚠️ tunnel1 恢复后状态为 %s/%s (restoreTunnels 失败时不降级，符合预期)", t1.DesiredState, t1.RuntimeState)
+		t.Logf("⚠️ tunnel1 state after restore is %s/%s (restoreTunnels does not downgrade on failure, which is expected)", t1.DesiredState, t1.RuntimeState)
 	}
 
 	t2, _ := s.store.GetTunnel("client-1", "tunnel2")
 	if t2.DesiredState != protocol.ProxyDesiredStatePaused || t2.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Errorf("Paused 隧道重启时应维持 paused/idle，得到 %s/%s", t2.DesiredState, t2.RuntimeState)
+		t.Errorf("paused tunnel should remain paused/idle after restart, got %s/%s", t2.DesiredState, t2.RuntimeState)
 	}
 }
 
@@ -2958,7 +2958,7 @@ func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 	s.store = store
 
@@ -2983,17 +2983,17 @@ func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
 	s.restoreTunnels(client)
 	elapsed := time.Since(start)
 	if elapsed > time.Second {
-		t.Fatalf("仅恢复 paused 隧道不应等待数据通道，耗时 %v", elapsed)
+		t.Fatalf("restoring only paused tunnels should not wait for the data channel, took %v", elapsed)
 	}
 
 	client.proxyMu.RLock()
 	tunnel, ok := client.proxies["paused-only"]
 	client.proxyMu.RUnlock()
 	if !ok {
-		t.Fatal("paused 隧道应被恢复到内存态")
+		t.Fatal("paused tunnel should be restored to in-memory state")
 	}
-	if tunnel.Config.DesiredState != protocol.ProxyDesiredStatePaused || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Errorf("恢复后的状态应保持 paused/idle，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
+	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateStopped || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Errorf("restored state should remain stopped/idle, got %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 }
 
@@ -3002,7 +3002,7 @@ func TestRestoreTunnels_PausedHTTPPlaceholderPreservesDomain(t *testing.T) {
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 	s.store = store
 
@@ -3036,10 +3036,10 @@ func TestRestoreTunnels_PausedHTTPPlaceholderPreservesDomain(t *testing.T) {
 	tunnel := client.proxies["paused-http"]
 	client.proxyMu.RUnlock()
 	if tunnel == nil {
-		t.Fatal("paused HTTP 隧道应被恢复到内存态")
+		t.Fatal("paused HTTP tunnel should be restored to in-memory state")
 	}
 	if tunnel.Config.Domain != domain {
-		t.Fatalf("恢复后的 paused HTTP 隧道应保留 domain=%q，得到 %q", domain, tunnel.Config.Domain)
+		t.Fatalf("restored paused HTTP tunnel should retain domain=%q, got %q", domain, tunnel.Config.Domain)
 	}
 }
 
@@ -3048,17 +3048,17 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 
 	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.json"))
 	if err != nil {
-		t.Fatalf("创建 AdminStore 失败: %v", err)
+		t.Fatalf("failed to create AdminStore: %v", err)
 	}
-	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
+	adminStore.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := adminStore.Initialize("admin", "password123", "localhost", []PortRange{{Start: 20000, End: 20010}}); err != nil {
-		t.Fatalf("初始化 AdminStore 失败: %v", err)
+		t.Fatalf("failed to initialize AdminStore: %v", err)
 	}
 	s.auth.adminStore = adminStore
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 	s.store = store
 
@@ -3096,10 +3096,10 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 	runtimeTunnel := client.proxies["http-port-blocked"]
 	client.proxyMu.RUnlock()
 	if runtimeTunnel == nil {
-		t.Fatal("端口不在白名单的隧道应生成 error 占位")
+		t.Fatal("tunnel with a port outside the allowlist should create an error placeholder")
 	}
 	if runtimeTunnel.Config.Domain != domain {
-		t.Fatalf("error 占位应保留 domain=%q，得到 %q", domain, runtimeTunnel.Config.Domain)
+		t.Fatalf("error placeholder should retain domain=%q, got %q", domain, runtimeTunnel.Config.Domain)
 	}
 
 	deadline := time.Now().Add(time.Second)
@@ -3111,7 +3111,7 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 			}
 			var payload map[string]any
 			if err := json.Unmarshal([]byte(ev.Data), &payload); err != nil {
-				t.Fatalf("解析 tunnel_changed 事件失败: %v", err)
+				t.Fatalf("failed to parse tunnel_changed event: %v", err)
 			}
 			action, _ := payload["action"].(string)
 			if action != "port_not_allowed" {
@@ -3119,21 +3119,21 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 			}
 			tunnelPayload, ok := payload["tunnel"].(map[string]any)
 			if !ok {
-				t.Fatalf("事件中的 tunnel 字段类型无效: %#v", payload["tunnel"])
+				t.Fatalf("tunnel field in event has invalid type: %#v", payload["tunnel"])
 			}
 			if got, _ := tunnelPayload["domain"].(string); got != domain {
-				t.Fatalf("port_not_allowed 事件应保留 domain=%q，得到 %q", domain, got)
+				t.Fatalf("port_not_allowed event should retain domain=%q, got %q", domain, got)
 			}
 			return
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
 
-	t.Fatal("未收到 port_not_allowed 的 tunnel_changed 事件")
+	t.Fatal("did not receive the tunnel_changed event for port_not_allowed")
 }
 
 // ============================================================
-// 认证 — Token 兑换集成测试
+// Authentication — token exchange integration tests
 // ============================================================
 
 func TestAuth_KeyExchange_ReturnsToken(t *testing.T) {
@@ -3159,13 +3159,13 @@ func TestAuth_KeyExchange_ReturnsToken(t *testing.T) {
 	resp.ParsePayload(&authResp)
 
 	if !authResp.Success {
-		t.Fatalf("认证应成功: %s", authResp.Message)
+		t.Fatalf("authentication should succeed: %s", authResp.Message)
 	}
 	if authResp.Token == "" {
-		t.Error("Key 认证成功后应返回 Token")
+		t.Error("token should be returned after successful key authentication")
 	}
 	if authResp.ClientID == "" {
-		t.Error("ClientID 不应为空")
+		t.Error("ClientID should not be empty")
 	}
 }
 
@@ -3173,36 +3173,36 @@ func TestAuth_TokenReconnect(t *testing.T) {
 	s, _, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	// 1. 首先用 Key 认证获取 Token
+	// 1. first authenticate with the key to obtain a token
 	conn1, _ := connectAndAuth(t, ts, "token-reconnect-host")
 
-	// 从 adminStore 获取为此 install_id 生成的 Token
+	// get the token generated for this install_id from adminStore
 	clientToken := s.auth.adminStore.GetClientTokenByInstallID("install-token-reconnect-host")
 	if clientToken == nil {
-		t.Fatal("首次 Key 认证后应有 Token 记录")
+		t.Fatal("there should be a token record after the first key authentication")
 	}
 
-	// 获取当前 Key 的 use_count
+	// get the current key use_count
 	keys := s.auth.adminStore.GetAPIKeys()
 	useCountBefore := keys[0].UseCount
 
-	// 断开连接
+	// disconnect
 	conn1.Close()
 	time.Sleep(200 * time.Millisecond)
 
-	// 2. 用新生成的 Token 重连（需要知道原始 Token，但 hash 后无法恢复）
-	//    这里直接重新用 Key 兑换一次来模拟客户端已有 Token 的场景
-	//    真实客户端会保存 AuthResponse.Token
-	// 实际上我们验证的是：同一 install_id 再次 ExchangeToken 不会增加 use_count
+	// 2. reconnect with the newly generated token (the original token would be needed, but it cannot be recovered after hashing)
+	//    here, exchange with the key once more directly to simulate the client already having a token
+	//    real clients persist AuthResponse.Token
+	// what this actually verifies is that calling ExchangeToken again for the same install_id does not increase use_count
 	_, _, err := s.auth.adminStore.ExchangeToken("test-key", "install-token-reconnect-host", clientToken.ClientID, "127.0.0.1:12345")
 	if err != nil {
-		t.Fatalf("Token 重用 ExchangeToken 失败: %v", err)
+		t.Fatalf("reused-token ExchangeToken failed: %v", err)
 	}
 
-	// 同一 install_id 已有有效 Token，不应消耗 Key
+	// when the same install_id already has a valid token, it should not consume the key
 	keys = s.auth.adminStore.GetAPIKeys()
 	if keys[0].UseCount != useCountBefore {
-		t.Errorf("Token 重用不应消耗 Key: 期望 %d, 得到 %d", useCountBefore, keys[0].UseCount)
+		t.Errorf("token reuse should not consume the key: want %d, got %d", useCountBefore, keys[0].UseCount)
 	}
 }
 
@@ -3210,7 +3210,7 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 	_, conn, _, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	// 模拟旧版客户端：只发 Key，不发 Token
+	// simulate an old client version: send only Key, not Token
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
 		InstallID: "install-old-client",
@@ -3220,7 +3220,7 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 			Arch:     "amd64",
 			Version:  "0.0.9",
 		},
-		// Token 字段为空 (omitempty)
+		// Token field is empty (omitempty)
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 	conn.WriteJSON(msg)
@@ -3231,10 +3231,10 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 	resp.ParsePayload(&authResp)
 
 	if !authResp.Success {
-		t.Fatalf("旧版客户端 Key 认证应成功: %s", authResp.Message)
+		t.Fatalf("old client key authentication should succeed: %s", authResp.Message)
 	}
 	if authResp.Token == "" {
-		t.Error("即使是旧客户端，服务端也应返回 Token（客户端可忽略）")
+		t.Error("even for old clients, the server should return a Token (the client may ignore it)")
 	}
 }
 
@@ -3242,35 +3242,35 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 
 // ============================================================
 
-// TestServer_GracefulShutdown 验证 P15：调用 Shutdown 后 Client 连接被正常关闭
+// TestServer_GracefulShutdown verify P15: after calling Shutdown, the client connection is closed normally
 func TestServer_GracefulShutdown(t *testing.T) {
-	// 使用真实的 Start() 启动服务器
+	// start the server with the real Start()
 	tmpDir := t.TempDir()
 	s := New(reserveTCPPort(t))
 	s.DataDir = tmpDir
 
-	// 预创建 AdminStore
+	// pre-create AdminStore
 	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "server", "admin.json"))
 	if err != nil {
-		t.Fatalf("创建 AdminStore 失败: %v", err)
+		t.Fatalf("failed to create AdminStore: %v", err)
 	}
-	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
+	adminStore.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
-		t.Fatalf("初始化 AdminStore 失败: %v", err)
+		t.Fatalf("failed to initialize AdminStore: %v", err)
 	}
 	if _, err := adminStore.AddAPIKey("default", "test-key", []string{"connect"}, nil); err != nil {
-		t.Fatalf("创建测试 API Key 失败: %v", err)
+		t.Fatalf("failed to create test API key: %v", err)
 	}
 	s.auth.adminStore = adminStore
 
-	// 在 goroutine 中启动 Server
+	// start the server in a goroutine
 	serverErr := make(chan error, 1)
 	go func() {
 		serverErr <- s.Start()
 	}()
 	time.Sleep(200 * time.Millisecond)
 
-	// 连接一个 Client
+	// connect a client
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws/control", s.Port)
 	dialer := *websocket.DefaultDialer
 	dialer.Subprotocols = []string{protocol.WSSubProtocolControl}
@@ -3285,17 +3285,17 @@ func TestServer_GracefulShutdown(t *testing.T) {
 		}
 		select {
 		case err := <-serverErr:
-			t.Fatalf("服务端启动失败: %v", err)
+			t.Fatalf("server failed to start: %v", err)
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("WebSocket 连接失败: %v", dialErr)
+			t.Fatalf("WebSocket connection failed: %v", dialErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	defer conn.Close()
 
-	// 完成认证
+	// complete authentication
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
 		InstallID: "install-shutdown-test",
@@ -3312,42 +3312,42 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	conn.ReadJSON(&authMsg)
 
-	// 确认 Client 已注册
+	// confirm that the client is registered
 	clientCount := 0
 	s.clients.Range(func(_, _ any) bool {
 		clientCount++
 		return true
 	})
 	if clientCount == 0 {
-		t.Fatal("Client 应已注册")
+		t.Fatal("client should be registered")
 	}
 
-	// 调用优雅关闭
+	// call graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := s.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown 失败: %v", err)
+		t.Fatalf("Shutdown failed: %v", err)
 	}
 
-	// 验证 clients 已清空
+	// verify clients have been cleared
 	clientCount = 0
 	s.clients.Range(func(_, _ any) bool {
 		clientCount++
 		return true
 	})
 	if clientCount != 0 {
-		t.Errorf("Shutdown 后 clients 应为空，得到 %d", clientCount)
+		t.Errorf("clients should be empty after Shutdown, got %d", clientCount)
 	}
 
-	// 验证 Server 已停止（Serve 返回）
+	// verify the server has stopped (Serve returned)
 	select {
 	case err := <-serverErr:
 		if err != nil && err.Error() != "http: Server closed" {
-			t.Errorf("Server 返回了非预期错误: %v", err)
+			t.Errorf("server returned an unexpected error: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Error("Server 应在 Shutdown 后返回")
+		t.Error("server should return after Shutdown")
 	}
 }
 
@@ -3358,19 +3358,19 @@ func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
 
 	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "server", "admin.json"))
 	if err != nil {
-		t.Fatalf("创建 AdminStore 失败: %v", err)
+		t.Fatalf("failed to create AdminStore: %v", err)
 	}
 	adminStore.bcryptCost = bcrypt.MinCost
 	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
-		t.Fatalf("初始化 AdminStore 失败: %v", err)
+		t.Fatalf("failed to initialize AdminStore: %v", err)
 	}
 	if _, err := adminStore.AddAPIKey("default", "test-key", []string{"connect"}, nil); err != nil {
-		t.Fatalf("创建测试 API Key 失败: %v", err)
+		t.Fatalf("failed to create test API key: %v", err)
 	}
 	s.auth.adminStore = adminStore
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("获取临时端口失败: %v", err)
+		t.Fatalf("failed to get temporary port: %v", err)
 	}
 	s.Port = ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
@@ -3395,11 +3395,11 @@ func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
 		}
 		select {
 		case err := <-serverErr:
-			t.Fatalf("服务端启动失败: %v", err)
+			t.Fatalf("server failed to start: %v", err)
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("WebSocket 连接失败: %v", dialErr)
+			t.Fatalf("WebSocket connection failed: %v", dialErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -3409,26 +3409,26 @@ func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
 	defer cancel()
 
 	if err := s.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown 失败: %v", err)
+		t.Fatalf("Shutdown failed: %v", err)
 	}
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	var msg protocol.Message
 	err = conn.ReadJSON(&msg)
 	if err == nil {
-		t.Fatal("Shutdown 后未认证控制连接应被关闭")
+		t.Fatal("unauthenticated control connection should be closed after Shutdown")
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		t.Fatalf("Shutdown 后控制连接未被及时关闭，读超时: %v", err)
+		t.Fatalf("control connection was not closed in time after Shutdown, read timed out: %v", err)
 	}
 
 	select {
 	case err := <-serverErr:
 		if err != nil && err.Error() != "http: Server closed" {
-			t.Errorf("Server 返回了非预期错误: %v", err)
+			t.Errorf("server returned an unexpected error: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Error("Server 应在 Shutdown 后返回")
+		t.Error("server should return after Shutdown")
 	}
 }

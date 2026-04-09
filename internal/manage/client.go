@@ -77,12 +77,12 @@ func showClientDetails(deps clientDeps) error {
 	if err != nil {
 		return err
 	}
-	deps.UI.PrintSummary("客户端详情", [][2]string{{"服务名", spec.ServiceName}, {"服务端", env.Server}, {"跳过 TLS 校验", boolLabel(env.TLSSkipVerify)}, {"TLS 指纹", env.TLSFingerprint}})
+	deps.UI.PrintSummary("Client details", [][2]string{{"Service name", spec.ServiceName}, {"Server", env.Server}, {"Skip TLS verification", boolLabel(env.TLSSkipVerify)}, {"TLS fingerprint", env.TLSFingerprint}})
 	return nil
 }
 
 func uninstallClient(deps clientDeps) error {
-	ok, err := deps.UI.Confirm("确认卸载?")
+	ok, err := deps.UI.Confirm("Confirm uninstall?")
 	if err != nil {
 		return err
 	}
