@@ -9,9 +9,8 @@ export const EMPTY_CONSOLE_SUMMARY: ConsoleSummary = {
   active_tunnels: 0,
   inactive_tunnels: 0,
   pending_tunnels: 0,
-    offline_tunnels: 0,
-    paused_tunnels: 0,
-    stopped_tunnels: 0,
+  offline_tunnels: 0,
+  stopped_tunnels: 0,
   error_tunnels: 0,
 };
 

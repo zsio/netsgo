@@ -82,7 +82,7 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 	}
 
 	if s.auth.adminStore != nil {
-				if s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(req.RemotePort) {
+		if s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(req.RemotePort) {
 			return newProxyRequestValidationError(fmt.Errorf("port %d is not in the allowed range", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 		}
 	}
@@ -181,7 +181,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 		return nil, err
 	}
 
-		client.proxyMu.Lock()
+	client.proxyMu.Lock()
 	if client.proxies == nil {
 		client.proxies = make(map[string]*ProxyTunnel)
 	}
@@ -220,7 +220,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	}
 
 	if tunnel.Config.Type == protocol.ProxyTypeHTTP {
-				setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+		setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 		return nil
 	}
 
@@ -405,7 +405,7 @@ func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listen
 		return
 	}
 
-		atob, btoa := mux.Relay(stream, extConn)
+	atob, btoa := mux.Relay(stream, extConn)
 	if s.trafficStore != nil {
 		s.trafficStore.RecordBytes(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(btoa), uint64(atob))
 	}
@@ -437,8 +437,8 @@ func (s *Server) StopAllProxies(client *ClientConn) {
 	}
 }
 
-// PauseProxy pauses a proxy tunnel (closes runtime resources only; business state is written by the manager layer).
-func (s *Server) PauseProxy(client *ClientConn, name string) error {
+// CloseProxyRuntime closes runtime resources for an existing tunnel; the manager layer owns state transitions.
+func (s *Server) CloseProxyRuntime(client *ClientConn, name string) error {
 	client.proxyMu.Lock()
 	tunnel, exists := client.proxies[name]
 	if !exists {
@@ -448,12 +448,12 @@ func (s *Server) PauseProxy(client *ClientConn, name string) error {
 	closeTunnelRuntimeResources(tunnel)
 	client.proxyMu.Unlock()
 
-	log.Printf("⏸️ proxy tunnel paused: %s", name)
+	log.Printf("🛑 proxy tunnel runtime closed: %s", name)
 	return nil
 }
 
-// ResumeProxy resumes a paused proxy tunnel by re-binding the port.
-func (s *Server) ResumeProxy(client *ClientConn, name string) error {
+// ReopenProxyRuntime re-binds runtime resources for an existing tunnel.
+func (s *Server) ReopenProxyRuntime(client *ClientConn, name string) error {
 	client.proxyMu.RLock()
 	tunnel, exists := client.proxies[name]
 	if !exists {
@@ -462,7 +462,7 @@ func (s *Server) ResumeProxy(client *ClientConn, name string) error {
 	}
 	client.proxyMu.RUnlock()
 
-		if tunnel.Config.RemotePort != 0 && s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
+	if tunnel.Config.RemotePort != 0 && s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
 		return fmt.Errorf("port %d is no longer in the allowed range, cannot resume", tunnel.Config.RemotePort)
 	}
 
@@ -470,12 +470,12 @@ func (s *Server) ResumeProxy(client *ClientConn, name string) error {
 		return err
 	}
 
-	log.Printf("▶️ proxy tunnel resumed: %s [:%d]", name, tunnel.Config.RemotePort)
+	log.Printf("▶️ proxy tunnel runtime reopened: %s [:%d]", name, tunnel.Config.RemotePort)
 	return nil
 }
 
-// PauseAllProxies pauses all active proxy tunnels for a client, retaining config (used on disconnect).
-func (s *Server) PauseAllProxies(client *ClientConn) {
+// CloseExposedProxyRuntime marks all exposed tunnels offline after the client disconnects.
+func (s *Server) CloseExposedProxyRuntime(client *ClientConn) {
 	client.proxyMu.Lock()
 	defer client.proxyMu.Unlock()
 

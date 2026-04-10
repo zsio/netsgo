@@ -311,10 +311,9 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 		}
 	})
 
-	t.Run("pending paused stopped and error still conflict", func(t *testing.T) {
+	t.Run("pending stopped and error still conflict", func(t *testing.T) {
 		statuses := []string{
 			protocol.ProxyStatusPending,
-			protocol.ProxyStatusPaused,
 			protocol.ProxyStatusStopped,
 			protocol.ProxyStatusError,
 		}
@@ -370,7 +369,7 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 			Domain:    "dup.example.com",
 			LocalIP:   "127.0.0.1",
 			LocalPort: 8080,
-		}, protocol.ProxyStatusPaused)
+		}, protocol.ProxyStatusStopped)
 		seedStoredTunnel(t, s, "client-2", protocol.ProxyNewRequest{
 			Name:      "shared-name",
 			Type:      protocol.ProxyTypeHTTP,

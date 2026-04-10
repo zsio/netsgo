@@ -89,33 +89,33 @@ func TestOfflineHTTPTunnel_Update_StoreFirst(t *testing.T) {
 	}
 }
 
-func TestOfflineHTTPTunnel_Pause_StoreFirst(t *testing.T) {
+func TestOfflineHTTPTunnel_Stop_StoreFirstUsesStoppedState(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
-	clientID := registerOfflineHTTPTestClient(t, s, "offline-pause")
+	clientID := registerOfflineHTTPTestClient(t, s, "offline-stop")
 	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
 		Name:      "offline-http",
 		Type:      protocol.ProxyTypeHTTP,
 		LocalIP:   "127.0.0.1",
 		LocalPort: 3000,
-		Domain:    "pause.example.com",
+		Domain:    "stop.example.com",
 	}, protocol.ProxyStatusActive)
 
-	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-http/pause", clientID), token, []byte(`{}`))
+	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-http/stop", clientID), token, []byte(`{}`))
 	if resp.Code != http.StatusOK {
-		t.Fatalf("offline HTTP pause: want 200, got %d, body=%s", resp.Code, resp.Body.String())
+		t.Fatalf("offline HTTP stop: want 200, got %d, body=%s", resp.Code, resp.Body.String())
 	}
 
 	stored, exists := s.store.GetTunnel(clientID, "offline-http")
 	if !exists {
-		t.Fatal("HTTP tunnel should still exist in the store after pause")
+		t.Fatal("HTTP tunnel should still exist in the store after stop")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateStopped || stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Fatalf("store state after pause: want stopped/idle, got %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("store state after stop: want stopped/idle, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
-	if stored.Domain != "pause.example.com" {
-		t.Fatalf("Domain should be preserved after pause, got %s", stored.Domain)
+	if stored.Domain != "stop.example.com" {
+		t.Fatalf("domain should be preserved after stop, got %s", stored.Domain)
 	}
 }
 
@@ -156,7 +156,7 @@ func TestOfflineHTTPTunnel_Resume_StoreFirst(t *testing.T) {
 		LocalIP:   "127.0.0.1",
 		LocalPort: 3000,
 		Domain:    "resume.example.com",
-	}, protocol.ProxyStatusPaused)
+	}, protocol.ProxyStatusStopped)
 
 	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-http/resume", clientID), token, []byte(`{}`))
 	if resp.Code != http.StatusOK {

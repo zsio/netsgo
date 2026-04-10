@@ -141,7 +141,7 @@ func TestOfflineManagedTunnel_Update_StoreFirstForTCPAndUDP(t *testing.T) {
 	}
 }
 
-func TestOfflineManagedTunnel_Pause_StoreFirstForTCPAndUDP(t *testing.T) {
+func TestOfflineManagedTunnel_Stop_StoreFirstForTCPAndUDP(t *testing.T) {
 	testCases := []struct {
 		name       string
 		tunnelType string
@@ -156,7 +156,7 @@ func TestOfflineManagedTunnel_Pause_StoreFirstForTCPAndUDP(t *testing.T) {
 			s, handler, token, cleanup := setupTestServerWithStores(t, true)
 			defer cleanup()
 
-			clientID := registerOfflineHTTPTestClient(t, s, "offline-pause-"+tc.name)
+			clientID := registerOfflineHTTPTestClient(t, s, "offline-stop-"+tc.name)
 			seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
 				Name:       "offline-" + tc.name,
 				Type:       tc.tunnelType,
@@ -165,17 +165,17 @@ func TestOfflineManagedTunnel_Pause_StoreFirstForTCPAndUDP(t *testing.T) {
 				RemotePort: tc.remotePort,
 			}, protocol.ProxyStatusActive)
 
-			resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-%s/pause", clientID, tc.name), token, []byte(`{}`))
+			resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-%s/stop", clientID, tc.name), token, []byte(`{}`))
 			if resp.Code != http.StatusOK {
-				t.Fatalf("Offline %s pause expected 200, got %d, body=%s", tc.tunnelType, resp.Code, resp.Body.String())
+				t.Fatalf("offline %s stop expected 200, got %d, body=%s", tc.tunnelType, resp.Code, resp.Body.String())
 			}
 
 			stored, exists := s.store.GetTunnel(clientID, "offline-"+tc.name)
 			if !exists {
-				t.Fatalf("Offline %s pause should retain record in store", tc.tunnelType)
+				t.Fatalf("offline %s stop should retain record in store", tc.tunnelType)
 			}
 			if stored.DesiredState != protocol.ProxyDesiredStateStopped || stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
-				t.Fatalf("Offline %s pause state error, got desired=%s runtime=%s", tc.tunnelType, stored.DesiredState, stored.RuntimeState)
+				t.Fatalf("offline %s stop state error, got desired=%s runtime=%s", tc.tunnelType, stored.DesiredState, stored.RuntimeState)
 			}
 		})
 	}
@@ -203,7 +203,7 @@ func TestOfflineManagedTunnel_Resume_StoreFirstForTCPAndUDP(t *testing.T) {
 				LocalIP:    "127.0.0.1",
 				LocalPort:  8080,
 				RemotePort: tc.remotePort,
-			}, protocol.ProxyStatusPaused)
+			}, protocol.ProxyStatusStopped)
 
 			resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-%s/resume", clientID, tc.name), token, []byte(`{}`))
 			if resp.Code != http.StatusOK {
@@ -216,46 +216,6 @@ func TestOfflineManagedTunnel_Resume_StoreFirstForTCPAndUDP(t *testing.T) {
 			}
 			if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateOffline {
 				t.Fatalf("Offline %s resume state error, got desired=%s runtime=%s", tc.tunnelType, stored.DesiredState, stored.RuntimeState)
-			}
-		})
-	}
-}
-
-func TestOfflineManagedTunnel_Stop_StoreFirstForTCPAndUDP(t *testing.T) {
-	testCases := []struct {
-		name       string
-		tunnelType string
-		remotePort int
-	}{
-		{name: "tcp", tunnelType: protocol.ProxyTypeTCP, remotePort: reserveTCPPort(t)},
-		{name: "udp", tunnelType: protocol.ProxyTypeUDP, remotePort: reserveUDPPort(t)},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			s, handler, token, cleanup := setupTestServerWithStores(t, true)
-			defer cleanup()
-
-			clientID := registerOfflineHTTPTestClient(t, s, "offline-stop-"+tc.name)
-			seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
-				Name:       "offline-" + tc.name,
-				Type:       tc.tunnelType,
-				LocalIP:    "127.0.0.1",
-				LocalPort:  8080,
-				RemotePort: tc.remotePort,
-			}, protocol.ProxyStatusActive)
-
-			resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/offline-%s/stop", clientID, tc.name), token, []byte(`{}`))
-			if resp.Code != http.StatusOK {
-				t.Fatalf("Offline %s stop expected 200, got %d, body=%s", tc.tunnelType, resp.Code, resp.Body.String())
-			}
-
-			stored, exists := s.store.GetTunnel(clientID, "offline-"+tc.name)
-			if !exists {
-				t.Fatalf("Offline %s stop should retain record in store", tc.tunnelType)
-			}
-			if stored.DesiredState != protocol.ProxyDesiredStateStopped || stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
-				t.Fatalf("Offline %s stop state error, got desired=%s runtime=%s", tc.tunnelType, stored.DesiredState, stored.RuntimeState)
 			}
 		})
 	}

@@ -45,7 +45,6 @@ type serverStatusView struct {
 	SystemUptime   int64                    `json:"system_uptime"`
 	OSInstallTime  int64                    `json:"os_install_time,omitempty"`
 	TunnelActive   int                      `json:"tunnel_active"`
-	TunnelPaused   int                      `json:"tunnel_paused"`
 	TunnelStopped  int                      `json:"tunnel_stopped"`
 	ServerAddr     string                   `json:"server_addr"`
 	AllowedPorts   []PortRange              `json:"allowed_ports"`
@@ -247,7 +246,6 @@ func (s *Server) collectServerStatus() serverStatusView {
 	now := time.Now()
 	clientCount := 0
 	tunnelActive := 0
-	tunnelPaused := 0
 	tunnelStopped := 0
 
 	s.clients.Range(func(_, value any) bool {
@@ -375,7 +373,6 @@ func (s *Server) collectServerStatus() serverStatusView {
 		SystemUptime:   int64(sysUptime),
 		OSInstallTime:  osInstallTime,
 		TunnelActive:   tunnelActive,
-		TunnelPaused:   tunnelPaused,
 		TunnelStopped:  tunnelStopped,
 		ServerAddr:     serverAddr,
 		AllowedPorts:   allowedPorts,

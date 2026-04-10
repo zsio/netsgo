@@ -19,7 +19,6 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): TunnelEntry {
     desired_state: 'running',
     runtime_state: 'exposed',
     capabilities: {
-      can_pause: true,
       can_resume: false,
       can_stop: true,
       can_edit: false,
@@ -52,7 +51,6 @@ describe('TunnelListTable', () => {
     const markup = renderTable([
       createTunnel({
         capabilities: {
-          can_pause: false,
           can_resume: true,
           can_stop: false,
           can_edit: true,

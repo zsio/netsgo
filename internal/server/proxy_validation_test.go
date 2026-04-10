@@ -130,12 +130,12 @@ func TestValidateProxyRequest_RejectsConflictsAcrossRuntimeAndStore(t *testing.T
 	s := newProxyValidationTestServer(t, 28080, "https://panel.example.com", nil)
 
 	seedStoredTunnel(t, s, "client-store", protocol.ProxyNewRequest{
-		Name:       "stored-paused",
+		Name:       "stored-stopped",
 		Type:       protocol.ProxyTypeTCP,
 		LocalIP:    "127.0.0.1",
 		LocalPort:  3000,
 		RemotePort: 19090,
-	}, protocol.ProxyStatusPaused)
+	}, protocol.ProxyStatusStopped)
 
 	liveClient := &ClientConn{
 		ID:      "client-live",
@@ -159,7 +159,7 @@ func TestValidateProxyRequest_RejectsConflictsAcrossRuntimeAndStore(t *testing.T
 		name string
 		port int
 	}{
-		{name: "conflict with stored paused tunnel", port: 19090},
+		{name: "conflict with stored stopped tunnel", port: 19090},
 		{name: "conflict with runtime error tunnel", port: 19091},
 	}
 
@@ -197,7 +197,7 @@ func TestValidateProxyRequestWithExclusions_AllowsUpdatingSameTunnelPort(t *test
 			LocalPort:    8080,
 			RemotePort:   19100,
 			ClientID:     client.ID,
-			DesiredState: protocol.ProxyDesiredStatePaused,
+			DesiredState: protocol.ProxyDesiredStateStopped,
 			RuntimeState: protocol.ProxyRuntimeStateIdle,
 		},
 	}
@@ -209,7 +209,7 @@ func TestValidateProxyRequestWithExclusions_AllowsUpdatingSameTunnelPort(t *test
 		LocalIP:    "127.0.0.1",
 		LocalPort:  8080,
 		RemotePort: 19100,
-	}, protocol.ProxyStatusPaused)
+	}, protocol.ProxyStatusStopped)
 
 	err := s.validateProxyRequestWithExclusions(client, protocol.ProxyNewRequest{
 		Name:       "editable",

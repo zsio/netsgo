@@ -183,7 +183,7 @@ func (s *Server) invalidateLogicalSessionIfCurrent(clientID string, generation u
 		_ = dataSession.Close()
 	}
 
-	s.PauseAllProxies(client)
+	s.CloseExposedProxyRuntime(client)
 
 	if wasLive {
 		info := client.GetInfo()

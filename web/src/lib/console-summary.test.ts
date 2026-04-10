@@ -16,7 +16,6 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
     desired_state: 'running',
     runtime_state: 'exposed',
     capabilities: {
-      can_pause: true,
       can_resume: false,
       can_stop: true,
       can_edit: false,
@@ -60,7 +59,7 @@ describe('summarizeConsoleClients', () => {
         online: false,
         proxies: [
           createTunnel({ name: 'offline', desired_state: 'running', runtime_state: 'exposed' }),
-          createTunnel({ name: 'paused', desired_state: 'paused', runtime_state: 'idle' }),
+          createTunnel({ name: 'stopped-a', desired_state: 'stopped', runtime_state: 'idle' }),
           createTunnel({ name: 'stopped', desired_state: 'stopped', runtime_state: 'idle' }),
         ],
       }),
@@ -74,7 +73,6 @@ describe('summarizeConsoleClients', () => {
     expect(summary.inactive_tunnels).toBe(5);
     expect(summary.pending_tunnels).toBe(1);
     expect(summary.offline_tunnels).toBe(1);
-    expect(summary.paused_tunnels).toBe(0);
     expect(summary.stopped_tunnels).toBe(2);
     expect(summary.error_tunnels).toBe(1);
   });

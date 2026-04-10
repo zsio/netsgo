@@ -7,7 +7,7 @@ import (
 )
 
 func canonicalDesiredState(desiredState string) string {
-	if desiredState == protocol.ProxyDesiredStatePaused {
+	if desiredState == "paused" {
 		return protocol.ProxyDesiredStateStopped
 	}
 	return desiredState
@@ -32,7 +32,7 @@ func validateTunnelStates(desiredState, runtimeState, errMsg string) error {
 		default:
 			return fmt.Errorf("running desired_state does not support runtime_state=%q", runtimeState)
 		}
-	case protocol.ProxyDesiredStatePaused, protocol.ProxyDesiredStateStopped:
+	case protocol.ProxyDesiredStateStopped:
 		if runtimeState != protocol.ProxyRuntimeStateIdle {
 			return fmt.Errorf("desired_state=%q only allows runtime_state=idle, got %q", desiredState, runtimeState)
 		}
@@ -79,10 +79,6 @@ func isTunnelOffline(config protocol.ProxyConfig) bool {
 		config.RuntimeState == protocol.ProxyRuntimeStateOffline
 }
 
-func canPauseTunnel(config protocol.ProxyConfig) bool {
-	return isTunnelExposed(config) || isTunnelOffline(config)
-}
-
 func canResumeTunnel(config protocol.ProxyConfig) bool {
 	desiredState := canonicalDesiredState(config.DesiredState)
 	return (desiredState == protocol.ProxyDesiredStateStopped && config.RuntimeState == protocol.ProxyRuntimeStateIdle) ||
@@ -96,13 +92,11 @@ func canEditOrDeleteLiveTunnel(config protocol.ProxyConfig) bool {
 }
 
 func computeTunnelCapabilities(config protocol.ProxyConfig) *protocol.TunnelCapabilities {
-	canPause := false
 	canResume := canResumeTunnel(config)
 	canStop := isTunnelExposed(config) || isTunnelOffline(config)
 	canEdit := canEditOrDeleteLiveTunnel(config) || isTunnelOffline(config)
 	canDelete := config.RuntimeState != protocol.ProxyRuntimeStatePending
 	return &protocol.TunnelCapabilities{
-		CanPause:  canPause,
 		CanResume: canResume,
 		CanStop:   canStop,
 		CanEdit:   canEdit,

@@ -149,7 +149,7 @@ func TestTunnelStore_LoadLegacyHostnameBindingFallsBackToEmptyStore(t *testing.T
 	    "type": "tcp",
 	    "hostname": "legacy-host",
 	    "binding": "legacy_hostname",
-	    "desired_state": "paused",
+	    "desired_state": "stopped",
 	    "runtime_state": "idle"
 	  }
 	]`
@@ -159,6 +159,42 @@ func TestTunnelStore_LoadLegacyHostnameBindingFallsBackToEmptyStore(t *testing.T
 
 	if _, err := NewTunnelStore(path); err == nil {
 		t.Fatal("old format/invalid state file should cause NewTunnelStore to fail")
+	}
+}
+
+func TestTunnelStore_LoadLegacyPausedDesiredStateCanonicalizesToStopped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tunnels.json")
+
+	legacyJSON := `[
+	  {
+	    "name": "legacy-paused",
+	    "type": "tcp",
+	    "local_ip": "127.0.0.1",
+	    "local_port": 8080,
+	    "remote_port": 18080,
+	    "binding": "client_id",
+	    "client_id": "client-1",
+	    "hostname": "legacy-host",
+	    "desired_state": "paused",
+	    "runtime_state": "idle"
+	  }
+	]`
+	if err := os.WriteFile(path, []byte(legacyJSON), 0o644); err != nil {
+		t.Fatalf("failed to write legacy store file: %v", err)
+	}
+
+	store, err := NewTunnelStore(path)
+	if err != nil {
+		t.Fatalf("legacy paused tunnel should still load: %v", err)
+	}
+
+	stored, ok := store.GetTunnel("client-1", "legacy-paused")
+	if !ok {
+		t.Fatal("should load legacy paused tunnel")
+	}
+	if stored.DesiredState != protocol.ProxyDesiredStateStopped || stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Fatalf("legacy paused tunnel should canonicalize to stopped/idle, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 }
 
@@ -272,7 +308,7 @@ func TestTunnelStore_UpdateStates(t *testing.T) {
 		RuntimeState:    protocol.ProxyRuntimeStateExposed,
 	})
 
-	if err := store.UpdateStates("client-1", "t1", protocol.ProxyDesiredStatePaused, protocol.ProxyRuntimeStateIdle, ""); err != nil {
+	if err := store.UpdateStates("client-1", "t1", protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, ""); err != nil {
 		t.Fatalf("UpdateStates failed: %v", err)
 	}
 	st, _ := store.GetTunnel("client-1", "t1")
@@ -318,7 +354,7 @@ func TestTunnelStore_UpdateState_ErrorRoundTrip(t *testing.T) {
 		t.Fatalf("expected error reason %q, got %q", "restore failed", st.Error)
 	}
 
-	if err := store.UpdateStates("client-1", "t-error", protocol.ProxyDesiredStatePaused, protocol.ProxyRuntimeStateIdle, ""); err != nil {
+	if err := store.UpdateStates("client-1", "t-error", protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, ""); err != nil {
 		t.Fatalf("UpdateStates clearing error failed: %v", err)
 	}
 	st, _ = store.GetTunnel("client-1", "t-error")

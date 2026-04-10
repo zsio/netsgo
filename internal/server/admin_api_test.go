@@ -169,9 +169,6 @@ func seedStoredTunnel(t *testing.T, s *Server, clientID string, req protocol.Pro
 		runtimeState = protocol.ProxyRuntimeStatePending
 	case protocol.ProxyStatusActive:
 		runtimeState = protocol.ProxyRuntimeStateExposed
-	case protocol.ProxyStatusPaused:
-		desiredState = protocol.ProxyDesiredStatePaused
-		runtimeState = protocol.ProxyRuntimeStateIdle
 	case protocol.ProxyStatusStopped:
 		desiredState = protocol.ProxyDesiredStateStopped
 		runtimeState = protocol.ProxyRuntimeStateIdle
@@ -600,7 +597,7 @@ func TestAdminConfigDryRun(t *testing.T) {
 			Domain:    "App.Example.com",
 			LocalIP:   "127.0.0.1",
 			LocalPort: 8080,
-		}, protocol.ProxyStatusPaused)
+		}, protocol.ProxyStatusStopped)
 
 		body := []byte(`{"server_addr":"https://app.example.com","allowed_ports":[]}`)
 		resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/config?dry_run=true", token, body)

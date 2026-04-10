@@ -48,7 +48,7 @@ interface TunnelListTableProps {
   showTraffic24h?: boolean;
   /** 24h 流量数据状态 */
   traffic24hState?: Traffic24hState;
-  /** 是否显示操作按钮（暂停/恢复/删除/编辑） */
+  /** 是否显示操作按钮（启动/停止/删除/编辑） */
   showActions?: boolean;
   /** 是否显示搜索框 */
   showSearch?: boolean;

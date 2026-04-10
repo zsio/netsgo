@@ -53,11 +53,10 @@ export interface Client {
 // --- Tunnel / Proxy ---
 
 export type ProxyType = "tcp" | "udp" | "http";
-export type ProxyDesiredState = "running" | "paused" | "stopped";
+export type ProxyDesiredState = "running" | "stopped";
 export type ProxyRuntimeState = "pending" | "exposed" | "offline" | "idle" | "error";
 
 export interface TunnelCapabilities {
-  can_pause: boolean;
   can_resume: boolean;
   can_stop: boolean;
   can_edit: boolean;
@@ -142,7 +141,6 @@ export interface ConsoleSummary {
   inactive_tunnels: number;
   pending_tunnels: number;
   offline_tunnels: number;
-  paused_tunnels: number;
   stopped_tunnels: number;
   error_tunnels: number;
 }
@@ -173,7 +171,6 @@ export interface ServerStatus {
   system_uptime: number;  // seconds (OS boot uptime)
   os_install_time?: number; // unix timestamp (seconds)
   tunnel_active: number;
-  tunnel_paused: number;
   tunnel_stopped: number;
   server_addr: string;
   allowed_ports: PortRange[];

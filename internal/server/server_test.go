@@ -365,7 +365,7 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 		t.Fatalf("failed to pre-create offline client: %v", err)
 	}
 	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-active", Type: protocol.ProxyTypeTCP, RemotePort: 20001}, protocol.ProxyStatusActive)
-	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-paused", Type: protocol.ProxyTypeTCP, RemotePort: 20002}, protocol.ProxyStatusPaused)
+	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-stopped-a", Type: protocol.ProxyTypeTCP, RemotePort: 20002}, protocol.ProxyStatusStopped)
 	seedStoredTunnel(t, s, offlineRecord.ID, protocol.ProxyNewRequest{Name: "offline-stopped", Type: protocol.ProxyTypeTCP, RemotePort: 20003}, protocol.ProxyStatusStopped)
 
 	authResp := doAuthWithInstallID(t, conn, "online-summary-host", "install-online-summary-host", "test-key")
@@ -393,7 +393,6 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 		"inactive_tunnels": 5,
 		"pending_tunnels":  1,
 		"offline_tunnels":  1,
-		"paused_tunnels":   0,
 		"stopped_tunnels":  2,
 		"error_tunnels":    1,
 	}
@@ -423,7 +422,7 @@ func TestAPI_Status_TunnelCounts(t *testing.T) {
 
 	client.proxyMu.Lock()
 	client.proxies["tunnel1"] = &ProxyTunnel{Config: protocol.ProxyConfig{DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStateExposed}, done: make(chan struct{})}
-	client.proxies["tunnel2"] = &ProxyTunnel{Config: protocol.ProxyConfig{DesiredState: protocol.ProxyDesiredStatePaused, RuntimeState: protocol.ProxyRuntimeStateIdle}, done: make(chan struct{})}
+	client.proxies["tunnel2"] = &ProxyTunnel{Config: protocol.ProxyConfig{DesiredState: protocol.ProxyDesiredStateStopped, RuntimeState: protocol.ProxyRuntimeStateIdle}, done: make(chan struct{})}
 	client.proxies["tunnel3"] = &ProxyTunnel{Config: protocol.ProxyConfig{DesiredState: protocol.ProxyDesiredStateStopped, RuntimeState: protocol.ProxyRuntimeStateIdle}, done: make(chan struct{})}
 	client.proxyMu.Unlock()
 
@@ -431,9 +430,6 @@ func TestAPI_Status_TunnelCounts(t *testing.T) {
 
 	if result["tunnel_active"].(float64) != 1 {
 		t.Errorf("tunnel_active: want 1, got %v", result["tunnel_active"])
-	}
-	if result["tunnel_paused"].(float64) != 0 {
-		t.Errorf("tunnel_paused: want 0, got %v", result["tunnel_paused"])
 	}
 	if result["tunnel_stopped"].(float64) != 2 {
 		t.Errorf("tunnel_stopped: want 2, got %v", result["tunnel_stopped"])
@@ -759,12 +755,12 @@ func TestEmitTunnelChanged_NormalizesDesiredAndRuntimeStates(t *testing.T) {
 	defer s.events.Unsubscribe(ch)
 
 	s.emitTunnelChanged("client-1", protocol.ProxyConfig{
-		Name:         "paused-http",
+		Name:         "stopped-http",
 		Type:         protocol.ProxyTypeHTTP,
 		ClientID:     "client-1",
-		DesiredState: protocol.ProxyDesiredStatePaused,
+		DesiredState: protocol.ProxyDesiredStateStopped,
 		RuntimeState: protocol.ProxyRuntimeStateIdle,
-	}, "paused")
+	}, "stopped")
 
 	select {
 	case event := <-ch:
@@ -2070,26 +2066,26 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		t.Errorf("initial state should be running/exposed, got %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
 	}
 
-	// 2. pause tunnel (/api/clients/{id}/tunnels/{name}/pause)
-	pauseReq := []byte(`{}`)
-	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/pause", clientID), pauseReq)
+	// 2. stop tunnel (/api/clients/{id}/tunnels/{name}/stop)
+	stopReq := []byte(`{}`)
+	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/stop", clientID), stopReq)
 	if code != http.StatusOK {
-		t.Errorf("pause tunnel: want 200, got %d", code)
+		t.Errorf("stop tunnel: want 200, got %d", code)
 	}
 
 	time.Sleep(50 * time.Millisecond)
 	tunnel, _ = s.store.GetTunnel(clientID, "test-tunnel")
 	if tunnel.DesiredState != protocol.ProxyDesiredStateStopped || tunnel.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Errorf("after pausing, tunnel state should be stopped/idle, got %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
+		t.Errorf("after stop, tunnel state should be stopped/idle, got %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
 	}
 	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var closeMsg protocol.Message
 	if err := wsConn.ReadJSON(&closeMsg); err != nil {
-		t.Fatalf("failed to read proxy_close after pause: %v", err)
+		t.Fatalf("failed to read proxy_close after stop: %v", err)
 	}
 	wsConn.SetReadDeadline(time.Time{})
 	if closeMsg.Type != protocol.MsgTypeProxyClose {
-		t.Fatalf("after pause, expected %s, got %s", protocol.MsgTypeProxyClose, closeMsg.Type)
+		t.Fatalf("after stop, expected %s, got %s", protocol.MsgTypeProxyClose, closeMsg.Type)
 	}
 
 	// 3. resume tunnel (/api/clients/{id}/tunnels/{name}/resume)
@@ -2107,7 +2103,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	}
 
 	// 4. stop tunnel (/api/clients/{id}/tunnels/{name}/stop)
-	stopReq := []byte(`{}`)
+	stopReq = []byte(`{}`)
 	code, _ = doRequest(http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/test-tunnel/stop", clientID), stopReq)
 	if code != http.StatusOK {
 		t.Errorf("stop tunnel: want 200, got %d", code)
@@ -2263,7 +2259,7 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 		Domain:    "app.example.com",
 		LocalIP:   "127.0.0.1",
 		LocalPort: 8080,
-	}, protocol.ProxyStatusPaused)
+	}, protocol.ProxyStatusStopped)
 
 	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
@@ -2328,7 +2324,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 		Domain:    "editable.example.com",
 		LocalIP:   "127.0.0.1",
 		LocalPort: 3000,
-	}, protocol.ProxyStatusPaused)
+	}, protocol.ProxyStatusStopped)
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
@@ -2344,7 +2340,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 			LocalPort:    3000,
 			Domain:       "editable.example.com",
 			ClientID:     authResp.ClientID,
-			DesiredState: protocol.ProxyDesiredStatePaused,
+			DesiredState: protocol.ProxyDesiredStateStopped,
 			RuntimeState: protocol.ProxyRuntimeStateIdle,
 		},
 		done: make(chan struct{}),
@@ -2532,7 +2528,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 			LocalPort:    8080,
 			RemotePort:   resumePort,
 			ClientID:     authResp.ClientID,
-			DesiredState: protocol.ProxyDesiredStatePaused,
+			DesiredState: protocol.ProxyDesiredStateStopped,
 			RuntimeState: protocol.ProxyRuntimeStateIdle,
 		},
 		done: make(chan struct{}),
@@ -2546,7 +2542,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 			LocalPort:  8080,
 			RemotePort: resumePort,
 		},
-		DesiredState: protocol.ProxyDesiredStatePaused,
+		DesiredState: protocol.ProxyDesiredStateStopped,
 		RuntimeState: protocol.ProxyRuntimeStateIdle,
 		ClientID:     authResp.ClientID,
 		Hostname:     "resume-post-ack-fail",
@@ -2880,7 +2876,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	})
 	tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel2", Type: "tcp", RemotePort: 5678},
-		DesiredState:    protocol.ProxyDesiredStatePaused,
+		DesiredState:    protocol.ProxyDesiredStateStopped,
 		RuntimeState:    protocol.ProxyRuntimeStateIdle,
 		ClientID:        "client-1",
 		Hostname:        "restore-host",
@@ -2948,12 +2944,12 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	}
 
 	t2, _ := s.store.GetTunnel("client-1", "tunnel2")
-	if t2.DesiredState != protocol.ProxyDesiredStatePaused || t2.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Errorf("paused tunnel should remain paused/idle after restart, got %s/%s", t2.DesiredState, t2.RuntimeState)
+	if t2.DesiredState != protocol.ProxyDesiredStateStopped || t2.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Errorf("stopped tunnel should remain stopped/idle after restart, got %s/%s", t2.DesiredState, t2.RuntimeState)
 	}
 }
 
-func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
+func TestRestoreTunnels_StoppedTunnelDoesNotWaitForDataSession(t *testing.T) {
 	s := New(0)
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
@@ -2963,8 +2959,8 @@ func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
 	s.store = store
 
 	mustAddStableTunnel(t, store, StoredTunnel{
-		ProxyNewRequest: protocol.ProxyNewRequest{Name: "paused-only", Type: "tcp", RemotePort: 19090},
-		DesiredState:    protocol.ProxyDesiredStatePaused,
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "stopped-only", Type: "tcp", RemotePort: 19090},
+		DesiredState:    protocol.ProxyDesiredStateStopped,
 		RuntimeState:    protocol.ProxyRuntimeStateIdle,
 		ClientID:        "client-restore",
 		Hostname:        "restore-host",
@@ -2983,21 +2979,21 @@ func TestRestoreTunnels_PausedTunnelDoesNotWaitForDataSession(t *testing.T) {
 	s.restoreTunnels(client)
 	elapsed := time.Since(start)
 	if elapsed > time.Second {
-		t.Fatalf("restoring only paused tunnels should not wait for the data channel, took %v", elapsed)
+		t.Fatalf("restoring only stopped tunnels should not wait for the data channel, took %v", elapsed)
 	}
 
 	client.proxyMu.RLock()
-	tunnel, ok := client.proxies["paused-only"]
+	tunnel, ok := client.proxies["stopped-only"]
 	client.proxyMu.RUnlock()
 	if !ok {
-		t.Fatal("paused tunnel should be restored to in-memory state")
+		t.Fatal("stopped tunnel should be restored to in-memory state")
 	}
 	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateStopped || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateIdle {
 		t.Errorf("restored state should remain stopped/idle, got %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 }
 
-func TestRestoreTunnels_PausedHTTPPlaceholderPreservesDomain(t *testing.T) {
+func TestRestoreTunnels_StoppedHTTPPlaceholderPreservesDomain(t *testing.T) {
 	s := New(0)
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
@@ -3009,13 +3005,13 @@ func TestRestoreTunnels_PausedHTTPPlaceholderPreservesDomain(t *testing.T) {
 	const domain = "app.example.com"
 	mustAddStableTunnel(t, store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
-			Name:      "paused-http",
+			Name:      "stopped-http",
 			Type:      protocol.ProxyTypeHTTP,
 			LocalIP:   "127.0.0.1",
 			LocalPort: 3000,
 			Domain:    domain,
 		},
-		DesiredState: protocol.ProxyDesiredStatePaused,
+		DesiredState: protocol.ProxyDesiredStateStopped,
 		RuntimeState: protocol.ProxyRuntimeStateIdle,
 		ClientID:     "client-http-domain",
 		Hostname:     "restore-host",
@@ -3033,13 +3029,13 @@ func TestRestoreTunnels_PausedHTTPPlaceholderPreservesDomain(t *testing.T) {
 	s.restoreTunnels(client)
 
 	client.proxyMu.RLock()
-	tunnel := client.proxies["paused-http"]
+	tunnel := client.proxies["stopped-http"]
 	client.proxyMu.RUnlock()
 	if tunnel == nil {
-		t.Fatal("paused HTTP tunnel should be restored to in-memory state")
+		t.Fatal("stopped HTTP tunnel should be restored to in-memory state")
 	}
 	if tunnel.Config.Domain != domain {
-		t.Fatalf("restored paused HTTP tunnel should retain domain=%q, got %q", domain, tunnel.Config.Domain)
+		t.Fatalf("restored stopped HTTP tunnel should retain domain=%q, got %q", domain, tunnel.Config.Domain)
 	}
 }
 

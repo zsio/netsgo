@@ -11,7 +11,6 @@ type consoleSummaryView struct {
 	InactiveTunnels int `json:"inactive_tunnels"`
 	PendingTunnels  int `json:"pending_tunnels"`
 	OfflineTunnels  int `json:"offline_tunnels"`
-	PausedTunnels   int `json:"paused_tunnels"`
 	StoppedTunnels  int `json:"stopped_tunnels"`
 	ErrorTunnels    int `json:"error_tunnels"`
 }
@@ -48,8 +47,6 @@ func summarizeConsoleClients(clients []clientView) consoleSummaryView {
 				summary.PendingTunnels++
 			case protocol.ProxyRuntimeStateOffline:
 				summary.OfflineTunnels++
-			case "paused":
-				summary.PausedTunnels++
 			case "stopped":
 				summary.StoppedTunnels++
 			default:

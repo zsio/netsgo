@@ -284,9 +284,9 @@ func TestStopProxy_UDP(t *testing.T) {
 	sConn.Close()
 }
 
-func TestPauseResumeProxy_UDP(t *testing.T) {
+func TestCloseAndReopenProxyRuntime_UDP(t *testing.T) {
 	s := New(0)
-	clientID := "udp-pause-client"
+	clientID := "udp-stop-client"
 	client := &ClientConn{
 		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
@@ -298,7 +298,7 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	client.dataSession = sSession
 
 	req := protocol.ProxyNewRequest{
-		Name:       "udp-pause-test",
+		Name:       "udp-stop-test",
 		Type:       protocol.ProxyTypeUDP,
 		RemotePort: reserveUDPPort(t),
 	}
@@ -308,9 +308,9 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	port := client.proxies[req.Name].Config.RemotePort
 	client.proxyMu.RUnlock()
 
-	// Pause
-	if err := s.PauseProxy(client, req.Name); err != nil {
-		t.Fatalf("PauseProxy UDP failed: %v", err)
+	// Close runtime resources without changing business state.
+	if err := s.CloseProxyRuntime(client, req.Name); err != nil {
+		t.Fatalf("CloseProxyRuntime UDP failed: %v", err)
 	}
 
 	client.proxyMu.RLock()
@@ -318,15 +318,15 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	runtimeState := client.proxies[req.Name].Config.RuntimeState
 	client.proxyMu.RUnlock()
 	if desiredState != protocol.ProxyDesiredStateRunning || runtimeState != protocol.ProxyRuntimeStateExposed {
-		t.Errorf("PauseProxy only closes runtime resources; the state should remain running/exposed, got %s/%s", desiredState, runtimeState)
+		t.Errorf("CloseProxyRuntime only closes runtime resources; the state should remain running/exposed, got %s/%s", desiredState, runtimeState)
 	}
 
 	// Wait for the port to be released
 	time.Sleep(50 * time.Millisecond)
 
-	// Resume
-	if err := s.ResumeProxy(client, req.Name); err != nil {
-		t.Fatalf("ResumeProxy UDP failed: %v", err)
+	// Reopen runtime resources.
+	if err := s.ReopenProxyRuntime(client, req.Name); err != nil {
+		t.Fatalf("ReopenProxyRuntime UDP failed: %v", err)
 	}
 
 	client.proxyMu.RLock()

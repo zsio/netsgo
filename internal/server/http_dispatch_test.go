@@ -296,7 +296,6 @@ func TestDispatch_HTTPTunnel_UnavailableStatuses_Return503(t *testing.T) {
 		status string
 	}{
 		{name: "pending", status: protocol.ProxyStatusPending},
-		{name: "paused", status: protocol.ProxyStatusPaused},
 		{name: "stopped", status: protocol.ProxyStatusStopped},
 		{name: "error", status: protocol.ProxyStatusError},
 		{name: "active but client offline", status: protocol.ProxyStatusActive},

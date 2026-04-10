@@ -24,7 +24,6 @@ export interface TunnelViewModel extends ProxyConfig {
 }
 
 export interface TunnelActionAvailability {
-  canPause: boolean;
   canResume: boolean;
   canStop: boolean;
   canEdit: boolean;
@@ -32,7 +31,6 @@ export interface TunnelActionAvailability {
 }
 
 const requiredTunnelCapabilities = [
-  'can_pause',
   'can_resume',
   'can_stop',
   'can_edit',
@@ -107,7 +105,6 @@ export function getTunnelActionAvailability(
   const capabilities = requireTunnelCapabilities(tunnel.capabilities);
 
   return {
-    canPause: capabilities.can_pause,
     canResume: capabilities.can_resume,
     canStop: capabilities.can_stop,
     canEdit: capabilities.can_edit,

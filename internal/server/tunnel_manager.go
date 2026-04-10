@@ -138,10 +138,6 @@ func (s *Server) createOfflineManagedTunnel(clientID string, req protocol.ProxyN
 	return config, nil
 }
 
-func (s *Server) pauseManagedTunnel(client *ClientConn, name string) error {
-	return s.stopManagedTunnel(client, name)
-}
-
 func (s *Server) resumeManagedTunnel(client *ClientConn, name string) error {
 	tunnel, err := s.mustGetTunnel(client, name)
 	if err != nil {
@@ -173,7 +169,7 @@ func (s *Server) resumeManagedTunnel(client *ClientConn, name string) error {
 		return errTunnelProvisionAckCancelled
 	}
 
-	if err := s.ResumeProxy(client, name); err != nil {
+	if err := s.ReopenProxyRuntime(client, name); err != nil {
 		s.rollbackResumedTunnelAfterReady(client, name, previousDesired, previousRuntime, previousError)
 		return err
 	}
@@ -206,29 +202,29 @@ func (s *Server) stopManagedTunnel(client *ClientConn, name string) error {
 	previousDesired := tunnel.Config.DesiredState
 	previousRuntime := tunnel.Config.RuntimeState
 	previousError := tunnel.Config.Error
-	pausedDuringStop := false
+	runtimeClosedDuringStop := false
 	if isTunnelExposed(tunnel.Config) {
-		if err := s.PauseProxy(client, name); err != nil {
+		if err := s.CloseProxyRuntime(client, name); err != nil {
 			return err
 		}
-		pausedDuringStop = true
+		runtimeClosedDuringStop = true
 	}
 	if _, ok := s.setTunnelStates(client, name, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, ""); !ok {
 		return fmt.Errorf("tunnel %q not found", name)
 	}
 	if err := s.persistTunnelStates(client.ID, name, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, ""); err != nil {
 		_, _ = s.setTunnelStates(client, name, previousDesired, previousRuntime, previousError)
-		if pausedDuringStop {
-			_ = s.ResumeProxy(client, name)
+		if runtimeClosedDuringStop {
+			_ = s.ReopenProxyRuntime(client, name)
 		}
 		return err
 	}
 
-	if pausedDuringStop {
+	if runtimeClosedDuringStop {
 		if err := s.notifyClientProxyClose(client, name, "stopped"); err != nil {
 			_ = s.persistTunnelStates(client.ID, name, previousDesired, previousRuntime, previousError)
 			_, _ = s.setTunnelStates(client, name, previousDesired, previousRuntime, previousError)
-			_ = s.ResumeProxy(client, name)
+			_ = s.ReopenProxyRuntime(client, name)
 			return err
 		}
 	}
@@ -297,7 +293,7 @@ func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP st
 	tunnel.Config.RemotePort = remotePort
 	tunnel.Config.Domain = domain
 	if wasError {
-		setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStatePaused, protocol.ProxyRuntimeStateIdle, "")
+		setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
 	}
 	updated := tunnel.Config
 	client.proxyMu.Unlock()
@@ -428,7 +424,7 @@ func tunnelChangedActionForStates(desiredState, runtimeState string) string {
 func (s *Server) rollbackResumedTunnelAfterReady(client *ClientConn, name, previousDesired, previousRuntime, previousError string) {
 	tunnel, err := s.mustGetTunnel(client, name)
 	if err == nil && isTunnelExposed(tunnel.Config) {
-		_ = s.PauseProxy(client, name)
+		_ = s.CloseProxyRuntime(client, name)
 	}
 	config, ok := s.setTunnelStates(client, name, previousDesired, previousRuntime, previousError)
 	if !ok {
@@ -562,10 +558,6 @@ func (s *Server) updateOfflineManagedTunnel(clientID, name, localIP string, loca
 	config := storedTunnelToProxyConfig(updated)
 	s.emitTunnelChanged(clientID, config, "updated")
 	return config, nil
-}
-
-func (s *Server) pauseOfflineManagedTunnel(clientID, name string) (protocol.ProxyConfig, error) {
-	return s.stopOfflineManagedTunnel(clientID, name)
 }
 
 func (s *Server) resumeOfflineManagedTunnel(clientID, name string) (protocol.ProxyConfig, error) {

@@ -106,10 +106,6 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handlePauseTunnel(w http.ResponseWriter, r *http.Request) {
-	s.handleStopTunnel(w, r)
-}
-
 func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
 	tunnelName := r.PathValue("name")
@@ -242,7 +238,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{
-			"error": fmt.Sprintf("tunnel is currently in state %s/%s; only paused/idle, stopped/idle, or running/error tunnels can be deleted", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
+			"error": fmt.Sprintf("tunnel is currently in state %s/%s; only stopped/idle or running/error tunnels can be deleted", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
 		})
 		return
 	}
@@ -297,7 +293,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	if !canEditOrDeleteLiveTunnel(tunnel.Config) {
 		encodeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": fmt.Sprintf("tunnel is currently in state %s/%s; only paused/idle, stopped/idle, or running/error tunnels can be edited", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
+			"error": fmt.Sprintf("tunnel is currently in state %s/%s; only stopped/idle or running/error tunnels can be edited", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
 		})
 		return
 	}

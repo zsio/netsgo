@@ -36,6 +36,7 @@ func (t *StoredTunnel) normalize() error {
 	if err := validateTunnelStates(t.DesiredState, t.RuntimeState, t.Error); err != nil {
 		return err
 	}
+	t.DesiredState = canonicalDesiredState(t.DesiredState)
 	t.Error = tunnelErrorForRuntimeState(t.RuntimeState, t.Error)
 	return nil
 }
