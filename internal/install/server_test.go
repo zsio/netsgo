@@ -58,8 +58,11 @@ func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 		},
 		WriteServerEnv:  func(spec svcmgr.ServiceSpec, env svcmgr.ServerEnv) error { return nil },
 		WriteServerUnit: func(spec svcmgr.ServiceSpec) error { return nil },
-		DaemonReload:    func() error { return nil },
-		EnableAndStart:  func(unit string) error { return nil },
+		ValidateCustomTLS: func(certPath, keyPath string) error {
+			return nil
+		},
+		DaemonReload:   func() error { return nil },
+		EnableAndStart: func(unit string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("historical data recovery install should not error: %v", err)
@@ -73,8 +76,8 @@ func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 	if len(ui.summaries) != 3 {
 		t.Fatalf("expected 3 summaries (historical data, install confirm, complete), got %d", len(ui.summaries))
 	}
-	if ui.summaries[0].title != "Detected existing server data" {
-		t.Fatalf("expected first summary to be 'Detected existing server data', got %#v", ui.summaries)
+	if ui.summaries[0].title != "Recoverable server data detected" {
+		t.Fatalf("expected first summary to be 'Recoverable server data detected', got %#v", ui.summaries)
 	}
 	if ui.summaries[2].title != "Server installation complete" {
 		t.Fatalf("expected last summary to be 'Server installation complete', got %#v", ui.summaries)
@@ -122,7 +125,7 @@ func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 	ui := &fakeUI{
 		inputs:    []string{"9527", "127.0.0.1/32", "/tmp/cert.pem", "/tmp/key.pem", "https://panel.example.com", "admin", "1-65535"},
-		passwords: []string{"Password123"},
+		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{true},
 	}
 	var writtenEnv svcmgr.ServerEnv
@@ -141,8 +144,11 @@ func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 			return nil
 		},
 		WriteServerUnit: func(spec svcmgr.ServiceSpec) error { return nil },
-		DaemonReload:    func() error { return nil },
-		EnableAndStart:  func(unit string) error { return nil },
+		ValidateCustomTLS: func(certPath, keyPath string) error {
+			return nil
+		},
+		DaemonReload:   func() error { return nil },
+		EnableAndStart: func(unit string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("custom TLS install should not error: %v", err)
@@ -177,7 +183,7 @@ func TestInstallServerWithBrokenStateFails(t *testing.T) {
 func TestInstallServerWithConfirmNoPrintsCancelledSummary(t *testing.T) {
 	ui := &fakeUI{
 		inputs:    []string{"9527", "127.0.0.1/32", "https://panel.example.com", "admin", "1-65535"},
-		passwords: []string{"Password123"},
+		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{false},
 	}
 	err := InstallServerWith(serverDeps{

@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log"
 	"log/slog"
 	"os"
@@ -21,7 +18,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"golang.org/x/term"
 )
 
 type initFlagValues struct {
@@ -29,44 +25,6 @@ type initFlagValues struct {
 	AdminPassword string
 	ServerAddr    string
 	AllowedPorts  string
-}
-
-type initPrompter interface {
-	IsInteractive() bool
-	Prompt(label string) (string, error)
-	PromptPassword(label string) (string, error)
-}
-
-type terminalInitPrompter struct{}
-
-func (terminalInitPrompter) IsInteractive() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
-}
-
-func (terminalInitPrompter) Prompt(label string) (string, error) {
-	if _, err := fmt.Fprintf(os.Stdout, "%s: ", label); err != nil {
-		return "", err
-	}
-	reader := bufio.NewReader(os.Stdin)
-	value, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	return strings.TrimSpace(value), nil
-}
-
-func (terminalInitPrompter) PromptPassword(label string) (string, error) {
-	if _, err := fmt.Fprintf(os.Stdout, "%s: ", label); err != nil {
-		return "", err
-	}
-	value, err := term.ReadPassword(int(os.Stdin.Fd()))
-	if _, printErr := fmt.Fprintln(os.Stdout); printErr != nil && err == nil {
-		err = printErr
-	}
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(value)), nil
 }
 
 func (v initFlagValues) anyProvided() bool {
@@ -85,46 +43,12 @@ func buildInitParamsFromViper() server.InitParams {
 	}
 }
 
-func completeInitParamsForStartup(initialized bool, params server.InitParams, prompter initPrompter) (server.InitParams, error) {
-	if initialized || params.IsComplete() || !prompter.IsInteractive() {
-		return params, nil
-	}
-
-	var err error
-	if params.AdminUsername == "" {
-		params.AdminUsername, err = prompter.Prompt("Init admin username")
-		if err != nil {
-			return params, err
-		}
-	}
-	if params.AdminPassword == "" {
-		params.AdminPassword, err = prompter.PromptPassword("Init admin password")
-		if err != nil {
-			return params, err
-		}
-	}
-	if params.ServerAddr == "" {
-		params.ServerAddr, err = prompter.Prompt("Init server addr")
-		if err != nil {
-			return params, err
-		}
-	}
-	if params.AllowedPorts == "" {
-		params.AllowedPorts, err = prompter.Prompt("Init allowed ports")
-		if err != nil {
-			return params, err
-		}
-	}
-
-	return params, nil
-}
-
 func validateInitFlagsForStartup(initialized bool, values initFlagValues) error {
 	if initialized {
 		return nil
 	}
 	if !values.anyProvided() {
-		return fmt.Errorf("server not yet initialized; use --init-* flags to complete one-time initialization")
+		return fmt.Errorf("server not yet initialized; provide all --init-* flags (or NETSGO_INIT_* env vars), or use netsgo install for interactive setup")
 	}
 	if values.AdminUsername == "" || values.AdminPassword == "" || values.ServerAddr == "" || values.AllowedPorts == "" {
 		return fmt.Errorf("server not yet initialized; must provide all of: --init-admin-username, --init-admin-password, --init-server-addr, --init-allowed-ports")
@@ -143,6 +67,9 @@ var serverCmd = &cobra.Command{
 
 This command is best suited for direct-run, development/debug, or container scenarios.
 For long-running deployments on Linux hosts, prefer using netsgo install and netsgo manage.
+If the server is not initialized yet, direct-run startup requires explicit --init-* flags
+or NETSGO_INIT_* environment variables. Interactive initialization is only available via
+netsgo install.
 
 TLS modes:
   custom  User-provided certificate and key (recommended for production)
@@ -153,6 +80,13 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
   NETSGO_PORT=9090 NETSGO_TLS_MODE=auto netsgo server`,
 	Example: `  # Start with default port 9527 (no TLS)
   netsgo server
+
+  # First-time initialization for direct-run startup
+  netsgo server \
+    --init-admin-username admin \
+    --init-admin-password Password123 \
+    --init-server-addr https://panel.example.com \
+    --init-allowed-ports 10000-11000
 
   # Start with auto-generated self-signed certificate
   netsgo server --tls-mode auto
@@ -178,10 +112,6 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 		}
 
 		initParams := buildInitParamsFromViper()
-		initParams, err = completeInitParamsForStartup(adminStore.IsInitialized(), initParams, terminalInitPrompter{})
-		if err != nil {
-			log.Fatalf("❌ Failed to read init inputs: %v", err)
-		}
 		if err := validateInitFlagsForStartup(adminStore.IsInitialized(), initFlagValues{
 			AdminUsername: initParams.AdminUsername,
 			AdminPassword: initParams.AdminPassword,

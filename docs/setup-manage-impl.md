@@ -679,7 +679,7 @@ go test -tags dev ./internal/svcmgr/...
     - `PrintSummary`
   - `Password` 与 TTY 检测使用 `golang.org/x/term`
 - `internal/install/install.go`
-  - 做安装入口、语言选择、角色选择、root / TTY / Linux + systemd 检查
+  - 做安装入口、角色选择、root / TTY / Linux + systemd 检查
 - `internal/install/server.go`
   - server 安装固定顺序：
     1. root 检查，不满足则 `syscall.Exec("sudo", ...)`
@@ -722,7 +722,7 @@ sudo ./netsgo install
 
 手工验收点：
 
-- 进入语言/角色选择菜单
+- 进入安装角色选择菜单
 - 非 root 执行时会整体提权
 - server 安装完成后不需要 `/setup`
 

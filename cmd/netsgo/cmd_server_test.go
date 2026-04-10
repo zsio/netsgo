@@ -1,47 +1,11 @@
 package main
 
 import (
-	"errors"
+	"strings"
 	"testing"
-
-	"netsgo/internal/server"
 
 	"github.com/spf13/viper"
 )
-
-type fakeInitPrompter struct {
-	interactive      bool
-	promptResponses  []string
-	passwordResponse string
-	promptErr        error
-	passwordErr      error
-	prompts          []string
-}
-
-func (p *fakeInitPrompter) IsInteractive() bool {
-	return p.interactive
-}
-
-func (p *fakeInitPrompter) Prompt(label string) (string, error) {
-	p.prompts = append(p.prompts, label)
-	if p.promptErr != nil {
-		return "", p.promptErr
-	}
-	if len(p.promptResponses) == 0 {
-		return "", nil
-	}
-	value := p.promptResponses[0]
-	p.promptResponses = p.promptResponses[1:]
-	return value, nil
-}
-
-func (p *fakeInitPrompter) PromptPassword(label string) (string, error) {
-	p.prompts = append(p.prompts, label)
-	if p.passwordErr != nil {
-		return "", p.passwordErr
-	}
-	return p.passwordResponse, nil
-}
 
 func TestBuildInitParamsFromViper(t *testing.T) {
 	t.Cleanup(viper.Reset)
@@ -74,6 +38,7 @@ func TestValidateInitFlagsForStartup(t *testing.T) {
 		initialized bool
 		params      initFlagValues
 		wantErr     bool
+		wantMsg     string
 	}{
 		{
 			name:        "initialized server ignores init flags",
@@ -88,6 +53,7 @@ func TestValidateInitFlagsForStartup(t *testing.T) {
 			initialized: false,
 			params:      initFlagValues{},
 			wantErr:     true,
+			wantMsg:     "or use netsgo install for interactive setup",
 		},
 		{
 			name:        "uninitialized with partial init flags fails",
@@ -97,6 +63,7 @@ func TestValidateInitFlagsForStartup(t *testing.T) {
 				AdminPassword: "Password123",
 			},
 			wantErr: true,
+			wantMsg: "--init-admin-username, --init-admin-password, --init-server-addr, --init-allowed-ports",
 		},
 		{
 			name:        "uninitialized with full init flags passes",
@@ -120,50 +87,10 @@ func TestValidateInitFlagsForStartup(t *testing.T) {
 			if !tt.wantErr && err != nil {
 				t.Fatalf("expected no error, got %v", err)
 			}
+			if tt.wantMsg != "" && (err == nil || !strings.Contains(err.Error(), tt.wantMsg)) {
+				t.Fatalf("expected error to contain %q, got %v", tt.wantMsg, err)
+			}
 		})
-	}
-}
-
-func TestCompleteInitParamsForStartup_PromptsMissingFieldsInInteractiveMode(t *testing.T) {
-	prompter := &fakeInitPrompter{
-		interactive:      true,
-		passwordResponse: "Password123",
-		promptResponses:  []string{"https://panel.example.com", "10000-10010"},
-	}
-
-	params, err := completeInitParamsForStartup(false, server.InitParams{
-		AdminUsername: "admin",
-	}, prompter)
-	if err != nil {
-		t.Fatalf("interactive completion should not fail: %v", err)
-	}
-	if params.AdminUsername != "admin" {
-		t.Fatalf("expected AdminUsername to remain %q, got %q", "admin", params.AdminUsername)
-	}
-	if params.AdminPassword != "Password123" {
-		t.Fatalf("expected AdminPassword %q, got %q", "Password123", params.AdminPassword)
-	}
-	if params.ServerAddr != "https://panel.example.com" {
-		t.Fatalf("expected ServerAddr %q, got %q", "https://panel.example.com", params.ServerAddr)
-	}
-	if params.AllowedPorts != "10000-10010" {
-		t.Fatalf("expected AllowedPorts %q, got %q", "10000-10010", params.AllowedPorts)
-	}
-	if len(prompter.prompts) != 3 {
-		t.Fatalf("expected 3 prompts, got %d", len(prompter.prompts))
-	}
-}
-
-func TestCompleteInitParamsForStartup_PropagatesPromptError(t *testing.T) {
-	wantErr := errors.New("stdin failed")
-	prompter := &fakeInitPrompter{
-		interactive: true,
-		promptErr:   wantErr,
-	}
-
-	_, err := completeInitParamsForStartup(false, server.InitParams{}, prompter)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("expected prompt error %v, got %v", wantErr, err)
 	}
 }
 

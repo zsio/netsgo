@@ -18,6 +18,13 @@ type summaryCall struct {
 	rows  [][2]string
 }
 
+func assertSelectionExit(t *testing.T, err error) {
+	t.Helper()
+	if err != nil && !errors.Is(err, errReturnToSelection) {
+		t.Fatalf("manage flow should exit cleanly, got %v", err)
+	}
+}
+
 func (f *fakeUI) Select(prompt string, options []string) (int, error) {
 	if len(f.selects) == 0 {
 		return 0, errors.New("no select value")
@@ -54,7 +61,7 @@ func TestRunWithTTYCheck(t *testing.T) {
 }
 
 func TestRunWithNoInstalledRole(t *testing.T) {
-	ui := &fakeUI{}
+	ui := &fakeUI{selects: []int{1}}
 	err := RunWith(Deps{
 		GOOS:   "linux",
 		HasTTY: true,
@@ -67,6 +74,28 @@ func TestRunWithNoInstalledRole(t *testing.T) {
 	}
 	if len(ui.summaries) != 1 {
 		t.Fatalf("should emit one summary when not installed, got %d", len(ui.summaries))
+	}
+}
+
+func TestRunWithNoInstalledRoleCanEnterInstall(t *testing.T) {
+	ui := &fakeUI{selects: []int{0}}
+	called := false
+	err := RunWith(Deps{
+		GOOS:   "linux",
+		HasTTY: true,
+		UID:    0,
+		UI:     ui,
+		Detect: func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateNotInstalled },
+		RunInstall: func() error {
+			called = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("should not error when handing off to install: %v", err)
+	}
+	if !called {
+		t.Fatal("should enter netsgo install from the no-installed menu")
 	}
 }
 
@@ -91,6 +120,8 @@ func TestRunWithRoleDispatch(t *testing.T) {
 			called = "client"
 			return nil
 		},
+		RunInstall:   func() error { return nil },
+		UninstallAll: func() error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("manage run should not fail: %v", err)
@@ -114,6 +145,8 @@ func TestRunWithRoleDispatch(t *testing.T) {
 			called = "client"
 			return nil
 		},
+		RunInstall:   func() error { return nil },
+		UninstallAll: func() error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("manage run should not fail: %v", err)
@@ -129,7 +162,7 @@ func TestRunWithServerBrokenNoInstalledRole(t *testing.T) {
 		GOOS:   "linux",
 		HasTTY: true,
 		UID:    0,
-		UI:     &fakeUI{},
+		UI:     &fakeUI{selects: []int{0}},
 		Inspect: func(role svcmgr.Role) svcmgr.InstallInspection {
 			if role == svcmgr.RoleServer {
 				return svcmgr.InstallInspection{Role: role, State: svcmgr.StateBroken, Problems: []string{"missing env file"}}
@@ -140,17 +173,19 @@ func TestRunWithServerBrokenNoInstalledRole(t *testing.T) {
 			called = true
 			return nil
 		},
+		ManageClient: func() error { return nil },
+		RunInstall:   func() error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("broken state should show guidance instead of failing: %v", err)
+		t.Fatalf("broken state should offer an explicit recovery path: %v", err)
 	}
-	if called {
-		t.Fatal("should not enter the normal manage server menu in broken state")
+	if !called {
+		t.Fatal("should allow entering the broken server recovery flow")
 	}
 }
 
 func TestRunWithServerHistoricalDataOnlyNoInstalledRole(t *testing.T) {
-	ui := &fakeUI{}
+	ui := &fakeUI{selects: []int{1}}
 	called := false
 	err := RunWith(Deps{
 		GOOS:   "linux",
@@ -167,15 +202,14 @@ func TestRunWithServerHistoricalDataOnlyNoInstalledRole(t *testing.T) {
 			called = true
 			return nil
 		},
+		RunInstall:   func() error { return nil },
+		ManageClient: func() error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("historical-data-only should show recovery guidance instead of failing: %v", err)
+		t.Fatalf("historical-data-only should allow entering install from recovery: %v", err)
 	}
 	if called {
-		t.Fatal("should not enter the normal manage server menu in historical-data-only state")
-	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Recoverable server data detected" {
-		t.Fatalf("should show a historical data notice, got %#v", ui.summaries)
+		t.Fatal("this test chooses install directly, so the recovery manage flow should not be entered")
 	}
 }
 
@@ -197,6 +231,7 @@ func TestRunWithClientInstalledAndServerBrokenWarnsThenManagesClient(t *testing.
 			called = "client"
 			return nil
 		},
+		RunInstall: func() error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("should still allow entering client management when a healthy client exists: %v", err)
@@ -206,5 +241,39 @@ func TestRunWithClientInstalledAndServerBrokenWarnsThenManagesClient(t *testing.
 	}
 	if len(ui.summaries) != 1 || ui.summaries[0].title != "Server installation is in an abnormal state" {
 		t.Fatalf("should first show the server problem notice, got %#v", ui.summaries)
+	}
+}
+
+func TestRunWithBothInstalledCanDispatchBulkUninstall(t *testing.T) {
+	ui := &fakeUI{selects: []int{2, 1}}
+	called := false
+	serverState := svcmgr.StateInstalled
+	clientState := svcmgr.StateInstalled
+	err := RunWith(Deps{
+		GOOS:   "linux",
+		HasTTY: true,
+		UID:    0,
+		UI:     ui,
+		Detect: func(role svcmgr.Role) svcmgr.InstallState {
+			if role == svcmgr.RoleServer {
+				return serverState
+			}
+			return clientState
+		},
+		ManageServer: func() error { return nil },
+		ManageClient: func() error { return nil },
+		RunInstall:   func() error { return nil },
+		UninstallAll: func() error {
+			called = true
+			serverState = svcmgr.StateNotInstalled
+			clientState = svcmgr.StateNotInstalled
+			return errReturnToSelection
+		},
+	})
+	if err != nil {
+		t.Fatalf("bulk uninstall dispatch should not fail: %v", err)
+	}
+	if !called {
+		t.Fatal("expected uninstall-all to be callable from the dual-installed menu")
 	}
 }

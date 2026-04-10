@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"golang.org/x/term"
+	"netsgo/internal/install"
 	"netsgo/internal/svcmgr"
 	"netsgo/internal/tui"
 )
@@ -34,6 +35,8 @@ type Deps struct {
 	Detect       func(svcmgr.Role) svcmgr.InstallState
 	ManageServer func() error
 	ManageClient func() error
+	RunInstall   func() error
+	UninstallAll func() error
 	Exec         func(argv0 string, argv []string, envv []string) error
 }
 
@@ -50,6 +53,12 @@ func Run() error {
 		},
 		ManageClient: func() error {
 			return ManageClient()
+		},
+		RunInstall: func() error {
+			return install.Run()
+		},
+		UninstallAll: func() error {
+			return UninstallAll()
 		},
 		Exec: syscall.Exec,
 	})
@@ -78,47 +87,181 @@ func RunWith(deps Deps) error {
 			deps.Inspect = svcmgr.Inspect
 		}
 	}
-	serverInspection := deps.Inspect(svcmgr.RoleServer)
-	clientInspection := deps.Inspect(svcmgr.RoleClient)
-	serverState := serverInspection.State
-	clientState := clientInspection.State
-	if serverState == svcmgr.StateNotInstalled && clientState == svcmgr.StateNotInstalled {
-		deps.UI.PrintSummary("No services installed", [][2]string{{"Next step", "Run netsgo install first"}})
-		return nil
-	}
-	if serverState == svcmgr.StateInstalled && clientState == svcmgr.StateInstalled {
-		if deps.ManageServer == nil || deps.ManageClient == nil {
-			return errors.New("manage dependencies are incomplete")
-		}
+	for {
+		serverInspection := deps.Inspect(svcmgr.RoleServer)
+		clientInspection := deps.Inspect(svcmgr.RoleClient)
+		serverState := serverInspection.State
+		clientState := clientInspection.State
 
-		role, err := deps.UI.Select("Select a role to manage", []string{"Server (server)", "Client (client)"})
-		if err != nil {
+		switch {
+		case serverState == svcmgr.StateInstalled && clientState == svcmgr.StateInstalled:
+			if deps.ManageServer == nil || deps.ManageClient == nil {
+				return errors.New("manage dependencies are incomplete")
+			}
+			shouldContinue, err := runDualInstalledMenu(deps)
+			if err != nil {
+				return err
+			}
+			if shouldContinue {
+				continue
+			}
+			return nil
+
+		case serverState == svcmgr.StateInstalled:
+			if deps.ManageServer == nil {
+				return errors.New("manage dependencies are incomplete")
+			}
+			printDegradedSummary(deps.UI, clientInspection)
+			err := deps.ManageServer()
+			if errors.Is(err, errReturnToSelection) {
+				return nil
+			}
 			return err
+
+		case clientState == svcmgr.StateInstalled:
+			if deps.ManageClient == nil {
+				return errors.New("manage dependencies are incomplete")
+			}
+			printDegradedSummary(deps.UI, serverInspection)
+			err := deps.ManageClient()
+			if errors.Is(err, errReturnToSelection) {
+				return nil
+			}
+			return err
+
+		case serverState == svcmgr.StateNotInstalled && clientState == svcmgr.StateNotInstalled:
+			shouldContinue, err := runNoInstalledMenu(deps)
+			if err != nil {
+				return err
+			}
+			if shouldContinue {
+				continue
+			}
+			return nil
+
+		default:
+			if deps.ManageServer == nil || deps.ManageClient == nil {
+				return errors.New("manage dependencies are incomplete")
+			}
+			shouldContinue, err := runRecoveryEntryMenu(deps, serverInspection, clientInspection)
+			if err != nil {
+				return err
+			}
+			if shouldContinue {
+				continue
+			}
+			return nil
 		}
-		if role == 0 {
-			return deps.ManageServer()
-		}
-		return deps.ManageClient()
+	}
+}
+
+func runDualInstalledMenu(deps Deps) (bool, error) {
+	role, err := deps.UI.Select("Select a role to manage", []string{
+		"Manage server",
+		"Manage client",
+		"Uninstall all managed services",
+		"Exit",
+	})
+	if err != nil {
+		return false, err
 	}
 
-	if serverState == svcmgr.StateInstalled {
+	switch role {
+	case 0:
 		if deps.ManageServer == nil {
-			return errors.New("manage dependencies are incomplete")
+			return false, errors.New("manage dependencies are incomplete")
 		}
-		printDegradedSummary(deps.UI, clientInspection)
-		return deps.ManageServer()
-	}
-	if clientState == svcmgr.StateInstalled {
+		err = deps.ManageServer()
+	case 1:
 		if deps.ManageClient == nil {
-			return errors.New("manage dependencies are incomplete")
+			return false, errors.New("manage dependencies are incomplete")
 		}
-		printDegradedSummary(deps.UI, serverInspection)
-		return deps.ManageClient()
+		err = deps.ManageClient()
+	case 2:
+		if deps.UninstallAll == nil {
+			return false, errors.New("manage dependencies are incomplete")
+		}
+		err = deps.UninstallAll()
+	case 3:
+		return false, nil
+	default:
+		return false, nil
+	}
+	if errors.Is(err, errReturnToSelection) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func runNoInstalledMenu(deps Deps) (bool, error) {
+	deps.UI.PrintSummary("No services installed", [][2]string{{"Next step", "Select whether to start netsgo install or exit"}})
+
+	action, err := deps.UI.Select("Select an action", []string{"Run netsgo install", "Exit"})
+	if err != nil {
+		return false, err
+	}
+	if action == 0 {
+		if deps.RunInstall == nil {
+			return false, errors.New("manage dependencies are incomplete")
+		}
+		return false, deps.RunInstall()
+	}
+	return false, nil
+}
+
+func runRecoveryEntryMenu(deps Deps, serverInspection, clientInspection svcmgr.InstallInspection) (bool, error) {
+	options := make([]string, 0, 4)
+	actions := make([]func() error, 0, 4)
+
+	appendRole := func(label string, fn func() error) {
+		options = append(options, label)
+		actions = append(actions, fn)
 	}
 
-	printDegradedSummary(deps.UI, serverInspection)
-	printDegradedSummary(deps.UI, clientInspection)
-	return nil
+	if serverInspection.State != svcmgr.StateNotInstalled {
+		appendRole(recoveryRoleLabel(serverInspection), deps.ManageServer)
+	}
+	if clientInspection.State != svcmgr.StateNotInstalled {
+		appendRole(recoveryRoleLabel(clientInspection), deps.ManageClient)
+	}
+	options = append(options, "Run netsgo install", "Exit")
+
+	choice, err := deps.UI.Select("Select a recovery action", options)
+	if err != nil {
+		return false, err
+	}
+	if choice < len(actions) {
+		err = actions[choice]()
+		if errors.Is(err, errReturnToSelection) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if choice == len(actions) {
+		if deps.RunInstall == nil {
+			return false, errors.New("manage dependencies are incomplete")
+		}
+		return false, deps.RunInstall()
+	}
+	return false, nil
+}
+
+func recoveryRoleLabel(inspection svcmgr.InstallInspection) string {
+	role := roleLabel(inspection.Role)
+	switch inspection.State {
+	case svcmgr.StateHistoricalDataOnly:
+		return "Inspect recoverable " + role + " state"
+	case svcmgr.StateBroken:
+		return "Inspect / cleanup broken " + role + " state"
+	default:
+		return "Manage " + role
+	}
 }
 
 func printDegradedSummary(ui uiProvider, inspection svcmgr.InstallInspection) {

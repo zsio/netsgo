@@ -44,7 +44,7 @@ docs:
 #   终端 3:  make dev-web
 
 DEV_PORT ?= 9527
-DEV_KEY  ?= dev-key
+DEV_KEY  ?= sk-8ccf857d-db62-4806-9719-776900e0785d
 STACK_PROXY ?= nginx
 STACK_PROJECT ?= netsgo-stack-$(STACK_PROXY)
 STACK_PROXY_PORT ?= 19080

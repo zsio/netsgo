@@ -1,31 +1,56 @@
 package manage
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"netsgo/internal/svcmgr"
 )
 
-func TestManageServerInspectRedactsSensitiveData(t *testing.T) {
-	ui := &fakeUI{selects: []int{1}}
-	err := ManageServerWith(serverDeps{
-		UI:             ui,
-		Status:         func() (string, error) { return "", nil },
-		ReadServerSpec: func() (svcmgr.ServiceSpec, error) { return svcmgr.ServiceSpec{}, nil },
+func newInstalledServerDeps(t *testing.T, ui *fakeUI) (serverDeps, svcmgr.ServiceSpec) {
+	t.Helper()
+
+	spec := svcmgr.NewSpec(svcmgr.RoleServer)
+	spec.DataDir = t.TempDir()
+	spec.UnitPath = filepath.Join(spec.DataDir, "netsgo-server.service")
+	spec.EnvPath = filepath.Join(spec.DataDir, "server.env")
+	spec.SpecPath = filepath.Join(spec.DataDir, "server.json")
+	spec.ServerURL = "https://panel.example.com"
+
+	return serverDeps{
+		UI: ui,
+		Inspect: func() svcmgr.InstallInspection {
+			return svcmgr.InstallInspection{Role: svcmgr.RoleServer, State: svcmgr.StateInstalled}
+		},
+		IsActive:  func() (bool, error) { return true, nil },
+		IsEnabled: func() (bool, error) { return true, nil },
+		Logs:      func() error { return nil },
+		RunInstall: func() error {
+			return nil
+		},
+		ReadServerSpec: func() (svcmgr.ServiceSpec, error) { return spec, nil },
 		ReadServerEnv: func() (svcmgr.ServerEnv, error) {
-			return svcmgr.ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: "https://panel.example.com"}, nil
+			return svcmgr.ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: spec.ServerURL}, nil
 		},
 		DisableAndStop: func() error { return nil },
 		EnableAndStart: func() error { return nil },
 		DaemonReload:   func() error { return nil },
 		RemovePaths:    func(paths ...string) error { return nil },
 		RemoveBinary:   func() error { return nil },
-		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
-	})
-	if err != nil {
-		t.Fatalf("inspect should not fail: %v", err)
-	}
+		DetectClient: func() svcmgr.InstallState {
+			return svcmgr.StateInstalled
+		},
+	}, spec
+}
+
+func TestManageServerInspectRedactsSensitiveData(t *testing.T) {
+	ui := &fakeUI{selects: []int{1, 7}}
+	deps, _ := newInstalledServerDeps(t, ui)
+
+	err := ManageServerWith(deps)
+	assertSelectionExit(t, err)
+
 	if len(ui.summaries) == 0 {
 		t.Fatal("inspect should output a summary")
 	}
@@ -40,29 +65,21 @@ func TestManageServerUninstallKeepData(t *testing.T) {
 	ui := &fakeUI{selects: []int{6, 0}, confirms: []bool{true}}
 	removed := []string{}
 	binaryRemoved := false
-	err := ManageServerWith(serverDeps{
-		UI:             ui,
-		Status:         func() (string, error) { return "", nil },
-		ReadServerSpec: func() (svcmgr.ServiceSpec, error) { return svcmgr.NewSpec(svcmgr.RoleServer), nil },
-		ReadServerEnv:  func() (svcmgr.ServerEnv, error) { return svcmgr.ServerEnv{}, nil },
-		DisableAndStop: func() error { return nil },
-		EnableAndStart: func() error { return nil },
-		DaemonReload:   func() error { return nil },
-		RemovePaths: func(paths ...string) error {
-			removed = append(removed, paths...)
-			return nil
-		},
-		RemoveBinary: func() error {
-			binaryRemoved = true
-			return nil
-		},
-		DetectClient: func() svcmgr.InstallState { return svcmgr.StateInstalled },
-	})
-	if err != nil {
-		t.Fatalf("uninstall keep-data should not fail: %v", err)
+	deps, spec := newInstalledServerDeps(t, ui)
+	deps.RemovePaths = func(paths ...string) error {
+		removed = append(removed, paths...)
+		return nil
 	}
+	deps.RemoveBinary = func() error {
+		binaryRemoved = true
+		return nil
+	}
+
+	err := ManageServerWith(deps)
+	assertSelectionExit(t, err)
+
 	for _, path := range removed {
-		if path == svcmgr.ManagedDataDir+"/server" {
+		if path == serverDataPath(spec) {
 			t.Fatalf("keep-data mode should not remove the server data dir: %v", removed)
 		}
 	}
@@ -72,25 +89,16 @@ func TestManageServerUninstallKeepData(t *testing.T) {
 }
 
 func TestManageServerRestart(t *testing.T) {
-	ui := &fakeUI{selects: []int{5}}
+	ui := &fakeUI{selects: []int{5, 7}}
 	stopped := false
 	started := false
-	err := ManageServerWith(serverDeps{
-		UI:             ui,
-		Status:         func() (string, error) { return "", nil },
-		ReadServerSpec: func() (svcmgr.ServiceSpec, error) { return svcmgr.ServiceSpec{}, nil },
-		ReadServerEnv:  func() (svcmgr.ServerEnv, error) { return svcmgr.ServerEnv{}, nil },
-		DisableAndStop: func() error { stopped = true; return nil },
-		EnableAndStart: func() error { started = true; return nil },
-		Logs:           func() error { return nil },
-		DaemonReload:   func() error { return nil },
-		RemovePaths:    func(paths ...string) error { return nil },
-		RemoveBinary:   func() error { return nil },
-		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
-	})
-	if err != nil {
-		t.Fatalf("restart should not fail: %v", err)
-	}
+	deps, _ := newInstalledServerDeps(t, ui)
+	deps.DisableAndStop = func() error { stopped = true; return nil }
+	deps.EnableAndStart = func() error { started = true; return nil }
+
+	err := ManageServerWith(deps)
+	assertSelectionExit(t, err)
+
 	if !stopped || !started {
 		t.Fatalf("restart should stop before start, stopped=%v started=%v", stopped, started)
 	}
@@ -102,19 +110,13 @@ func TestManageServerRestart(t *testing.T) {
 func TestManageServerLogs(t *testing.T) {
 	ui := &fakeUI{selects: []int{2}}
 	called := false
-	err := ManageServerWith(serverDeps{
-		UI:             ui,
-		Status:         func() (string, error) { return "", nil },
-		Logs:           func() error { called = true; return nil },
-		ReadServerSpec: func() (svcmgr.ServiceSpec, error) { return svcmgr.ServiceSpec{}, nil },
-		ReadServerEnv:  func() (svcmgr.ServerEnv, error) { return svcmgr.ServerEnv{}, nil },
-		DisableAndStop: func() error { return nil },
-		EnableAndStart: func() error { return nil },
-		DaemonReload:   func() error { return nil },
-		RemovePaths:    func(paths ...string) error { return nil },
-		RemoveBinary:   func() error { return nil },
-		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
-	})
+	deps, _ := newInstalledServerDeps(t, ui)
+	deps.Logs = func() error {
+		called = true
+		return nil
+	}
+
+	err := ManageServerWith(deps)
 	if err != nil {
 		t.Fatalf("logs should not fail: %v", err)
 	}
@@ -124,45 +126,43 @@ func TestManageServerLogs(t *testing.T) {
 }
 
 func TestManageServerStartPrintsSuccess(t *testing.T) {
-	ui := &fakeUI{selects: []int{3}}
-	err := ManageServerWith(serverDeps{
-		UI:             ui,
-		Status:         func() (string, error) { return "", nil },
-		ReadServerSpec: func() (svcmgr.ServiceSpec, error) { return svcmgr.ServiceSpec{}, nil },
-		ReadServerEnv:  func() (svcmgr.ServerEnv, error) { return svcmgr.ServerEnv{}, nil },
-		DisableAndStop: func() error { return nil },
-		EnableAndStart: func() error { return nil },
-		DaemonReload:   func() error { return nil },
-		RemovePaths:    func(paths ...string) error { return nil },
-		RemoveBinary:   func() error { return nil },
-		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
-	})
-	if err != nil {
-		t.Fatalf("start should not fail: %v", err)
-	}
+	ui := &fakeUI{selects: []int{3, 7}}
+	deps, _ := newInstalledServerDeps(t, ui)
+
+	err := ManageServerWith(deps)
+	assertSelectionExit(t, err)
+
 	if len(ui.summaries) != 1 || ui.summaries[0].title != "Operation successful" {
 		t.Fatalf("start should show a success message, got %#v", ui.summaries)
 	}
 }
 
 func TestManageServerUninstallCancelPrintsCancelled(t *testing.T) {
-	ui := &fakeUI{selects: []int{6, 0}, confirms: []bool{false}}
-	err := ManageServerWith(serverDeps{
-		UI:             ui,
-		Status:         func() (string, error) { return "", nil },
-		ReadServerSpec: func() (svcmgr.ServiceSpec, error) { return svcmgr.NewSpec(svcmgr.RoleServer), nil },
-		ReadServerEnv:  func() (svcmgr.ServerEnv, error) { return svcmgr.ServerEnv{}, nil },
-		DisableAndStop: func() error { return nil },
-		EnableAndStart: func() error { return nil },
-		DaemonReload:   func() error { return nil },
-		RemovePaths:    func(paths ...string) error { return nil },
-		RemoveBinary:   func() error { return nil },
-		DetectClient:   func() svcmgr.InstallState { return svcmgr.StateInstalled },
-	})
-	if err != nil {
-		t.Fatalf("canceling uninstall should not fail: %v", err)
-	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Cancelled" {
+	ui := &fakeUI{selects: []int{6, 0, 7}, confirms: []bool{false}}
+	deps, _ := newInstalledServerDeps(t, ui)
+
+	err := ManageServerWith(deps)
+	assertSelectionExit(t, err)
+
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "Cancelled" {
 		t.Fatalf("canceling uninstall should show a canceled message, got %#v", ui.summaries)
+	}
+}
+
+func TestManageServerUninstallLastRoleCanRemoveSharedBinary(t *testing.T) {
+	ui := &fakeUI{selects: []int{6, 0}, confirms: []bool{true, true}}
+	binaryRemoved := false
+	deps, _ := newInstalledServerDeps(t, ui)
+	deps.DetectClient = func() svcmgr.InstallState { return svcmgr.StateNotInstalled }
+	deps.RemoveBinary = func() error {
+		binaryRemoved = true
+		return nil
+	}
+
+	err := ManageServerWith(deps)
+	assertSelectionExit(t, err)
+
+	if !binaryRemoved {
+		t.Fatal("expected the last-role uninstall flow to allow removing the shared binary")
 	}
 }
