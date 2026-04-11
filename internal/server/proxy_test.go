@@ -18,7 +18,7 @@ import (
 )
 
 // ============================================================
-// Proxy 管理与监听测试
+// Proxy management and listener tests
 // ============================================================
 
 func TestStartProxy_Success(t *testing.T) {
@@ -30,12 +30,12 @@ func TestStartProxy_Success(t *testing.T) {
 	}
 	s.clients.Store(clientID, client)
 
-	// 欺骗其拥有活跃的 DataSession (使用 net.Pipe 作为占位)
+	// Pretend it has an active DataSession (use net.Pipe as a placeholder)
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
 	client.dataSession = sSession
 
-	// 尝试启动一个对公网代理（分配随机端口）
+	// Try to start a public-facing proxy (assign a random port)
 	req := protocol.ProxyNewRequest{
 		Name:       "random-port-tunnel",
 		Type:       protocol.ProxyTypeTCP,
@@ -45,31 +45,31 @@ func TestStartProxy_Success(t *testing.T) {
 	}
 
 	if err := s.StartProxy(client, req); err != nil {
-		t.Fatalf("StartProxy 失败: %v", err)
+		t.Fatalf("StartProxy failed: %v", err)
 	}
 
-	// 检查内部状态
+	// Check internal state
 	client.proxyMu.RLock()
 	tunnel, exists := client.proxies[req.Name]
 	client.proxyMu.RUnlock()
 
 	if !exists {
-		t.Fatal("StartProxy 成功但没有将隧道加入 map")
+		t.Fatal("StartProxy succeeded but did not add the tunnel to the map")
 	}
 
 	if tunnel.Config.RemotePort <= 0 {
-		t.Errorf("分配的端口无效: %d", tunnel.Config.RemotePort)
+		t.Errorf("Allocated port is invalid: %d", tunnel.Config.RemotePort)
 	}
 
-	// 确认监听器确实打开着
+	// Confirm the listener is actually open
 	testConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", tunnel.Config.RemotePort))
 	if err != nil {
-		t.Errorf("由于无法 Dial 绑定的公网端口，说明监听器异常: %v", err)
+		t.Errorf("Unable to dial the bound public port, which indicates the listener is broken: %v", err)
 	} else {
 		testConn.Close()
 	}
 
-	// 清理
+	// Cleanup
 	s.StopAllProxies(client)
 	cConn.Close()
 	sConn.Close()
@@ -89,7 +89,7 @@ func TestStartProxy_NoDataChannel(t *testing.T) {
 	}
 
 	if err := s.StartProxy(client, req); err == nil {
-		t.Error("缺少 Data 通道时应启动失败")
+		t.Error("Startup should fail when the Data channel is missing")
 	}
 }
 
@@ -120,10 +120,10 @@ func TestPrepareProxyTunnel_PreservesHTTPDomain(t *testing.T) {
 
 	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending)
 	if err != nil {
-		t.Fatalf("prepareProxyTunnel 失败: %v", err)
+		t.Fatalf("prepareProxyTunnel failed: %v", err)
 	}
 	if tunnel.Config.Domain != req.Domain {
-		t.Fatalf("Domain 应保留为 %q，得到 %q", req.Domain, tunnel.Config.Domain)
+		t.Fatalf("Domain should remain %q, got %q", req.Domain, tunnel.Config.Domain)
 	}
 }
 
@@ -155,17 +155,17 @@ func TestActivatePreparedTunnel_HTTPDoesNotBindListener(t *testing.T) {
 
 	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending)
 	if err != nil {
-		t.Fatalf("prepareProxyTunnel 失败: %v", err)
+		t.Fatalf("prepareProxyTunnel failed: %v", err)
 	}
 
 	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
-		t.Fatalf("activatePreparedTunnel 失败: %v", err)
+		t.Fatalf("activatePreparedTunnel failed: %v", err)
 	}
 	if tunnel.Listener != nil {
-		t.Fatal("HTTP 隧道不应创建 TCP listener")
+		t.Fatal("HTTP tunnels should not create a TCP listener")
 	}
 	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("HTTP 隧道激活后状态应为 running/exposed，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
+		t.Fatalf("After HTTP tunnel activation the state should be running/exposed, got %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 }
 
@@ -197,11 +197,11 @@ func TestActivatePreparedTunnel_HTTPDoesNotConflictWithSelf(t *testing.T) {
 
 	tunnel, err := s.prepareProxyTunnel(client, req, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending)
 	if err != nil {
-		t.Fatalf("prepareProxyTunnel 失败: %v", err)
+		t.Fatalf("prepareProxyTunnel failed: %v", err)
 	}
 
 	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
-		t.Fatalf("activatePreparedTunnel 不应因自身域名而冲突: %v", err)
+		t.Fatalf("activatePreparedTunnel should not conflict with its own domain: %v", err)
 	}
 }
 
@@ -223,11 +223,11 @@ func TestStartProxy_DuplicateName(t *testing.T) {
 	}
 
 	if err := s.StartProxy(client, req); err != nil {
-		t.Fatalf("首次启动应成功: %v", err)
+		t.Fatalf("The first startup should succeed: %v", err)
 	}
 
 	if err := s.StartProxy(client, req); err == nil {
-		t.Error("同名隧道第二次启动应当报错冲突")
+		t.Error("Starting a tunnel with the same name a second time should fail with a conflict")
 	}
 
 	s.StopAllProxies(client)
@@ -249,25 +249,25 @@ func TestStopProxy(t *testing.T) {
 
 	req := protocol.ProxyNewRequest{Name: "to-be-stopped", RemotePort: reserveTCPPort(t)}
 	if err := s.StartProxy(client, req); err != nil {
-		t.Fatalf("StartProxy 失败: %v", err)
+		t.Fatalf("StartProxy failed: %v", err)
 	}
 
 	client.proxyMu.RLock()
 	port := client.proxies[req.Name].Config.RemotePort
 	client.proxyMu.RUnlock()
 
-	// 执行 Stop
+	// Execute Stop
 	if err := s.StopProxy(client, "to-be-stopped"); err != nil {
-		t.Fatalf("StopProxy 出错: %v", err)
+		t.Fatalf("StopProxy failed: %v", err)
 	}
 
-	// 等待一小会儿确保 net.Listener close 生效
+	// Wait a moment to ensure net.Listener close takes effect
 	time.Sleep(50 * time.Millisecond)
 
-	// 测试 Dial 原来的端口应该会被拒绝
+	// Test that dialing the original port should now be refused
 	_, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 50*time.Millisecond)
 	if err == nil {
-		t.Errorf("代理已停止，但端口 %d 仍能被连接", port)
+		t.Errorf("The proxy has stopped, but port %d can still be connected to", port)
 	}
 
 	cConn.Close()
@@ -287,10 +287,10 @@ func TestStopAllProxies(t *testing.T) {
 	client.dataSession = sSession
 
 	if err := s.StartProxy(client, protocol.ProxyNewRequest{Name: "t1", RemotePort: reserveTCPPort(t)}); err != nil {
-		t.Fatalf("启动 t1 失败: %v", err)
+		t.Fatalf("Failed to start t1: %v", err)
 	}
 	if err := s.StartProxy(client, protocol.ProxyNewRequest{Name: "t2", RemotePort: reserveTCPPort(t)}); err != nil {
-		t.Fatalf("启动 t2 失败: %v", err)
+		t.Fatalf("Failed to start t2: %v", err)
 	}
 
 	client.proxyMu.RLock()
@@ -298,7 +298,7 @@ func TestStopAllProxies(t *testing.T) {
 	client.proxyMu.RUnlock()
 
 	if count != 2 {
-		t.Fatalf("期望有 2 个隧道，得到 %d", count)
+		t.Fatalf("Expected 2 tunnels, got %d", count)
 	}
 
 	s.StopAllProxies(client)
@@ -308,14 +308,14 @@ func TestStopAllProxies(t *testing.T) {
 	client.proxyMu.RUnlock()
 
 	if countAf != 0 {
-		t.Errorf("StopAllProxies 后代理映射表应该清空，得到长度 %d", countAf)
+		t.Errorf("The proxy map should be empty after StopAllProxies, got length %d", countAf)
 	}
 	cConn.Close()
 	sConn.Close()
 }
 
 // ============================================================
-// 完整的 Proxy 接收循环与转发行为测试
+// Complete Proxy accept loop and forwarding behavior tests
 // ============================================================
 
 func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
@@ -327,12 +327,12 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	}
 	s.clients.Store(clientID, cc)
 
-	// 1. 模拟网络通道 (用于 Yamux multiplexing)
+	// 1. Simulate a network channel (for Yamux multiplexing)
 	pipeC, pipeS := net.Pipe()
 	defer pipeC.Close()
 	defer pipeS.Close()
 
-	// 初始化 Yamux Server/Client session
+	// Initialize the Yamux server/client session
 	var serverSession *yamux.Session
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -347,7 +347,7 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	defer serverSession.Close()
 	defer clientSession.Close()
 
-	// 2. 启动代理监听
+	// 2. Start proxy listening
 	tunnelName := "echo-http-tunnel"
 	req := protocol.ProxyNewRequest{
 		Name:       tunnelName,
@@ -357,7 +357,7 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 
 	err := s.StartProxy(cc, req)
 	if err != nil {
-		t.Fatalf("启动代理失败: %v", err)
+		t.Fatalf("Failed to start proxy: %v", err)
 	}
 	defer s.StopProxy(cc, tunnelName)
 
@@ -365,8 +365,8 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	remotePort := cc.proxies[tunnelName].Config.RemotePort
 	cc.proxyMu.RUnlock()
 
-	// 3. 在客户端一侧（Client侧）起一个 goroutine 处理 Yamux 连接
-	// 期望将接收到的流量转发给本地的 HTTP Test Server
+	// 3. Start a goroutine on the client side to handle the Yamux connection
+	// The received traffic is expected to be forwarded to the local HTTP test server
 	localBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Proxy-Target", "hit")
 		w.WriteHeader(http.StatusOK)
@@ -382,14 +382,14 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 			}
 			go func(stream net.Conn) {
 				defer stream.Close()
-				// 丢弃前面代理传入的 2Bytes length + Name 作为 header (mock Client parsing)
+				// Discard the 2-byte length and Name header sent by the proxy (mock client parsing)
 				var ln [2]byte
 				stream.Read(ln[:])
 				nameLen := int(ln[0])<<8 | int(ln[1])
 				nameBuf := make([]byte, nameLen)
 				stream.Read(nameBuf)
 
-				// Dial 真实本地后端
+				// Dial the real local backend
 				backendConn, err := net.Dial("tcp", localBackend.Listener.Addr().String())
 				if err != nil {
 					return
@@ -400,38 +400,38 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 		}
 	}()
 
-	// 4. 从真实网络请求 User 发起的请求 (连接 Server 分配的 RemotePort)
+	// 4. Send a request from a real network client (connect to the Server-assigned RemotePort)
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d", remotePort))
 	if err != nil {
-		t.Fatalf("请求代理地址失败: %v", err)
+		t.Fatalf("Failed to request the proxy address: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("状态码期望 200，得到 %d", resp.StatusCode)
+		t.Errorf("Expected status code 200, got %d", resp.StatusCode)
 	}
 	if resp.Header.Get("X-Proxy-Target") != "hit" {
-		t.Errorf("未正确触达后端 HTTP Server")
+		t.Errorf("Did not correctly reach the backend HTTP server")
 	}
 }
 
 // ============================================================
-// 并发端口竞争测试
+// Concurrent port contention tests
 // ============================================================
 
 func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 	s := New(0)
 
-	// 先分配一个固定端口用于竞争
+	// Reserve a fixed port for contention first
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("预分配端口失败: %v", err)
+		t.Fatalf("Failed to preallocate port: %v", err)
 	}
 	contestedPort := ln.Addr().(*net.TCPAddr).Port
-	ln.Close() // 释放端口让两个 Client 去抢
+	ln.Close() // Release the port so two clients can race for it
 
-	// 创建两个 Client，各自有自己的 data session
+	// Create two clients, each with its own data session
 	makeClient := func(id string) *ClientConn {
 		client := &ClientConn{
 			ID:      id,
@@ -452,7 +452,7 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 	client1 := makeClient("race-client-1")
 	client2 := makeClient("race-client-2")
 
-	// 并发启动代理抢同一端口
+	// Start proxies concurrently to race for the same port
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
 
@@ -486,13 +486,13 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 	}
 
 	if successes != 1 {
-		t.Errorf("抢同一端口应只有 1 个成功，实际成功 %d 个", successes)
+		t.Errorf("Only 1 success is expected when racing for the same port, got %d", successes)
 	}
 	if failures != 1 {
-		t.Errorf("抢同一端口应有 1 个失败，实际失败 %d 个", failures)
+		t.Errorf("Only 1 failure is expected when racing for the same port, got %d", failures)
 	}
 
-	// 清理
+	// Cleanup
 	s.StopAllProxies(client1)
 	s.StopAllProxies(client2)
 }
@@ -566,24 +566,24 @@ func TestProxyAcceptLoop_UnexpectedAcceptFailureMarksTunnelError(t *testing.T) {
 	client.proxyMu.RUnlock()
 
 	if got.DesiredState != protocol.ProxyDesiredStateRunning || got.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("意外 Accept 失败后状态应为 running/error，得到 %s/%s", got.DesiredState, got.RuntimeState)
+		t.Fatalf("After an unexpected Accept failure, the state should be running/error, got %s/%s", got.DesiredState, got.RuntimeState)
 	}
 	if got.Error == "" {
-		t.Fatal("意外 Accept 失败后 error 不应为空")
+		t.Fatal("The error should not be empty after an unexpected Accept failure")
 	}
 	if currentListener != nil {
-		t.Fatal("意外 Accept 失败后 listener 应已清理")
+		t.Fatal("The listener should have been cleaned up after an unexpected Accept failure")
 	}
 
 	stored, ok := s.store.GetTunnel(client.ID, tunnel.Config.Name)
 	if !ok {
-		t.Fatal("store 中应仍存在该隧道")
+		t.Fatal("The tunnel should still exist in the store")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("store 状态应为 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("The store state should be running/error, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Error == "" {
-		t.Fatal("store error 不应为空")
+		t.Fatal("The store error should not be empty")
 	}
 }
 
@@ -625,15 +625,15 @@ func TestProxyAcceptLoop_ClosedDoneDoesNotMarkTunnelError(t *testing.T) {
 	client.proxyMu.RUnlock()
 
 	if got.DesiredState != protocol.ProxyDesiredStateRunning || got.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("正常关闭不应把状态降级为 error，得到 %s/%s", got.DesiredState, got.RuntimeState)
+		t.Fatalf("A normal shutdown should not downgrade the state to error, got %s/%s", got.DesiredState, got.RuntimeState)
 	}
 
 	stored, ok := s.store.GetTunnel(client.ID, tunnel.Config.Name)
 	if !ok {
-		t.Fatal("store 中应仍存在该隧道")
+		t.Fatal("The tunnel should still exist in the store")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("正常关闭后 store 状态应保持 running/exposed，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("After a normal shutdown, the store state should remain running/exposed, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 }
 
@@ -675,18 +675,18 @@ func TestMarkTCPProxyRuntimeErrorIfCurrent_StaleListenerDoesNotDemote(t *testing
 	client.proxyMu.RUnlock()
 
 	if got.DesiredState != protocol.ProxyDesiredStateRunning || got.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("stale listener 不应把状态降级为 error，得到 %s/%s", got.DesiredState, got.RuntimeState)
+		t.Fatalf("A stale listener should not downgrade the state to error, got %s/%s", got.DesiredState, got.RuntimeState)
 	}
 	if gotListener != currentListener {
-		t.Fatal("stale listener 不应清理当前 listener")
+		t.Fatal("A stale listener should not clean up the current listener")
 	}
 
 	stored, ok := s.store.GetTunnel(client.ID, tunnel.Config.Name)
 	if !ok {
-		t.Fatal("store 中应仍存在该隧道")
+		t.Fatal("The tunnel should still exist in the store")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("stale listener 后 store 状态应保持 running/exposed，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("After a stale listener event, the store state should remain running/exposed, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 }
 
@@ -731,7 +731,7 @@ func TestHandleProxyConn_OpenStreamFailureMarksTunnelError(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("handleProxyConn 在 OpenStream 失败后未及时退出")
+		t.Fatal("handleProxyConn did not exit promptly after OpenStream failure")
 	}
 
 	client.proxyMu.RLock()
@@ -740,23 +740,23 @@ func TestHandleProxyConn_OpenStreamFailureMarksTunnelError(t *testing.T) {
 	client.proxyMu.RUnlock()
 
 	if got.DesiredState != protocol.ProxyDesiredStateRunning || got.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("OpenStream 失败后状态应为 running/error，得到 %s/%s", got.DesiredState, got.RuntimeState)
+		t.Fatalf("Expected running/error state after OpenStream failure, got %s/%s", got.DesiredState, got.RuntimeState)
 	}
-	if !strings.Contains(got.Error, "数据通道未建立") {
-		t.Fatalf("OpenStream 失败后 error 应包含数据通道原因，得到 %q", got.Error)
+	if !strings.Contains(got.Error, "data channel not established") {
+		t.Fatalf("Expected the error to contain the data channel reason after OpenStream failure, got %q", got.Error)
 	}
 	if currentListener != nil {
-		t.Fatal("OpenStream 失败后 listener 应已清理")
+		t.Fatal("Expected the listener to be cleaned up after OpenStream failure")
 	}
 
 	stored, ok := s.store.GetTunnel(client.ID, tunnel.Config.Name)
 	if !ok {
-		t.Fatal("store 中应仍存在该隧道")
+		t.Fatal("The tunnel should still exist in the store")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("store 状态应为 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("Expected store state running/error, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
-	if !strings.Contains(stored.Error, "数据通道未建立") {
-		t.Fatalf("store error 应包含数据通道原因，得到 %q", stored.Error)
+	if !strings.Contains(stored.Error, "data channel not established") {
+		t.Fatalf("Expected the store error to contain the data channel reason, got %q", stored.Error)
 	}
 }

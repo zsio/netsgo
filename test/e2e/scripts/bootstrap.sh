@@ -2,7 +2,6 @@
 set -eu
 
 BASE_URL="${NETSGO_BOOTSTRAP_BASE_URL:-http://proxy}"
-SETUP_TOKEN="${NETSGO_SETUP_TOKEN:-}"
 ADMIN_USER="${NETSGO_ADMIN_USER:-admin}"
 ADMIN_PASS="${NETSGO_ADMIN_PASS:-password123}"
 SERVER_ADDR="${NETSGO_SERVER_ADDR:-http://panel.compose.local}"
@@ -18,11 +17,6 @@ TUNNEL_LOCAL_IP="${NETSGO_TUNNEL_LOCAL_IP:-backend}"
 TUNNEL_LOCAL_PORT="${NETSGO_TUNNEL_LOCAL_PORT:-18083}"
 WAIT_TIMEOUT="${NETSGO_BOOTSTRAP_WAIT_TIMEOUT:-180}"
 MANAGEMENT_HOST="${NETSGO_MANAGEMENT_HOST:-}"
-
-if [ -z "${SETUP_TOKEN}" ]; then
-	echo "NETSGO_SETUP_TOKEN is required" >&2
-	exit 1
-fi
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
@@ -41,18 +35,6 @@ fi
 
 deadline() {
 	expr "$(date +%s)" + "${WAIT_TIMEOUT}"
-}
-
-wait_for_http() {
-	url="$1"
-	end_ts="$(deadline)"
-	while [ "$(date +%s)" -lt "${end_ts}" ]; do
-		if curl -fsS -H "Host: ${MANAGEMENT_HOST}" "${url}" >/dev/null 2>&1; then
-			return 0
-		fi
-		sleep 1
-	done
-	return 1
 }
 
 http_json() {
@@ -112,52 +94,6 @@ wait_for_client() {
 	done
 	return 1
 }
-
-log "waiting for ${BASE_URL}/api/setup/status"
-if ! wait_for_http "${BASE_URL}/api/setup/status"; then
-	log "timed out waiting for proxy/server readiness"
-	exit 1
-fi
-
-status_resp="${tmpdir}/setup-status.json"
-init_payload="${tmpdir}/setup-init.json"
-init_resp="${tmpdir}/setup-init.resp"
-
-code="$(http_json GET "${BASE_URL}/api/setup/status" "" "${status_resp}" -H "Host: ${MANAGEMENT_HOST}")"
-if [ "${code}" != "200" ]; then
-	log "unexpected setup status response: ${code}"
-	cat "${status_resp}" >&2 || true
-	exit 1
-fi
-
-initialized="$(jq -r '.initialized' "${status_resp}")"
-if [ "${initialized}" != "true" ]; then
-	log "initializing server"
-	jq -n \
-		--arg username "${ADMIN_USER}" \
-		--arg password "${ADMIN_PASS}" \
-		--arg server_addr "${SERVER_ADDR}" \
-		--arg setup_token "${SETUP_TOKEN}" \
-		'{admin:{username:$username,password:$password},server_addr:$server_addr,allowed_ports:[],setup_token:$setup_token}' >"${init_payload}"
-	code="$(http_json POST "${BASE_URL}/api/setup/init" "${init_payload}" "${init_resp}" -H "Host: ${MANAGEMENT_HOST}")" || code=""
-	case "${code}" in
-	201)
-		;;
-	403)
-		code="$(http_json GET "${BASE_URL}/api/setup/status" "" "${status_resp}" -H "Host: ${MANAGEMENT_HOST}")"
-		if [ "${code}" != "200" ] || [ "$(jq -r '.initialized' "${status_resp}")" != "true" ]; then
-			log "server initialization rejected"
-			cat "${init_resp}" >&2 || true
-			exit 1
-		fi
-		;;
-	*)
-		log "server initialization failed with status ${code}"
-		cat "${init_resp}" >&2 || true
-		exit 1
-		;;
-	esac
-fi
 
 log "logging in as admin"
 admin_token="$(login_admin)" || {

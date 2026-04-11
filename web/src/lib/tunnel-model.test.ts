@@ -20,7 +20,6 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
     desired_state: 'running',
     runtime_state: 'exposed',
     capabilities: {
-      can_pause: true,
       can_resume: false,
       can_stop: true,
       can_edit: false,
@@ -65,17 +64,17 @@ describe('tunnel-model', () => {
     expect(view.status.description).toContain('等待 Client 上线');
   });
 
-  test('paused + idle 时展示已暂停', () => {
+  test('idle 时统一展示已停止', () => {
     const view = buildTunnelViewModel(
       createTunnel({
-        desired_state: 'paused',
+        desired_state: 'stopped',
         runtime_state: 'idle',
       }),
       false,
     );
 
-    expect(view.status.key).toBe('paused');
-    expect(view.status.label).toBe('已暂停');
+    expect(view.status.key).toBe('stopped');
+    expect(view.status.label).toBe('已停止');
   });
 
   test('动作能力直接消费 server capability projection', () => {
@@ -84,7 +83,6 @@ describe('tunnel-model', () => {
         desired_state: 'running',
         runtime_state: 'exposed',
         capabilities: {
-          can_pause: false,
           can_resume: true,
           can_stop: false,
           can_edit: true,
@@ -93,7 +91,6 @@ describe('tunnel-model', () => {
       }),
     );
 
-    expect(permissions.canPause).toBe(false);
     expect(permissions.canResume).toBe(true);
     expect(permissions.canStop).toBe(false);
     expect(permissions.canEdit).toBe(true);
@@ -110,9 +107,7 @@ describe('tunnel-model', () => {
   test('capability projection 缺字段时立即失败', () => {
     expect(() => getTunnelActionAvailability({
       ...createTunnel(),
-      capabilities: {
-        can_pause: true,
-      } as never,
+      capabilities: {} as never,
     })).toThrow('Tunnel capability "can_resume" is required');
   });
 

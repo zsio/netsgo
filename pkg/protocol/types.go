@@ -48,8 +48,7 @@ type SystemStats struct {
 
 // TunnelCapabilities 描述一条隧道当前允许执行的操作，由服务端计算并注入，仅用于前端展示
 type TunnelCapabilities struct {
-	CanPause  bool `json:"can_pause"`  // 是否可以暂停
-	CanResume bool `json:"can_resume"` // 是否可以恢复
+	CanResume bool `json:"can_resume"` // 是否可以启动
 	CanStop   bool `json:"can_stop"`   // 是否可以停止
 	CanEdit   bool `json:"can_edit"`   // 是否可以编辑
 	CanDelete bool `json:"can_delete"` // 是否可以删除
@@ -64,7 +63,7 @@ type ProxyConfig struct {
 	RemotePort   int                 `json:"remote_port"`            // 公网暴露端口
 	Domain       string              `json:"domain"`                 // HTTP 类型时的域名
 	ClientID     string              `json:"client_id"`              // 所属 Client ID
-	DesiredState string              `json:"desired_state"`          // 用户目标状态: running, paused, stopped
+	DesiredState string              `json:"desired_state"`          // 用户目标状态: running, stopped
 	RuntimeState string              `json:"runtime_state"`          // 实际运行状态: pending, exposed, offline, idle, error
 	Error        string              `json:"error,omitempty"`        // 错误状态时的具体原因
 	Capabilities *TunnelCapabilities `json:"capabilities,omitempty"` // 可执行操作（服务端计算，仅供前端使用）
@@ -112,7 +111,6 @@ const (
 const (
 	ProxyStatusPending = "pending"
 	ProxyStatusActive  = "active"
-	ProxyStatusPaused  = "paused"
 	ProxyStatusStopped = "stopped"
 	ProxyStatusError   = "error"
 )
@@ -120,7 +118,6 @@ const (
 // 隧道目标状态常量
 const (
 	ProxyDesiredStateRunning = "running"
-	ProxyDesiredStatePaused  = "paused"
 	ProxyDesiredStateStopped = "stopped"
 )
 

@@ -11,7 +11,6 @@ type consoleSummaryView struct {
 	InactiveTunnels int `json:"inactive_tunnels"`
 	PendingTunnels  int `json:"pending_tunnels"`
 	OfflineTunnels  int `json:"offline_tunnels"`
-	PausedTunnels   int `json:"paused_tunnels"`
 	StoppedTunnels  int `json:"stopped_tunnels"`
 	ErrorTunnels    int `json:"error_tunnels"`
 }
@@ -48,8 +47,6 @@ func summarizeConsoleClients(clients []clientView) consoleSummaryView {
 				summary.PendingTunnels++
 			case protocol.ProxyRuntimeStateOffline:
 				summary.OfflineTunnels++
-			case "paused":
-				summary.PausedTunnels++
 			case "stopped":
 				summary.StoppedTunnels++
 			default:
@@ -63,6 +60,7 @@ func summarizeConsoleClients(clients []clientView) consoleSummaryView {
 
 func consoleTunnelStatusKey(tunnel protocol.ProxyConfig, clientOnline bool) string {
 	runtimeState := tunnel.RuntimeState
+	desiredState := canonicalDesiredState(tunnel.DesiredState)
 	if !clientOnline && tunnel.DesiredState == protocol.ProxyDesiredStateRunning && runtimeState != protocol.ProxyRuntimeStateError {
 		runtimeState = protocol.ProxyRuntimeStateOffline
 	}
@@ -74,9 +72,7 @@ func consoleTunnelStatusKey(tunnel protocol.ProxyConfig, clientOnline bool) stri
 		protocol.ProxyRuntimeStateError:
 		return runtimeState
 	case protocol.ProxyRuntimeStateIdle:
-		if tunnel.DesiredState == protocol.ProxyDesiredStatePaused {
-			return "paused"
-		}
+		_ = desiredState
 		return "stopped"
 	default:
 		return protocol.ProxyRuntimeStateError

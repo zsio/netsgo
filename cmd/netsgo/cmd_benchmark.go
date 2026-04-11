@@ -20,19 +20,19 @@ import (
 
 var benchmarkCmd = &cobra.Command{
 	Use:   "benchmark",
-	Short: "运行真实 TCP 全链路性能压测",
-	Long: `NetsGo 真实 TCP 全链路性能压测工具。
+	Short: "Run a full TCP end-to-end performance benchmark",
+	Long: `NetsGo full TCP end-to-end performance benchmark.
 
-完整数据路径:
-  压测客户端 → TCP → Server ProxyPort → yamux OpenStream →
-  Client AcceptStream → Client Dial Backend → io.Copy → Backend 消费`,
-	Example: `  # 默认: 50 并发 × 1MB
+Full data path:
+  Benchmark client → TCP → Server ProxyPort → yamux OpenStream →
+  Client AcceptStream → Client Dial Backend → io.Copy → Backend consume`,
+	Example: `  # Default: 50 concurrent × 1 MB
   netsgo benchmark
 
-  # 100 并发
+  # 100 concurrent connections
   netsgo benchmark -c 100
 
-  # 20 并发 × 10MB
+  # 20 concurrent × 10 MB each
   netsgo benchmark -c 20 --size 10`,
 	Run: func(cmd *cobra.Command, args []string) {
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
@@ -42,8 +42,8 @@ var benchmarkCmd = &cobra.Command{
 }
 
 func init() {
-	benchmarkCmd.Flags().IntP("concurrency", "c", 50, "并发连接数")
-	benchmarkCmd.Flags().Int("size", 1, "每个连接传输的数据大小 (MB)")
+	benchmarkCmd.Flags().IntP("concurrency", "c", 50, "Number of concurrent connections")
+	benchmarkCmd.Flags().Int("size", 1, "Data size per connection (MB)")
 
 	rootCmd.AddCommand(benchmarkCmd)
 }
@@ -51,7 +51,6 @@ func init() {
 func runBenchmark(concurrency, dataSize int) {
 	bytesPerConn := dataSize * 1024 * 1024
 
-	// 限制 CPU 到 50%
 	numCPU := runtime.NumCPU()
 	halfCPU := numCPU / 2
 	if halfCPU < 1 {
@@ -60,22 +59,19 @@ func runBenchmark(concurrency, dataSize int) {
 	runtime.GOMAXPROCS(halfCPU)
 
 	fmt.Println("╔══════════════════════════════════════════════════════╗")
-	fmt.Println("║         NetsGo 真实 TCP 全链路性能压测              ║")
+	fmt.Println("║         NetsGo Full TCP End-to-End Benchmark         ║")
 	fmt.Println("╠══════════════════════════════════════════════════════╣")
-	fmt.Printf("║  CPU 核心    : %d / %d (50%%)\n", halfCPU, numCPU)
-	fmt.Printf("║  并发连接    : %d\n", concurrency)
-	fmt.Printf("║  每连接传输  : %d MB\n", dataSize)
-	fmt.Printf("║  预期总传输  : %d MB\n", concurrency*dataSize)
+	fmt.Printf("║  CPU cores   : %d / %d (50%%)\n", halfCPU, numCPU)
+	fmt.Printf("║  Concurrent  : %d\n", concurrency)
+	fmt.Printf("║  Per conn    : %d MB\n", dataSize)
+	fmt.Printf("║  Total (est) : %d MB\n", concurrency*dataSize)
 	fmt.Println("╚══════════════════════════════════════════════════════╝")
 	fmt.Println()
 
-	// ============================================================
-	// 1. 启动 Backend (接收并消费数据，统计收到的字节数)
-	// ============================================================
 	var backendReceived int64
 	backendLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		benchExitf("启动 backend 失败: %v", err)
+		benchExitf("Failed to start backend: %v", err)
 	}
 	defer backendLn.Close()
 	backendPort := backendLn.Addr().(*net.TCPAddr).Port
@@ -93,14 +89,11 @@ func runBenchmark(concurrency, dataSize int) {
 			}(conn)
 		}
 	}()
-	benchPrintStep("Backend 消费服务已启动 (:%d)", backendPort)
+	benchPrintStep("Backend consumer started (:%d)", backendPort)
 
-	// ============================================================
-	// 2. 启动 NetsGo Server
-	// ============================================================
 	srvLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		benchExitf("Server 预分配端口失败: %v", err)
+		benchExitf("Failed to pre-allocate server port: %v", err)
 	}
 	serverPort := srvLn.Addr().(*net.TCPAddr).Port
 	srvLn.Close()
@@ -108,11 +101,8 @@ func runBenchmark(concurrency, dataSize int) {
 	srv := server.New(serverPort)
 	go srv.Start()
 	time.Sleep(500 * time.Millisecond)
-	benchPrintStep("NetsGo Server 已启动 (:%d)", serverPort)
+	benchPrintStep("NetsGo Server started (:%d)", serverPort)
 
-	// ============================================================
-	// 3. 启动 Client + 创建代理隧道
-	// ============================================================
 	wsAddr := fmt.Sprintf("ws://127.0.0.1:%d", serverPort)
 	c := client.New(wsAddr, "bench-key")
 	c.ProxyConfigs = []protocol.ProxyNewRequest{
@@ -127,7 +117,7 @@ func runBenchmark(concurrency, dataSize int) {
 
 	go c.Start()
 
-	fmt.Print("⏳ 等待隧道建立...")
+	fmt.Print("⏳ Waiting for tunnel to establish...")
 	var proxyPort int
 	for i := 0; i < 50; i++ {
 		time.Sleep(100 * time.Millisecond)
@@ -137,24 +127,20 @@ func runBenchmark(concurrency, dataSize int) {
 		}
 	}
 	if proxyPort == 0 {
-		benchExitf("\n❌ 代理隧道未建立 (5秒超时)")
+		benchExitf("\n❌ Proxy tunnel not established (5s timeout)")
 	}
-	fmt.Printf(" 完成! 代理端口 :%d\n", proxyPort)
+	fmt.Printf(" done! Proxy port :%d\n", proxyPort)
 
-	// 验证隧道
 	tc, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 2*time.Second)
 	if err != nil {
-		benchExitf("❌ 代理端口不可达: %v", err)
+		benchExitf("❌ Proxy port unreachable: %v", err)
 	}
 	tc.Write([]byte("hi"))
 	tc.Close()
 	time.Sleep(50 * time.Millisecond)
-	benchPrintStep("隧道可通行性验证通过")
+	benchPrintStep("Tunnel connectivity verified")
 
-	// ============================================================
-	// 4. 并发压测
-	// ============================================================
-	fmt.Printf("\n🚀 开始压测: %d 并发 × %d MB/连接...\n\n", concurrency, dataSize)
+	fmt.Printf("\n🚀 Starting benchmark: %d concurrent × %d MB/conn...\n\n", concurrency, dataSize)
 
 	payload := make([]byte, 64*1024)
 	rand.Read(payload)
@@ -210,24 +196,21 @@ func runBenchmark(concurrency, dataSize int) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	// ============================================================
-	// 5. 结果报告
-	// ============================================================
 	sentMB := float64(totalSent) / (1024 * 1024)
 	recvMB := float64(atomic.LoadInt64(&backendReceived)) / (1024 * 1024)
 	throughput := sentMB / duration.Seconds()
 
 	fmt.Println("╔══════════════════════════════════════════════════════╗")
-	fmt.Println("║                 📊 压测结果报告                     ║")
+	fmt.Println("║                  📊 Benchmark Results               ║")
 	fmt.Println("╠══════════════════════════════════════════════════════╣")
-	fmt.Printf("║  总耗时          : %.2f 秒\n", duration.Seconds())
-	fmt.Printf("║  成功 / 总连接   : %d / %d\n", successConn, concurrency)
+	fmt.Printf("║  Total time      : %.2f s\n", duration.Seconds())
+	fmt.Printf("║  Success / Total : %d / %d\n", successConn, concurrency)
 	if failedConn > 0 {
-		fmt.Printf("║  失败连接        : %d\n", failedConn)
+		fmt.Printf("║  Failed conns    : %d\n", failedConn)
 	}
-	fmt.Printf("║  发送总量        : %.2f MB\n", sentMB)
-	fmt.Printf("║  Backend 收到    : %.2f MB\n", recvMB)
-	fmt.Printf("║  发送吞吐量      : %.2f MB/s\n", throughput)
+	fmt.Printf("║  Bytes sent      : %.2f MB\n", sentMB)
+	fmt.Printf("║  Backend recv    : %.2f MB\n", recvMB)
+	fmt.Printf("║  Throughput      : %.2f MB/s\n", throughput)
 
 	if len(latencies) > 0 {
 		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -238,16 +221,16 @@ func runBenchmark(concurrency, dataSize int) {
 			p99idx = len(latencies) - 1
 		}
 		p99 := latencies[p99idx]
-		fmt.Printf("║  延迟 P50        : %v\n", p50.Round(time.Millisecond))
-		fmt.Printf("║  延迟 P90        : %v\n", p90.Round(time.Millisecond))
-		fmt.Printf("║  延迟 P99        : %v\n", p99.Round(time.Millisecond))
+		fmt.Printf("║  Latency P50     : %v\n", p50.Round(time.Millisecond))
+		fmt.Printf("║  Latency P90     : %v\n", p90.Round(time.Millisecond))
+		fmt.Printf("║  Latency P99     : %v\n", p99.Round(time.Millisecond))
 	}
 
 	lossRate := 0.0
 	if sentMB > 0 {
 		lossRate = (1 - recvMB/sentMB) * 100
 	}
-	fmt.Printf("║  数据丢失率      : %.2f%%\n", lossRate)
+	fmt.Printf("║  Data loss rate  : %.2f%%\n", lossRate)
 	fmt.Println("╚══════════════════════════════════════════════════════╝")
 }
 

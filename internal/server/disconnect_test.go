@@ -42,7 +42,7 @@ func TestDisconnect_DuringActiveRelay(t *testing.T) {
 
 	clientSession, err := mux.NewClientSession(clientPipe, mux.DefaultConfig())
 	if err != nil {
-		t.Fatalf("创建客户端 Session 失败: %v", err)
+		t.Fatalf("Failed to create client session: %v", err)
 	}
 
 	// 等待 Server 端 Session 建立
@@ -51,7 +51,7 @@ func TestDisconnect_DuringActiveRelay(t *testing.T) {
 	// 打开一个 Stream 并开始传输数据
 	stream, err := clientSession.Open()
 	if err != nil {
-		t.Fatalf("打开 Stream 失败: %v", err)
+		t.Fatalf("Failed to open stream: %v", err)
 	}
 
 	// 在后台持续向 stream 写入数据（模拟活跃流量）
@@ -102,13 +102,13 @@ func TestDisconnect_DuringActiveRelay(t *testing.T) {
 	select {
 	case <-writerDone:
 	case <-timeout:
-		t.Fatal("writer goroutine 没有在 5 秒内退出 — 可能死锁")
+		t.Fatal("writer goroutine did not exit within 5s — possible deadlock")
 	}
 
 	select {
 	case <-readerDone:
 	case <-timeout:
-		t.Fatal("reader goroutine 没有在 5 秒内退出 — 可能死锁")
+		t.Fatal("reader goroutine did not exit within 5s — possible deadlock")
 	}
 
 	// 验证 Session 已关闭
@@ -117,7 +117,7 @@ func TestDisconnect_DuringActiveRelay(t *testing.T) {
 	client.dataMu.RUnlock()
 
 	if sess != nil && !sess.IsClosed() {
-		t.Error("底层连接断开后 dataSession 应该已关闭")
+		t.Error("dataSession should be closed after underlying connection disconnected")
 	}
 
 	sessionWg.Wait() // 确保 server goroutine 也退出了
@@ -166,7 +166,7 @@ func TestDisconnect_RelayGoroutineCleanup(t *testing.T) {
 	case <-relayDone:
 		// ✅ 正常退出
 	case <-time.After(3 * time.Second):
-		t.Fatal("Relay goroutine 未在 3 秒内退出 — goroutine 泄漏")
+		t.Fatal("Relay goroutine did not exit within 3s — goroutine leak")
 	}
 
 	b2.Close()

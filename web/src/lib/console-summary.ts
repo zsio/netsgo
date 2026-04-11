@@ -10,7 +10,6 @@ export const EMPTY_CONSOLE_SUMMARY: ConsoleSummary = {
   inactive_tunnels: 0,
   pending_tunnels: 0,
   offline_tunnels: 0,
-  paused_tunnels: 0,
   stopped_tunnels: 0,
   error_tunnels: 0,
 };
@@ -38,9 +37,6 @@ export function summarizeConsoleClients(clients: Client[] | null | undefined): C
           break;
         case 'offline':
           base.offline_tunnels += 1;
-          break;
-        case 'paused':
-          base.paused_tunnels += 1;
           break;
         case 'stopped':
           base.stopped_tunnels += 1;

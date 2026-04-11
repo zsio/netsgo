@@ -26,16 +26,16 @@ import (
 )
 
 // ============================================================
-// 测试辅助函数
+// Test helper functions
 // ============================================================
 
-// generateTestCert 为测试生成自签名 ECDSA P-256 证书
+// generateTestCert creates a self-signed ECDSA P-256 certificate for tests
 func generateTestCert(t *testing.T) (tls.Certificate, *x509.Certificate) {
 	t.Helper()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("生成密钥失败: %v", err)
+		t.Fatalf("failed to generate key: %v", err)
 	}
 
 	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
@@ -53,12 +53,12 @@ func generateTestCert(t *testing.T) (tls.Certificate, *x509.Certificate) {
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {
-		t.Fatalf("创建证书失败: %v", err)
+		t.Fatalf("failed to create certificate: %v", err)
 	}
 
 	x509Cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
-		t.Fatalf("解析证书失败: %v", err)
+		t.Fatalf("failed to parse certificate: %v", err)
 	}
 
 	return tls.Certificate{
@@ -67,7 +67,7 @@ func generateTestCert(t *testing.T) (tls.Certificate, *x509.Certificate) {
 	}, x509Cert
 }
 
-// computeTestFingerprint 计算证书指纹（与 client checkTLSFingerprint 格式一致）
+// computeTestFingerprint computes a certificate fingerprint in the same format used by client checkTLSFingerprint
 func computeTestFingerprint(certDER []byte) string {
 	hash := sha256.Sum256(certDER)
 	hexStr := strings.ToUpper(hex.EncodeToString(hash[:]))
@@ -82,7 +82,7 @@ func computeTestFingerprint(certDER []byte) string {
 	return strings.Join(parts, ":")
 }
 
-// startTLSWSServer 启动 TLS WebSocket 服务器，返回 server 和 wss:// URL
+// startTLSWSServer starts a TLS WebSocket server and returns the server and wss:// URL
 func startTLSWSServer(t *testing.T, cert tls.Certificate) (*httptest.Server, string) {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -106,7 +106,7 @@ func startTLSWSServer(t *testing.T, cert tls.Certificate) (*httptest.Server, str
 	return ts, wsURL
 }
 
-// dialTLSWS 连接 TLS WebSocket（InsecureSkipVerify 跳过 CA 校验）
+// dialTLSWS connects to a TLS WebSocket (InsecureSkipVerify skips CA verification)
 func dialTLSWS(t *testing.T, wsURL string) *websocket.Conn {
 	t.Helper()
 	dialer := &websocket.Dialer{
@@ -114,13 +114,13 @@ func dialTLSWS(t *testing.T, wsURL string) *websocket.Conn {
 	}
 	conn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("TLS WebSocket 连接失败: %v", err)
+		t.Fatalf("TLS WebSocket connection failed: %v", err)
 	}
 	return conn
 }
 
 // ============================================================
-// Part 1: buildTLSConfig 单元测试
+// Part 1: buildTLSConfig unit tests
 // ============================================================
 
 func TestBuildTLSConfig_Defaults(t *testing.T) {
@@ -128,13 +128,13 @@ func TestBuildTLSConfig_Defaults(t *testing.T) {
 	cfg := c.buildTLSConfig("example.com")
 
 	if cfg.MinVersion != tls.VersionTLS12 {
-		t.Errorf("MinVersion 应为 TLS 1.2，得到 0x%04x", cfg.MinVersion)
+		t.Errorf("MinVersion should be TLS 1.2, got 0x%04x", cfg.MinVersion)
 	}
 	if cfg.InsecureSkipVerify {
-		t.Error("默认 InsecureSkipVerify 应为 false")
+		t.Error("default InsecureSkipVerify should be false")
 	}
 	if cfg.ServerName != "example.com" {
-		t.Errorf("ServerName 应为 'example.com'，得到 %q", cfg.ServerName)
+		t.Errorf("ServerName should be 'example.com', got %q", cfg.ServerName)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestBuildTLSConfig_SkipVerify(t *testing.T) {
 	cfg := c.buildTLSConfig("example.com")
 
 	if !cfg.InsecureSkipVerify {
-		t.Error("TLSSkipVerify=true 时 InsecureSkipVerify 应为 true")
+		t.Error("InsecureSkipVerify should be true when TLSSkipVerify=true")
 	}
 }
 
@@ -162,17 +162,17 @@ func TestBuildTLSConfig_ServerName_Variants(t *testing.T) {
 		c := New("wss://"+tt.host, "key")
 		cfg := c.buildTLSConfig(tt.host)
 		if cfg.ServerName != tt.expectName {
-			t.Errorf("buildTLSConfig(%q): ServerName = %q，期望 %q", tt.host, cfg.ServerName, tt.expectName)
+			t.Errorf("buildTLSConfig(%q): ServerName = %q, want %q", tt.host, cfg.ServerName, tt.expectName)
 		}
 	}
 }
 
 // ============================================================
-// Part 2: checkTLSFingerprint 单元测试
+// Part 2: checkTLSFingerprint unit tests
 // ============================================================
 
 func TestCheckTLSFingerprint_NonTLSConn_Skipped(t *testing.T) {
-	// 普通 HTTP WS 服务器（非 TLS）
+	// Plain HTTP WS server (non-TLS)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		up := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
@@ -193,14 +193,14 @@ func TestCheckTLSFingerprint_NonTLSConn_Skipped(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("连接失败: %v", err)
+		t.Fatalf("connection failed: %v", err)
 	}
 	defer conn.Close()
 
 	c := New("ws://localhost", "key")
-	// 非 TLS 连接调用 checkTLSFingerprint 应直接返回 nil
+	// Calling checkTLSFingerprint on a non-TLS connection should return nil directly
 	if err := c.checkTLSFingerprint(conn); err != nil {
-		t.Errorf("非 TLS 连接不应报错，得到: %v", err)
+		t.Errorf("non-TLS connections should not return an error, got: %v", err)
 	}
 }
 
@@ -213,14 +213,14 @@ func TestCheckTLSFingerprint_TOFU_FirstConnect_RecordsFingerprint(t *testing.T) 
 	defer conn.Close()
 
 	c := New("wss://localhost", "key")
-	// TLSFingerprint 为空 → TOFU 首次连接
+	// Empty TLSFingerprint -> first TOFU connection
 	if err := c.checkTLSFingerprint(conn); err != nil {
-		t.Fatalf("TOFU 首次连接不应报错: %v", err)
+		t.Fatalf("first TOFU connection should not error: %v", err)
 	}
 
 	expectedFP := computeTestFingerprint(x509Cert.Raw)
 	if c.CurrentTLSFingerprint() != expectedFP {
-		t.Errorf("TOFU 应记录指纹:\n期望: %s\n实际: %s", expectedFP, c.TLSFingerprint)
+		t.Errorf("TOFU should record the fingerprint:\nwant: %s\ngot: %s", expectedFP, c.TLSFingerprint)
 	}
 }
 
@@ -235,10 +235,10 @@ func TestCheckTLSFingerprint_TOFU_SameFingerprint_Passes(t *testing.T) {
 	defer conn.Close()
 
 	c := New("wss://localhost", "key")
-	c.TLSFingerprint = expectedFP // 模拟已有指纹
+	c.TLSFingerprint = expectedFP // Simulate an existing fingerprint
 
 	if err := c.checkTLSFingerprint(conn); err != nil {
-		t.Errorf("匹配的指纹不应报错: %v", err)
+		t.Errorf("a matching fingerprint should not error: %v", err)
 	}
 }
 
@@ -251,17 +251,17 @@ func TestCheckTLSFingerprint_TOFU_DifferentFingerprint_Rejects(t *testing.T) {
 	defer conn.Close()
 
 	c := New("wss://localhost", "key")
-	c.TLSFingerprint = "AA:BB:CC:DD:FAKE:FINGERPRINT" // 伪造的旧指纹
+	c.TLSFingerprint = "AA:BB:CC:DD:FAKE:FINGERPRINT" // Forged old fingerprint
 
 	err := c.checkTLSFingerprint(conn)
 	if err == nil {
-		t.Fatal("指纹不匹配应报错")
+		t.Fatal("fingerprint mismatch should return an error")
 	}
-	if !strings.Contains(err.Error(), "指纹不匹配") {
-		t.Errorf("错误信息应包含'指纹不匹配'，得到: %v", err)
+	if !strings.Contains(err.Error(), "TLS certificate fingerprint mismatch") {
+		t.Errorf("error should contain 'TLS certificate fingerprint mismatch', got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "中间人攻击") {
-		t.Errorf("错误信息应提到中间人攻击: %v", err)
+	if !strings.Contains(err.Error(), "man-in-the-middle attack") {
+		t.Errorf("error should mention a man-in-the-middle attack: %v", err)
 	}
 }
 
@@ -274,176 +274,176 @@ func TestCheckTLSFingerprint_TOFU_PersistsToStateFile(t *testing.T) {
 	defer conn.Close()
 
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
+	statePath := filepath.Join(tmpDir, "client", "client.json")
 
 	c := New("wss://localhost", "key")
 	c.InstallID = "test-install-id"
-	c.StatePath = statePath
+	c.DataDir = tmpDir
 
 	if err := c.checkTLSFingerprint(conn); err != nil {
-		t.Fatalf("TOFU 首次连接不应报错: %v", err)
+		t.Fatalf("first TOFU connection should not error: %v", err)
 	}
 
-	// 验证指纹已持久化到文件
+	// Verify that the fingerprint was persisted to the file
 	data, err := os.ReadFile(statePath)
 	if err != nil {
-		t.Fatalf("读取状态文件失败: %v", err)
+		t.Fatalf("failed to read state file: %v", err)
 	}
 	var state persistedState
 	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("解析状态文件失败: %v", err)
+		t.Fatalf("failed to parse state file: %v", err)
 	}
 
 	expectedFP := computeTestFingerprint(x509Cert.Raw)
 	if state.TLSFingerprint != expectedFP {
-		t.Errorf("状态文件中的指纹不正确:\n期望: %s\n实际: %s", expectedFP, state.TLSFingerprint)
+		t.Errorf("fingerprint in state file is incorrect:\nwant: %s\ngot: %s", expectedFP, state.TLSFingerprint)
 	}
 }
 
 // ============================================================
-// Part 3: TLS 指纹持久化测试
+// Part 3: TLS fingerprint persistence tests
 // ============================================================
 
 func TestSaveTLSFingerprint_WritesCorrectly(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
+	statePath := filepath.Join(tmpDir, "client", "client.json")
 
 	c := New("wss://localhost", "key")
 	c.InstallID = "install-abc"
 	c.Token = "token-xyz"
-	c.StatePath = statePath
+	c.DataDir = tmpDir
 
 	fp := "AA:BB:CC:DD:EE:FF"
 	if err := c.saveTLSFingerprint(fp); err != nil {
-		t.Fatalf("保存指纹失败: %v", err)
+		t.Fatalf("failed to save fingerprint: %v", err)
 	}
 
 	data, err := os.ReadFile(statePath)
 	if err != nil {
-		t.Fatalf("读取状态文件失败: %v", err)
+		t.Fatalf("failed to read state file: %v", err)
 	}
 	var state persistedState
 	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("解析状态失败: %v", err)
+		t.Fatalf("failed to parse state: %v", err)
 	}
 	if state.TLSFingerprint != fp {
-		t.Errorf("指纹不正确: 期望 %q，得到 %q", fp, state.TLSFingerprint)
+		t.Errorf("wrong fingerprint: want %q, got %q", fp, state.TLSFingerprint)
 	}
 	if state.InstallID != "install-abc" {
-		t.Errorf("InstallID 应保留: 期望 %q，得到 %q", "install-abc", state.InstallID)
+		t.Errorf("InstallID should be preserved: want %q, got %q", "install-abc", state.InstallID)
 	}
 	if state.Token != "token-xyz" {
-		t.Errorf("Token 应保留: 期望 %q，得到 %q", "token-xyz", state.Token)
+		t.Errorf("Token should be preserved: want %q, got %q", "token-xyz", state.Token)
 	}
 }
 
 func TestSaveTLSFingerprint_EmptyStatePath_NoOp(t *testing.T) {
 	c := New("wss://localhost", "key")
-	c.StatePath = "" // 空路径
+	c.DataDir = t.TempDir()
 
-	// 不应报错，也不应写文件
 	if err := c.saveTLSFingerprint("AA:BB"); err != nil {
-		t.Errorf("空 StatePath 应直接返回 nil，得到: %v", err)
+		t.Errorf("saveTLSFingerprint() error = %v", err)
 	}
 }
 
 func TestEnsureInstallID_LoadsTLSFingerprint(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
+	statePath := filepath.Join(tmpDir, "client", "client.json")
 
-	// 先写一个包含指纹的状态文件
+	// First write a state file that includes a fingerprint
 	state := persistedState{
 		InstallID:      "saved-install-id",
 		Token:          "saved-token",
 		TLSFingerprint: "11:22:33:44:55:66",
 	}
 	data, _ := json.MarshalIndent(state, "", "  ")
+	os.MkdirAll(filepath.Dir(statePath), 0o755)
 	os.WriteFile(statePath, data, 0o600)
 
-	// 新 Client 加载状态
+	// Have a new client load the state
 	c := New("wss://localhost", "key")
-	c.StatePath = statePath
+	c.DataDir = tmpDir
 
 	if err := c.ensureInstallID(); err != nil {
-		t.Fatalf("ensureInstallID 失败: %v", err)
+		t.Fatalf("ensureInstallID failed: %v", err)
 	}
 
 	if c.InstallID != "saved-install-id" {
-		t.Errorf("InstallID 应加载: 期望 %q，得到 %q", "saved-install-id", c.InstallID)
+		t.Errorf("InstallID should be loaded: want %q, got %q", "saved-install-id", c.InstallID)
 	}
 	if c.CurrentToken() != "saved-token" {
-		t.Errorf("Token 应加载: 期望 %q，得到 %q", "saved-token", c.CurrentToken())
+		t.Errorf("Token should be loaded: want %q, got %q", "saved-token", c.CurrentToken())
 	}
 	if c.CurrentTLSFingerprint() != "11:22:33:44:55:66" {
-		t.Errorf("TLSFingerprint 应加载: 期望 %q，得到 %q", "11:22:33:44:55:66", c.CurrentTLSFingerprint())
+		t.Errorf("TLSFingerprint should be loaded: want %q, got %q", "11:22:33:44:55:66", c.CurrentTLSFingerprint())
 	}
 }
 
 func TestEnsureInstallID_DoesNotOverwriteExistingFingerprint(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
+	statePath := filepath.Join(tmpDir, "client", "client.json")
 
-	// 状态文件中有一个旧指纹
+	// The state file contains an old fingerprint
 	state := persistedState{
 		InstallID:      "install-old",
 		TLSFingerprint: "OLD:FP",
 	}
 	data, _ := json.MarshalIndent(state, "", "  ")
+	os.MkdirAll(filepath.Dir(statePath), 0o755)
 	os.WriteFile(statePath, data, 0o600)
 
-	// Client 已有一个新指纹
+	// The client already has a new fingerprint
 	c := New("wss://localhost", "key")
-	c.StatePath = statePath
-	c.TLSFingerprint = "NEW:FP" // 已有值
+	c.DataDir = tmpDir
+	c.TLSFingerprint = "NEW:FP" // Existing value
 
 	if err := c.ensureInstallID(); err != nil {
-		t.Fatalf("ensureInstallID 失败: %v", err)
+		t.Fatalf("ensureInstallID failed: %v", err)
 	}
 
-	// 不应被文件中的旧值覆盖
+	// It should not be overwritten by the old value in the file
 	if c.CurrentTLSFingerprint() != "NEW:FP" {
-		t.Errorf("已存在的 TLSFingerprint 不应被覆盖: 期望 %q，得到 %q", "NEW:FP", c.CurrentTLSFingerprint())
+		t.Errorf("existing TLSFingerprint should not be overwritten: want %q, got %q", "NEW:FP", c.CurrentTLSFingerprint())
 	}
 }
 
 func TestState_AllFieldsRoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
 
-	// 保存完整状态
+	// Save the full state
 	c1 := New("wss://localhost", "key")
 	c1.InstallID = "rt-install"
 	c1.Token = "rt-token"
-	c1.StatePath = statePath
+	c1.DataDir = tmpDir
 
 	if err := c1.saveTLSFingerprint("RT:FP:AA:BB"); err != nil {
-		t.Fatalf("保存失败: %v", err)
+		t.Fatalf("save failed: %v", err)
 	}
 
-	// 新 Client 加载
+	// Load with a new client
 	c2 := New("wss://localhost", "key")
-	c2.StatePath = statePath
+	c2.DataDir = tmpDir
 
 	if err := c2.ensureInstallID(); err != nil {
-		t.Fatalf("加载失败: %v", err)
+		t.Fatalf("load failed: %v", err)
 	}
 
 	if c2.InstallID != "rt-install" {
-		t.Errorf("InstallID 丢失: %q", c2.InstallID)
+		t.Errorf("InstallID lost: %q", c2.InstallID)
 	}
 	if c2.Token != "rt-token" {
-		t.Errorf("Token 丢失: %q", c2.Token)
+		t.Errorf("Token lost: %q", c2.Token)
 	}
 	if c2.TLSFingerprint != "RT:FP:AA:BB" {
-		t.Errorf("TLSFingerprint 丢失: %q", c2.TLSFingerprint)
+		t.Errorf("TLSFingerprint lost: %q", c2.TLSFingerprint)
 	}
 }
 
 // ============================================================
-// Part 4: 端到端 TLS 场景测试
+// Part 4: end-to-end TLS scenario tests
 // ============================================================
 
-// 场景：使用 wss:// 连接并完成认证
+// Scenario: connect with wss:// and complete authentication
 func TestScenario_TLS_ConnectAndAuth(t *testing.T) {
 	cert, _ := generateTestCert(t)
 	ms := newMockServer(true)
@@ -461,19 +461,19 @@ func TestScenario_TLS_ConnectAndAuth(t *testing.T) {
 	c := New(wssURL, "test-key")
 	c.TLSSkipVerify = true
 	c.DisableReconnect = true
-	c.StatePath = filepath.Join(t.TempDir(), "client.json")
+	c.DataDir = t.TempDir()
 
 	go c.Start()
 	time.Sleep(3 * time.Second)
 
 	if c.CurrentClientID() != "mock_client_1" {
-		t.Errorf("TLS 认证后 ClientID 期望 'mock_client_1'，得到 %q", c.CurrentClientID())
+		t.Errorf("after TLS authentication, ClientID: want 'mock_client_1', got %q", c.CurrentClientID())
 	}
 	if !c.UsesTLS() {
-		t.Error("wss:// 应设置 useTLS = true")
+		t.Error("wss:// should set useTLS = true")
 	}
 
-	// Server 应收到认证消息
+	// The server should receive the authentication message
 	msgs := ms.getReceivedMsgs()
 	authFound := false
 	for _, msg := range msgs {
@@ -483,11 +483,11 @@ func TestScenario_TLS_ConnectAndAuth(t *testing.T) {
 		}
 	}
 	if !authFound {
-		t.Error("Server 应收到 auth 消息")
+		t.Error("server should receive the auth message")
 	}
 }
 
-// 场景：ws:// 连接不使用 TLS
+// Scenario: ws:// connection does not use TLS
 func TestScenario_PlainWS_NoTLSUsed(t *testing.T) {
 	ms := newMockServer(true)
 	httpMux := http.NewServeMux()
@@ -499,20 +499,20 @@ func TestScenario_PlainWS_NoTLSUsed(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := New(wsURL, "test-key")
 	c.DisableReconnect = true
-	c.StatePath = filepath.Join(t.TempDir(), "client.json")
+	c.DataDir = t.TempDir()
 
 	go c.Start()
 	time.Sleep(2 * time.Second)
 
 	if c.UsesTLS() {
-		t.Error("ws:// 不应设置 useTLS")
+		t.Error("ws:// should not set useTLS")
 	}
 	if c.CurrentClientID() != "mock_client_1" {
-		t.Errorf("明文认证后 ClientID 期望 'mock_client_1'，得到 %q", c.CurrentClientID())
+		t.Errorf("after plain authentication, ClientID: want 'mock_client_1', got %q", c.CurrentClientID())
 	}
 }
 
-// 场景：TLSSkipVerify=true 时跳过 TOFU 指纹检查
+// Scenario: skip TOFU fingerprint checks when TLSSkipVerify=true
 func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
 	cert, _ := generateTestCert(t)
 	ms := newMockServer(true)
@@ -529,21 +529,21 @@ func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
 	c := New(wssURL, "test-key")
 	c.TLSSkipVerify = true
 	c.DisableReconnect = true
-	c.StatePath = filepath.Join(t.TempDir(), "client.json")
+	c.DataDir = t.TempDir()
 
 	go c.Start()
 	time.Sleep(3 * time.Second)
 
-	// TLSSkipVerify=true → checkTLSFingerprint 不会被调用 → 指纹不会被记录
+	// TLSSkipVerify=true -> checkTLSFingerprint is not called -> the fingerprint is not recorded
 	if c.CurrentTLSFingerprint() != "" {
-		t.Errorf("TLSSkipVerify=true 时不应记录指纹，得到: %q", c.CurrentTLSFingerprint())
+		t.Errorf("should not record fingerprint when TLSSkipVerify=true, got: %q", c.CurrentTLSFingerprint())
 	}
 	if c.CurrentClientID() != "mock_client_1" {
-		t.Errorf("认证应成功，ClientID 期望 'mock_client_1'，得到 %q", c.CurrentClientID())
+		t.Errorf("authentication should succeed, ClientID: want 'mock_client_1', got %q", c.CurrentClientID())
 	}
 }
 
-// 场景：数据通道在 useTLS=true 时使用 TLS
+// Scenario: the data channel uses TLS when useTLS=true
 func TestScenario_TLS_DataChannelUsesTLS(t *testing.T) {
 	cert, _ := generateTestCert(t)
 	ms := newMockServer(true)
@@ -564,7 +564,7 @@ func TestScenario_TLS_DataChannelUsesTLS(t *testing.T) {
 	c.TLSSkipVerify = true
 
 	if err := c.connectDataChannel(); err != nil {
-		t.Fatalf("TLS 数据通道连接失败: %v", err)
+		t.Fatalf("TLS data channel connection failed: %v", err)
 	}
 
 	c.dataMu.RLock()
@@ -572,13 +572,13 @@ func TestScenario_TLS_DataChannelUsesTLS(t *testing.T) {
 	c.dataMu.RUnlock()
 
 	if !hasSession {
-		t.Error("TLS 数据通道握手成功后 dataSession 不应为 nil")
+		t.Error("dataSession should not be nil after a successful TLS data channel handshake")
 	}
 }
 
-// 场景：数据通道在 useTLS=false 时拒绝 TLS 连接
+// Scenario: the data channel rejects TLS connections when useTLS=false
 func TestScenario_PlainWS_DataChannelUsesPlainWS(t *testing.T) {
-	// TLS-only 服务器，客户端用明文连接 → 应失败
+	// TLS-only server, client connects in plain text -> should fail
 	cert, _ := generateTestCert(t)
 	ms := newMockServer(true)
 	ms.authResp.ClientID = "plain-data-test"
@@ -597,59 +597,58 @@ func TestScenario_PlainWS_DataChannelUsesPlainWS(t *testing.T) {
 	c.ClientID = "plain-data-test"
 	c.dataToken = "plain-data-token"
 
-	// 明文 WS 连接 TLS 服务器 → 握手失败
+	// Plain WS connection to a TLS server -> handshake fails
 	err := c.connectDataChannel()
 	if err == nil {
-		t.Error("明文 WS 连接 TLS 服务器应失败")
+		t.Error("plain WS connection to a TLS server should fail")
 	}
 }
 
-// 场景：指纹持久化后新 Client 实例能加载并通过校验
+// Scenario: after the fingerprint is persisted, a new client instance can load it and pass verification
 func TestScenario_TLS_FingerprintPersistedAndLoadedOnRestart(t *testing.T) {
 	cert, x509Cert := generateTestCert(t)
 	ts, wsURL := startTLSWSServer(t, cert)
 	defer ts.Close()
 
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client.json")
 	expectedFP := computeTestFingerprint(x509Cert.Raw)
 
-	// ---- 第一次连接：记录指纹 ----
+	// ---- First connection: record the fingerprint ----
 	conn1 := dialTLSWS(t, wsURL)
 	c1 := New("wss://localhost", "key")
 	c1.InstallID = "persist-test"
-	c1.StatePath = statePath
+	c1.DataDir = tmpDir
 
 	if err := c1.checkTLSFingerprint(conn1); err != nil {
-		t.Fatalf("首次连接不应报错: %v", err)
+		t.Fatalf("first connection should not error: %v", err)
 	}
 	conn1.Close()
 
 	if c1.TLSFingerprint != expectedFP {
-		t.Fatalf("首次连接后应记录指纹")
+		t.Fatalf("the fingerprint should be recorded after the first connection")
 	}
 
-	// ---- 模拟重启：新 Client 实例加载状态 ----
+	// ---- Simulate restart: a new client instance loads the state ----
 	c2 := New("wss://localhost", "key")
-	c2.StatePath = statePath
+	c2.DataDir = tmpDir
 	if err := c2.ensureInstallID(); err != nil {
-		t.Fatalf("加载状态失败: %v", err)
+		t.Fatalf("failed to load state: %v", err)
 	}
 
 	if c2.TLSFingerprint != expectedFP {
-		t.Errorf("重启后应加载指纹:\n期望: %s\n实际: %s", expectedFP, c2.TLSFingerprint)
+		t.Errorf("fingerprint should be loaded after restart:\nwant: %s\ngot: %s", expectedFP, c2.TLSFingerprint)
 	}
 
-	// ---- 重新连接同一服务器：指纹应匹配 ----
+	// ---- Reconnect to the same server: the fingerprint should match ----
 	conn2 := dialTLSWS(t, wsURL)
 	defer conn2.Close()
 
 	if err := c2.checkTLSFingerprint(conn2); err != nil {
-		t.Errorf("重启后重连同一服务器应通过指纹校验: %v", err)
+		t.Errorf("reconnecting to the same server after restart should pass fingerprint verification: %v", err)
 	}
 }
 
-// 场景：TOFU 重连同一证书 → 通过
+// Scenario: TOFU reconnects to the same certificate -> passes
 func TestScenario_TLS_TOFU_ReconnectSameCert_Passes(t *testing.T) {
 	cert, _ := generateTestCert(t)
 	ts, wsURL := startTLSWSServer(t, cert)
@@ -657,53 +656,53 @@ func TestScenario_TLS_TOFU_ReconnectSameCert_Passes(t *testing.T) {
 
 	c := New("wss://localhost", "key")
 
-	// 第一次连接 → 记录指纹
+	// First connection -> record the fingerprint
 	conn1 := dialTLSWS(t, wsURL)
 	if err := c.checkTLSFingerprint(conn1); err != nil {
-		t.Fatalf("首次连接失败: %v", err)
+		t.Fatalf("first connection failed: %v", err)
 	}
 	conn1.Close()
 
 	fp := c.CurrentTLSFingerprint()
 	if fp == "" {
-		t.Fatal("首次连接后应已记录指纹")
+		t.Fatal("the fingerprint should have been recorded after the first connection")
 	}
 
-	// 第二次连接同一服务器 → 应通过
+	// Second connection to the same server -> should pass
 	conn2 := dialTLSWS(t, wsURL)
 	defer conn2.Close()
 
 	if err := c.checkTLSFingerprint(conn2); err != nil {
-		t.Errorf("重连同一证书应通过: %v", err)
+		t.Errorf("reconnecting to the same certificate should pass: %v", err)
 	}
 
 	if c.CurrentTLSFingerprint() != fp {
-		t.Error("指纹不应改变")
+		t.Error("the fingerprint should not change")
 	}
 }
 
-// 场景：服务器证书变更（模拟 MITM 或合法换证）→ 拒绝连接
+// Scenario: server certificate changes (simulated MITM or legitimate rotation) -> reject connection
 func TestScenario_TLS_TOFU_DetectsCertChange(t *testing.T) {
 	cert1, _ := generateTestCert(t)
-	cert2, _ := generateTestCert(t) // 第二张不同的证书
+	cert2, _ := generateTestCert(t) // Second, different certificate
 
-	// 先连接 cert1 的服务器
+	// First connect to the server using cert1
 	ts1, wsURL1 := startTLSWSServer(t, cert1)
 	conn1 := dialTLSWS(t, wsURL1)
 
 	c := New("wss://localhost", "key")
 	if err := c.checkTLSFingerprint(conn1); err != nil {
-		t.Fatalf("首次连接失败: %v", err)
+		t.Fatalf("first connection failed: %v", err)
 	}
 	conn1.Close()
 	ts1.Close()
 
 	savedFP := c.CurrentTLSFingerprint()
 	if savedFP == "" {
-		t.Fatal("应已记录指纹")
+		t.Fatal("the fingerprint should have been recorded")
 	}
 
-	// 连接使用不同证书的服务器 → 应检测到变更
+	// Connect to a server using a different certificate -> the change should be detected
 	ts2, wsURL2 := startTLSWSServer(t, cert2)
 	defer ts2.Close()
 
@@ -712,14 +711,14 @@ func TestScenario_TLS_TOFU_DetectsCertChange(t *testing.T) {
 
 	err := c.checkTLSFingerprint(conn2)
 	if err == nil {
-		t.Fatal("证书变更后应报错")
+		t.Fatal("certificate changes should return an error")
 	}
-	if !strings.Contains(err.Error(), "指纹不匹配") {
-		t.Errorf("错误应包含'指纹不匹配': %v", err)
+	if !strings.Contains(err.Error(), "TLS certificate fingerprint mismatch") {
+		t.Errorf("error should contain 'TLS certificate fingerprint mismatch': %v", err)
 	}
 
-	// 指纹不应被更新
+	// The fingerprint should not be updated
 	if c.TLSFingerprint != savedFP {
-		t.Error("检测到变更后指纹不应被更新")
+		t.Error("the fingerprint should not be updated after detecting a change")
 	}
 }

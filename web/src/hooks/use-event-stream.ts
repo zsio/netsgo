@@ -180,7 +180,7 @@ export function useEventStream() {
   const setStatus = useConnectionStore((state) => state.setStatus);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const shouldConnect = isAuthenticated && pathname !== '/setup' && pathname !== '/login';
+  const shouldConnect = isAuthenticated && pathname !== '/login';
 
   useEffect(() => {
     if (!shouldConnect) {

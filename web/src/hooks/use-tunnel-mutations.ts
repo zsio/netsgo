@@ -22,18 +22,6 @@ export function useCreateTunnel() {
   });
 }
 
-export function usePauseTunnel() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({ clientId, tunnelName }: { clientId: string; tunnelName: string }) =>
-      api.put(`/api/clients/${clientId}/tunnels/${tunnelName}/pause`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['clients'] });
-    },
-  });
-}
-
 export function useResumeTunnel() {
   const queryClient = useQueryClient();
 

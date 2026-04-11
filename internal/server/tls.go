@@ -20,63 +20,63 @@ import (
 	"time"
 )
 
-// TLS 模式常量
+// TLS mode constants
 const (
-	TLSModeCustom = "custom" // 用户提供证书
-	TLSModeAuto   = "auto"   // 自动生成自签名证书
-	TLSModeOff    = "off"    // 不使用 TLS（由反向代理负责）
+	TLSModeCustom = "custom" // User-provided certificate
+	TLSModeAuto   = "auto"   // Auto-generate a self-signed certificate
+	TLSModeOff    = "off"    // No TLS (handled by a reverse proxy)
 )
 
-// TLSConfig TLS 配置
+// TLSConfig holds the TLS configuration.
 type TLSConfig struct {
 	Mode           string   `json:"mode"`            // custom / auto / off
-	CertFile       string   `json:"cert_file"`       // custom 模式: 证书文件路径
-	KeyFile        string   `json:"key_file"`        // custom 模式: 私钥文件路径
-	TrustedProxies []string `json:"trusted_proxies"` // off 模式: 受信任代理 CIDR 列表
-	AutoDir        string   `json:"auto_dir"`        // auto 模式: 证书自动存储目录（空则使用默认）
+	CertFile       string   `json:"cert_file"`       // custom mode: certificate file path
+	KeyFile        string   `json:"key_file"`        // custom mode: private key file path
+	TrustedProxies []string `json:"trusted_proxies"` // off mode: list of trusted proxy CIDRs
+	AutoDir        string   `json:"auto_dir"`        // auto mode: certificate storage directory (empty = default)
 }
 
-// Validate 验证 TLS 配置合法性
+// Validate checks the TLS configuration for validity.
 func (c *TLSConfig) Validate() error {
 	switch c.Mode {
 	case TLSModeCustom:
 		if c.CertFile == "" || c.KeyFile == "" {
-			return fmt.Errorf("tls.mode=custom 需要指定 cert_file 和 key_file")
+			return fmt.Errorf("tls.mode=custom requires cert_file and key_file")
 		}
 		if _, err := os.Stat(c.CertFile); err != nil {
-			return fmt.Errorf("证书文件不可访问: %s: %w", c.CertFile, err)
+			return fmt.Errorf("certificate file is not accessible: %s: %w", c.CertFile, err)
 		}
 		if _, err := os.Stat(c.KeyFile); err != nil {
-			return fmt.Errorf("私钥文件不可访问: %s: %w", c.KeyFile, err)
+			return fmt.Errorf("private key file is not accessible: %s: %w", c.KeyFile, err)
 		}
 	case TLSModeAuto:
-		// auto 模式无需额外参数
+		// No additional parameters required for auto mode.
 	case TLSModeOff:
-		// off 模式验证 trusted_proxies CIDR 格式
+		// Validate trusted_proxies CIDR format for off mode.
 		for _, cidr := range c.TrustedProxies {
 			if _, _, err := net.ParseCIDR(cidr); err != nil {
-				// 尝试按单 IP 解析
+				// Try parsing as a plain IP address.
 				if ip := net.ParseIP(cidr); ip == nil {
-					return fmt.Errorf("trusted_proxies 格式无效: %s (需要 CIDR 如 127.0.0.1/32 或 IP 地址)", cidr)
+					return fmt.Errorf("trusted_proxies has invalid format: %s (expected CIDR like 127.0.0.1/32 or an IP address)", cidr)
 				}
 			}
 		}
 	case "":
-		return fmt.Errorf("tls.mode 不能为空，可选值: custom / auto / off")
+		return fmt.Errorf("tls.mode cannot be empty; valid values: custom / auto / off")
 	default:
-		return fmt.Errorf("不支持的 tls.mode: %s，可选值: custom / auto / off", c.Mode)
+		return fmt.Errorf("unsupported tls.mode: %s; valid values: custom / auto / off", c.Mode)
 	}
 	return nil
 }
 
-// IsEnabled 返回是否启用了 TLS（custom 或 auto）
+// IsEnabled reports whether TLS is enabled (custom or auto).
 func (c *TLSConfig) IsEnabled() bool {
 	return c.Mode == TLSModeCustom || c.Mode == TLSModeAuto
 }
 
-// loadOrBuildTLSConfig 根据 TLSConfig 构建 *tls.Config
-// 如果 mode=custom，加载用户提供的证书；
-// 如果 mode=auto，从磁盘加载或自动生成自签证书。
+// loadOrBuildTLSConfig builds a *tls.Config from the TLSConfig.
+// If mode=custom, loads the user-provided certificate.
+// If mode=auto, loads from disk or auto-generates a self-signed certificate.
 func (c *TLSConfig) loadOrBuildTLSConfig(dataDir string) (*tls.Config, string, error) {
 	switch c.Mode {
 	case TLSModeCustom:
@@ -84,15 +84,15 @@ func (c *TLSConfig) loadOrBuildTLSConfig(dataDir string) (*tls.Config, string, e
 	case TLSModeAuto:
 		return c.loadOrGenerateAutoTLS(dataDir)
 	default:
-		return nil, "", fmt.Errorf("TLS 未启用 (mode=%s)", c.Mode)
+		return nil, "", fmt.Errorf("TLS is not enabled (mode=%s)", c.Mode)
 	}
 }
 
-// loadCustomTLS 加载用户提供的证书
+// loadCustomTLS loads the user-provided certificate.
 func (c *TLSConfig) loadCustomTLS() (*tls.Config, string, error) {
 	cert, err := tls.LoadX509KeyPair(c.CertFile, c.KeyFile)
 	if err != nil {
-		return nil, "", fmt.Errorf("加载证书失败: %w", err)
+		return nil, "", fmt.Errorf("failed to load certificate: %w", err)
 	}
 
 	fingerprint := certFingerprint(cert.Certificate[0])
@@ -102,30 +102,30 @@ func (c *TLSConfig) loadCustomTLS() (*tls.Config, string, error) {
 		MinVersion:   tls.VersionTLS12,
 	}
 
-	log.Printf("🔒 TLS 模式: custom")
-	log.Printf("🔒 证书: %s", c.CertFile)
-	log.Printf("🔒 私钥: %s", c.KeyFile)
-	log.Printf("🔒 证书指纹 (SHA-256): %s", fingerprint)
+	log.Printf("🔒 TLS mode: custom")
+	log.Printf("🔒 Certificate: %s", c.CertFile)
+	log.Printf("🔒 Private key: %s", c.KeyFile)
+	log.Printf("🔒 Certificate fingerprint (SHA-256): %s", fingerprint)
 
 	return tlsConfig, fingerprint, nil
 }
 
-// loadOrGenerateAutoTLS 从磁盘加载或自动生成自签证书
+// loadOrGenerateAutoTLS loads from disk or auto-generates a self-signed certificate.
 func (c *TLSConfig) loadOrGenerateAutoTLS(dataDir string) (*tls.Config, string, error) {
 	autoDir := c.AutoDir
 	if autoDir == "" {
-		autoDir = filepath.Join(dataDir, "tls")
+		autoDir = filepath.Join(dataDir, "server", "tls")
 	}
 
 	certPath := filepath.Join(autoDir, "server.crt")
 	keyPath := filepath.Join(autoDir, "server.key")
 
-	// 尝试从磁盘加载已有证书
+	// Try to load an existing certificate from disk.
 	if _, err := os.Stat(certPath); err == nil {
 		if _, err := os.Stat(keyPath); err == nil {
 			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 			if err == nil {
-				// 检查证书是否过期
+				// Check whether the certificate has expired.
 				x509Cert, parseErr := x509.ParseCertificate(cert.Certificate[0])
 				if parseErr == nil && time.Now().Before(x509Cert.NotAfter) {
 					fingerprint := certFingerprint(cert.Certificate[0])
@@ -133,35 +133,35 @@ func (c *TLSConfig) loadOrGenerateAutoTLS(dataDir string) (*tls.Config, string, 
 						Certificates: []tls.Certificate{cert},
 						MinVersion:   tls.VersionTLS12,
 					}
-					log.Printf("🔒 TLS 模式: auto (已加载持久化证书)")
-					log.Printf("🔒 证书路径: %s", certPath)
-					log.Printf("🔒 证书有效期至: %s", x509Cert.NotAfter.Format("2006-01-02"))
-					log.Printf("🔒 证书指纹 (SHA-256): %s", fingerprint)
+					log.Printf("🔒 TLS mode: auto (loaded persisted certificate)")
+					log.Printf("🔒 Certificate path: %s", certPath)
+					log.Printf("🔒 Certificate valid until: %s", x509Cert.NotAfter.Format("2006-01-02"))
+					log.Printf("🔒 Certificate fingerprint (SHA-256): %s", fingerprint)
 					return tlsConfig, fingerprint, nil
 				}
-				log.Printf("⚠️ 已有证书已过期或无法解析，将重新生成")
+				log.Printf("⚠️ Existing certificate has expired or could not be parsed; regenerating")
 			} else {
-				log.Printf("⚠️ 已有证书加载失败: %v，将重新生成", err)
+				log.Printf("⚠️ Failed to load existing certificate: %v; regenerating", err)
 			}
 		}
 	}
 
-	// 生成新的自签名证书
-	log.Printf("🔒 TLS 模式: auto (生成自签名证书)")
+	// Generate a new self-signed certificate.
+	log.Printf("🔒 TLS mode: auto (generating self-signed certificate)")
 	cert, certPEM, keyPEM, err := generateSelfSignedCert()
 	if err != nil {
-		return nil, "", fmt.Errorf("生成自签名证书失败: %w", err)
+		return nil, "", fmt.Errorf("failed to generate self-signed certificate: %w", err)
 	}
 
-	// 持久化到磁盘
+	// Persist to disk.
 	if err := os.MkdirAll(autoDir, 0700); err != nil {
-		return nil, "", fmt.Errorf("创建证书目录失败: %w", err)
+		return nil, "", fmt.Errorf("failed to create certificate directory: %w", err)
 	}
 	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
-		return nil, "", fmt.Errorf("保存证书文件失败: %w", err)
+		return nil, "", fmt.Errorf("failed to save certificate file: %w", err)
 	}
 	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
-		return nil, "", fmt.Errorf("保存私钥文件失败: %w", err)
+		return nil, "", fmt.Errorf("failed to save private key file: %w", err)
 	}
 
 	fingerprint := certFingerprint(cert.Certificate[0])
@@ -171,25 +171,25 @@ func (c *TLSConfig) loadOrGenerateAutoTLS(dataDir string) (*tls.Config, string, 
 		MinVersion:   tls.VersionTLS12,
 	}
 
-	log.Printf("🔒 证书已持久化: %s", certPath)
-	log.Printf("🔒 证书指纹 (SHA-256): %s", fingerprint)
+	log.Printf("🔒 Certificate persisted: %s", certPath)
+	log.Printf("🔒 Certificate fingerprint (SHA-256): %s", fingerprint)
 
 	return tlsConfig, fingerprint, nil
 }
 
-// generateSelfSignedCert 生成 ECDSA P-256 自签名证书
-// 包含当前主机名和所有可检测到的 IP 作为 SAN
+// generateSelfSignedCert generates an ECDSA P-256 self-signed certificate
+// with the current hostname and all detectable IPs as SANs.
 func generateSelfSignedCert() (tls.Certificate, []byte, []byte, error) {
-	// 生成密钥对
+	// Generate a key pair.
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("生成密钥失败: %w", err)
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to generate key: %w", err)
 	}
 
-	// 构建证书模板
+	// Build the certificate template.
 	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("生成序列号失败: %w", err)
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to generate serial number: %w", err)
 	}
 
 	hostname, _ := os.Hostname()
@@ -204,22 +204,22 @@ func generateSelfSignedCert() (tls.Certificate, []byte, []byte, error) {
 			Organization: []string{"NetsGo Auto-Generated"},
 		},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // 1 年有效期
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // valid for 1 year
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 	}
 
-	// 添加 SAN: 主机名
+	// Add SAN: hostname
 	template.DNSNames = []string{hostname, "localhost"}
 
-	// 添加 SAN: 回环地址
+	// Add SAN: loopback addresses
 	template.IPAddresses = []net.IP{
 		net.ParseIP("127.0.0.1"),
 		net.ParseIP("::1"),
 	}
 
-	// 添加 SAN: 所有可检测到的本机 IP
+	// Add SAN: all detectable local IPs
 	if addrs, err := net.InterfaceAddrs(); err == nil {
 		for _, addr := range addrs {
 			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
@@ -228,28 +228,28 @@ func generateSelfSignedCert() (tls.Certificate, []byte, []byte, error) {
 		}
 	}
 
-	// 签发证书
+	// Sign the certificate.
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("签发证书失败: %w", err)
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to issue certificate: %w", err)
 	}
 
-	// PEM 编码
+	// PEM encode.
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 
 	privDER, err := x509.MarshalECPrivateKey(priv)
 	if err != nil {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("编码私钥失败: %w", err)
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to encode private key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privDER})
 
-	// 构建 tls.Certificate
+	// Assemble the tls.Certificate.
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("组装证书失败: %w", err)
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to assemble certificate: %w", err)
 	}
 
-	log.Printf("🔒 已生成自签名证书: CN=%s, 有效期至 %s",
+	log.Printf("🔒 Self-signed certificate generated: CN=%s, valid until %s",
 		hostname, template.NotAfter.Format("2006-01-02"))
 	log.Printf("🔒 SAN DNS: %v", template.DNSNames)
 	log.Printf("🔒 SAN IP: %v", template.IPAddresses)
@@ -257,13 +257,13 @@ func generateSelfSignedCert() (tls.Certificate, []byte, []byte, error) {
 	return cert, certPEM, keyPEM, nil
 }
 
-// certFingerprint 计算 DER 编码证书的 SHA-256 指纹
+// certFingerprint computes the SHA-256 fingerprint of a DER-encoded certificate.
 func certFingerprint(certDER []byte) string {
 	hash := sha256.Sum256(certDER)
 	return formatFingerprint(hex.EncodeToString(hash[:]))
 }
 
-// formatFingerprint 将 hex 字符串格式化为 AA:BB:CC 形式
+// formatFingerprint formats a hex string as AA:BB:CC notation.
 func formatFingerprint(hexStr string) string {
 	hexStr = strings.ToUpper(hexStr)
 	parts := make([]string, 0, len(hexStr)/2)
@@ -277,7 +277,7 @@ func formatFingerprint(hexStr string) string {
 	return strings.Join(parts, ":")
 }
 
-// isTrustedProxy 检查给定 IP 是否在受信任代理列表中
+// isTrustedProxy reports whether the given IP is in the trusted proxy list.
 func (c *TLSConfig) isTrustedProxy(ip string) bool {
 	if c.Mode != TLSModeOff || len(c.TrustedProxies) == 0 {
 		return false
@@ -291,7 +291,7 @@ func (c *TLSConfig) isTrustedProxy(ip string) bool {
 	for _, cidr := range c.TrustedProxies {
 		_, network, err := net.ParseCIDR(cidr)
 		if err != nil {
-			// 尝试按单 IP 匹配
+			// Try matching as a plain IP.
 			if net.ParseIP(cidr) != nil && cidr == ip {
 				return true
 			}

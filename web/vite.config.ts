@@ -6,7 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '')
-  const backendTarget = (env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:8080').replace(/\/$/, '')
+  const backendTarget = (env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:9527').replace(/\/$/, '')
   const wsTarget = backendTarget.replace(/^http/, 'ws')
 
   return {
@@ -26,7 +26,9 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       allowedHosts: [
-        "xxx.com"
+        "xxx.com",
+        "d.iuv.me",
+        "d2.iuv.me"
       ],
       proxy: {
         '/api': {

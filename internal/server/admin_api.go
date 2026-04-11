@@ -44,114 +44,6 @@ func sanitizeAPIKeys(keys []APIKey) []apiKeyResponse {
 	return result
 }
 
-// ========= Setup API (初始化) =========
-
-func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
-	initialized := false
-	if s.auth.adminStore != nil {
-		initialized = s.auth.adminStore.IsInitialized()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"initialized":          initialized,
-		"setup_token_required": !initialized && s.auth.setupToken != "",
-	})
-}
-
-func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
-	if s.auth.adminStore == nil {
-		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
-		return
-	}
-
-	// 速率限制检查
-	ip := s.clientIP(r)
-	if s.auth.setupLimiter != nil {
-		if allowed, retryAfter := s.auth.setupLimiter.Allow(ip); !allowed {
-			slog.Warn("初始化接口被限速", "ip", ip, "module", "security")
-			writeRateLimitResponse(w, retryAfter)
-			return
-		}
-	}
-
-	// 直接尝试初始化，由 Initialize 内部的互斥锁保证原子性和幂等性
-	// 不做前置检查以避免 TOCTOU 竞态
-	var req struct {
-		Admin struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
-		} `json:"admin"`
-		ServerAddr   string      `json:"server_addr"`
-		AllowedPorts []PortRange `json:"allowed_ports"`
-		SetupToken   string      `json:"setup_token"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
-		return
-	}
-
-	// 基本校验
-	if req.Admin.Username == "" {
-		http.Error(w, `{"error":"用户名不能为空"}`, http.StatusBadRequest)
-		return
-	}
-
-	normalizedServerAddr, err := validateServerAddr(req.ServerAddr)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{
-			"error": err.Error(),
-		})
-		return
-	}
-	req.ServerAddr = normalizedServerAddr
-
-	if s.auth.setupToken != "" {
-		if req.SetupToken != s.auth.setupToken {
-			if s.auth.setupLimiter != nil {
-				s.auth.setupLimiter.RecordFailure(ip)
-			}
-			slog.Warn("Setup Token 验证失败", "ip", ip, "module", "security")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]any{
-				"error": "Setup Token 无效，请检查服务端控制台输出",
-			})
-			return
-		}
-	}
-
-	// 执行初始化（内部持有锁，重复调用会返回错误）
-	if err := s.auth.adminStore.Initialize(req.Admin.Username, req.Admin.Password, req.ServerAddr, req.AllowedPorts); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		// 区分"已初始化"和其他错误（如密码不合规）
-		if s.auth.adminStore.IsInitialized() {
-			w.WriteHeader(http.StatusForbidden)
-		} else {
-			w.WriteHeader(http.StatusBadRequest)
-			if s.auth.setupLimiter != nil {
-				s.auth.setupLimiter.RecordFailure(ip)
-			}
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	slog.Info("服务初始化完成", "admin", req.Admin.Username, "module", "setup")
-	s.auth.setupToken = ""
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{
-		"success": true,
-		"message": "初始化成功，请使用刚创建的管理员账号登录",
-	})
-}
-
 // ========= Auth API =========
 
 func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
@@ -160,12 +52,12 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 速率限制检查
+	// rate limit check
 	ip := s.clientIP(r)
 	if s.auth.loginLimiter != nil {
 		if allowed, retryAfter := s.auth.loginLimiter.Allow(ip); !allowed {
 			if s.auth.adminStore != nil {
-				slog.Warn("登录接口被限速", "ip", ip, "module", "security")
+				slog.Warn("Login endpoint rate limited", "ip", ip, "module", "security")
 			}
 			writeRateLimitResponse(w, retryAfter)
 			return
@@ -196,7 +88,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 创建 session（会自动踢出旧 session → 单端登录）
+	// create session (automatically invalidates old sessions → single active session per user)
 	session, err := s.auth.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
 	if err != nil {
 		http.Error(w, `{"error":"failed to persist session"}`, http.StatusInternalServerError)
@@ -269,15 +161,15 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name        string   `json:"name"`
 			Permissions []string `json:"permissions"`
-			MaxUses     int      `json:"max_uses"`   // 0 = 无限制
-			ExpiresIn   string   `json:"expires_in"` // "1h","3h","24h","168h","" 或 "0" 表示不限制
+			MaxUses     int      `json:"max_uses"`   // 0 = unlimited
+			ExpiresIn   string   `json:"expires_in"` // "1h","3h","24h","168h","" or "0" means no expiry
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
 			return
 		}
 
-		// 解析过期时间
+		// parse expiry duration
 		var expiresAt *time.Time
 		if req.ExpiresIn != "" && req.ExpiresIn != "0" {
 			d, err := time.ParseDuration(req.ExpiresIn)
@@ -289,7 +181,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 			expiresAt = &t
 		}
 
-		// 后端生成一个随机字符串作为原始 key
+		// generate a random string as the raw key on the server side
 		rawKey := "sk-" + generateUUID()
 		key, err := s.auth.adminStore.AddAPIKey(req.Name, rawKey, req.Permissions, expiresAt)
 		if err != nil {
@@ -301,7 +193,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 设置 MaxUses
+		// set MaxUses
 		if req.MaxUses > 0 {
 			if err := s.auth.adminStore.SetAPIKeyMaxUses(key.ID, req.MaxUses); err != nil {
 				slog.Warn("Failed to set max_uses for key", "key_id", key.ID, "module", "admin")
@@ -311,7 +203,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 
 		slog.Info("Created new API Key", "name", req.Name, "module", "admin")
 
-		// 获取 server_addr
+		// get server_addr
 		serverAddr := ""
 		if s.auth.adminStore != nil {
 			serverAddr = s.auth.adminStore.GetServerConfig().ServerAddr
@@ -319,10 +211,10 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		// 返回包含了原始 key 的完整响应 (仅创建时可见！)
+		// return the full response including the raw key (only visible at creation time!)
 		json.NewEncoder(w).Encode(map[string]any{
 			"key":         sanitizeAPIKey(*key),
-			"raw_key":     rawKey, // 告诉前端显示给用户
+			"raw_key":     rawKey, // tell the frontend to display this to the user
 			"server_addr": serverAddr,
 		})
 
@@ -362,7 +254,7 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 		if active {
 			actionText = "enabled"
 		}
-		slog.Info("API Key 状态变更", "action", actionText, "key_id", keyID, "module", "admin")
+		slog.Info("API Key status changed", "action", actionText, "key_id", keyID, "module", "admin")
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"success": true})
@@ -422,13 +314,13 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		config.ServerAddr = normalizedServerAddr
 
-		// 校验端口范围合法性
+		// validate port range
 		for _, pr := range config.AllowedPorts {
 			if pr.Start < 1 || pr.End > 65535 || pr.Start > pr.End {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]any{
-					"error": "端口范围无效: start 必须 >= 1, end 必须 <= 65535, 且 start <= end",
+					"error": "invalid port range: start must be >= 1, end must be <= 65535, and start <= end",
 				})
 				return
 			}
@@ -441,11 +333,11 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		if normalizedCurrent, err := validateServerAddr(current.ServerAddr); err == nil {
 			currentServerAddr = normalizedCurrent
 		}
-		// 检查受影响的隧道（当新白名单非空时）
+		// check affected tunnels (when new allowlist is non-empty)
 		affected := s.findTunnelsAffectedByPortChange(config.AllowedPorts)
 		conflicts := conflictingHTTPDomainsForServerAddr(config.ServerAddr, s)
 
-		// dry_run 模式：仅预览受影响的隧道，不保存
+		// dry_run mode: preview affected tunnels without saving
 		if r.URL.Query().Get("dry_run") == "true" {
 			encodeJSON(w, http.StatusOK, adminConfigUpdateResponse{
 				AffectedTunnels:        affected,
@@ -454,10 +346,10 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 环境变量锁定时，仅允许保存与持久化值一致的 server_addr。
+		// when locked by environment variable, only allow saving server_addr that matches the persisted value.
 		if isServerAddrLocked() && config.ServerAddr != currentServerAddr {
 			encodeJSON(w, http.StatusConflict, adminConfigUpdateResponse{
-				Error:                  "server_addr 已被环境变量 NETSGO_SERVER_ADDR 锁定",
+				Error:                  "server_addr is locked by the NETSGO_SERVER_ADDR environment variable",
 				ServerAddrLocked:       true,
 				AffectedTunnels:        affected,
 				ConflictingHTTPTunnels: conflicts,
@@ -467,14 +359,14 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 
 		if len(conflicts) > 0 {
 			encodeJSON(w, http.StatusConflict, adminConfigUpdateResponse{
-				Error:                  "server_addr 与现有 HTTP 隧道域名冲突",
+				Error:                  "server_addr conflicts with existing HTTP tunnel domains",
 				AffectedTunnels:        affected,
 				ConflictingHTTPTunnels: conflicts,
 			})
 			return
 		}
 
-		// 实际保存配置
+		// save config
 		if err := s.auth.adminStore.UpdateServerConfig(config); err != nil {
 			http.Error(w, `{"error":"failed to update config"}`, http.StatusInternalServerError)
 			return
@@ -487,10 +379,10 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Info("Server config updated", "admin", adminName, "module", "admin")
 
-		// 将受影响的运行时隧道标记为 error
+		// mark affected runtime tunnels as error
 		if len(affected) > 0 {
 			s.markTunnelsPortNotAllowed(affected)
-			slog.Warn("端口白名单变更导致隧道被标记为异常",
+			slog.Warn("Port allowlist change caused tunnels to be marked as errored",
 				"affected_count", len(affected), "module", "admin")
 		}
 

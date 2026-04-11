@@ -13,17 +13,23 @@ services:
       - server
       - --port
       - "8080"
+      - --init-admin-username
+      - ${NETSGO_ADMIN_USER:-admin}
+      - --init-admin-password
+      - ${NETSGO_ADMIN_PASS:-password123}
+      - --init-server-addr
+      - ${NETSGO_SERVER_ADDR:-http://panel.compose.local}
+      - --init-allowed-ports
+      - ${NETSGO_INIT_ALLOWED_PORTS:-1-65535}
       - --tls-mode
       - off
       - --trusted-proxies
       - 127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
-      - --setup-token
-      - ${NETSGO_SETUP_TOKEN:-compose-setup-token}
     ports:
       - "${UPSTREAM_PORT:-19081}:8080"
       - "${TUNNEL_REMOTE_PORT:-19082}:${TUNNEL_REMOTE_PORT:-19082}"
     volumes:
-      - netsgo-server-data:/root/.netsgo
+      - netsgo-server-data:/var/lib/netsgo
 
   backend:
     image: hashicorp/http-echo:1.0.0
@@ -39,7 +45,6 @@ services:
       - /opt/netsgo-e2e/bootstrap.sh
     environment:
       NETSGO_BOOTSTRAP_BASE_URL: http://proxy
-      NETSGO_SETUP_TOKEN: ${NETSGO_SETUP_TOKEN:-compose-setup-token}
       NETSGO_ADMIN_USER: ${NETSGO_ADMIN_USER:-admin}
       NETSGO_ADMIN_PASS: ${NETSGO_ADMIN_PASS:-password123}
       NETSGO_SERVER_ADDR: ${NETSGO_SERVER_ADDR:-http://panel.compose.local}
@@ -72,7 +77,7 @@ services:
       NETSGO_CLIENT_KEY_FILE: /shared/client.key
       NETSGO_CLIENT_KEY_WAIT_TIMEOUT: ${NETSGO_CLIENT_KEY_WAIT_TIMEOUT:-180}
     volumes:
-      - netsgo-client-data:/root/.netsgo
+      - netsgo-client-data:/var/lib/netsgo
       - netsgo-shared:/shared
     depends_on:
       - backend

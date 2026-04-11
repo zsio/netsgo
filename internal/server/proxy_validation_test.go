@@ -18,17 +18,17 @@ func newProxyValidationTestServer(t *testing.T, port int, serverAddr string, all
 
 	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.json"))
 	if err != nil {
-		t.Fatalf("创建 AdminStore 失败: %v", err)
+		t.Fatalf("failed to create AdminStore: %v", err)
 	}
-	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
+	adminStore.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := adminStore.Initialize("admin", "password123", serverAddr, allowedPorts); err != nil {
-		t.Fatalf("初始化 AdminStore 失败: %v", err)
+		t.Fatalf("failed to initialize AdminStore: %v", err)
 	}
 	s.auth.adminStore = adminStore
 
 	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("failed to create TunnelStore: %v", err)
 	}
 	s.store = store
 
@@ -56,10 +56,10 @@ func TestValidateProxyRequest_TCPUDPRequireExplicitRemotePort(t *testing.T) {
 				RemotePort: 0,
 			})
 			if err == nil {
-				t.Fatal("remote_port=0 时应返回校验错误")
+				t.Fatal("remote_port=0 should return a validation error")
 			}
-			if !strings.Contains(err.Error(), "必须填写明确的公网端口") {
-				t.Fatalf("错误信息应提示必须填写明确端口，得到 %v", err)
+			if !strings.Contains(err.Error(), "TCP/UDP tunnels require an explicit remote port") {
+				t.Fatalf("error should mention that an explicit port is required, got %v", err)
 			}
 		})
 	}
@@ -76,21 +76,21 @@ func TestValidateProxyRequest_HTTPInvalidDomainReturnsTypedBadRequest(t *testing
 		Domain:    "https://bad.example.com",
 	})
 	if err == nil {
-		t.Fatal("非法 domain 应返回校验错误")
+		t.Fatal("an invalid domain should return a validation error")
 	}
 
 	var validationErr *proxyRequestValidationError
 	if !errors.As(err, &validationErr) {
-		t.Fatalf("期望 proxyRequestValidationError，得到 %T", err)
+		t.Fatalf("expected proxyRequestValidationError, got %T", err)
 	}
 	if validationErr.ErrorCode() != protocol.TunnelMutationErrorCodeDomainInvalid {
-		t.Fatalf("error_code 期望 %q，得到 %q", protocol.TunnelMutationErrorCodeDomainInvalid, validationErr.ErrorCode())
+		t.Fatalf("error_code: want %q, got %q", protocol.TunnelMutationErrorCodeDomainInvalid, validationErr.ErrorCode())
 	}
 	if validationErr.Field() != protocol.TunnelMutationFieldDomain {
-		t.Fatalf("field 期望 %q，得到 %q", protocol.TunnelMutationFieldDomain, validationErr.Field())
+		t.Fatalf("field: want %q, got %q", protocol.TunnelMutationFieldDomain, validationErr.Field())
 	}
 	if validationErr.StatusCode() != 400 {
-		t.Fatalf("status 期望 400，得到 %d", validationErr.StatusCode())
+		t.Fatalf("status: want 400, got %d", validationErr.StatusCode())
 	}
 }
 
@@ -102,9 +102,9 @@ func TestValidateProxyRequest_RejectsReservedAndManagementPorts(t *testing.T) {
 		port        int
 		expectInErr string
 	}{
-		{name: "reject port 80", port: 80, expectInErr: "不能使用保留端口"},
-		{name: "reject port 443", port: 443, expectInErr: "不能使用保留端口"},
-		{name: "reject management port", port: 18080, expectInErr: "管理服务监听端口"},
+		{name: "reject port 80", port: 80, expectInErr: "cannot use reserved port"},
+		{name: "reject port 443", port: 443, expectInErr: "cannot use reserved port"},
+		{name: "reject management port", port: 18080, expectInErr: "management service listen port"},
 	}
 
 	for _, tc := range testCases {
@@ -117,10 +117,10 @@ func TestValidateProxyRequest_RejectsReservedAndManagementPorts(t *testing.T) {
 				RemotePort: tc.port,
 			})
 			if err == nil {
-				t.Fatalf("端口 %d 应被拒绝", tc.port)
+				t.Fatalf("port %d should be rejected", tc.port)
 			}
 			if !strings.Contains(err.Error(), tc.expectInErr) {
-				t.Fatalf("错误信息应包含 %q，得到 %v", tc.expectInErr, err)
+				t.Fatalf("error should contain %q, got %v", tc.expectInErr, err)
 			}
 		})
 	}
@@ -130,12 +130,12 @@ func TestValidateProxyRequest_RejectsConflictsAcrossRuntimeAndStore(t *testing.T
 	s := newProxyValidationTestServer(t, 28080, "https://panel.example.com", nil)
 
 	seedStoredTunnel(t, s, "client-store", protocol.ProxyNewRequest{
-		Name:       "stored-paused",
+		Name:       "stored-stopped",
 		Type:       protocol.ProxyTypeTCP,
 		LocalIP:    "127.0.0.1",
 		LocalPort:  3000,
 		RemotePort: 19090,
-	}, protocol.ProxyStatusPaused)
+	}, protocol.ProxyStatusStopped)
 
 	liveClient := &ClientConn{
 		ID:      "client-live",
@@ -159,7 +159,7 @@ func TestValidateProxyRequest_RejectsConflictsAcrossRuntimeAndStore(t *testing.T
 		name string
 		port int
 	}{
-		{name: "conflict with stored paused tunnel", port: 19090},
+		{name: "conflict with stored stopped tunnel", port: 19090},
 		{name: "conflict with runtime error tunnel", port: 19091},
 	}
 
@@ -173,10 +173,10 @@ func TestValidateProxyRequest_RejectsConflictsAcrossRuntimeAndStore(t *testing.T
 				RemotePort: tc.port,
 			})
 			if err == nil {
-				t.Fatalf("端口 %d 已被已有隧道占用，应返回冲突", tc.port)
+				t.Fatalf("port %d is already occupied by an existing tunnel and should return a conflict", tc.port)
 			}
-			if !strings.Contains(err.Error(), "已被隧道占用") {
-				t.Fatalf("错误信息应提示端口冲突，得到 %v", err)
+			if !strings.Contains(err.Error(), "already in use by another tunnel") {
+				t.Fatalf("error should indicate a port conflict, got %v", err)
 			}
 		})
 	}
@@ -197,7 +197,7 @@ func TestValidateProxyRequestWithExclusions_AllowsUpdatingSameTunnelPort(t *test
 			LocalPort:    8080,
 			RemotePort:   19100,
 			ClientID:     client.ID,
-			DesiredState: protocol.ProxyDesiredStatePaused,
+			DesiredState: protocol.ProxyDesiredStateStopped,
 			RuntimeState: protocol.ProxyRuntimeStateIdle,
 		},
 	}
@@ -209,7 +209,7 @@ func TestValidateProxyRequestWithExclusions_AllowsUpdatingSameTunnelPort(t *test
 		LocalIP:    "127.0.0.1",
 		LocalPort:  8080,
 		RemotePort: 19100,
-	}, protocol.ProxyStatusPaused)
+	}, protocol.ProxyStatusStopped)
 
 	err := s.validateProxyRequestWithExclusions(client, protocol.ProxyNewRequest{
 		Name:       "editable",
@@ -219,6 +219,6 @@ func TestValidateProxyRequestWithExclusions_AllowsUpdatingSameTunnelPort(t *test
 		RemotePort: 19100,
 	}, "editable", client.ID)
 	if err != nil {
-		t.Fatalf("编辑同一条隧道时不应把自己判成端口冲突: %v", err)
+		t.Fatalf("editing the same tunnel should not treat itself as a port conflict: %v", err)
 	}
 }

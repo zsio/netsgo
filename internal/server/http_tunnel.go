@@ -13,7 +13,7 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-// httpTunnelRuleError 表示 HTTP 域名规则层返回的结构化冲突。
+// httpTunnelRuleError represents a structured conflict returned by the HTTP domain rule layer.
 type httpTunnelRuleError struct {
 	code               string
 	message            string
@@ -39,8 +39,8 @@ func (e *httpTunnelRuleError) ConflictingTunnels() []string {
 	return append([]string(nil), e.conflictingTunnels...)
 }
 
-// canonicalHost 统一管理地址 / HTTP 域名的比较口径。
-// 它会去掉 scheme、path，转小写，并去掉标准端口 80/443。
+// canonicalHost normalizes an address / HTTP domain name for comparison.
+// It strips the scheme and path, lowercases the result, and removes standard ports 80/443.
 func canonicalHost(addr string) string {
 	raw := strings.TrimSpace(addr)
 	if raw == "" {
@@ -100,101 +100,101 @@ func normalizeHostLiteral(host string) string {
 	return host
 }
 
-// validateDomain 只接受明确的 FQDN，不接受 scheme/path/IP/wildcard。
+// validateDomain only accepts explicit FQDNs; rejects scheme/path/IP/wildcard.
 func validateDomain(domain string) error {
 	raw := strings.TrimSpace(domain)
 	if raw == "" {
-		return fmt.Errorf("domain 不能为空")
+		return fmt.Errorf("domain cannot be empty")
 	}
 	if raw != domain || strings.ContainsAny(domain, " \t\r\n") {
-		return fmt.Errorf("domain 不能包含空白字符")
+		return fmt.Errorf("domain cannot contain whitespace")
 	}
 	if strings.Contains(domain, "*") {
-		return fmt.Errorf("domain 不支持通配符")
+		return fmt.Errorf("domain does not support wildcards")
 	}
 	if strings.Contains(domain, "://") {
-		return fmt.Errorf("domain 不能包含 scheme")
+		return fmt.Errorf("domain cannot contain a scheme")
 	}
 	if strings.ContainsAny(domain, "/?#") {
-		return fmt.Errorf("domain 不能包含路径或查询")
+		return fmt.Errorf("domain cannot contain a path or query string")
 	}
 	if strings.Contains(domain, ":") {
-		return fmt.Errorf("domain 不能包含端口或 IPv6 字面量")
+		return fmt.Errorf("domain cannot contain a port or IPv6 literal")
 	}
 
 	normalized := strings.ToLower(raw)
 	normalized = strings.TrimSuffix(normalized, ".")
 
 	if len(normalized) > 253 {
-		return fmt.Errorf("domain 长度不能超过 253 个字符")
+		return fmt.Errorf("domain length cannot exceed 253 characters")
 	}
 
 	if ip := net.ParseIP(normalized); ip != nil {
-		return fmt.Errorf("domain 不能是 IP 地址")
+		return fmt.Errorf("domain cannot be an IP address")
 	}
 
 	labels := strings.Split(normalized, ".")
 	if len(labels) < 2 {
-		return fmt.Errorf("domain 必须包含至少两个标签")
+		return fmt.Errorf("domain must contain at least two labels")
 	}
 
 	for _, label := range labels {
 		if label == "" {
-			return fmt.Errorf("domain 标签不能为空")
+			return fmt.Errorf("domain label cannot be empty")
 		}
 		if len(label) > 63 {
-			return fmt.Errorf("domain 标签长度不能超过 63 个字符")
+			return fmt.Errorf("domain label length cannot exceed 63 characters")
 		}
 		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-			return fmt.Errorf("domain 标签不能以连字符开头或结尾")
+			return fmt.Errorf("domain label cannot start or end with a hyphen")
 		}
 		for _, ch := range label {
 			if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
 				continue
 			}
 			if ch > 127 {
-				return fmt.Errorf("domain 包含非 ASCII 字符，请使用 Punycode 格式 (xn--开头)")
+				return fmt.Errorf("domain contains non-ASCII characters; please use Punycode format (xn-- prefix)")
 			}
-			return fmt.Errorf("domain 包含非法字符")
+			return fmt.Errorf("domain contains invalid characters")
 		}
 	}
 
 	return nil
 }
 
-// validateServerAddr 校验 setup / 系统设置里的管理地址。
-// 仅允许 http(s):// + (FQDN | localhost | IPv4 | IPv6字面量) + 可选端口。
+// validateServerAddr validates the management address in setup / system settings.
+// Only allows http(s):// + (FQDN | localhost | IPv4 | IPv6 literal) + optional port.
 func validateServerAddr(addr string) (string, error) {
 	raw := strings.TrimSpace(addr)
 	if raw == "" {
-		return "", fmt.Errorf("server_addr 不能为空")
+		return "", fmt.Errorf("server_addr cannot be empty")
 	}
 
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("server_addr 必须是完整的 http:// 或 https:// URL")
+		return "", fmt.Errorf("server_addr must be a complete http:// or https:// URL")
 	}
 
 	scheme := strings.ToLower(parsed.Scheme)
 	if scheme != "http" && scheme != "https" {
-		return "", fmt.Errorf("server_addr 仅支持 http:// 或 https://")
+		return "", fmt.Errorf("server_addr only supports http:// or https://")
 	}
 	if parsed.Host == "" {
-		return "", fmt.Errorf("server_addr 必须包含主机名")
+		return "", fmt.Errorf("server_addr must include a hostname")
 	}
 	if parsed.User != nil {
-		return "", fmt.Errorf("server_addr 不能包含用户信息")
+		return "", fmt.Errorf("server_addr cannot contain user info")
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", fmt.Errorf("server_addr 不能包含查询参数或锚点")
+		return "", fmt.Errorf("server_addr cannot contain query parameters or fragment")
 	}
 	if parsed.Path != "" && parsed.Path != "/" {
-		return "", fmt.Errorf("server_addr 不能包含路径")
+		return "", fmt.Errorf("server_addr cannot contain a path")
 	}
 
 	hostname := strings.ToLower(parsed.Hostname())
 	if hostname == "" {
-		return "", fmt.Errorf("server_addr 必须包含主机名")
+		return "", fmt.Errorf("server_addr must include a hostname")
 	}
 
 	switch {
@@ -202,7 +202,7 @@ func validateServerAddr(addr string) (string, error) {
 	case net.ParseIP(hostname) != nil:
 	default:
 		if err := validateDomain(hostname); err != nil {
-			return "", fmt.Errorf("server_addr 主机名无效: %w", err)
+			return "", fmt.Errorf("server_addr hostname is invalid: %w", err)
 		}
 	}
 
@@ -210,7 +210,7 @@ func validateServerAddr(addr string) (string, error) {
 	if port != "" {
 		portNum, err := strconv.Atoi(port)
 		if err != nil || portNum < 1 || portNum > 65535 {
-			return "", fmt.Errorf("server_addr 端口无效")
+			return "", fmt.Errorf("server_addr port is invalid")
 		}
 	}
 	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
@@ -299,8 +299,8 @@ func collectDeclaredHTTPDomains(server *Server) map[string]string {
 	return result
 }
 
-// collectDeclaredHTTPDomainOwners 会同时扫描运行时和 store，
-// 让冲突检测覆盖在线与离线 HTTP 隧道。
+// collectDeclaredHTTPDomainOwners scans both the runtime state and the store
+// so that conflict detection covers both online and offline HTTP tunnels.
 func collectDeclaredHTTPDomainOwners(server *Server) map[string][]string {
 	owners := map[string][]string{}
 	if server == nil {
@@ -367,7 +367,7 @@ func checkDomainConflict(domain, excludeName, excludeClientID string, server *Se
 	if managementHost := effectiveManagementHost(cfg, serverListenAddr(server)); managementHost != "" && canonicalDomain == managementHost {
 		return &httpTunnelRuleError{
 			code:    protocol.TunnelMutationErrorCodeServerAddrConflict,
-			message: fmt.Sprintf("域名 %q 与当前管理地址冲突", domain),
+			message: fmt.Sprintf("domain %q conflicts with the current management address", domain),
 		}
 	}
 
@@ -378,7 +378,7 @@ func checkDomainConflict(domain, excludeName, excludeClientID string, server *Se
 
 	return &httpTunnelRuleError{
 		code:               protocol.TunnelMutationErrorCodeHTTPTunnelConflict,
-		message:            fmt.Sprintf("域名 %q 已被 HTTP 隧道占用", domain),
+		message:            fmt.Sprintf("domain %q is already claimed by an HTTP tunnel", domain),
 		conflictingTunnels: conflicts,
 	}
 }

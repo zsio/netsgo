@@ -64,13 +64,13 @@ func TestEventBus_PubSub(t *testing.T) {
 		select {
 		case ev := <-ch:
 			if ev.Type != expectedType {
-				t.Errorf("%s 期望收到 %s，得到 %s", name, expectedType, ev.Type)
+				t.Errorf("%s expected to receive %s, got %s", name, expectedType, ev.Type)
 			}
 			if !strings.Contains(ev.Data, expectedData) {
-				t.Errorf("%s 数据不匹配: %s", name, ev.Data)
+				t.Errorf("%s data mismatch: %s", name, ev.Data)
 			}
 		case <-time.After(500 * time.Millisecond):
-			t.Errorf("%s 未收到事件", name)
+			t.Errorf("%s did not receive event", name)
 		}
 	}
 
@@ -87,7 +87,7 @@ func TestEventBus_PubSub(t *testing.T) {
 	select {
 	case ev, ok := <-ch1:
 		if ok {
-			t.Errorf("ch1 已经退订，不应收到有效事件: %v", ev)
+			t.Errorf("ch1 already unsubscribed, should not receive valid events: %v", ev)
 		}
 	case <-time.After(50 * time.Millisecond):
 		// 正常，没有事件
@@ -120,7 +120,7 @@ loop:
 	}
 
 	if count != 64 {
-		t.Errorf("期望通道被塞满 64 个，得到 %d 个", count)
+		t.Errorf("expected channel to be full with 64, got %d", count)
 	}
 }
 
@@ -148,18 +148,18 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 	subCount := len(s.events.subscribers)
 	s.events.mu.RUnlock()
 	if subCount != 1 {
-		t.Errorf("期望有一个订阅者，得到 %d", subCount)
+		t.Errorf("expected one subscriber, got %d", subCount)
 	}
 
 	body := w.BodyString()
 	if !strings.Contains(body, "event: ready\ndata: {}\n\n") {
-		t.Fatalf("期望 SSE 连接建立后立即发送 ready 事件，实际 body: %q", body)
+		t.Fatalf("expected ready event immediately after SSE connection, actual body: %q", body)
 	}
 
 	if !strings.Contains(body, "event: snapshot\n") ||
 		!strings.Contains(body, `"clients":`) ||
 		!strings.Contains(body, `"server_status":`) {
-		t.Fatalf("期望 SSE 连接建立后立即发送完整快照，实际 body: %q", body)
+		t.Fatalf("expected full snapshot immediately after SSE connection, actual body: %q", body)
 	}
 
 	// 发送事件
@@ -168,7 +168,7 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 
 	body = w.BodyString()
 	if !strings.Contains(body, "event: foo\ndata: \"bar\"\n\n") {
-		t.Fatalf("期望收到业务事件，实际 body: %q", body)
+		t.Fatalf("expected to receive business event, actual body: %q", body)
 	}
 
 	// 模拟客户端断开连接 (Cancel context)
@@ -179,7 +179,7 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 	case <-done:
 		// 正常退出
 	case <-time.After(1 * time.Second):
-		t.Fatal("handleSSE 没有在客户端断开时正确退出")
+		t.Fatal("handleSSE did not exit correctly when client disconnected")
 	}
 
 	// 确认订阅数减少为 0
@@ -187,6 +187,6 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 	subCount = len(s.events.subscribers)
 	s.events.mu.RUnlock()
 	if subCount != 0 {
-		t.Errorf("客户端断开后，订阅应该被清理，还剩 %d", subCount)
+		t.Errorf("subscription should be cleaned up after client disconnect, remaining: %d", subCount)
 	}
 }

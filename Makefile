@@ -6,6 +6,12 @@ BIN_DIR=bin
 # 完整构建：先前端、再后端，产出单文件二进制
 build: build-web build-go
 
+# 构建多平台发布包（Linux/macOS/Windows）
+build-release: build-web
+	@echo "📦 构建多平台发布包..."
+	goreleaser release --snapshot --clean
+	@echo "✅ 构建完成: dist/"
+
 # 仅构建前端
 build-web:
 	@echo "🌐 构建前端..."
@@ -37,8 +43,8 @@ docs:
 #   终端 2:  make dev-client
 #   终端 3:  make dev-web
 
-DEV_PORT ?= 8080
-DEV_KEY  ?= dev-key
+DEV_PORT ?= 9527
+DEV_KEY  ?= sk-8ccf857d-db62-4806-9719-776900e0785d
 STACK_PROXY ?= nginx
 STACK_PROJECT ?= netsgo-stack-$(STACK_PROXY)
 STACK_PROXY_PORT ?= 19080

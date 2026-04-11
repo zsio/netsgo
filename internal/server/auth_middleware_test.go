@@ -19,19 +19,19 @@ func setupMockAdminStore(t *testing.T) (*AdminStore, func()) {
 	t.Helper()
 	tmpDir, err := os.MkdirTemp("", "admin_store_test_*")
 	if err != nil {
-		t.Fatalf("创建临时目录失败: %v", err)
+		t.Fatalf("Failed to create temp directory: %v", err)
 	}
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, err := NewAdminStore(dbPath)
 	if err != nil {
-		t.Fatalf("创建 AdminStore 失败: %v", err)
+		t.Fatalf("Failed to create AdminStore: %v", err)
 	}
 	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 
 	// 初始化一个默认的 admin
 	err = store.Initialize("admin", "password123", "localhost", nil)
 	if err != nil {
-		t.Fatalf("初始化 AdminStore 失败: %v", err)
+		t.Fatalf("Failed to initialize AdminStore: %v", err)
 	}
 
 	cleanup := func() {
@@ -61,7 +61,7 @@ func TestAuthMiddleware_MissingHeader(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("缺少 Authorization 头应返回 401，得到 %d", w.Code)
+		t.Errorf("Missing Authorization header should return 401, got %d", w.Code)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestAuthMiddleware_InvalidFormat(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("错误的 Authorization 格式应返回 401，得到 %d", w.Code)
+		t.Errorf("Invalid Authorization format should return 401, got %d", w.Code)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestAuthMiddleware_InvalidTokenSignature(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("签名错误的 token 应返回 401，得到 %d", w.Code)
+		t.Errorf("Token with invalid signature should return 401, got %d", w.Code)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestAuthMiddleware_FallbackSecretTokenRejected(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("使用旧 fallback secret 签发的 token 应返回 401，得到 %d", w.Code)
+		t.Errorf("Token signed with old fallback secret should return 401, got %d", w.Code)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	secret, err := store.GetJWTSecret()
 	if err != nil {
-		t.Fatalf("获取 JWT Secret 失败: %v", err)
+		t.Fatalf("Failed to get JWT Secret: %v", err)
 	}
 	tokenString, _ := token.SignedString(secret)
 
@@ -167,7 +167,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("过期的 token 应返回 401，得到 %d", w.Code)
+		t.Errorf("Expired token should return 401, got %d", w.Code)
 	}
 }
 
@@ -182,7 +182,7 @@ func TestGenerateAdminToken_MissingJWTSecret(t *testing.T) {
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	_, err := s.GenerateAdminToken(session)
 	if !errors.Is(err, errJWTSecretMissing) {
-		t.Fatalf("缺少 JWT Secret 时 GenerateAdminToken 应返回 errJWTSecretMissing，得到 %v", err)
+		t.Fatalf("GenerateAdminToken should return errJWTSecretMissing when JWT Secret is missing, got %v", err)
 	}
 }
 
@@ -202,7 +202,7 @@ func TestAuthMiddleware_MissingJWTSecret(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Errorf("缺少 JWT Secret 时应返回 500，得到 %d", w.Code)
+		t.Errorf("Should return 500 when JWT Secret is missing, got %d", w.Code)
 	}
 }
 
@@ -217,7 +217,7 @@ func TestAuthMiddleware_ValidTokenButSessionRevoked(t *testing.T) {
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 token 失败: %v", err)
+		t.Fatalf("Failed to generate token: %v", err)
 	}
 
 	// 模拟 session 被注销/踢出
@@ -231,7 +231,7 @@ func TestAuthMiddleware_ValidTokenButSessionRevoked(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Session 被注销的 token 应返回 401，得到 %d", w.Code)
+		t.Errorf("Token for revoked Session should return 401, got %d", w.Code)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestAuthMiddleware_ValidTokenSuccess(t *testing.T) {
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 token 失败: %v", err)
+		t.Fatalf("Failed to generate token: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -262,25 +262,25 @@ func TestAuthMiddleware_ValidTokenSuccess(t *testing.T) {
 		// 验证上下文中是否成功注入了 session 信息
 		info := GetSessionFromContext(r.Context())
 		if info == nil {
-			t.Errorf("上下文中未找到 SessionInfo")
+			t.Errorf("SessionInfo not found in context")
 		} else if info.SessionID != session.ID {
-			t.Errorf("上下文中 SessionID 期望 %s，得到 %s", session.ID, info.SessionID)
+			t.Errorf("Expected SessionID %s in context, got %s", session.ID, info.SessionID)
 		}
 
 		// 验证兼容接口
 		adminInfo := GetAdminFromContext(r.Context())
 		if adminInfo == nil || adminInfo.SessionID != session.ID {
-			t.Errorf("GetAdminFromContext 获取信息失败")
+			t.Errorf("GetAdminFromContext failed to get info")
 		}
 	})
 
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("合法的 token 应返回 200，得到 %d", w.Code)
+		t.Errorf("Valid token should return 200, got %d", w.Code)
 	}
 	if !handlerCalled {
-		t.Errorf("Handler 未被调用")
+		t.Errorf("Handler was not called")
 	}
 }
 
@@ -288,7 +288,7 @@ func TestGetSessionFromContext_Nil(t *testing.T) {
 	ctx := context.Background()
 	info := GetSessionFromContext(ctx)
 	if info != nil {
-		t.Errorf("空 Context 应该返回 nil")
+		t.Errorf("Empty Context should return nil")
 	}
 }
 
@@ -317,7 +317,7 @@ func TestAuthMiddleware_StoreNotInitialized(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Store 未初始化应返回 500 (或 401 视秘钥验证结果)，得到 %d", w.Code)
+		t.Errorf("Uninitialized Store should return 500 (or 401 depending on secret validation result), got %d", w.Code)
 	}
 }
 
@@ -333,7 +333,7 @@ func TestAuthMiddleware_CookieAuth_Success(t *testing.T) {
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	tokenString, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 token 失败: %v", err)
+		t.Fatalf("Failed to generate token: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -346,9 +346,9 @@ func TestAuthMiddleware_CookieAuth_Success(t *testing.T) {
 		handlerCalled = true
 		info := GetSessionFromContext(r.Context())
 		if info == nil {
-			t.Errorf("上下文中未找到 SessionInfo")
+			t.Errorf("SessionInfo not found in context")
 		} else if info.SessionID != session.ID {
-			t.Errorf("上下文中 SessionID 期望 %s，得到 %s", session.ID, info.SessionID)
+			t.Errorf("Expected SessionID %s in context, got %s", session.ID, info.SessionID)
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -356,10 +356,10 @@ func TestAuthMiddleware_CookieAuth_Success(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("Cookie 中的合法 token 应返回 200，得到 %d", w.Code)
+		t.Errorf("Valid token in Cookie should return 200, got %d", w.Code)
 	}
 	if !handlerCalled {
-		t.Errorf("Handler 未被调用")
+		t.Errorf("Handler was not called")
 	}
 }
 
@@ -378,7 +378,7 @@ func TestAuthMiddleware_CookieAuth_InvalidToken(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Cookie 中的非法 token 应返回 401，得到 %d", w.Code)
+		t.Errorf("Invalid token in Cookie should return 401, got %d", w.Code)
 	}
 }
 
@@ -392,7 +392,7 @@ func TestAuthMiddleware_HeaderPriority(t *testing.T) {
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	validToken, err := s.GenerateAdminToken(session)
 	if err != nil {
-		t.Fatalf("生成 token 失败: %v", err)
+		t.Fatalf("Failed to generate token: %v", err)
 	}
 
 	// Header 中放合法 token，Cookie 中放非法 token
@@ -409,7 +409,7 @@ func TestAuthMiddleware_HeaderPriority(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("Header 优先级高于 Cookie，应返回 200，得到 %d", w.Code)
+		t.Errorf("Header takes precedence over Cookie, should return 200, got %d", w.Code)
 	}
 }
 
@@ -425,6 +425,6 @@ func TestAuthMiddleware_NoCredentials(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("无 header 无 cookie 应返回 401，得到 %d", w.Code)
+		t.Errorf("Missing both header and cookie should return 401, got %d", w.Code)
 	}
 }

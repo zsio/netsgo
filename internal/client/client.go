@@ -39,31 +39,31 @@ const (
 
 var retryJitterFloat64 = rand.Float64
 
-// Client 是客户端/Client 的核心结构体
+// Client is the core client structure.
 type Client struct {
-	ServerAddr      string // 服务器地址（支持 ws:// wss:// http:// https://，内部统一规范化）
-	Key             string // 认证密钥（用于兑换 Token）
-	Token           string // 客户端连接密钥（由 Key 兑换）
-	InstallID       string // 稳定安装 ID
-	StatePath       string // 安装 ID 持久化路径
-	ClientID        string // Server 分配的稳定 Client ID
+	ServerAddr      string // Server address (supports ws://, wss://, http://, and https://, normalized internally)
+	Key             string // Authentication key (used to exchange for a token)
+	Token           string // Client connection token (exchanged from Key)
+	InstallID       string // Stable installation ID
+	DataDir         string
+	ClientID        string // Stable client ID assigned by the server
 	TLSSkipVerify   bool
 	TLSFingerprint  string
 	dataToken       string
 	conn            *websocket.Conn
-	mu              sync.Mutex // 保护当前 runtime 与镜像字段
+	mu              sync.Mutex // Protects the current runtime and mirrored fields
 	done            chan struct{}
-	dataSession     *yamux.Session // 数据通道 yamux Session
+	dataSession     *yamux.Session // yamux session for the data channel
 	dataMu          sync.RWMutex
 	proxies         sync.Map // proxy_name -> ProxyNewRequest
 	useTLS          bool
-	startTime       time.Time // 程序启动时间，用于计算 process uptime
-	publicIPv4      string    // 缓存的公网 IPv4
-	publicIPv6      string    // 缓存的公网 IPv6
-	publicIPFetched time.Time // 上次获取时间
-	// ProxyConfigs 由服务端下发，Benchmark 测试也可手动设置
+	startTime       time.Time // Program start time, used to calculate process uptime
+	publicIPv4      string    // Cached public IPv4 address
+	publicIPv6      string    // Cached public IPv6 address
+	publicIPFetched time.Time // Last fetch time
+	// ProxyConfigs are delivered by the server and may also be set manually in benchmarks.
 	ProxyConfigs []protocol.ProxyNewRequest
-	// DisableReconnect 禁用自动重连（用于测试等场景）
+	// DisableReconnect disables automatic reconnect (used in tests and similar scenarios).
 	DisableReconnect bool
 
 	dataHandshakeTimeout time.Duration
@@ -95,7 +95,7 @@ func (rt *sessionRuntime) writeJSON(v any) error {
 	rt.connMu.Lock()
 	defer rt.connMu.Unlock()
 	if rt.conn == nil {
-		return fmt.Errorf("控制通道不可用")
+		return fmt.Errorf("control channel unavailable")
 	}
 	return rt.conn.WriteJSON(v)
 }
@@ -104,7 +104,7 @@ func (rt *sessionRuntime) writeMessage(messageType int, data []byte) error {
 	rt.connMu.Lock()
 	defer rt.connMu.Unlock()
 	if rt.conn == nil {
-		return fmt.Errorf("控制通道不可用")
+		return fmt.Errorf("control channel unavailable")
 	}
 	return rt.conn.WriteMessage(messageType, data)
 }
@@ -113,7 +113,7 @@ func (rt *sessionRuntime) writeControl(messageType int, data []byte, deadline ti
 	rt.connMu.Lock()
 	defer rt.connMu.Unlock()
 	if rt.conn == nil {
-		return fmt.Errorf("控制通道不可用")
+		return fmt.Errorf("control channel unavailable")
 	}
 	return rt.conn.WriteControl(messageType, data, deadline)
 }
@@ -139,7 +139,7 @@ func (rt *sessionRuntime) closeDone() {
 	})
 }
 
-// New 创建一个新的 Client 实例
+// New creates a new client instance.
 func New(serverAddr, key string) *Client {
 	return &Client{
 		ServerAddr:           serverAddr,
@@ -229,10 +229,10 @@ func (c *Client) runtimeForStandaloneUse() *sessionRuntime {
 	return rt
 }
 
-// normalizeServerAddr 将用户输入的地址规范化为统一格式。
-// 支持输入: ws:// wss:// http:// https://
-// 输出: http://host:port 或 https://host:port
-// 同时设置 c.useTLS 标记。
+// normalizeServerAddr normalizes the user-provided address to a consistent format.
+// Supported inputs: ws://, wss://, http://, https://
+// Output: http://host:port or https://host:port
+// It also sets the c.useTLS flag.
 func (c *Client) normalizeServerAddr() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -250,7 +250,7 @@ func (c *Client) normalizeServerAddr() {
 		useTLS = true
 	case strings.HasPrefix(addr, "http://"):
 	default:
-		// 无协议前缀，默认 http
+		// No scheme prefix; default to http.
 		addr = "http://" + addr
 	}
 
@@ -258,7 +258,7 @@ func (c *Client) normalizeServerAddr() {
 	c.useTLS = useTLS
 }
 
-// deriveControlURL 从规范化后的 ServerAddr 推导控制通道 WebSocket URL
+// deriveControlURL derives the control-channel WebSocket URL from the normalized ServerAddr.
 // http://host:port -> ws://host:port/ws/control
 // https://host:port -> wss://host:port/ws/control
 func (c *Client) currentServerState() (string, bool) {
@@ -287,7 +287,7 @@ func (c *Client) deriveDataURL() string {
 	return addr + "/ws/data"
 }
 
-// buildTLSConfig 构建客户端 TLS 配置
+// buildTLSConfig builds the client TLS configuration.
 func (c *Client) CurrentClientID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -344,9 +344,9 @@ func (c *Client) newWSDialer(host string) *websocket.Dialer {
 	return &dialer
 }
 
-// retryInterval 根据首次断连时间计算重试间隔。
-// 前 5 分钟以 3s 为基准，之后以 10s 为基准，并加入正向抖动，
-// 避免大量 Client 同时断线后按固定节奏一起回连。
+// retryInterval calculates the retry interval based on the initial disconnect time.
+// It uses 3s for the first 5 minutes, then 10s afterward, with positive jitter
+// to avoid large numbers of clients reconnecting in lockstep after a mass disconnect.
 func retryInterval(disconnectTime time.Time) time.Duration {
 	return retryIntervalWithJitter(disconnectTime, retryJitterFloat64())
 }
@@ -370,13 +370,13 @@ func retryIntervalWithJitter(disconnectTime time.Time, jitter float64) time.Dura
 	return base + time.Duration(float64(base)*retryJitterMultiplier*jitter)
 }
 
-// Start 启动客户端，连接 Server 并开始工作。
-// 如果连接断开，自动重连（认证失败等致命错误除外）。
+// Start starts the client, connects to the server, and begins work.
+// If the connection drops, it reconnects automatically except for fatal errors such as authentication failures.
 func (c *Client) Start() error {
 	for {
 		err := c.connectAndRun()
 		if err != nil {
-			// 认证失败是致命错误，不重连
+			// Authentication failure is fatal and should not trigger reconnect.
 			if c.DisableReconnect {
 				return err
 			}
@@ -384,43 +384,43 @@ func (c *Client) Start() error {
 				return err
 			}
 
-			log.Printf("⚠️ 连接断开: %v", err)
+			log.Printf("⚠️ Connection lost: %v", err)
 		}
 
 		if c.DisableReconnect {
 			return err
 		}
 
-		// 清理旧连接资源
+		// Clean up stale connection resources.
 		c.cleanup()
 
-		// 重连循环
+		// Reconnect loop.
 		disconnectTime := time.Now()
 		for {
 			interval := retryInterval(disconnectTime)
-			log.Printf("🔄 将在 %v 后重连...", interval)
+			log.Printf("🔄 Reconnecting in %v...", interval)
 			time.Sleep(interval)
 
 			serverAddr, _ := c.currentServerState()
-			log.Printf("🔄 正在尝试重连 %s ...", serverAddr)
+			log.Printf("🔄 Attempting to reconnect to %s ...", serverAddr)
 			err := c.connectAndRun()
 			if err == nil {
-				// connectAndRun 正常返回（连接又断了），开始新一轮重连
+				// connectAndRun returned normally (the connection dropped again), so start a new reconnect cycle.
 				break
 			}
 			if isFatalError(err) {
 				return err
 			}
-			log.Printf("⚠️ 重连失败: %v", err)
+			log.Printf("⚠️ Reconnect failed: %v", err)
 			c.cleanup()
 		}
 
-		// connectAndRun 正常返回，准备再次重连
+		// connectAndRun returned normally, so prepare for another reconnect.
 		c.cleanup()
 	}
 }
 
-// isFatalError 判断是否为致命错误（不应重连）
+// isFatalError reports whether an error is fatal and should not trigger reconnect.
 func isFatalError(err error) bool {
 	if err == nil {
 		return false
@@ -432,10 +432,10 @@ func isFatalError(err error) bool {
 	return false
 }
 
-// Shutdown 优雅关闭客户端连接
-// 发送 WebSocket 正常关闭帧，让服务端知道是主动断开而非异常
+// Shutdown gracefully closes the client connection.
+// It sends a normal WebSocket close frame so the server knows the disconnect was intentional.
 func (c *Client) Shutdown() {
-	log.Printf("🛑 客户端开始优雅关闭...")
+	log.Printf("🛑 Starting graceful client shutdown...")
 
 	if rt := c.getCurrentRuntime(); rt != nil {
 		_ = rt.writeMessage(
@@ -448,7 +448,7 @@ func (c *Client) Shutdown() {
 
 	c.cleanup()
 
-	log.Printf("✅ 客户端优雅关闭完成")
+	log.Printf("✅ Graceful client shutdown complete")
 }
 
 func (c *Client) closeDone() {
@@ -485,7 +485,7 @@ func (c *Client) stopRuntime(rt *sessionRuntime, reason string) {
 	}
 }
 
-// cleanup 清理旧连接资源，为重连做准备
+// cleanup clears stale connection resources in preparation for reconnect.
 func (c *Client) cleanup() {
 	rt := c.getCurrentRuntime()
 	c.stopRuntime(rt, "")
@@ -513,26 +513,26 @@ func (c *Client) failCurrentSession(reason string) {
 	c.failRuntime(c.getCurrentRuntime(), reason)
 }
 
-// connectAndRun 执行完整的连接流程并阻塞直到断连。
-// 返回 nil 表示连接曾经成功但后来断开（可以重连），
-// 返回 error 表示连接或认证失败。
+// connectAndRun performs the full connection flow and blocks until disconnected.
+// A nil return means the connection was established and later dropped (reconnect is allowed).
+// A non-nil error means connection or authentication failed.
 func (c *Client) connectAndRun() error {
 	if err := c.ensureInstallID(); err != nil {
-		return fmt.Errorf("初始化客户端身份失败: %w", err)
+		return fmt.Errorf("failed to initialize client identity: %w", err)
 	}
 
 	c.normalizeServerAddr()
 	rt := c.beginRuntime()
 
-	// 1. 连接控制通道
+	// 1. Connect the control channel.
 	controlURL := c.deriveControlURL()
-	log.Printf("🔌 正在连接 Server: %s", controlURL)
+	log.Printf("🔌 Connecting to server: %s", controlURL)
 
 	serverAddr, useTLS := c.currentServerState()
 	u, err := url.Parse(serverAddr)
 	if err != nil {
 		c.clearCurrentRuntime(rt)
-		return fmt.Errorf("解析 ServerAddr 失败: %w", err)
+		return fmt.Errorf("failed to parse ServerAddr: %w", err)
 	}
 
 	dialer := c.newWSDialer(u.Hostname())
@@ -540,36 +540,36 @@ func (c *Client) connectAndRun() error {
 	conn, _, err := dialer.Dial(controlURL, nil)
 	if err != nil {
 		c.clearCurrentRuntime(rt)
-		return fmt.Errorf("连接 Server 失败: %w", err)
+		return fmt.Errorf("failed to connect to server: %w", err)
 	}
 
 	if useTLS && !c.TLSSkipVerify {
 		if err := c.checkTLSFingerprint(conn); err != nil {
 			conn.Close()
 			c.clearCurrentRuntime(rt)
-			return fmt.Errorf("TLS 证书指纹校验失败: %w", err)
+			return fmt.Errorf("TLS certificate fingerprint verification failed: %w", err)
 		}
 	}
 
 	c.setRuntimeConn(rt, conn)
 
-	log.Printf("✅ 已连接到 Server")
+	log.Printf("✅ Connected to server")
 
-	// 2. 发送认证
+	// 2. Send authentication.
 	if err := c.authenticateRuntime(rt); err != nil {
 		c.stopRuntime(rt, "")
 		c.clearCurrentRuntime(rt)
 		return err
 	}
-	log.Printf("✅ 认证成功，Client ID: %s", c.CurrentClientID())
+	log.Printf("✅ Authentication succeeded, Client ID: %s", c.CurrentClientID())
 
-	// 3. 建立数据通道
+	// 3. Establish the data channel.
 	if err := c.connectDataChannelRuntime(rt); err != nil {
-		log.Printf("⚠️ 数据通道建立失败，当前逻辑会话将重建: %v", err)
+		log.Printf("⚠️ Failed to establish data channel, rebuilding the current logical session: %v", err)
 		c.failRuntime(rt, "data_channel_start_failed")
-		return fmt.Errorf("数据通道建立失败: %w", err)
+		return fmt.Errorf("failed to establish data channel: %w", err)
 	}
-	log.Printf("✅ 数据通道已建立")
+	log.Printf("✅ Data channel established")
 
 	rt.wg.Add(1)
 	go func() {
@@ -602,8 +602,8 @@ func (c *Client) connectAndRun() error {
 	return nil
 }
 
-// authenticate 发送认证请求
-// 优先使用 Token，失败后降级到 Key
+// authenticate sends the authentication request.
+// It prefers Token first and falls back to Key on failure.
 func (c *Client) authenticate() error {
 	return c.authenticateRuntime(c.runtimeForStandaloneUse())
 }
@@ -626,27 +626,28 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 		},
 	}
 
-	// 如果有 Token，先只发 Token（不发 Key，避免服务端在 Token 无效时消耗 Key）
+	// If a token exists, send only the token first.
+	// Do not send the key to avoid consuming it when the token is invalid.
 	if token != "" {
 		tokenReq := authReq
-		tokenReq.Key = "" // 不发送 Key
+		tokenReq.Key = "" // Do not send the key.
 		authResp, err := c.sendAuthRequestRuntime(rt, tokenReq)
 		if err != nil {
-			return fmt.Errorf("认证阶段连接失败: %w", err)
+			return fmt.Errorf("connection failed during authentication: %w", err)
 		}
 		if authResp.Success {
 			c.applyAuthSuccess(authResp)
-			log.Printf("✅ Token 认证成功")
+			log.Printf("✅ Token authentication succeeded")
 			return nil
 		}
 
 		return c.handleAuthFailure(authResp, true)
 	}
 
-	// 没有 Token，用 Key 认证
+	// No token available, authenticate with the key.
 	authResp, err := c.sendAuthRequestRuntime(rt, authReq)
 	if err != nil {
-		return fmt.Errorf("认证阶段连接失败: %w", err)
+		return fmt.Errorf("connection failed during authentication: %w", err)
 	}
 	if !authResp.Success {
 		return c.handleAuthFailure(authResp, false)
@@ -667,27 +668,27 @@ func (c *Client) sendAuthRequestRuntime(rt *sessionRuntime, authReq protocol.Aut
 	}
 
 	if err := rt.writeJSON(msg); err != nil {
-		return protocol.AuthResponse{}, fmt.Errorf("发送认证消息失败: %w", err)
+		return protocol.AuthResponse{}, fmt.Errorf("failed to send authentication message: %w", err)
 	}
 
 	rt.connMu.Lock()
 	conn := rt.conn
 	rt.connMu.Unlock()
 	if conn == nil {
-		return protocol.AuthResponse{}, fmt.Errorf("控制通道不可用")
+		return protocol.AuthResponse{}, fmt.Errorf("control channel unavailable")
 	}
 
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
-		return protocol.AuthResponse{}, fmt.Errorf("读取认证响应失败: %w", err)
+		return protocol.AuthResponse{}, fmt.Errorf("failed to read authentication response: %w", err)
 	}
 	if resp.Type != protocol.MsgTypeAuthResp {
-		return protocol.AuthResponse{}, fmt.Errorf("期望认证响应，收到: %s", resp.Type)
+		return protocol.AuthResponse{}, fmt.Errorf("expected auth response, got: %s", resp.Type)
 	}
 
 	var authResp protocol.AuthResponse
 	if err := resp.ParsePayload(&authResp); err != nil {
-		return protocol.AuthResponse{}, fmt.Errorf("解析认证响应失败: %w", err)
+		return protocol.AuthResponse{}, fmt.Errorf("failed to parse authentication response: %w", err)
 	}
 	return authResp, nil
 }
@@ -703,9 +704,9 @@ func (c *Client) applyAuthSuccess(authResp protocol.AuthResponse) {
 
 	if authResp.Token != "" {
 		if err := c.saveToken(authResp.Token); err != nil {
-			log.Printf("⚠️ 保存 Token 失败: %v", err)
+			log.Printf("⚠️ Failed to save token: %v", err)
 		} else {
-			log.Printf("🔑 Token 已保存，后续重连将自动使用")
+			log.Printf("🔑 Token saved and will be reused for future reconnects")
 		}
 	}
 }
@@ -717,46 +718,46 @@ func (c *Client) handleAuthFailure(authResp protocol.AuthResponse, attemptedWith
 	}
 
 	if authResp.ClearToken {
-		log.Printf("⚠️ 服务端要求清除本地 Token: code=%s", authResp.Code)
+		log.Printf("⚠️ Server requested local token cleanup: code=%s", authResp.Code)
 		c.setToken("")
 		if err := c.clearToken(); err != nil {
-			log.Printf("⚠️ 清除本地 Token 失败: %v", err)
+			log.Printf("⚠️ Failed to clear local token: %v", err)
 		}
 		if c.Key != "" {
 			return &clientRunError{
-				message: fmt.Sprintf("认证失败(%s)，已清除 Token，准备改用 Key 重连", authResp.Code),
+				message: fmt.Sprintf("authentication failed (%s), token cleared, retrying with key", authResp.Code),
 				fatal:   false,
 			}
 		}
 		return &clientRunError{
-			message: fmt.Sprintf("认证失败: %s", message),
+			message: fmt.Sprintf("authentication failed: %s", message),
 			fatal:   true,
 		}
 	}
 
 	if authResp.Retryable {
 		return &clientRunError{
-			message: fmt.Sprintf("认证失败(%s)，稍后重试", authResp.Code),
+			message: fmt.Sprintf("authentication failed (%s), retrying later", authResp.Code),
 			fatal:   false,
 		}
 	}
 
 	if attemptedWithToken && c.Key != "" && (authResp.Code == protocol.AuthCodeInvalidToken || authResp.Code == protocol.AuthCodeRevokedToken) {
 		return &clientRunError{
-			message: fmt.Sprintf("认证失败(%s)，准备改用 Key 重连", authResp.Code),
+			message: fmt.Sprintf("authentication failed (%s), retrying with key", authResp.Code),
 			fatal:   false,
 		}
 	}
 
 	return &clientRunError{
-		message: fmt.Sprintf("认证失败: %s", message),
+		message: fmt.Sprintf("authentication failed: %s", message),
 		fatal:   true,
 	}
 }
 
-// connectDataChannel 建立数据通道。
-// 通过 /ws/data 建立 WebSocket，发送首个 binary 握手帧，
-// 然后在 WSConn 上建立 yamux Client Session。
+// connectDataChannel establishes the data channel.
+// It opens a WebSocket to /ws/data, sends the initial binary handshake frame,
+// and then creates a yamux client session on top of the WSConn.
 func (c *Client) connectDataChannel() error {
 	return c.connectDataChannelRuntime(c.runtimeForStandaloneUse())
 }
@@ -767,7 +768,7 @@ func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
 	serverAddr, _ := c.currentServerState()
 	u, err := url.Parse(serverAddr)
 	if err != nil {
-		return fmt.Errorf("解析 ServerAddr 失败: %w", err)
+		return fmt.Errorf("failed to parse ServerAddr: %w", err)
 	}
 
 	dataURL := c.deriveDataURL()
@@ -775,7 +776,7 @@ func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
 	dialer.Subprotocols = []string{protocol.WSSubProtocolData}
 	wsConn, _, err := dialer.Dial(dataURL, nil)
 	if err != nil {
-		return fmt.Errorf("建立数据通道 WebSocket 失败: %w", err)
+		return fmt.Errorf("failed to open data-channel WebSocket: %w", err)
 	}
 	wsConn.SetReadLimit(wsDataMaxMessageSize)
 	wsConn.SetReadDeadline(time.Now().Add(c.dataHandshakeTimeout))
@@ -784,34 +785,34 @@ func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
 	handshake := protocol.EncodeDataHandshake(clientID, dataToken)
 	if err := wsConn.WriteMessage(websocket.BinaryMessage, handshake); err != nil {
 		wsConn.Close()
-		return fmt.Errorf("发送数据通道握手失败: %w", err)
+		return fmt.Errorf("failed to send data-channel handshake: %w", err)
 	}
 
 	messageType, payload, err := wsConn.ReadMessage()
 	if err != nil {
 		wsConn.Close()
-		return fmt.Errorf("读取数据通道握手响应失败: %w", err)
+		return fmt.Errorf("failed to read data-channel handshake response: %w", err)
 	}
 	if messageType != websocket.BinaryMessage {
 		wsConn.Close()
-		return fmt.Errorf("数据通道握手响应类型错误: %d", messageType)
+		return fmt.Errorf("invalid data-channel handshake response type: %d", messageType)
 	}
 	if len(payload) != 1 {
 		wsConn.Close()
-		return fmt.Errorf("数据通道握手响应长度错误: %d", len(payload))
+		return fmt.Errorf("invalid data-channel handshake response length: %d", len(payload))
 	}
 	if payload[0] != protocol.DataHandshakeOK {
 		wsConn.Close()
-		return fmt.Errorf("数据通道握手被拒绝 (状态码: 0x%02x)", payload[0])
+		return fmt.Errorf("data-channel handshake rejected (status: 0x%02x)", payload[0])
 	}
 
 	wsConn.SetReadDeadline(time.Time{})
 
-	// 建立 yamux Client Session
+	// Create the yamux client session.
 	session, err := mux.NewClientSession(mux.NewWSConn(wsConn), mux.DefaultConfig())
 	if err != nil {
 		wsConn.Close()
-		return fmt.Errorf("创建 yamux Session 失败: %w", err)
+		return fmt.Errorf("failed to create yamux session: %w", err)
 	}
 
 	c.setRuntimeDataSession(rt, session)
@@ -819,19 +820,19 @@ func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
 	return nil
 }
 
-// checkTLSFingerprint 检查 TLS 连接的证书指纹 (TOFU)
+// checkTLSFingerprint checks the TLS certificate fingerprint (TOFU).
 func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
 	tlsConn, ok := conn.UnderlyingConn().(*tls.Conn)
 	if !ok {
-		return nil // 非 TLS 连接，跳过
+		return nil // Non-TLS connection; skip.
 	}
 
 	state := tlsConn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
-		return fmt.Errorf("服务器未提供证书")
+		return fmt.Errorf("server did not provide a certificate")
 	}
 
-	// 计算服务端证书指纹
+	// Calculate the server certificate fingerprint.
 	certDER := state.PeerCertificates[0].Raw
 	hash := sha256.Sum256(certDER)
 	hexStr := strings.ToUpper(hex.EncodeToString(hash[:]))
@@ -848,36 +849,36 @@ func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
 	c.mu.Lock()
 	currentFingerprint := c.TLSFingerprint
 	if currentFingerprint == "" {
-		// TOFU: 首次连接，记录指纹
+		// TOFU: first connection, record the fingerprint.
 		c.TLSFingerprint = serverFP
 		c.mu.Unlock()
-		log.Printf("🔒 TOFU: 首次连接，记录服务器证书指纹")
-		log.Printf("🔒 指纹: %s", serverFP)
-		// 持久化指纹
+		log.Printf("🔒 TOFU: first connection, recording server certificate fingerprint")
+		log.Printf("🔒 Fingerprint: %s", serverFP)
+		// Persist the fingerprint.
 		if err := c.saveTLSFingerprint(serverFP); err != nil {
-			log.Printf("⚠️ 保存 TLS 指纹失败: %v", err)
+			log.Printf("⚠️ Failed to save TLS fingerprint: %v", err)
 		}
 		return nil
 	}
 	c.mu.Unlock()
 
-	// 已有指纹，严格比对
+	// A fingerprint already exists; compare strictly.
 	if serverFP != currentFingerprint {
 		return fmt.Errorf(
-			"\n⚠️ TLS 证书指纹不匹配！可能存在中间人攻击。"+
-				"\n  期望: %s"+
-				"\n  实际: %s"+
-				"\n  如果服务器确实更换了证书，请删除客户端状态文件后重试。",
+			"\n⚠️ TLS certificate fingerprint mismatch! A man-in-the-middle attack may be in progress."+
+				"\n  Expected: %s"+
+				"\n  Actual:   %s"+
+				"\n  If the server really changed its certificate, delete the client state file and try again.",
 			currentFingerprint, serverFP,
 		)
 	}
 
-	log.Printf("🔒 TLS 证书指纹校验通过")
+	log.Printf("🔒 TLS certificate fingerprint verified")
 	return nil
 }
 
-// acceptStreamLoop 持续接收 Server 发来的 yamux Stream。
-// 每个 Stream 代表一个外部连接需要转发到本地服务。
+// acceptStreamLoop continuously accepts yamux streams from the server.
+// Each stream represents an external connection that must be forwarded to a local service.
 func (c *Client) acceptStreamLoop() {
 	c.acceptStreamLoopRuntime(c.runtimeForStandaloneUse())
 }
@@ -898,7 +899,7 @@ func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
 				return
 			default:
 				if !session.IsClosed() {
-					log.Printf("⚠️ AcceptStream 失败: %v", err)
+					log.Printf("⚠️ AcceptStream failed: %v", err)
 				}
 				c.failRuntime(rt, "data_session_closed")
 				return
@@ -909,79 +910,79 @@ func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
 	}
 }
 
-// handleStream 处理单个 yamux Stream：
-// 1. 读取 StreamHeader 获取 proxy_name
-// 2. 根据 proxy_name 查找本地代理配置
-// 3. Dial 本地服务
+// handleStream handles a single yamux stream:
+// 1. Read the StreamHeader to get proxy_name
+// 2. Look up the local proxy configuration by proxy_name
+// 3. Dial the local service
 // 4. Relay(stream, localConn)
 func (c *Client) handleStream(stream *yamux.Stream) {
 	defer stream.Close()
 
-	// 读取 StreamHeader: [2B name长度] [NB proxy_name]
+	// Read StreamHeader: [2B name length] [NB proxy_name]
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
-		log.Printf("⚠️ 读取 StreamHeader 失败: %v", err)
+		log.Printf("⚠️ Failed to read StreamHeader: %v", err)
 		return
 	}
 	nameLen := binary.BigEndian.Uint16(lenBuf[:])
 	if nameLen == 0 || nameLen > 1024 {
-		log.Printf("⚠️ StreamHeader 名称长度异常: %d", nameLen)
+		log.Printf("⚠️ Invalid StreamHeader name length: %d", nameLen)
 		return
 	}
 
 	nameBuf := make([]byte, nameLen)
 	if _, err := io.ReadFull(stream, nameBuf); err != nil {
-		log.Printf("⚠️ 读取 StreamHeader 名称失败: %v", err)
+		log.Printf("⚠️ Failed to read StreamHeader name: %v", err)
 		return
 	}
 	proxyName := string(nameBuf)
 
-	// 查找代理配置
+	// Look up the proxy configuration.
 	val, ok := c.proxies.Load(proxyName)
 	if !ok {
-		log.Printf("⚠️ 未知的代理名称: %s", proxyName)
+		log.Printf("⚠️ Unknown proxy name: %s", proxyName)
 		return
 	}
 	cfg := val.(protocol.ProxyNewRequest)
 
-	// 按代理类型分发
+	// Dispatch by proxy type.
 	if cfg.Type == protocol.ProxyTypeUDP {
 		c.handleUDPStream(stream, cfg)
 		return
 	}
 
-	// TCP 类型：连接本地服务
+	// TCP type: connect to the local service.
 	localAddr := net.JoinHostPort(cfg.LocalIP, fmt.Sprintf("%d", cfg.LocalPort))
 	localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
 	if err != nil {
-		log.Printf("⚠️ 连接本地服务失败 [%s → %s]: %v", proxyName, localAddr, err)
+		log.Printf("⚠️ Failed to connect to local service [%s → %s]: %v", proxyName, localAddr, err)
 		return
 	}
 
-	// 双向转发
+	// Relay traffic in both directions.
 	mux.Relay(stream, localConn)
 }
 
-// requestProxy 通过控制通道请求创建代理隧道
+// requestProxy requests creation of a proxy tunnel over the control channel.
 func (c *Client) requestProxy(cfg protocol.ProxyNewRequest) {
 	c.requestProxyRuntime(c.runtimeForStandaloneUse(), cfg)
 }
 
 func (c *Client) requestProxyRuntime(rt *sessionRuntime, cfg protocol.ProxyNewRequest) {
-	// 先注册本地代理配置
+	// Register the local proxy configuration first.
 	c.proxies.Store(cfg.Name, cfg)
 
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, protocol.ProxyCreateRequest(cfg))
 	err := rt.writeJSON(msg)
 	if err != nil {
-		log.Printf("❌ 发送代理请求失败 [%s]: %v", cfg.Name, err)
+		log.Printf("❌ Failed to send proxy request [%s]: %v", cfg.Name, err)
 		return
 	}
-	log.Printf("📤 已请求创建代理隧道: %s (本地 %s:%d → 公网 :%d)",
+	log.Printf("📤 Requested proxy tunnel creation: %s (local %s:%d → public :%d)",
 		cfg.Name, cfg.LocalIP, cfg.LocalPort, cfg.RemotePort)
 }
 
-// heartbeatLoop 定时发送心跳
+// heartbeatLoop sends heartbeats periodically.
 func (c *Client) heartbeatLoop() {
 	c.heartbeatLoopRuntime(c.runtimeForStandaloneUse())
 }
@@ -996,7 +997,7 @@ func (c *Client) heartbeatLoopRuntime(rt *sessionRuntime) {
 			msg, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 			err := rt.writeJSON(msg)
 			if err != nil {
-				log.Printf("⚠️ 发送心跳失败: %v", err)
+				log.Printf("⚠️ Failed to send heartbeat: %v", err)
 				c.failRuntime(rt, "heartbeat_write_failed")
 				return
 			}
@@ -1006,13 +1007,13 @@ func (c *Client) heartbeatLoopRuntime(rt *sessionRuntime) {
 	}
 }
 
-// probeLoop 定时采集并上报系统状态
+// probeLoop collects and reports system status periodically.
 func (c *Client) probeLoop() {
 	c.probeLoopRuntime(c.runtimeForStandaloneUse())
 }
 
 func (c *Client) probeLoopRuntime(rt *sessionRuntime) {
-	// 启动时立即上报一次
+	// Report once immediately on startup.
 	c.reportProbeRuntime(rt)
 
 	ticker := time.NewTicker(10 * time.Second)
@@ -1028,7 +1029,7 @@ func (c *Client) probeLoopRuntime(rt *sessionRuntime) {
 	}
 }
 
-// reportProbe 采集系统状态并上报
+// reportProbe collects and reports system status.
 func (c *Client) reportProbe() {
 	c.reportProbeRuntime(c.runtimeForStandaloneUse())
 }
@@ -1036,11 +1037,11 @@ func (c *Client) reportProbe() {
 func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 	stats, err := CollectSystemStats(c.startTime)
 	if err != nil {
-		log.Printf("⚠️ 采集系统状态失败: %v", err)
+		log.Printf("⚠️ Failed to collect system status: %v", err)
 		return
 	}
 
-	// 刷新公网 IP（内部有 5 分钟 TTL 控制）并附加到探针数据
+	// Refresh public IPs (internally guarded by a 5-minute TTL) and attach them to the probe data.
 	c.refreshPublicIPs()
 	c.mu.Lock()
 	stats.PublicIPv4 = c.publicIPv4
@@ -1050,17 +1051,18 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
 	err = rt.writeJSON(msg)
 	if err != nil {
-		log.Printf("⚠️ 上报探针数据失败: %v", err)
+		log.Printf("⚠️ Failed to report probe data: %v", err)
 		c.failRuntime(rt, "probe_write_failed")
 	}
 }
 
-// refreshPublicIPs 获取公网 IP 并缓存（仅当距上次获取超过 5 分钟时才实际请求）
+// refreshPublicIPs fetches and caches public IPs.
+// It only performs a real request if more than 5 minutes have passed since the last fetch.
 func (c *Client) refreshPublicIPs() {
 	c.mu.Lock()
 	if !c.publicIPFetched.IsZero() && time.Since(c.publicIPFetched) < 5*time.Minute {
 		c.mu.Unlock()
-		return // 还没过期，使用缓存
+		return // Cache is still fresh.
 	}
 	c.mu.Unlock()
 
@@ -1077,7 +1079,7 @@ func (c *Client) refreshPublicIPs() {
 	c.publicIPFetched = time.Now()
 }
 
-// controlLoop 监听 Server 下发的控制消息
+// controlLoop listens for control messages sent by the server.
 func (c *Client) controlLoop() {
 	c.controlLoopRuntime(c.runtimeForStandaloneUse())
 }
@@ -1094,7 +1096,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 		var msg protocol.Message
 		if err := conn.ReadJSON(&msg); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("⚠️ 控制通道连接异常: %v", err)
+				log.Printf("⚠️ Control channel connection error: %v", err)
 			}
 			rt.closeDone()
 			return
@@ -1102,16 +1104,16 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 
 		switch msg.Type {
 		case protocol.MsgTypePong:
-			// 心跳回复，忽略
+			// Heartbeat reply, ignore.
 
 		case protocol.MsgTypeProxyProvision:
-			// 服务端下发: 要求 client 接受/provision 代理隧道配置。
+			// Sent by the server: asks the client to accept/provision a proxy tunnel configuration.
 			var req protocol.ProxyProvisionRequest
 			if err := msg.ParsePayload(&req); err != nil {
-				log.Printf("⚠️ 解析代理指令失败: %v", err)
+				log.Printf("⚠️ Failed to parse proxy instruction: %v", err)
 				continue
 			}
-			log.Printf("📥 收到服务端隧道 provisioning 配置: %s (本地 %s:%d → 公网 :%d)",
+			log.Printf("📥 Received tunnel provisioning config from server: %s (local %s:%d → public :%d)",
 				req.Name, req.LocalIP, req.LocalPort, req.RemotePort)
 
 			c.proxies.Store(req.Name, protocol.ProxyNewRequest(req))
@@ -1120,46 +1122,46 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				Accepted: true,
 				Message:  "provision accepted",
 			})
-			log.Printf("✅ 已接受服务端隧道 provisioning 配置 [%s]", req.Name)
+			log.Printf("✅ Accepted tunnel provisioning config from server [%s]", req.Name)
 
 			if err := rt.writeJSON(resp); err != nil {
-				log.Printf("⚠️ 返回 provisioning ACK 失败 [%s]: %v", req.Name, err)
+				log.Printf("⚠️ Failed to send provisioning ACK [%s]: %v", req.Name, err)
 				c.failRuntime(rt, "proxy_provision_ack_write_failed")
 				return
 			}
 
 		case protocol.MsgTypeProxyCreateResp:
-			// 代理创建结果（客户端主动请求场景，如 Benchmark）
+			// Proxy creation result (for client-initiated requests such as benchmarks).
 			var resp protocol.ProxyCreateResponse
 			if err := msg.ParsePayload(&resp); err != nil {
-				log.Printf("⚠️ 解析代理响应失败: %v", err)
+				log.Printf("⚠️ Failed to parse proxy response: %v", err)
 				continue
 			}
 			if resp.Success {
-				log.Printf("✅ 代理隧道创建成功 [%s]，公网端口: %d", resp.Name, resp.RemotePort)
+				log.Printf("✅ Proxy tunnel created successfully [%s], public port: %d", resp.Name, resp.RemotePort)
 			} else {
-				log.Printf("❌ 代理隧道创建失败 [%s]: %s", resp.Name, resp.Message)
+				log.Printf("❌ Failed to create proxy tunnel [%s]: %s", resp.Name, resp.Message)
 			}
 
 		case protocol.MsgTypeProxyClose:
-			// 服务端下发: 关闭代理隧道
+			// Sent by the server: close the proxy tunnel.
 			var req protocol.ProxyCloseRequest
 			if err := msg.ParsePayload(&req); err != nil {
-				log.Printf("⚠️ 解析关闭代理指令失败: %v", err)
+				log.Printf("⚠️ Failed to parse proxy close instruction: %v", err)
 				continue
 			}
 			c.proxies.Delete(req.Name)
-			log.Printf("🔌 代理隧道已关闭: %s (原因: %s)", req.Name, req.Reason)
+			log.Printf("🔌 Proxy tunnel closed: %s (reason: %s)", req.Name, req.Reason)
 
 		default:
-			log.Printf("📩 收到控制消息: %s", msg.Type)
+			log.Printf("📩 Received control message: %s", msg.Type)
 		}
 	}
 }
 
-// checkBackendHealth 验证 backend 服务是否可达
+// checkBackendHealth verifies whether the backend service is reachable.
 // proxyType: tcp/udp/http
-// backendAddr: 格式为 "ip:port"
+// backendAddr: format "ip:port"
 func checkBackendHealth(proxyType, backendAddr string) error {
 	var network string
 	switch proxyType {

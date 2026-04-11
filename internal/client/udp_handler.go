@@ -11,23 +11,23 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-// handleUDPStream 处理 UDP 类型的 yamux stream：
-// 1. Dial 本地 UDP 服务
-// 2. 使用 UDPRelay 在 stream（帧化）和 localConn（原始 UDP）之间转发
+// handleUDPStream handles a UDP yamux stream:
+// 1. Dial the local UDP service
+// 2. Use UDPRelay to forward between the stream (framed) and localConn (raw UDP)
 //
-// 每个 stream 代表一个 UDP 虚拟会话（由外部 srcAddr 标识），
-// Server 保证同一 srcAddr 的报文走同一个 stream。
+// Each stream represents a virtual UDP session identified by the external srcAddr.
+// The server guarantees that packets from the same srcAddr use the same stream.
 func (c *Client) handleUDPStream(stream *yamux.Stream, cfg protocol.ProxyNewRequest) {
 	defer stream.Close()
 
 	localAddr := net.JoinHostPort(cfg.LocalIP, fmt.Sprintf("%d", cfg.LocalPort))
 	localConn, err := net.Dial("udp", localAddr)
 	if err != nil {
-		log.Printf("⚠️ UDP 连接本地服务失败 [%s → %s]: %v", cfg.Name, localAddr, err)
+		log.Printf("⚠️ Failed to connect UDP local service [%s → %s]: %v", cfg.Name, localAddr, err)
 		return
 	}
 	defer localConn.Close()
 
-	// 双向转发：stream（帧化）↔ localConn（原始 UDP）
+	// Relay traffic in both directions: stream (framed) ↔ localConn (raw UDP)
 	mux.UDPRelay(stream, localConn)
 }

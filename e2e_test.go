@@ -33,8 +33,7 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 	ln.Close() // 释放端口给 Server
 
 	tmpDir := t.TempDir()
-	tunnelStorePath := filepath.Join(tmpDir, "tunnels.json")
-	adminStore, err := server.NewAdminStore(filepath.Join(tmpDir, "admin.json"))
+	adminStore, err := server.NewAdminStore(filepath.Join(tmpDir, "server", "admin.json"))
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
@@ -46,7 +45,7 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 	}
 
 	srv := server.New(serverPort)
-	srv.StorePath = tunnelStorePath
+	srv.DataDir = tmpDir
 
 	go func() {
 		err := srv.Start()
@@ -70,7 +69,7 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 
 	// 3. 启动 Client，并自动请求创建一个代理
 	c := client.New(serverWsAddr, "e2e-key")
-	c.StatePath = filepath.Join(tmpDir, "client.json")
+	c.DataDir = tmpDir
 	c.DisableReconnect = true
 	proxyName := "e2e-tunnel"
 

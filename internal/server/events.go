@@ -9,36 +9,36 @@ import (
 	"time"
 )
 
-// SSEEvent 代表一个 SSE 事件
+// SSEEvent represents a single SSE event.
 type SSEEvent struct {
 	Type string // "ready" | "snapshot" | "stats_update" | "client_online" | "client_offline" | "tunnel_changed"
-	Data string // JSON 字符串
+	Data string // JSON string
 }
 
-// EventBus 管理 SSE 订阅者的注册和广播
+// EventBus manages SSE subscriber registration and broadcasting.
 type EventBus struct {
 	mu          sync.RWMutex
 	subscribers map[chan SSEEvent]struct{}
 }
 
-// NewEventBus 创建一个新的事件总线
+// NewEventBus creates a new event bus.
 func NewEventBus() *EventBus {
 	return &EventBus{
 		subscribers: make(map[chan SSEEvent]struct{}),
 	}
 }
 
-// Subscribe 注册一个新的订阅者，返回事件通道
+// Subscribe registers a new subscriber and returns its event channel.
 func (eb *EventBus) Subscribe() chan SSEEvent {
-	ch := make(chan SSEEvent, 64) // 缓冲 64 条事件，防止慢消费者阻塞
+	ch := make(chan SSEEvent, 64) // Buffer 64 events to avoid blocking on slow consumers.
 	eb.mu.Lock()
 	eb.subscribers[ch] = struct{}{}
 	eb.mu.Unlock()
 	return ch
 }
 
-// Unsubscribe 移除订阅者并关闭通道
-// 如果通道已被 Close() 关闭并移除，则为 no-op
+// Unsubscribe removes a subscriber and closes its channel.
+// If the channel was already closed and removed by Close(), this is a no-op.
 func (eb *EventBus) Unsubscribe(ch chan SSEEvent) {
 	eb.mu.Lock()
 	_, exists := eb.subscribers[ch]
@@ -51,7 +51,7 @@ func (eb *EventBus) Unsubscribe(ch chan SSEEvent) {
 	}
 }
 
-// Close 关闭事件总线，断开所有订阅者 (P15)
+// Close shuts down the event bus and disconnects all subscribers. (P15)
 func (eb *EventBus) Close() {
 	eb.mu.Lock()
 	defer eb.mu.Unlock()
@@ -61,7 +61,8 @@ func (eb *EventBus) Close() {
 	}
 }
 
-// Publish 向所有订阅者广播事件（非阻塞，满则丢弃）
+// Publish broadcasts an event to all subscribers.
+// It is non-blocking and drops the event if a subscriber channel is full.
 func (eb *EventBus) Publish(event SSEEvent) {
 	eb.mu.RLock()
 	defer eb.mu.RUnlock()
@@ -69,17 +70,17 @@ func (eb *EventBus) Publish(event SSEEvent) {
 		select {
 		case ch <- event:
 		default:
-			// 通道已满，丢弃事件防止阻塞
-			log.Printf("⚠️ SSE 订阅者通道已满，丢弃事件: %s", event.Type)
+			// Drop the event to avoid blocking if the channel is full.
+			log.Printf("⚠️ SSE subscriber channel is full, dropping event: %s", event.Type)
 		}
 	}
 }
 
-// PublishJSON 序列化 data 为 JSON 并广播
+// PublishJSON marshals data to JSON and broadcasts it.
 func (eb *EventBus) PublishJSON(eventType string, data any) {
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("⚠️ SSE 事件序列化失败: %v", err)
+		log.Printf("⚠️ Failed to marshal SSE event: %v", err)
 		return
 	}
 	eb.Publish(SSEEvent{Type: eventType, Data: string(jsonBytes)})
@@ -98,7 +99,7 @@ func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string
 	return nil
 }
 
-// handleSSE 处理 SSE 连接 — GET /api/events
+// handleSSE handles SSE connections — GET /api/events.
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -116,14 +117,14 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	ch := s.events.Subscribe()
 	defer s.events.Unsubscribe(ch)
 
-	log.Printf("📡 SSE 客户端已连接: %s", r.RemoteAddr)
+	log.Printf("📡 SSE client connected: %s", r.RemoteAddr)
 
 	if err := writeSSEEvent(w, flusher, "ready", map[string]any{}); err != nil {
-		log.Printf("⚠️ SSE 初始握手写入失败: %v", err)
+		log.Printf("⚠️ Failed to write initial SSE handshake: %v", err)
 		return
 	}
 	if err := writeSSEEvent(w, flusher, "snapshot", s.collectSnapshot()); err != nil {
-		log.Printf("⚠️ SSE 初始快照写入失败: %v", err)
+		log.Printf("⚠️ Failed to write initial SSE snapshot: %v", err)
 		return
 	}
 
@@ -139,23 +140,23 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, event.Data); err != nil {
-				log.Printf("⚠️ SSE 事件写入失败: %v", err)
+				log.Printf("⚠️ Failed to write SSE event: %v", err)
 				return
 			}
 			flusher.Flush()
 		case <-snapshotTicker.C:
 			if err := writeSSEEvent(w, flusher, "snapshot", s.collectSnapshot()); err != nil {
-				log.Printf("⚠️ SSE 快照写入失败: %v", err)
+				log.Printf("⚠️ Failed to write SSE snapshot: %v", err)
 				return
 			}
 		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
-				log.Printf("⚠️ SSE 心跳写入失败: %v", err)
+				log.Printf("⚠️ Failed to write SSE heartbeat: %v", err)
 				return
 			}
 			flusher.Flush()
 		case <-r.Context().Done():
-			log.Printf("📡 SSE 客户端已断开: %s", r.RemoteAddr)
+			log.Printf("📡 SSE client disconnected: %s", r.RemoteAddr)
 			return
 		}
 	}

@@ -64,7 +64,7 @@ func setupManagedUDPErrorTestTunnel(t *testing.T, tunnelName string) (*Server, *
 	s := New(0)
 	store, err := NewTunnelStore(fmt.Sprintf("%s/%s.json", t.TempDir(), tunnelName))
 	if err != nil {
-		t.Fatalf("创建 TunnelStore 失败: %v", err)
+		t.Fatalf("Failed to create TunnelStore: %v", err)
 	}
 	s.store = store
 
@@ -89,7 +89,7 @@ func setupManagedUDPErrorTestTunnel(t *testing.T, tunnelName string) (*Server, *
 	}
 	setStoredTunnelStates(&stored, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 	if err := store.AddTunnel(stored); err != nil {
-		t.Fatalf("添加持久化隧道失败: %v", err)
+		t.Fatalf("Failed to add persistent tunnel: %v", err)
 	}
 
 	tunnel := &ProxyTunnel{
@@ -115,7 +115,7 @@ func attachUDPTestDataSessionSink(t *testing.T, client *ClientConn) func() {
 	}()
 	clientSession, err := mux.NewClientSession(pipeC, mux.DefaultConfig())
 	if err != nil {
-		t.Fatalf("创建 client yamux session 失败: %v", err)
+		t.Fatalf("Failed to create client yamux session: %v", err)
 	}
 	wg.Wait()
 
@@ -164,17 +164,17 @@ func reserveUDPPort(t *testing.T) int {
 
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("预留 UDP 端口失败: %v", err)
+		t.Fatalf("Failed to reserve UDP port: %v", err)
 	}
 	port := conn.LocalAddr().(*net.UDPAddr).Port
 	if err := conn.Close(); err != nil {
-		t.Fatalf("关闭预留 UDP 端口失败: %v", err)
+		t.Fatalf("Failed to close reserved UDP port: %v", err)
 	}
 	return port
 }
 
 // ============================================================
-// Server 端 UDP 代理测试
+// Server-side UDP proxy tests
 // ============================================================
 
 func TestStartProxy_UDP_Success(t *testing.T) {
@@ -186,7 +186,7 @@ func TestStartProxy_UDP_Success(t *testing.T) {
 	}
 	s.clients.Store(clientID, client)
 
-	// 构建 yamux session
+	// Build the yamux session
 	cConn, sConn := net.Pipe()
 	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
 	client.dataSession = sSession
@@ -200,40 +200,40 @@ func TestStartProxy_UDP_Success(t *testing.T) {
 	}
 
 	if err := s.StartProxy(client, req); err != nil {
-		t.Fatalf("StartProxy UDP 失败: %v", err)
+		t.Fatalf("StartProxy UDP failed: %v", err)
 	}
 
-	// 检查内部状态
+	// Check internal state
 	client.proxyMu.RLock()
 	tunnel, exists := client.proxies[req.Name]
 	client.proxyMu.RUnlock()
 
 	if !exists {
-		t.Fatal("StartProxy 成功但没有将隧道加入 map")
+		t.Fatal("StartProxy succeeded but did not add the tunnel to the map")
 	}
 	if tunnel.Config.RemotePort <= 0 {
-		t.Errorf("分配的端口无效: %d", tunnel.Config.RemotePort)
+		t.Errorf("Allocated port is invalid: %d", tunnel.Config.RemotePort)
 	}
 	if tunnel.Config.Type != protocol.ProxyTypeUDP {
-		t.Errorf("类型期望 udp，得到 %s", tunnel.Config.Type)
+		t.Errorf("Expected type udp, got %s", tunnel.Config.Type)
 	}
 	if tunnel.UDPState == nil {
-		t.Fatal("UDP 隧道的 UDPState 不应为 nil")
+		t.Fatal("The UDPState of a UDP tunnel should not be nil")
 	}
 	if tunnel.Listener != nil {
-		t.Error("UDP 隧道不应有 TCP Listener")
+		t.Error("A UDP tunnel should not have a TCP listener")
 	}
 
-	// 验证 UDP 端口确实在监听：发一个 UDP 报文不应报错
+	// Verify the UDP port is actually listening: sending a UDP packet should not error
 	testConn, err := net.DialTimeout("udp", fmt.Sprintf("127.0.0.1:%d", tunnel.Config.RemotePort), 100*time.Millisecond)
 	if err != nil {
-		t.Errorf("无法连接 UDP 端口: %v", err)
+		t.Errorf("Unable to connect to the UDP port: %v", err)
 	} else {
 		testConn.Write([]byte("probe"))
 		testConn.Close()
 	}
 
-	// 清理
+	// Cleanup
 	s.StopAllProxies(client)
 	cConn.Close()
 	sConn.Close()
@@ -264,18 +264,18 @@ func TestStopProxy_UDP(t *testing.T) {
 	port := tunnel.Config.RemotePort
 	client.proxyMu.RUnlock()
 
-	// 停止
+	// Stop
 	if err := s.StopProxy(client, req.Name); err != nil {
-		t.Fatalf("StopProxy UDP 出错: %v", err)
+		t.Fatalf("StopProxy UDP failed: %v", err)
 	}
 
-	// 等待端口释放
+	// Wait for the port to be released
 	time.Sleep(50 * time.Millisecond)
 
-	// UDP 端口已关闭：重新 ListenPacket 应该能成功（说明旧的已释放）
+	// UDP port is closed: re-listening with ListenPacket should succeed (meaning the old one was released)
 	probe, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		t.Errorf("UDP 端口 %d 未被释放: %v", port, err)
+		t.Errorf("UDP port %d was not released: %v", port, err)
 	} else {
 		probe.Close()
 	}
@@ -284,9 +284,9 @@ func TestStopProxy_UDP(t *testing.T) {
 	sConn.Close()
 }
 
-func TestPauseResumeProxy_UDP(t *testing.T) {
+func TestCloseAndReopenProxyRuntime_UDP(t *testing.T) {
 	s := New(0)
-	clientID := "udp-pause-client"
+	clientID := "udp-stop-client"
 	client := &ClientConn{
 		ID:      clientID,
 		proxies: make(map[string]*ProxyTunnel),
@@ -298,7 +298,7 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	client.dataSession = sSession
 
 	req := protocol.ProxyNewRequest{
-		Name:       "udp-pause-test",
+		Name:       "udp-stop-test",
 		Type:       protocol.ProxyTypeUDP,
 		RemotePort: reserveUDPPort(t),
 	}
@@ -308,9 +308,9 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	port := client.proxies[req.Name].Config.RemotePort
 	client.proxyMu.RUnlock()
 
-	// 暂停
-	if err := s.PauseProxy(client, req.Name); err != nil {
-		t.Fatalf("PauseProxy UDP 出错: %v", err)
+	// Close runtime resources without changing business state.
+	if err := s.CloseProxyRuntime(client, req.Name); err != nil {
+		t.Fatalf("CloseProxyRuntime UDP failed: %v", err)
 	}
 
 	client.proxyMu.RLock()
@@ -318,15 +318,15 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	runtimeState := client.proxies[req.Name].Config.RuntimeState
 	client.proxyMu.RUnlock()
 	if desiredState != protocol.ProxyDesiredStateRunning || runtimeState != protocol.ProxyRuntimeStateExposed {
-		t.Errorf("PauseProxy 仅关闭运行时资源，状态应保持 running/exposed，得到 %s/%s", desiredState, runtimeState)
+		t.Errorf("CloseProxyRuntime only closes runtime resources; the state should remain running/exposed, got %s/%s", desiredState, runtimeState)
 	}
 
-	// 等待端口释放
+	// Wait for the port to be released
 	time.Sleep(50 * time.Millisecond)
 
-	// 恢复
-	if err := s.ResumeProxy(client, req.Name); err != nil {
-		t.Fatalf("ResumeProxy UDP 出错: %v", err)
+	// Reopen runtime resources.
+	if err := s.ReopenProxyRuntime(client, req.Name); err != nil {
+		t.Fatalf("ReopenProxyRuntime UDP failed: %v", err)
 	}
 
 	client.proxyMu.RLock()
@@ -336,10 +336,10 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 	client.proxyMu.RUnlock()
 
 	if desiredState != protocol.ProxyDesiredStateRunning || runtimeState != protocol.ProxyRuntimeStateExposed {
-		t.Errorf("恢复后状态期望 running/exposed，得到 %s/%s", desiredState, runtimeState)
+		t.Errorf("After resuming, expected running/exposed, got %s/%s", desiredState, runtimeState)
 	}
 	if newPort != port {
-		t.Errorf("恢复后端口期望 %d，得到 %d", port, newPort)
+		t.Errorf("After resuming, expected port %d, got %d", port, newPort)
 	}
 
 	s.StopAllProxies(client)
@@ -348,7 +348,7 @@ func TestPauseResumeProxy_UDP(t *testing.T) {
 }
 
 // ============================================================
-// UDP 代理端到端转发测试（模拟完整 yamux 通道）
+// UDP proxy end-to-end forwarding tests (simulate a full yamux channel)
 // ============================================================
 
 func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
@@ -360,10 +360,10 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	}
 	s.clients.Store(clientID, client)
 
-	// 1. 启动本地 UDP echo 服务（模拟内网服务）
+	// 1. Start a local UDP echo service (simulate an internal service)
 	echoConn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("启动 echo 服务失败: %v", err)
+		t.Fatalf("Failed to start echo service: %v", err)
 	}
 	defer echoConn.Close()
 	echoPort := echoConn.LocalAddr().(*net.UDPAddr).Port
@@ -379,7 +379,7 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 		}
 	}()
 
-	// 2. 构建 yamux session（模拟 Server ↔ Client 数据通道）
+	// 2. Build the yamux session (simulate the Server ↔ Client data channel)
 	pipeC, pipeS := net.Pipe()
 	defer pipeC.Close()
 	defer pipeS.Close()
@@ -398,7 +398,7 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	defer serverSession.Close()
 	defer clientSession.Close()
 
-	// 3. 启动 Client 侧 stream 接收循环（模拟 Client 的 acceptStreamLoop）
+	// 3. Start the client-side stream accept loop (simulate the Client acceptStreamLoop)
 	go func() {
 		for {
 			stream, err := clientSession.AcceptStream()
@@ -408,14 +408,14 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 			go func(s *yamux.Stream) {
 				defer s.Close()
 
-				// 读取 StreamHeader
+				// Read the StreamHeader
 				var lenBuf [2]byte
 				s.Read(lenBuf[:])
 				nameLen := int(lenBuf[0])<<8 | int(lenBuf[1])
 				nameBuf := make([]byte, nameLen)
 				s.Read(nameBuf)
 
-				// 连接本地 UDP 服务（echo）
+				// Connect to the local UDP service (echo)
 				localConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", echoPort))
 				if err != nil {
 					return
@@ -427,7 +427,7 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 		}
 	}()
 
-	// 4. 启动 UDP 代理
+	// 4. Start the UDP proxy
 	tunnelName := "udp-e2e-tunnel"
 	req := protocol.ProxyNewRequest{
 		Name:       tunnelName,
@@ -437,7 +437,7 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 		RemotePort: reserveUDPPort(t),
 	}
 	if err := s.StartProxy(client, req); err != nil {
-		t.Fatalf("启动 UDP 代理失败: %v", err)
+		t.Fatalf("Failed to start UDP proxy: %v", err)
 	}
 	defer s.StopProxy(client, tunnelName)
 
@@ -445,28 +445,28 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	remotePort := client.proxies[tunnelName].Config.RemotePort
 	client.proxyMu.RUnlock()
 
-	// 5. 模拟外部 UDP 客户端：发消息并等待 echo 回复
+	// 5. Simulate an external UDP client: send a message and wait for the echo reply
 	extConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", remotePort))
 	if err != nil {
-		t.Fatalf("外部客户端连接失败: %v", err)
+		t.Fatalf("External client connection failed: %v", err)
 	}
 	defer extConn.Close()
 
 	testMsg := []byte("hello from external client")
 	if _, err := extConn.Write(testMsg); err != nil {
-		t.Fatalf("发送 UDP 报文失败: %v", err)
+		t.Fatalf("Failed to send UDP packet: %v", err)
 	}
 
-	// 读取 echo 回复
+	// Read the echo reply
 	buf := make([]byte, 65535)
 	extConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	n, err := extConn.Read(buf)
 	if err != nil {
-		t.Fatalf("读取回复超时: %v", err)
+		t.Fatalf("Timed out while reading the reply: %v", err)
 	}
 
 	if string(buf[:n]) != string(testMsg) {
-		t.Errorf("回复数据不匹配: 期望 %q，得到 %q", testMsg, buf[:n])
+		t.Errorf("Reply data mismatch: expected %q, got %q", testMsg, buf[:n])
 	}
 }
 
@@ -479,7 +479,7 @@ func TestUDPProxy_MultipleSessions(t *testing.T) {
 	}
 	s.clients.Store(clientID, client)
 
-	// 启动 UDP echo 服务
+	// Start the UDP echo service
 	echoConn, _ := net.ListenPacket("udp", "127.0.0.1:0")
 	defer echoConn.Close()
 	echoPort := echoConn.LocalAddr().(*net.UDPAddr).Port
@@ -495,7 +495,7 @@ func TestUDPProxy_MultipleSessions(t *testing.T) {
 		}
 	}()
 
-	// 构建 yamux
+	// Build yamux
 	pipeC, pipeS := net.Pipe()
 	defer pipeC.Close()
 	defer pipeS.Close()
@@ -514,7 +514,7 @@ func TestUDPProxy_MultipleSessions(t *testing.T) {
 	defer serverSession.Close()
 	defer clientSession.Close()
 
-	// Client 侧 stream 接收
+	// Client-side stream accept loop
 	go func() {
 		for {
 			stream, err := clientSession.AcceptStream()
@@ -535,7 +535,7 @@ func TestUDPProxy_MultipleSessions(t *testing.T) {
 		}
 	}()
 
-	// 启动 UDP 代理
+	// Start the UDP proxy
 	req := protocol.ProxyNewRequest{
 		Name:       "udp-multi-tunnel",
 		Type:       protocol.ProxyTypeUDP,
@@ -548,7 +548,7 @@ func TestUDPProxy_MultipleSessions(t *testing.T) {
 	remotePort := client.proxies[req.Name].Config.RemotePort
 	client.proxyMu.RUnlock()
 
-	// 使用多个本地端口模拟多个外部客户端（不同 srcAddr）
+	// Use multiple local ports to simulate multiple external clients (different srcAddr)
 	const numClients = 3
 	var clientWg sync.WaitGroup
 	errors := make(chan error, numClients)
@@ -576,7 +576,7 @@ func TestUDPProxy_MultipleSessions(t *testing.T) {
 				return
 			}
 			if string(buf[:n]) != msg {
-				errors <- fmt.Errorf("client #%d: 期望 %q，得到 %q", idx, msg, buf[:n])
+				errors <- fmt.Errorf("client #%d: expected %q, got %q", idx, msg, buf[:n])
 			}
 		}(i)
 	}
@@ -605,21 +605,21 @@ func TestUDPReadLoop_UnexpectedReadError_MarksTunnelErrorAndPersistsState(t *tes
 	s.udpReadLoop(client, tunnel, state)
 
 	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("异常退出后状态期望 running/error，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
+		t.Fatalf("After an unexpected exit, expected running/error state, got %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 	if !strings.Contains(tunnel.Config.Error, "boom") {
-		t.Fatalf("异常退出后 error 期望包含 boom，得到 %q", tunnel.Config.Error)
+		t.Fatalf("After an unexpected exit, expected the error to contain boom, got %q", tunnel.Config.Error)
 	}
 
 	stored, exists := store.GetTunnel(client.ID, tunnel.Config.Name)
 	if !exists {
-		t.Fatal("store 中应保留该 UDP 隧道")
+		t.Fatal("The UDP tunnel should be retained in the store")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("store 状态期望 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("Expected store state running/error, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if !strings.Contains(stored.Error, "boom") {
-		t.Fatalf("store error 期望包含 boom，得到 %q", stored.Error)
+		t.Fatalf("Expected the store error to contain boom, got %q", stored.Error)
 	}
 }
 
@@ -653,25 +653,25 @@ func TestUDPReadLoop_StateClose_DoesNotMarkTunnelError(t *testing.T) {
 	select {
 	case <-loopDone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("udpReadLoop 在 state.Close() 后未退出")
+		t.Fatal("udpReadLoop did not exit after state.Close()")
 	}
 
 	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("正常关闭后状态应保持 running/exposed，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
+		t.Fatalf("After a normal shutdown, the state should remain running/exposed, got %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 	if tunnel.Config.Error != "" {
-		t.Fatalf("正常关闭后 error 应为空，得到 %q", tunnel.Config.Error)
+		t.Fatalf("After a normal shutdown, the error should be empty, got %q", tunnel.Config.Error)
 	}
 
 	stored, exists := store.GetTunnel(client.ID, tunnel.Config.Name)
 	if !exists {
-		t.Fatal("store 中应保留该 UDP 隧道")
+		t.Fatal("The UDP tunnel should be retained in the store")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("正常关闭后 store 状态应保持 running/exposed，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("After a normal shutdown, the store state should remain running/exposed, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Error != "" {
-		t.Fatalf("正常关闭后 store error 应为空，得到 %q", stored.Error)
+		t.Fatalf("After a normal shutdown, the store error should be empty, got %q", stored.Error)
 	}
 }
 
@@ -693,21 +693,21 @@ func TestUDPReadLoop_UnexpectedReadError_DoesNotPoisonReplacedRuntime(t *testing
 	s.udpReadLoop(client, tunnel, staleState)
 
 	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("旧 runtime 异常不应污染当前状态，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
+		t.Fatalf("A stale runtime error should not contaminate the current state, got %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
 	if tunnel.Config.Error != "" {
-		t.Fatalf("旧 runtime 异常不应写入 error，得到 %q", tunnel.Config.Error)
+		t.Fatalf("A stale runtime error should not be written to error, got %q", tunnel.Config.Error)
 	}
 
 	stored, exists := store.GetTunnel(client.ID, tunnel.Config.Name)
 	if !exists {
-		t.Fatal("store 中应保留该 UDP 隧道")
+		t.Fatal("The UDP tunnel should be retained in the store")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateExposed {
-		t.Fatalf("旧 runtime 异常不应污染 store 状态，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("A stale runtime error should not contaminate the store state, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 	if stored.Error != "" {
-		t.Fatalf("旧 runtime 异常不应写入 store error，得到 %q", stored.Error)
+		t.Fatalf("A stale runtime error should not be written to the store error, got %q", stored.Error)
 	}
 }
 
@@ -734,21 +734,21 @@ func TestUDPReadLoop_OpenStreamFailureMarksTunnelErrorAndPersistsState(t *testin
 	s.udpReadLoop(client, tunnel, state)
 
 	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("OpenStream 失败后状态期望 running/error，得到 %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
+		t.Fatalf("Expected running/error state after OpenStream failure, got %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 	}
-	if !strings.Contains(tunnel.Config.Error, "数据通道未建立") {
-		t.Fatalf("OpenStream 失败后 error 期望包含数据通道原因，得到 %q", tunnel.Config.Error)
+	if !strings.Contains(tunnel.Config.Error, "data channel not established") {
+		t.Fatalf("Expected the error to contain the data channel reason after OpenStream failure, got %q", tunnel.Config.Error)
 	}
 
 	stored, exists := store.GetTunnel(client.ID, tunnel.Config.Name)
 	if !exists {
-		t.Fatal("store 中应保留该 UDP 隧道")
+		t.Fatal("The UDP tunnel should be retained in the store")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateRunning || stored.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("store 状态期望 running/error，得到 %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("Expected store state running/error, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
-	if !strings.Contains(stored.Error, "数据通道未建立") {
-		t.Fatalf("store error 期望包含数据通道原因，得到 %q", stored.Error)
+	if !strings.Contains(stored.Error, "data channel not established") {
+		t.Fatalf("Expected the store error to contain the data channel reason, got %q", stored.Error)
 	}
 }
 
@@ -762,17 +762,17 @@ func TestUDPProxyState_RemoveSession_DecrementsPerIPCount(t *testing.T) {
 	}
 
 	if _, added := state.storeSession(key, sess); !added {
-		t.Fatal("首次 storeSession 应成功")
+		t.Fatal("The first storeSession call should succeed")
 	}
 	if got := state.sessionCountForIP("203.0.113.10"); got != 1 {
-		t.Fatalf("单 IP 会话数期望 1，得到 %d", got)
+		t.Fatalf("Expected 1 session for the single IP, got %d", got)
 	}
 
 	if removed := state.removeSession(key); !removed {
-		t.Fatal("removeSession 应返回 true")
+		t.Fatal("removeSession should return true")
 	}
 	if got := state.sessionCountForIP("203.0.113.10"); got != 0 {
-		t.Fatalf("removeSession 后单 IP 会话数期望 0，得到 %d", got)
+		t.Fatalf("After removeSession, the single-IP session count should be 0, got %d", got)
 	}
 }
 
@@ -792,7 +792,7 @@ func TestUDPReadLoop_PerIPSessionLimit_DropsNewSessionFromSameIP(t *testing.T) {
 			ipKey:   sameIP,
 			done:    make(chan struct{}),
 		}); !added {
-			t.Fatalf("预填充会话 %s 失败", key)
+			t.Fatalf("Failed to prefill session %s", key)
 		}
 	}
 
@@ -825,12 +825,12 @@ func TestUDPReadLoop_PerIPSessionLimit_DropsNewSessionFromSameIP(t *testing.T) {
 	if _, exists := state.sessions.Load(newKey); exists {
 		state.Close()
 		<-loopDone
-		t.Fatal("同一 IP 超过上限时不应创建新会话")
+		t.Fatal("No new session should be created when the same IP exceeds the limit")
 	}
 	if got := state.sessionCountForIP(sameIP); got != MaxUDPSessionsPerIP {
 		state.Close()
 		<-loopDone
-		t.Fatalf("同一 IP 会话数应保持 %d，得到 %d", MaxUDPSessionsPerIP, got)
+		t.Fatalf("The session count for the same IP should remain %d, got %d", MaxUDPSessionsPerIP, got)
 	}
 
 	state.Close()
@@ -849,23 +849,23 @@ func TestUDPProxyState_CanCreateSessionForIP_BlocksOnlySaturatedIP(t *testing.T)
 			ipKey:   fullIP,
 			done:    make(chan struct{}),
 		}); !added {
-			t.Fatalf("预填充会话 %s 失败", key)
+			t.Fatalf("Failed to prefill session %s", key)
 		}
 	}
 
 	if state.canCreateSessionForIP(fullIP) {
-		t.Fatal("已打满的 IP 不应继续创建新会话")
+		t.Fatal("An IP that has reached its limit should not create new sessions")
 	}
 	if !state.canCreateSessionForIP(otherIP) {
-		t.Fatal("其他 IP 不应被已打满的单 IP 上限误伤")
+		t.Fatal("Other IPs should not be affected by the saturated single-IP limit")
 	}
 }
 
 // ============================================================
-// sessionCount 正确性测试
+// sessionCount correctness tests
 // ============================================================
 
-// TestRemoveSession_Idempotent 验证 removeSession 重复调用只递减一次计数。
+// TestRemoveSession_Idempotent verifies that repeated removeSession calls decrement the count only once.
 func TestRemoveSession_Idempotent(t *testing.T) {
 	state := &UDPProxyState{
 		done: make(chan struct{}),
@@ -876,35 +876,35 @@ func TestRemoveSession_Idempotent(t *testing.T) {
 	state.sessions.Store(key, sess)
 	state.sessionCount.Store(1)
 
-	// 第一次调用：应该成功移除并递减
+	// First call: should remove successfully and decrement
 	if removed := state.removeSession(key); !removed {
-		t.Error("第一次调用 removeSession 应返回 true")
+		t.Error("The first removeSession call should return true")
 	}
 	if got := state.sessionCount.Load(); got != 0 {
-		t.Errorf("第一次调用后 sessionCount 应为 0，实际为 %d", got)
+		t.Errorf("After the first call, sessionCount should be 0, got %d", got)
 	}
 
-	// 第二次调用：key 已不存在，应该是空操作
+	// Second call: the key no longer exists, so it should be a no-op
 	if removed := state.removeSession(key); removed {
-		t.Error("第二次调用 removeSession 应返回 false（key 已不存在）")
+		t.Error("The second removeSession call should return false (the key no longer exists)")
 	}
 	if got := state.sessionCount.Load(); got != 0 {
-		t.Errorf("第二次调用后 sessionCount 应仍为 0，实际为 %d（发生了双重递减）", got)
+		t.Errorf("After the second call, sessionCount should still be 0, got %d (double decrement occurred)", got)
 	}
 }
 
-// TestUDPProxy_SessionCount_AfterCleanup 验证 Close() 后 sessionCount 不会变为负数。
+// TestUDPProxy_SessionCount_AfterCleanup verifies that sessionCount does not become negative after Close().
 func TestUDPProxy_SessionCount_AfterCleanup(t *testing.T) {
 	pipeC, pipeS := net.Pipe()
 	defer pipeC.Close()
 	defer pipeS.Close()
 
-	// 构建一个最小可用的 UDPProxyState（不需要真实 packetConn）
+	// Build a minimal usable UDPProxyState (no real packetConn needed)
 	state := &UDPProxyState{
 		done: make(chan struct{}),
 	}
 
-	// 手动注入多个已关闭的 stream 会话（模拟活跃会话）
+	// Manually inject multiple closed stream sessions (simulate active sessions)
 	const numSessions = 3
 	for i := 0; i < numSessions; i++ {
 		c1, c2 := net.Pipe()
@@ -917,7 +917,7 @@ func TestUDPProxy_SessionCount_AfterCleanup(t *testing.T) {
 		sess.Touch()
 		state.sessions.Store(key, sess)
 		state.sessionCount.Add(1)
-		// 启动 reverse goroutine，它持有 c1，当 sess.Close() 时会退出
+		// Start the reverse goroutine; it holds c1 and exits when sess.Close() runs
 		go func(s *UDPSession) {
 			buf := make([]byte, 1024)
 			s.stream.Read(buf) //nolint
@@ -926,13 +926,13 @@ func TestUDPProxy_SessionCount_AfterCleanup(t *testing.T) {
 	}
 
 	if got := state.sessionCount.Load(); got != numSessions {
-		t.Fatalf("初始 sessionCount 应为 %d，实际为 %d", numSessions, got)
+		t.Fatalf("The initial sessionCount should be %d, got %d", numSessions, got)
 	}
 
-	// 触发 Close()
+	// Trigger Close()
 	state.Close()
 
-	// 轮询等待 sessionCount 归零（最多 2s），不依赖 goroutine 退出信号
+	// Poll until sessionCount reaches zero (up to 2s), without relying on goroutine exit signals
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if state.sessionCount.Load() == 0 {
@@ -942,17 +942,17 @@ func TestUDPProxy_SessionCount_AfterCleanup(t *testing.T) {
 	}
 
 	if got := state.sessionCount.Load(); got < 0 {
-		t.Errorf("Close() 后 sessionCount 不应为负数，实际为 %d", got)
+		t.Errorf("After Close(), sessionCount should not be negative, got %d", got)
 	}
 }
 
-// TestUDPReaper_NoDoubleDecrement 验证 udpReaper 与 removeSession 并发时 sessionCount 不双减。
+// TestUDPReaper_NoDoubleDecrement verifies that sessionCount is not decremented twice when udpReaper and removeSession run concurrently.
 func TestUDPReaper_NoDoubleDecrement(t *testing.T) {
 	state := &UDPProxyState{
 		done: make(chan struct{}),
 	}
 
-	// 创建一对 pipe 作为 stream
+	// Create a pipe pair as the stream
 	c1, c2 := net.Pipe()
 	defer c2.Close()
 
@@ -966,14 +966,14 @@ func TestUDPReaper_NoDoubleDecrement(t *testing.T) {
 	state.sessions.Store(key, sess)
 	state.sessionCount.Store(1)
 
-	// 模拟 udpReaper 超时清理
+	// Simulate udpReaper timeout cleanup
 	sess.Close()
 	state.removeSession(key)
 
-	// 同时模拟 udpSessionReverse defer 也触发 removeSession（竞争场景）
+	// Simultaneously simulate udpSessionReverse defer also triggering removeSession (race scenario)
 	state.removeSession(key)
 
 	if got := state.sessionCount.Load(); got != 0 {
-		t.Errorf("并发双次 removeSession 后 sessionCount 应为 0，实际为 %d（发生了双重递减）", got)
+		t.Errorf("After concurrent double removeSession calls, sessionCount should be 0, got %d (double decrement occurred)", got)
 	}
 }

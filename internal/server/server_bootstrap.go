@@ -2,65 +2,62 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
 
+	"netsgo/pkg/datadir"
 	"netsgo/web"
 )
 
 func (s *Server) initStore() error {
-	path := s.StorePath
-	if path == "" {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, ".netsgo", "tunnels.json")
-	}
+	path := s.getStorePath()
 	store, err := NewTunnelStore(path)
 	if err != nil {
 		return err
 	}
 	s.store = store
-	log.Printf("📦 隧道配置存储: %s", path)
+	log.Printf("📦 Tunnel configuration store: %s", path)
 
-	adminPath := s.StorePath
-	if adminPath == "" {
-		home, _ := os.UserHomeDir()
-		adminPath = filepath.Join(home, ".netsgo", "admin.json")
-	} else {
-		adminPath = filepath.Join(filepath.Dir(s.StorePath), "admin.json")
-	}
+	adminPath := filepath.Join(s.serverDataDir(), "admin.json")
 	adminStore, err := NewAdminStore(adminPath)
 	if err != nil {
 		return err
 	}
 	s.auth.adminStore = adminStore
-	log.Printf("📦 系统管理存储: %s", adminPath)
+	log.Printf("📦 System admin store: %s", adminPath)
 
-	trafficPath := filepath.Join(s.getDataDir(), "traffic.json")
+	trafficPath := filepath.Join(s.serverDataDir(), "traffic.json")
 	trafficStore, err := NewTrafficStore(trafficPath)
 	if err != nil {
 		return err
 	}
 	s.trafficStore = trafficStore
-	log.Printf("📦 流量历史存储: %s", trafficPath)
+	log.Printf("📦 Traffic history store: %s", trafficPath)
 
 	return nil
 }
 
 func (s *Server) getDataDir() string {
-	if s.StorePath != "" {
-		return filepath.Dir(s.StorePath)
+	if s.DataDir != "" {
+		return s.DataDir
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".netsgo")
+	return datadir.DefaultDataDir()
+}
+
+func (s *Server) serverDataDir() string {
+	return filepath.Join(s.getDataDir(), "server")
+}
+
+func (s *Server) getStorePath() string {
+	if s.store != nil {
+		return s.store.path
+	}
+	return filepath.Join(s.serverDataDir(), "tunnels.json")
 }
 
 func (s *Server) Start() error {
@@ -70,7 +67,7 @@ func (s *Server) Start() error {
 
 	webFS, err := web.DistFS()
 	if err != nil {
-		return fmt.Errorf("加载前端资源失败: %w", err)
+		return fmt.Errorf("failed to load frontend assets: %w", err)
 	}
 	s.webFS = webFS
 	if s.webFS != nil {
@@ -78,42 +75,31 @@ func (s *Server) Start() error {
 	}
 
 	if web.IsDevMode() {
-		log.Printf("🔧 开发模式：前端资源未嵌入，请使用 cd web && bun run dev 独立启动前端")
+		log.Printf("🔧 Dev mode: frontend assets are not embedded; start the frontend separately with cd web && bun run dev")
 	} else if s.webFS != nil {
-		log.Printf("📦 前端资源已嵌入到二进制中")
+		log.Printf("📦 Frontend assets are embedded in the binary")
 	}
 
 	if err := s.initStore(); err != nil {
-		return fmt.Errorf("初始化隧道存储失败: %w", err)
+		return fmt.Errorf("failed to initialize tunnel store: %w", err)
 	}
 
 	if s.auth.adminStore != nil {
 		if err := s.auth.adminStore.CleanExpiredTokens(); err != nil {
-			return fmt.Errorf("清理过期 token 失败: %w", err)
+			return fmt.Errorf("failed to clean expired tokens: %w", err)
 		}
 		go s.tokenCleanupLoop()
 	}
 
 	if s.auth.adminStore != nil && !s.auth.adminStore.IsInitialized() {
-		if s.auth.setupToken == "" {
-			if s.SetupToken != "" {
-				s.auth.setupToken = s.SetupToken
-			} else {
-				buf := make([]byte, 32)
-				if _, err := rand.Read(buf); err != nil {
-					return fmt.Errorf("生成 Setup Token 失败: %w", err)
-				}
-				s.auth.setupToken = hex.EncodeToString(buf)
-			}
-		}
-		s.emitSetupTokenBanner(os.Stderr)
+		return fmt.Errorf("server is not initialized; use install or init flags to complete setup")
 	}
 
 	s.auth.initRateLimiters()
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Port))
 	if err != nil {
-		return fmt.Errorf("监听端口 %d 失败: %w", s.Port, err)
+		return fmt.Errorf("failed to listen on port %d: %w", s.Port, err)
 	}
 	s.listener = ln
 
@@ -128,32 +114,32 @@ func (s *Server) Start() error {
 		tlsConfig, fingerprint, err := s.TLS.loadOrBuildTLSConfig(dataDir)
 		if err != nil {
 			ln.Close()
-			return fmt.Errorf("TLS 初始化失败: %w", err)
+			return fmt.Errorf("TLS initialization failed: %w", err)
 		}
 		s.TLSFingerprint = fingerprint
 		s.tlsEnabled = true
 		serveLn = tls.NewListener(ln, tlsConfig)
 	}
 
-	log.Printf("🚀 NetsGo Server 已启动，监听 :%d", s.Port)
+	log.Printf("🚀 NetsGo Server started, listening on :%d", s.Port)
 	if s.tlsEnabled {
 		if s.webFS != nil {
-			log.Printf("📊 Web 面板: https://localhost:%d", s.Port)
+			log.Printf("📊 Web UI: https://localhost:%d", s.Port)
 		}
-		log.Printf("🔌 控制通道: wss://localhost:%d/ws/control", s.Port)
-		log.Printf("🔗 数据通道: wss://localhost:%d/ws/data", s.Port)
+		log.Printf("🔌 Control channel: wss://localhost:%d/ws/control", s.Port)
+		log.Printf("🔗 Data channel: wss://localhost:%d/ws/data", s.Port)
 	} else {
 		if s.webFS != nil {
-			log.Printf("📊 Web 面板: http://localhost:%d", s.Port)
+			log.Printf("📊 Web UI: http://localhost:%d", s.Port)
 		}
-		log.Printf("🔌 控制通道: ws://localhost:%d/ws/control", s.Port)
-		log.Printf("🔗 数据通道: ws://localhost:%d/ws/data", s.Port)
+		log.Printf("🔌 Control channel: ws://localhost:%d/ws/control", s.Port)
+		log.Printf("🔗 Data channel: ws://localhost:%d/ws/data", s.Port)
 	}
 
 	if s.TLS != nil && s.TLS.Mode == TLSModeOff && len(s.TLS.TrustedProxies) == 0 {
-		log.Printf("⚠️ TLS 模式为 off（反向代理模式），但未配置 --trusted-proxies")
-		log.Printf("⚠️ X-Forwarded-For 头将被忽略，速率限制将按代理 IP 而非真实客户端 IP 计算")
-		log.Printf("⚠️ 如果在反向代理后运行，请配置: --trusted-proxies 127.0.0.1/32")
+		log.Printf("⚠️ TLS mode is off (reverse proxy mode), but --trusted-proxies is not configured")
+		log.Printf("⚠️ The X-Forwarded-For header will be ignored, and rate limiting will use the proxy IP instead of the real client IP")
+		log.Printf("⚠️ If you are running behind a reverse proxy, configure: --trusted-proxies 127.0.0.1/32")
 	}
 
 	s.httpServer = &http.Server{
@@ -168,25 +154,14 @@ func (s *Server) Start() error {
 
 	return s.httpServer.Serve(serveLn)
 }
-
-func (s *Server) emitSetupTokenBanner(w io.Writer) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "┌──────────────────────────────────────────────────────────────────┐")
-	fmt.Fprintln(w, "│  ⚠️  服务尚未初始化                                              │")
-	fmt.Fprintln(w, "│  请使用以下 Setup Token 完成初始化:                               │")
-	fmt.Fprintf(w, "│  SETUP_TOKEN=%s │\n", s.auth.setupToken)
-	fmt.Fprintln(w, "└──────────────────────────────────────────────────────────────────┘")
-	fmt.Fprintln(w)
-}
-
 func (s *Server) Shutdown(ctx context.Context) error {
-	log.Printf("🛑 开始优雅关闭...")
+	log.Printf("🛑 Starting graceful shutdown...")
 
 	close(s.done)
 
 	if s.events != nil {
 		s.events.Close()
-		log.Printf("📡 SSE 事件总线已关闭")
+		log.Printf("📡 SSE event bus closed")
 	}
 
 	clientCount := 0
@@ -198,30 +173,30 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return true
 	})
 	if clientCount > 0 {
-		log.Printf("🔌 已断开 %d 个 Client 连接", clientCount)
+		log.Printf("🔌 Disconnected %d client connections", clientCount)
 	}
 
 	s.closeManagedConns("server_shutdown")
 
 	if err := s.waitForLongLivedHandlers(ctx); err != nil {
-		log.Printf("⚠️ 等待长连接处理退出超时: %v", err)
+		log.Printf("⚠️ Timed out waiting for long-lived handlers to exit: %v", err)
 		return err
 	}
 
 	if s.trafficStore != nil {
 		if err := s.trafficStore.Flush(); err != nil {
-			log.Printf("⚠️ 流量数据持久化失败: %v", err)
+			log.Printf("⚠️ Failed to persist traffic data: %v", err)
 		}
 	}
 
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
-			log.Printf("⚠️ HTTP 服务器关闭出错: %v", err)
+			log.Printf("⚠️ HTTP server shutdown failed: %v", err)
 			return err
 		}
 	}
 
-	log.Printf("✅ 优雅关闭完成")
+	log.Printf("✅ Graceful shutdown complete")
 	return nil
 }
 
@@ -236,7 +211,7 @@ func (s *Server) tokenCleanupLoop() {
 		case <-ticker.C:
 			if s.auth.adminStore != nil {
 				if err := s.auth.adminStore.CleanExpiredTokens(); err != nil {
-					log.Printf("⚠️ 清理过期 Token 失败: %v", err)
+					log.Printf("⚠️ Failed to clean expired tokens: %v", err)
 				}
 			}
 		}
@@ -270,7 +245,7 @@ func (s *Server) trafficPersistLoop() {
 		case <-ticker.C:
 			if s.trafficStore != nil {
 				if err := s.trafficStore.Flush(); err != nil {
-					log.Printf("⚠️ 流量数据持久化失败: %v", err)
+					log.Printf("⚠️ Failed to persist traffic data: %v", err)
 				}
 			}
 		}

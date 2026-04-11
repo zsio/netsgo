@@ -9,33 +9,33 @@ import (
 	"time"
 )
 
-// RateLimiterConfig 速率限制器配置
+// RateLimiterConfig holds the rate limiter configuration.
 type RateLimiterConfig struct {
-	WindowSize      time.Duration // 滑动窗口大小（如 1 分钟）
-	MaxRequests     int           // 窗口内最大请求数
-	MaxFailures     int           // 最大连续失败次数（触发锁定）
-	LockoutPeriod   time.Duration // 锁定时长
-	CleanupInterval time.Duration // 自动清理间隔（0 表示不启动后台清理）
+	WindowSize      time.Duration // Sliding window size (e.g. 1 minute)
+	MaxRequests     int           // Maximum requests within the window
+	MaxFailures     int           // Maximum consecutive failures before lockout
+	LockoutPeriod   time.Duration // Lockout duration
+	CleanupInterval time.Duration // Background cleanup interval (0 disables background cleanup)
 }
 
-// rateLimitEntry 单个 IP 的限速状态
+// rateLimitEntry holds the rate-limit state for a single IP.
 type rateLimitEntry struct {
 	mu           sync.Mutex
-	timestamps   []time.Time // 请求时间戳（滑动窗口）
-	failures     int         // 连续失败次数
-	lockedUntil  time.Time   // 锁定截止时间
-	lastActivity time.Time   // 最后一次活动时间
+	timestamps   []time.Time // Request timestamps (sliding window)
+	failures     int         // Consecutive failure count
+	lockedUntil  time.Time   // Lockout expiry time
+	lastActivity time.Time   // Last activity time
 }
 
-// RateLimiter 基于 IP 的速率限制器
+// RateLimiter is an IP-based rate limiter.
 type RateLimiter struct {
 	config  RateLimiterConfig
 	entries sync.Map // IP string -> *rateLimitEntry
 	stopCh  chan struct{}
 }
 
-// NewRateLimiter 创建一个新的速率限制器
-// 如果 config.CleanupInterval > 0，会启动后台清理 goroutine
+// NewRateLimiter creates a new rate limiter.
+// If config.CleanupInterval > 0, a background cleanup goroutine is started.
 func NewRateLimiter(config RateLimiterConfig) *RateLimiter {
 	rl := &RateLimiter{
 		config: config,
@@ -49,8 +49,8 @@ func NewRateLimiter(config RateLimiterConfig) *RateLimiter {
 	return rl
 }
 
-// Allow 检查给定 IP 是否允许发起请求
-// 返回 (是否允许, 需要等待的时间)
+// Allow checks whether the given IP is allowed to make a request.
+// Returns (allowed, retry-after duration).
 func (rl *RateLimiter) Allow(ip string) (bool, time.Duration) {
 	entry := rl.getOrCreate(ip)
 	entry.mu.Lock()
@@ -59,13 +59,13 @@ func (rl *RateLimiter) Allow(ip string) (bool, time.Duration) {
 	now := time.Now()
 	entry.lastActivity = now
 
-	// 检查是否被锁定
+	// Check whether the IP is locked out.
 	if now.Before(entry.lockedUntil) {
 		retryAfter := entry.lockedUntil.Sub(now)
 		return false, retryAfter
 	}
 
-	// 清理窗口外的时间戳
+	// Prune timestamps outside the window.
 	windowStart := now.Add(-rl.config.WindowSize)
 	validIdx := 0
 	for _, t := range entry.timestamps {
@@ -76,9 +76,9 @@ func (rl *RateLimiter) Allow(ip string) (bool, time.Duration) {
 	}
 	entry.timestamps = entry.timestamps[:validIdx]
 
-	// 检查窗口内请求数
+	// Check request count within the window.
 	if len(entry.timestamps) >= rl.config.MaxRequests {
-		// 计算最早条目过期的时间
+		// Calculate when the earliest entry expires.
 		retryAfter := entry.timestamps[0].Add(rl.config.WindowSize).Sub(now)
 		if retryAfter < 0 {
 			retryAfter = time.Second
@@ -86,13 +86,13 @@ func (rl *RateLimiter) Allow(ip string) (bool, time.Duration) {
 		return false, retryAfter
 	}
 
-	// 允许请求，记录时间戳
+	// Allow the request and record the timestamp.
 	entry.timestamps = append(entry.timestamps, now)
 	return true, 0
 }
 
-// RecordFailure 记录一次认证失败
-// 如果连续失败次数达到阈值，触发锁定
+// RecordFailure records one authentication failure.
+// If the consecutive failure count reaches the threshold, the IP is locked out.
 func (rl *RateLimiter) RecordFailure(ip string) {
 	entry := rl.getOrCreate(ip)
 	entry.mu.Lock()
@@ -103,11 +103,11 @@ func (rl *RateLimiter) RecordFailure(ip string) {
 
 	if rl.config.MaxFailures > 0 && entry.failures >= rl.config.MaxFailures {
 		entry.lockedUntil = time.Now().Add(rl.config.LockoutPeriod)
-		entry.failures = 0 // 重置计数，锁定期满后重新开始计数
+		entry.failures = 0 // Reset counter; start fresh after lockout expires.
 	}
 }
 
-// ResetFailures 认证成功后重置失败计数
+// ResetFailures resets the failure counter after a successful authentication.
 func (rl *RateLimiter) ResetFailures(ip string) {
 	entry := rl.getOrCreate(ip)
 	entry.mu.Lock()
@@ -116,17 +116,17 @@ func (rl *RateLimiter) ResetFailures(ip string) {
 	entry.failures = 0
 }
 
-// Stop 停止后台清理 goroutine
+// Stop stops the background cleanup goroutine.
 func (rl *RateLimiter) Stop() {
 	select {
 	case <-rl.stopCh:
-		// 已经停止
+		// Already stopped.
 	default:
 		close(rl.stopCh)
 	}
 }
 
-// getOrCreate 获取或创建 IP 对应的限速条目
+// getOrCreate retrieves or creates the rate-limit entry for the given IP.
 func (rl *RateLimiter) getOrCreate(ip string) *rateLimitEntry {
 	if val, ok := rl.entries.Load(ip); ok {
 		return val.(*rateLimitEntry)
@@ -138,7 +138,7 @@ func (rl *RateLimiter) getOrCreate(ip string) *rateLimitEntry {
 	return actual.(*rateLimitEntry)
 }
 
-// cleanupLoop 后台定期清理过期条目
+// cleanupLoop periodically removes expired entries in the background.
 func (rl *RateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(rl.config.CleanupInterval)
 	defer ticker.Stop()
@@ -153,10 +153,10 @@ func (rl *RateLimiter) cleanupLoop() {
 	}
 }
 
-// cleanup 清理不活跃的条目
+// cleanup removes inactive entries.
 func (rl *RateLimiter) cleanup() {
 	now := time.Now()
-	// 条目在窗口大小 + 锁定时长之后才被认为不活跃
+	// An entry is considered inactive after window size + lockout period.
 	maxIdle := rl.config.WindowSize + rl.config.LockoutPeriod
 	if maxIdle < time.Minute {
 		maxIdle = time.Minute
@@ -174,21 +174,21 @@ func (rl *RateLimiter) cleanup() {
 	})
 }
 
-// --- 辅助函数 ---
+// --- helper functions ---
 
-// clientIP 从 HTTP 请求中提取客户端 IP 地址。
-// 信任代理头（X-Forwarded-For / X-Real-IP）的条件：
-//  1. 来源是本地回环地址（127.0.0.1 / ::1）— 同机 nginx/Caddy，默认信任
-//  2. TLS 模式为 off 且来源 IP 在 TrustedProxies 列表中 — 用户显式配置
+// clientIP extracts the client IP address from an HTTP request.
+// Proxy headers (X-Forwarded-For / X-Real-IP) are trusted when:
+//  1. The source is a loopback address (127.0.0.1 / ::1) — same-host nginx/Caddy, trusted by default.
+//  2. TLS mode is "off" and the source IP is in the TrustedProxies list — explicitly configured by the user.
 //
-// 其他情况一律使用 RemoteAddr，防止攻击者伪造代理头绕过速率限制。
+// In all other cases RemoteAddr is used to prevent attackers from spoofing proxy headers to bypass rate limiting.
 func (s *Server) clientIP(r *http.Request) string {
-	// 先提取直连 IP
+	// Extract the direct connection IP first.
 	directIP := remoteIPFromAddr(r.RemoteAddr)
 
-	// 判断是否信任代理头
+	// Determine whether to trust proxy headers.
 	if s.trustProxyHeaders(r) {
-		// 优先使用 X-Forwarded-For（取第一个 IP）
+		// Prefer X-Forwarded-For (take the first IP).
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := strings.SplitN(xff, ",", 2)
 			ip := strings.TrimSpace(parts[0])
@@ -197,7 +197,7 @@ func (s *Server) clientIP(r *http.Request) string {
 			}
 		}
 
-		// 再尝试 X-Real-IP
+		// Fall back to X-Real-IP.
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {
 			return strings.TrimSpace(xri)
 		}
@@ -206,16 +206,16 @@ func (s *Server) clientIP(r *http.Request) string {
 	return directIP
 }
 
-// trustProxyHeaders 判断当前请求是否可以信任代理头。
-// 规则与 clientIP 保持一致：本地回环默认信任，或来源于显式配置的受信代理。
+// trustProxyHeaders reports whether proxy headers can be trusted for the current request.
+// The rule matches clientIP: loopback is trusted by default, or when the source is an explicitly configured trusted proxy.
 func (s *Server) trustProxyHeaders(r *http.Request) bool {
 	directIP := remoteIPFromAddr(r.RemoteAddr)
 	return isLoopback(directIP) || (s.TLS != nil && s.TLS.isTrustedProxy(directIP))
 }
 
-// isHTTPSRequest 判断浏览器侧看到的请求是否是 HTTPS。
-// 1. 服务端自身 TLS 终止时，看 r.TLS
-// 2. 反向代理模式下，仅对受信代理发送的协议头做判断
+// isHTTPSRequest reports whether the browser-side request was made over HTTPS.
+// 1. When the server terminates TLS itself, check r.TLS.
+// 2. In reverse-proxy mode, only inspect protocol headers from trusted proxies.
 func (s *Server) isHTTPSRequest(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
@@ -239,7 +239,7 @@ func firstHeaderToken(v string) string {
 	return strings.TrimSpace(parts[0])
 }
 
-// forwardedProto 从 RFC 7239 Forwarded 头中提取首个 proto 值。
+// forwardedProto extracts the first proto value from an RFC 7239 Forwarded header.
 func forwardedProto(v string) string {
 	if v == "" {
 		return ""
@@ -259,12 +259,12 @@ func forwardedProto(v string) string {
 	return ""
 }
 
-// isLoopback 判断 IP 是否是本地回环地址
+// isLoopback reports whether the IP is a loopback address.
 func isLoopback(ip string) bool {
 	return ip == "127.0.0.1" || ip == "::1"
 }
 
-// remoteIPFromAddr 从 host:port 格式的地址中提取 IP
+// remoteIPFromAddr extracts the IP from a host:port formatted address.
 func remoteIPFromAddr(addr string) string {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -273,7 +273,7 @@ func remoteIPFromAddr(addr string) string {
 	return host
 }
 
-// writeRateLimitResponse 返回 429 Too Many Requests 响应
+// writeRateLimitResponse writes a 429 Too Many Requests response.
 func writeRateLimitResponse(w http.ResponseWriter, retryAfter time.Duration) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Retry-After", retryAfterString(retryAfter))
@@ -281,7 +281,7 @@ func writeRateLimitResponse(w http.ResponseWriter, retryAfter time.Duration) {
 	w.Write([]byte(`{"error":"too many requests, please try again later"}`))
 }
 
-// retryAfterString 将 Duration 转为秒数字符串
+// retryAfterString converts a Duration to a seconds string.
 func retryAfterString(d time.Duration) string {
 	secs := int(d.Seconds())
 	if secs < 1 {

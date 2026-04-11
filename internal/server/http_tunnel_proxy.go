@@ -66,36 +66,13 @@ func (s *Server) hostDispatchHandler(management http.Handler) http.Handler {
 			return
 		}
 
-		if s.allowSetupRequest(r) || s.isManagementHost(r.Host) {
+		if s.isManagementHost(r.Host) {
 			management.ServeHTTP(w, r)
 			return
 		}
 
 		http.NotFound(w, r)
 	})
-}
-
-func (s *Server) allowSetupRequest(r *http.Request) bool {
-	if r == nil || r.URL == nil {
-		return false
-	}
-	if s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() {
-		return false
-	}
-
-	path := r.URL.Path
-	switch {
-	case path == "/":
-		return true
-	case path == "/favicon.ico":
-		return true
-	case strings.HasPrefix(path, "/assets/"):
-		return true
-	case strings.HasPrefix(path, "/api/setup/"):
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *Server) isManagementHost(host string) bool {
@@ -114,9 +91,9 @@ func (s *Server) isManagementHost(host string) bool {
 		return true
 	}
 
-	// localhost / 127.0.0.1 / [::1] 在同端口下视为等价。
-	// 开发环境下 Vite 等反代工具会把 Host 改写为 127.0.0.1:PORT，
-	// 而 serverListenAddr 兜底返回 localhost:PORT，需要在此对齐。
+	// localhost / 127.0.0.1 / [::1] are treated as equivalent on the same port.
+	// In dev environments, tools like Vite may rewrite the Host header to 127.0.0.1:PORT,
+	// while serverListenAddr falls back to localhost:PORT, so we need to align here.
 	if isLoopbackHost(managementHost) && isLoopbackHost(reqCanonical) {
 		_, mPort := splitCanonicalHostPort(managementHost)
 		_, rPort := splitCanonicalHostPort(reqCanonical)
@@ -124,8 +101,8 @@ func (s *Server) isManagementHost(host string) bool {
 			return true
 		}
 
-		// 显式配置为 http://localhost 这类“无端口 loopback”时，也允许
-		// 同机代理改写成 127.0.0.1:<server-port> / [::1]:<server-port>。
+		// When explicitly configured as a portless loopback (e.g. http://localhost),
+		// also allow same-machine proxies that rewrite to 127.0.0.1:<server-port> / [::1]:<server-port>.
 		if mPort == "" {
 			_, listenPort := splitCanonicalHostPort(serverListenAddr(s))
 			switch {
@@ -292,6 +269,6 @@ func isHTTPRouteUnavailable(err error) bool {
 	}
 	msg := err.Error()
 	return errors.Is(err, context.Canceled) ||
-		strings.Contains(msg, "当前不在线") ||
-		strings.Contains(msg, "数据通道未建立")
+		strings.Contains(msg, "is not online") ||
+		strings.Contains(msg, "data channel not established")
 }

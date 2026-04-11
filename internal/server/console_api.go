@@ -44,9 +44,7 @@ type serverStatusView struct {
 	Uptime         int64                    `json:"uptime"`
 	SystemUptime   int64                    `json:"system_uptime"`
 	OSInstallTime  int64                    `json:"os_install_time,omitempty"`
-	StorePath      string                   `json:"store_path"`
 	TunnelActive   int                      `json:"tunnel_active"`
-	TunnelPaused   int                      `json:"tunnel_paused"`
 	TunnelStopped  int                      `json:"tunnel_stopped"`
 	ServerAddr     string                   `json:"server_addr"`
 	AllowedPorts   []PortRange              `json:"allowed_ports"`
@@ -231,7 +229,7 @@ func (s *Server) refreshPublicIPs() {
 	}
 	s.publicIPMu.Unlock()
 	if ipv4 != "" || ipv6 != "" {
-		log.Printf("🌐 公网 IP 已刷新: IPv4=%s IPv6=%s", ipv4, ipv6)
+		log.Printf("🌐 Public IP refreshed: IPv4=%s IPv6=%s", ipv4, ipv6)
 	}
 }
 
@@ -248,19 +246,17 @@ func (s *Server) collectServerStatus() serverStatusView {
 	now := time.Now()
 	clientCount := 0
 	tunnelActive := 0
-	tunnelPaused := 0
 	tunnelStopped := 0
 
 	s.clients.Range(func(_, value any) bool {
 		clientCount++
 		a := value.(*ClientConn)
 		a.RangeProxies(func(_ string, t *ProxyTunnel) bool {
+			desiredState := canonicalDesiredState(t.Config.DesiredState)
 			switch {
 			case isTunnelExposed(t.Config):
 				tunnelActive++
-			case t.Config.DesiredState == protocol.ProxyDesiredStatePaused && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
-				tunnelPaused++
-			case t.Config.DesiredState == protocol.ProxyDesiredStateStopped && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
+			case desiredState == protocol.ProxyDesiredStateStopped && t.Config.RuntimeState == protocol.ProxyRuntimeStateIdle:
 				tunnelStopped++
 			}
 			return true
@@ -376,9 +372,7 @@ func (s *Server) collectServerStatus() serverStatusView {
 		Uptime:         int64(time.Since(s.startTime).Seconds()),
 		SystemUptime:   int64(sysUptime),
 		OSInstallTime:  osInstallTime,
-		StorePath:      s.getStorePath(),
 		TunnelActive:   tunnelActive,
-		TunnelPaused:   tunnelPaused,
 		TunnelStopped:  tunnelStopped,
 		ServerAddr:     serverAddr,
 		AllowedPorts:   allowedPorts,
@@ -411,11 +405,4 @@ func baseDiskName(device string) string {
 		return m
 	}
 	return device
-}
-
-func (s *Server) getStorePath() string {
-	if s.store != nil {
-		return s.store.path
-	}
-	return s.StorePath
 }

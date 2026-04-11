@@ -289,7 +289,7 @@ function TunnelDialogForm({
             <label className="text-sm font-medium">公网端口</label>
             <Input
               type="number"
-              placeholder="例如 18080"
+              placeholder="e.g. 18080"
               value={remotePort}
               onChange={(e) => setRemotePort(e.target.value)}
               min={1}

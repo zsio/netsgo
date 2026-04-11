@@ -51,10 +51,10 @@ func TestCountingConnIngressEgressBytes(t *testing.T) {
 
 	ingressBytes, egressBytes := cc.ingressEgressBytes()
 	if ingressBytes != 321 {
-		t.Fatalf("ingress bytes 期望 321，得到 %d", ingressBytes)
+		t.Fatalf("expected ingress bytes 321, got %d", ingressBytes)
 	}
 	if egressBytes != 654 {
-		t.Fatalf("egress bytes 期望 654，得到 %d", egressBytes)
+		t.Fatalf("expected egress bytes 654, got %d", egressBytes)
 	}
 }
 
@@ -151,14 +151,14 @@ func TestIsServerAddrLocked(t *testing.T) {
 	t.Run("valid env locks server addr", func(t *testing.T) {
 		t.Setenv("NETSGO_SERVER_ADDR", "https://locked.example.com")
 		if !isServerAddrLocked() {
-			t.Fatal("合法环境变量应锁定 server_addr")
+			t.Fatal("valid environment variables should lock server_addr")
 		}
 	})
 
 	t.Run("invalid env should not lock server addr", func(t *testing.T) {
 		t.Setenv("NETSGO_SERVER_ADDR", "ws://locked.example.com")
 		if isServerAddrLocked() {
-			t.Fatal("非法环境变量不应锁定 server_addr")
+			t.Fatal("invalid environment variables should not lock server_addr")
 		}
 	})
 }
@@ -242,7 +242,7 @@ func TestDomainConflictWithManagementHost(t *testing.T) {
 		defer cleanup()
 
 		if err := checkDomainConflict("panel.example.com", "", "", s); err == nil {
-			t.Fatal("domain 与 management host 相同时应返回冲突")
+			t.Fatal("should return conflict when domain matches management host")
 		}
 	})
 
@@ -253,7 +253,7 @@ func TestDomainConflictWithManagementHost(t *testing.T) {
 		defer cleanup()
 
 		if err := checkDomainConflict("app.example.com", "", "", s); err != nil {
-			t.Fatalf("不同 host 不应冲突，得到 %v", err)
+			t.Fatalf("different hosts should not conflict, got %v", err)
 		}
 	})
 
@@ -264,7 +264,7 @@ func TestDomainConflictWithManagementHost(t *testing.T) {
 		defer cleanup()
 
 		if err := checkDomainConflict("PANEL.EXAMPLE.COM", "", "", s); err == nil {
-			t.Fatal("management host 冲突应大小写不敏感")
+			t.Fatal("management host conflict should be case-insensitive")
 		}
 	})
 }
@@ -283,7 +283,7 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 		}, protocol.ProxyStatusActive)
 
 		if err := checkDomainConflict("app.example.com", "", "", s); err == nil {
-			t.Fatal("同一 client 重复 domain 应冲突")
+			t.Fatal("duplicate domain for the same client should conflict")
 		}
 	})
 
@@ -307,14 +307,13 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 		}, protocol.ProxyStatusActive)
 
 		if err := checkDomainConflict("APP.EXAMPLE.COM", "", "", s); err == nil {
-			t.Fatal("不同 client 重复 domain 也应冲突")
+			t.Fatal("duplicate domain for different clients should also conflict")
 		}
 	})
 
-	t.Run("pending paused stopped and error still conflict", func(t *testing.T) {
+	t.Run("pending stopped and error still conflict", func(t *testing.T) {
 		statuses := []string{
 			protocol.ProxyStatusPending,
-			protocol.ProxyStatusPaused,
 			protocol.ProxyStatusStopped,
 			protocol.ProxyStatusError,
 		}
@@ -333,7 +332,7 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 				}, status)
 
 				if err := checkDomainConflict("state.example.com", "", "", s); err == nil {
-					t.Fatalf("%s 状态仍应参与冲突检测", status)
+					t.Fatalf("%s status should still participate in conflict detection", status)
 				}
 			})
 		}
@@ -352,11 +351,11 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 		}, protocol.ProxyStatusStopped)
 
 		if err := s.store.RemoveTunnel("client-1", "http-a"); err != nil {
-			t.Fatalf("删除测试隧道失败: %v", err)
+			t.Fatalf("failed to delete test tunnel: %v", err)
 		}
 
 		if err := checkDomainConflict("deleted.example.com", "", "", s); err != nil {
-			t.Fatalf("已删除隧道不应再冲突，得到 %v", err)
+			t.Fatalf("deleted tunnel should no longer conflict, got %v", err)
 		}
 	})
 
@@ -370,7 +369,7 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 			Domain:    "dup.example.com",
 			LocalIP:   "127.0.0.1",
 			LocalPort: 8080,
-		}, protocol.ProxyStatusPaused)
+		}, protocol.ProxyStatusStopped)
 		seedStoredTunnel(t, s, "client-2", protocol.ProxyNewRequest{
 			Name:      "shared-name",
 			Type:      protocol.ProxyTypeHTTP,
@@ -381,10 +380,10 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 
 		conflicts := findHTTPDomainConflictNames("dup.example.com", "", "", s)
 		if len(conflicts) != 2 {
-			t.Fatalf("不同 client 同名 tunnel 不应被去重，得到 %v", conflicts)
+			t.Fatalf("tunnels with the same name from different clients should not be deduplicated, got %v", conflicts)
 		}
 		if conflicts[0] != "client-1:shared-name" || conflicts[1] != "client-2:shared-name" {
-			t.Fatalf("冲突名称应包含 clientID 避免歧义，得到 %v", conflicts)
+			t.Fatalf("conflict name should include clientID to avoid ambiguity, got %v", conflicts)
 		}
 	})
 }

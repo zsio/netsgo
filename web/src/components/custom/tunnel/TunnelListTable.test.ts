@@ -19,7 +19,6 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): TunnelEntry {
     desired_state: 'running',
     runtime_state: 'exposed',
     capabilities: {
-      can_pause: true,
       can_resume: false,
       can_stop: true,
       can_edit: false,
@@ -52,7 +51,6 @@ describe('TunnelListTable', () => {
     const markup = renderTable([
       createTunnel({
         capabilities: {
-          can_pause: false,
           can_resume: true,
           can_stop: false,
           can_edit: true,
@@ -66,6 +64,14 @@ describe('TunnelListTable', () => {
     expect(markup).not.toContain('title="停止"');
     expect(markup).toContain('title="编辑"');
     expect(markup).toContain('title="删除"');
+  });
+
+  test('动作按钮默认直接展示，不再依赖行 hover', () => {
+    const markup = renderTable([createTunnel()]);
+
+    expect(markup).toContain('title="停止"');
+    expect(markup).not.toContain('group-hover:opacity-100');
+    expect(markup).not.toContain('opacity-0');
   });
 
   test('缺失 capability projection 时渲染直接失败', () => {

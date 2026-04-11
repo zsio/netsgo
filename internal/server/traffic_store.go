@@ -97,12 +97,12 @@ func NewTrafficStore(path string) (*TrafficStore, error) {
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("创建流量存储目录失败: %w", err)
+		return nil, fmt.Errorf("failed to create traffic store directory: %w", err)
 	}
 
 	if _, err := os.Stat(path); err == nil {
 		if err := store.load(); err != nil {
-			return nil, fmt.Errorf("加载流量存储失败: %w", err)
+			return nil, fmt.Errorf("failed to load traffic store: %w", err)
 		}
 	}
 

@@ -8,21 +8,22 @@ import (
 	"os"
 	"path/filepath"
 
+	"netsgo/pkg/datadir"
 	"netsgo/pkg/fileutil"
 )
 
 type persistedState struct {
 	InstallID      string `json:"install_id"`
-	Token          string `json:"token,omitempty"` // 由 Key 兑换的连接密钥
+	Token          string `json:"token,omitempty"` // Connection token exchanged from the key
 	TLSFingerprint string `json:"tls_fingerprint,omitempty"`
 }
 
-func defaultStatePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("获取用户目录失败: %w", err)
+func (c *Client) statePath() string {
+	root := c.DataDir
+	if root == "" {
+		root = datadir.DefaultDataDir()
 	}
-	return filepath.Join(home, ".netsgo", "client.json"), nil
+	return filepath.Join(root, "client", "client.json")
 }
 
 func (c *Client) ensureInstallID() error {
@@ -30,21 +31,13 @@ func (c *Client) ensureInstallID() error {
 		return nil
 	}
 
-	path := c.StatePath
-	if path == "" {
-		var err error
-		path, err = defaultStatePath()
-		if err != nil {
-			return err
-		}
-		c.StatePath = path
-	}
+	path := c.statePath()
 
 	if data, err := os.ReadFile(path); err == nil {
 		var state persistedState
 		if err := json.Unmarshal(data, &state); err == nil && state.InstallID != "" {
 			c.InstallID = state.InstallID
-			// 同时加载 Token（如果有）
+			// Also load the token if present.
 			if state.Token != "" && c.Token == "" {
 				c.Token = state.Token
 			}
@@ -63,39 +56,39 @@ func (c *Client) ensureInstallID() error {
 	state := persistedState{InstallID: installID}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("创建客户端状态目录失败: %w", err)
+		return fmt.Errorf("failed to create client state directory: %w", err)
 	}
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化客户端状态失败: %w", err)
+		return fmt.Errorf("failed to marshal client state: %w", err)
 	}
 	if err := fileutil.AtomicWriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("写入客户端状态失败: %w", err)
+		return fmt.Errorf("failed to write client state: %w", err)
 	}
 
 	c.InstallID = installID
 	return nil
 }
 
-// saveToken 将 Token 持久化到客户端状态文件
+// saveToken persists the token to the client state file.
 func (c *Client) saveToken(token string) error {
-	path := c.StatePath
-	if path == "" {
-		return nil
+	path := c.statePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("failed to create client state directory: %w", err)
 	}
 
-	// 读取已有状态
+	// Read the existing state.
 	state := persistedState{InstallID: c.InstallID, Token: token}
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化客户端状态失败: %w", err)
+		return fmt.Errorf("failed to marshal client state: %w", err)
 	}
 	return fileutil.AtomicWriteFile(path, data, 0o600)
 }
 
-// clearToken 清除本地保存的 Token
+// clearToken clears the locally saved token.
 func (c *Client) clearToken() error {
 	c.Token = ""
 	return c.saveToken("")
@@ -104,16 +97,16 @@ func (c *Client) clearToken() error {
 func generateInstallID() (string, error) {
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		return "", fmt.Errorf("生成 install id 失败: %w", err)
+		return "", fmt.Errorf("failed to generate install id: %w", err)
 	}
 	return "client-" + hex.EncodeToString(buf[:]), nil
 }
 
-// saveTLSFingerprint 将 TLS 指纹持久化到客户端状态文件 (P1 TOFU)
+// saveTLSFingerprint persists the TLS fingerprint to the client state file. (P1 TOFU)
 func (c *Client) saveTLSFingerprint(fingerprint string) error {
-	path := c.StatePath
-	if path == "" {
-		return nil
+	path := c.statePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("failed to create client state directory: %w", err)
 	}
 
 	state := persistedState{
@@ -124,7 +117,7 @@ func (c *Client) saveTLSFingerprint(fingerprint string) error {
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化客户端状态失败: %w", err)
+		return fmt.Errorf("failed to marshal client state: %w", err)
 	}
 	return fileutil.AtomicWriteFile(path, data, 0o600)
 }

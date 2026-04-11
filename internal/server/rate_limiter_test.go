@@ -19,7 +19,7 @@ func TestRateLimiter_AllowWithinWindow(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		allowed, _ := rl.Allow("1.2.3.4")
 		if !allowed {
-			t.Fatalf("第 %d 次请求应被允许", i+1)
+			t.Fatalf("request #%d should be allowed", i+1)
 		}
 	}
 }
@@ -37,23 +37,23 @@ func TestRateLimiter_BlockAfterWindowExceeded(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		allowed, _ := rl.Allow("1.2.3.4")
 		if !allowed {
-			t.Fatalf("第 %d 次请求应被允许", i+1)
+			t.Fatalf("request #%d should be allowed", i+1)
 		}
 	}
 
 	// 第 4 次应被拒绝
 	allowed, retryAfter := rl.Allow("1.2.3.4")
 	if allowed {
-		t.Fatal("超过窗口限制后应被拒绝")
+		t.Fatal("should be rejected after exceeding window limit")
 	}
 	if retryAfter <= 0 {
-		t.Fatal("retryAfter 应 > 0")
+		t.Fatal("retryAfter should be > 0")
 	}
 
 	// 不同 IP 不受影响
 	allowed, _ = rl.Allow("5.6.7.8")
 	if !allowed {
-		t.Fatal("不同 IP 不应受影响")
+		t.Fatal("different IPs should not be affected")
 	}
 }
 
@@ -76,10 +76,10 @@ func TestRateLimiter_LockoutAfterFailures(t *testing.T) {
 	// 应被锁定
 	allowed, retryAfter := rl.Allow(ip)
 	if allowed {
-		t.Fatal("连续失败后应被锁定")
+		t.Fatal("should be locked after consecutive failures")
 	}
 	if retryAfter <= 0 {
-		t.Fatal("锁定时 retryAfter 应 > 0")
+		t.Fatal("retryAfter should be > 0 when locked")
 	}
 }
 
@@ -100,7 +100,7 @@ func TestRateLimiter_LockoutExpiry(t *testing.T) {
 
 	allowed, _ := rl.Allow(ip)
 	if allowed {
-		t.Fatal("锁定期间应被拒绝")
+		t.Fatal("should be rejected during lock period")
 	}
 
 	// 等待锁定过期
@@ -108,7 +108,7 @@ func TestRateLimiter_LockoutExpiry(t *testing.T) {
 
 	allowed, _ = rl.Allow(ip)
 	if !allowed {
-		t.Fatal("锁定过期后应恢复放行")
+		t.Fatal("should be allowed again after lock expires")
 	}
 }
 
@@ -137,7 +137,7 @@ func TestRateLimiter_ResetOnSuccess(t *testing.T) {
 	// 不应被锁定（因为之前被重置了，现在只有 2 次）
 	allowed, _ := rl.Allow(ip)
 	if !allowed {
-		t.Fatal("重置后再次失败未达阈值，不应被锁定")
+		t.Fatal("should not be locked when failing again after reset before reaching threshold")
 	}
 }
 
@@ -167,7 +167,7 @@ func TestRateLimiter_AutoCleanup(t *testing.T) {
 	// 条目应已被清理
 	_, loaded := rl.entries.Load("cleanup-test-ip")
 	if loaded {
-		t.Fatal("过期条目应被自动清理")
+		t.Fatal("expired entries should be cleaned up automatically")
 	}
 }
 
@@ -189,7 +189,7 @@ func TestRateLimiter_WindowSliding(t *testing.T) {
 	// 第 3 次被拒
 	allowed, _ := rl.Allow(ip)
 	if allowed {
-		t.Fatal("超过窗口限制应被拒绝")
+		t.Fatal("should be rejected when exceeding window limit")
 	}
 
 	// 等待窗口滑过
@@ -198,7 +198,7 @@ func TestRateLimiter_WindowSliding(t *testing.T) {
 	// 旧条目滑出窗口，应恢复
 	allowed, _ = rl.Allow(ip)
 	if !allowed {
-		t.Fatal("窗口滑过后应恢复放行")
+		t.Fatal("should be allowed again after window slides")
 	}
 }
 
@@ -368,11 +368,11 @@ func TestWriteRateLimitResponse(t *testing.T) {
 	writeRateLimitResponse(w, 30*time.Second)
 
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("期望 429，得到 %d", w.Code)
+		t.Fatalf("expected 429, got %d", w.Code)
 	}
 
 	retryAfter := w.Header().Get("Retry-After")
 	if retryAfter != "30" {
-		t.Errorf("Retry-After 期望 30，得到 %q", retryAfter)
+		t.Errorf("Retry-After expected 30, got %q", retryAfter)
 	}
 }

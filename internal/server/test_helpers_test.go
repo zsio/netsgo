@@ -6,7 +6,7 @@ func mustCreateSession(t testing.TB, store *AdminStore, userID, username, role, 
 	t.Helper()
 	session, err := store.CreateSession(userID, username, role, ip, ua)
 	if err != nil {
-		t.Fatalf("CreateSession 失败: %v", err)
+		t.Fatalf("CreateSession failed: %v", err)
 	}
 	return session
 }
@@ -14,6 +14,6 @@ func mustCreateSession(t testing.TB, store *AdminStore, userID, username, role, 
 func mustDeleteSession(t testing.TB, store *AdminStore, sessionID string) {
 	t.Helper()
 	if err := store.DeleteSession(sessionID); err != nil {
-		t.Fatalf("DeleteSession 失败: %v", err)
+		t.Fatalf("DeleteSession failed: %v", err)
 	}
 }

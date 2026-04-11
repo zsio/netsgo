@@ -53,11 +53,10 @@ export interface Client {
 // --- Tunnel / Proxy ---
 
 export type ProxyType = "tcp" | "udp" | "http";
-export type ProxyDesiredState = "running" | "paused" | "stopped";
+export type ProxyDesiredState = "running" | "stopped";
 export type ProxyRuntimeState = "pending" | "exposed" | "offline" | "idle" | "error";
 
 export interface TunnelCapabilities {
-  can_pause: boolean;
   can_resume: boolean;
   can_stop: boolean;
   can_edit: boolean;
@@ -142,7 +141,6 @@ export interface ConsoleSummary {
   inactive_tunnels: number;
   pending_tunnels: number;
   offline_tunnels: number;
-  paused_tunnels: number;
   stopped_tunnels: number;
   error_tunnels: number;
 }
@@ -172,9 +170,7 @@ export interface ServerStatus {
   uptime: number;         // seconds (process uptime)
   system_uptime: number;  // seconds (OS boot uptime)
   os_install_time?: number; // unix timestamp (seconds)
-  store_path: string;
   tunnel_active: number;
-  tunnel_paused: number;
   tunnel_stopped: number;
   server_addr: string;
   allowed_ports: PortRange[];
@@ -271,24 +267,4 @@ export interface TunnelMutationErrorResponse {
   success?: boolean;
   error?: string;
   error_code?: string;
-}
-
-export interface SetupStatus {
-  initialized: boolean;
-  setup_token_required: boolean;
-}
-
-export interface SetupRequest {
-  admin: {
-    username: string;
-    password: string;
-  };
-  server_addr: string;
-  allowed_ports: PortRange[];
-  setup_token?: string;
-}
-
-export interface SetupResponse {
-  success: boolean;
-  message: string;
 }

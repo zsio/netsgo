@@ -4,8 +4,6 @@ package e2e_test
 
 import (
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,7 +18,7 @@ func TestComposeStackE2E(t *testing.T) {
 	registerComposeCleanup(t, composeEnv, projectName, composeFiles)
 
 	runComposeFiles(t, composeEnv, projectName, composeFiles, "up", "-d", "--build", "--remove-orphans")
-	waitForHTTP200(t, baseURL+"/api/setup/status", managementHost, 90*time.Second)
+	waitForAdminToken(t, baseURL, managementHost, 90*time.Second)
 	waitForTunnel(t, tunnelURL, tunnelHost, []byte("compose backend response"), 2*time.Minute)
 
 	runComposeFiles(t, composeEnv, projectName, composeFiles, "restart", "proxy")
@@ -34,10 +32,8 @@ func TestComposeStackSoak(t *testing.T) {
 	registerComposeCleanup(t, composeEnv, projectName, composeFiles)
 
 	runComposeFiles(t, composeEnv, projectName, composeFiles, "up", "-d", "--build", "--remove-orphans")
-	waitForHTTP200(t, baseURL+"/api/setup/status", managementHost, 90*time.Second)
+	adminToken := waitForAdminToken(t, baseURL, managementHost, 90*time.Second)
 	waitForTunnel(t, tunnelURL, tunnelHost, []byte("compose backend response"), 2*time.Minute)
-
-	adminToken := waitForAdminToken(t, baseURL, managementHost, 45*time.Second)
 	waitForLiveClientCount(t, baseURL, managementHost, adminToken, 1, 45*time.Second)
 
 	idleDuration := mustParseDuration(t, getenvDefault("NETSGO_E2E_SOAK_IDLE", "45s"))
@@ -146,24 +142,6 @@ func mustPositiveInt(t *testing.T, raw string) int {
 		t.Fatalf("整数必须 > 0，得到 %q", raw)
 	}
 	return out
-}
-
-func waitForHTTP200(t *testing.T, url, host string, timeout time.Duration) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		resp, err := doRequest(http.MethodGet, url, host, "", nil, "")
-		if err == nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return
-			}
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	t.Fatalf("在 %v 内未观察到 HTTP 200: %s", timeout, url)
 }
 
 func dumpComposeOutput(t *testing.T, env []string, projectName string, composeFiles []string, args ...string) {

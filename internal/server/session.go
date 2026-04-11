@@ -85,10 +85,10 @@ func (s *Server) waitForCurrentDataReady(client *ClientConn, timeout time.Durati
 	deadline := time.Now().Add(timeout)
 	for {
 		if !s.isCurrentGeneration(client.ID, client.generation) {
-			return fmt.Errorf("逻辑会话已失效")
+			return fmt.Errorf("logical session has been invalidated")
 		}
 		if client.getState() == clientStateClosing {
-			return fmt.Errorf("逻辑会话正在关闭")
+			return fmt.Errorf("logical session is closing")
 		}
 
 		client.dataMu.RLock()
@@ -100,7 +100,7 @@ func (s *Server) waitForCurrentDataReady(client *ClientConn, timeout time.Durati
 		}
 
 		if timeout <= 0 || time.Now().After(deadline) {
-			return fmt.Errorf("等待数据通道就绪超时")
+			return fmt.Errorf("timed out waiting for data channel to become ready")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -183,11 +183,11 @@ func (s *Server) invalidateLogicalSessionIfCurrent(clientID string, generation u
 		_ = dataSession.Close()
 	}
 
-	s.PauseAllProxies(client)
+	s.CloseExposedProxyRuntime(client)
 
 	if wasLive {
 		info := client.GetInfo()
-		log.Printf("🔌 Client 已断开: %s [ID: %s, reason=%s]", info.Hostname, client.ID, reason)
+		log.Printf("🔌 Client disconnected: %s [ID: %s, reason=%s]", info.Hostname, client.ID, reason)
 		s.events.PublishJSON("client_offline", map[string]any{
 			"client_id": client.ID,
 		})

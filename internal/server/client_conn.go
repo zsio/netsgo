@@ -25,7 +25,7 @@ func (c *ClientConn) writeJSON(v any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn == nil {
-		return fmt.Errorf("client %s 控制通道不可用", c.ID)
+		return fmt.Errorf("client %s control channel unavailable", c.ID)
 	}
 	return c.conn.WriteJSON(v)
 }
