@@ -224,6 +224,14 @@ func newMockHTTPServer(ms *mockServer) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
+func newIsolatedTestClient(t *testing.T, serverAddr, key string) *Client {
+	t.Helper()
+
+	c := New(serverAddr, key)
+	c.DataDir = t.TempDir()
+	return c
+}
+
 // ============================================================
 // Client integration tests
 // ============================================================
@@ -234,7 +242,7 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
 	// Start the client in the background (Start blocks in controlLoop)
@@ -267,7 +275,7 @@ func TestClientControlDial_SendsSubprotocol(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
 	go c.Start()
@@ -293,7 +301,7 @@ func TestClient_HeartbeatSent(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
 	go c.Start()
@@ -320,7 +328,7 @@ func TestClient_ProbeReportSent(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
 	go c.Start()
@@ -364,7 +372,7 @@ func TestClient_ServerDisconnect_WithReconnect(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true // Disable reconnect in this test to avoid blocking
 
 	// Start the client in the background
@@ -402,7 +410,8 @@ func TestClient_AuthFailed(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "wrong-key")
+	c := newIsolatedTestClient(t, wsURL, "wrong-key")
+	c.DisableReconnect = true
 
 	err := c.Start()
 	if err == nil || !strings.Contains(err.Error(), "authentication failed") {
@@ -474,7 +483,7 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	// Do not set DisableReconnect so reconnect can take effect
 
 	// Start the client in the background
@@ -610,7 +619,7 @@ func TestClient_RequestProxy(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
 	// Start the client (it blocks in controlLoop in the background)
@@ -658,7 +667,7 @@ func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
 	go c.Start()
@@ -692,7 +701,7 @@ func TestClient_ControlLoop_ProxyCreateResp_Failure(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
 	go c.Start()
@@ -738,7 +747,7 @@ func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
 	go c.Start()
@@ -796,7 +805,7 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	c := New(wsURL, "test-key")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
 	go c.Start()
