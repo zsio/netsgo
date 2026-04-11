@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -103,6 +104,67 @@ func TestWSConnWriteProducesBinaryMessages(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("未收到服务端 payload")
+	}
+}
+
+func TestWSConnConcurrentWrites(t *testing.T) {
+	const writers = 8
+
+	received := make(chan [][]byte, 1)
+	wsConn, cleanup := setupWSPair(t, func(conn *websocket.Conn) {
+		defer conn.Close()
+
+		payloads := make([][]byte, 0, writers)
+		for i := 0; i < writers; i++ {
+			messageType, data, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("ReadMessage 失败: %v", err)
+				return
+			}
+			if messageType != websocket.BinaryMessage {
+				t.Errorf("messageType = %d, 期望 binary", messageType)
+				return
+			}
+			payloads = append(payloads, append([]byte(nil), data...))
+		}
+		received <- payloads
+	})
+	defer cleanup()
+
+	expected := make(map[string]int, writers)
+	var wg sync.WaitGroup
+	wg.Add(writers)
+
+	for i := 0; i < writers; i++ {
+		payload := []byte{byte('a' + i)}
+		expected[string(payload)]++
+
+		go func(payload []byte) {
+			defer wg.Done()
+			if _, err := wsConn.Write(payload); err != nil {
+				t.Errorf("Write 失败: %v", err)
+			}
+		}(payload)
+	}
+
+	wg.Wait()
+
+	select {
+	case payloads := <-received:
+		if len(payloads) != writers {
+			t.Fatalf("message 数量错误: %d", len(payloads))
+		}
+		for _, payload := range payloads {
+			expected[string(payload)]--
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未收到服务端 payload")
+	}
+
+	for payload, count := range expected {
+		if count != 0 {
+			t.Fatalf("payload %q 收到次数错误: %d", payload, 1-count)
+		}
 	}
 }
 
