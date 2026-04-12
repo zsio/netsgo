@@ -164,7 +164,7 @@ func (s *Server) ensureClientDataReady(client *ClientConn) error {
 	hasData := client.dataSession != nil && !client.dataSession.IsClosed()
 	client.dataMu.RUnlock()
 	if !hasData {
-		return fmt.Errorf("Client [%s] data channel not established, cannot create proxy", client.ID)
+		return fmt.Errorf("client [%s] data channel not established, cannot create proxy", client.ID)
 	}
 	return nil
 }

@@ -61,8 +61,8 @@ func NewClientSession(conn io.ReadWriteCloser, cfg *Config) (*yamux.Session, err
 func Relay(a, b io.ReadWriteCloser) (atob, btoa int64) {
 	var once sync.Once
 	closeAll := func() {
-		a.Close()
-		b.Close()
+		_ = a.Close()
+		_ = b.Close()
 	}
 
 	var wg sync.WaitGroup

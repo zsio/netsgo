@@ -25,19 +25,19 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	success := false
 	defer func() {
 		if !success {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath)
 		}
 	}()
 
 	// 写入数据
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("写入临时文件失败: %w", err)
 	}
 
 	// 刷盘：确保数据到达磁盘，而不是留在 OS 缓冲区
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("fsync 临时文件失败: %w", err)
 	}
 

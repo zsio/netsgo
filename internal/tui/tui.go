@@ -102,9 +102,9 @@ func Confirm(prompt string) (bool, error) {
 
 // PrintSummary prints a titled key-value table to stdout.
 func PrintSummary(title string, rows [][2]string) {
-	fmt.Fprintf(os.Stdout, "\n  %s\n", title)
+	_, _ = fmt.Fprintf(os.Stdout, "\n  %s\n", title)
 	for _, row := range rows {
-		fmt.Fprintf(os.Stdout, "  %-20s %s\n", row[0]+":", row[1])
+		_, _ = fmt.Fprintf(os.Stdout, "  %-20s %s\n", row[0]+":", row[1])
 	}
-	fmt.Fprintln(os.Stdout)
+	_, _ = fmt.Fprintln(os.Stdout)
 }

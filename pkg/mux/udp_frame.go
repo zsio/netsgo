@@ -55,8 +55,8 @@ func ReadUDPFrame(r io.Reader) ([]byte, error) {
 func UDPRelay(stream io.ReadWriteCloser, udpConn net.Conn) {
 	var once sync.Once
 	closeAll := func() {
-		stream.Close()
-		udpConn.Close()
+		_ = stream.Close()
+		_ = udpConn.Close()
 	}
 
 	var wg sync.WaitGroup

@@ -149,7 +149,7 @@ func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) err
 // writes a StreamHeader to tell the client which proxy this stream belongs to.
 func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.Conn, error) {
 	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
-		return nil, fmt.Errorf("Client [%s] is not online", client.ID)
+		return nil, fmt.Errorf("client [%s] is not online", client.ID)
 	}
 
 	client.dataMu.RLock()
@@ -157,7 +157,7 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 	client.dataMu.RUnlock()
 
 	if session == nil || session.IsClosed() {
-		return nil, fmt.Errorf("Client [%s] data channel not established", client.ID)
+		return nil, fmt.Errorf("client [%s] data channel not established", client.ID)
 	}
 
 	stream, err := session.Open()
