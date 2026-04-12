@@ -35,7 +35,6 @@ import {
   SidebarMenuButton,
   SidebarMenuBadge,
   SidebarRail,
-  SidebarSeparator,
 } from '@/components/ui/sidebar';
 
 interface ClientSidebarProps {
@@ -108,7 +107,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                 asChild 
                 isActive={isOverview} 
                 tooltip="Dashboard"
-                className="data-[active=true]:bg-primary/10 data-[active=true]:text-primary font-medium"
+                className="data-[active=true]:bg-background data-[active=true]:shadow-sm data-[active=true]:border-l-2 data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium"
               >
                 <Link to="/dashboard">
                   <LayoutDashboard className="h-4 w-4" />
@@ -120,8 +119,8 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
         </SidebarGroup>
 
         {/* 客户端列表 */}
-        <SidebarGroup className="group/clients">
-          <SidebarGroupLabel className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-[0.15em] px-2 transition-colors group-hover/clients:text-muted-foreground">
+        <SidebarGroup className="group/clients mt-4">
+          <SidebarGroupLabel className="text-[11px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em] px-2 mb-1 transition-colors group-hover/clients:text-muted-foreground/70">
             客户端 / Client
           </SidebarGroupLabel>
           <SidebarGroupAction 
@@ -170,7 +169,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                         asChild
                         isActive={isSelected}
                         tooltip={client.display_name ? `${client.display_name} (${client.info.hostname})` : client.info.hostname}
-                        className={`data-active:bg-primary/15 data-active:text-primary hover:data-active:bg-primary/20 ${!isOnline && !isSelected ? 'opacity-60' : ''}`}
+                        className={`data-[active=true]:bg-background data-[active=true]:shadow-[0_1px_2px_rgba(0,0,0,0.05)] data-[active=true]:border-l-[3px] data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground ${!isOnline && !isSelected ? 'opacity-60' : ''}`}
                       >
                         <Link
                           to="/dashboard/clients/$clientId"
@@ -203,10 +202,11 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
       </SidebarContent>
 
       {/* 底部 — 系统设置 */}
-      <SidebarFooter>
-        <SidebarSeparator />
+      <SidebarFooter className="pb-4">
         <SidebarGroup>
-          <SidebarGroupLabel>系统设置</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-[11px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em] px-2 mb-1">
+            系统设置
+          </SidebarGroupLabel>
           <SidebarMenu>
             {ADMIN_NAV.map((item) => (
               <SidebarMenuItem key={item.path}>
@@ -214,7 +214,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                   asChild
                   isActive={pathname === item.path}
                   tooltip={item.name}
-                  className="data-active:bg-primary/15 data-active:text-primary hover:data-active:bg-primary/20"
+                  className="data-[active=true]:bg-background data-[active=true]:shadow-[0_1px_2px_rgba(0,0,0,0.05)] data-[active=true]:border-l-[3px] data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
                 >
                   <Link to={item.path}>
                     <item.icon />
@@ -225,8 +225,8 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
             ))}
           </SidebarMenu>
         </SidebarGroup>
-        <SidebarSeparator />
-        <SidebarGroup>
+        
+        <SidebarGroup className="mt-2 text-muted-foreground/80">
           <SidebarMenu>
             <SidebarMenuItem>
               <AlertDialog>
