@@ -107,10 +107,11 @@ func InstallServerWith(deps serverDeps) error {
 		Description: "Comma-separated list of trusted proxy CIDRs (leave empty if not behind a proxy)",
 		Default:     "127.0.0.1/8",
 	})
+	if err != nil {
+		return err
+	}
 	if tlsMode != "off" {
 		trustedProxies = ""
-	} else if err != nil {
-		return err
 	}
 	tlsCert := ""
 	tlsKey := ""
