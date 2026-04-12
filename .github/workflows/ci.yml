@@ -55,6 +55,7 @@ jobs:
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11
+          only-new-issues: true
 
   govulncheck:
     runs-on: ubuntu-latest
