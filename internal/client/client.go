@@ -353,7 +353,7 @@ func retryInterval(disconnectTime time.Time) time.Duration {
 
 func retryIntervalWithJitter(disconnectTime time.Time, jitter float64) time.Duration {
 	elapsed := time.Since(disconnectTime)
-	base := retryShortInterval
+	var base time.Duration
 	if elapsed < retryLongIntervalAfter {
 		base = retryShortInterval
 	} else {
@@ -865,10 +865,9 @@ func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
 	// A fingerprint already exists; compare strictly.
 	if serverFP != currentFingerprint {
 		return fmt.Errorf(
-			"\n⚠️ TLS certificate fingerprint mismatch! A man-in-the-middle attack may be in progress."+
-				"\n  Expected: %s"+
-				"\n  Actual:   %s"+
-				"\n  If the server really changed its certificate, delete the client state file and try again.",
+			"TLS certificate fingerprint mismatch! A man-in-the-middle attack may be in progress"+
+				" (expected: %s, actual: %s); "+
+				"if the server really changed its certificate, delete the client state file and try again",
 			currentFingerprint, serverFP,
 		)
 	}

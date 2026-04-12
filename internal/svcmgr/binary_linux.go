@@ -14,7 +14,7 @@ func InstallBinary(srcPath string) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	if err := os.MkdirAll(filepath.Dir(BinaryPath), 0o755); err != nil {
 		return err

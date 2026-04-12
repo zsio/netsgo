@@ -126,7 +126,7 @@ func TestReadUDPFrame_EOF(t *testing.T) {
 func TestReadUDPFrame_InvalidLength(t *testing.T) {
 	// 写入超过上限的长度（非法）
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint16(MaxUDPPayload+1))
+	_ = binary.Write(&buf, binary.BigEndian, uint16(MaxUDPPayload+1))
 
 	_, err := ReadUDPFrame(&buf)
 	if err == nil {
@@ -137,8 +137,8 @@ func TestReadUDPFrame_InvalidLength(t *testing.T) {
 func TestReadUDPFrame_TruncatedPayload(t *testing.T) {
 	// 帧头说有 100 字节，但实际只有 5 字节
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint16(100))
-	buf.Write([]byte("short"))
+	_ = binary.Write(&buf, binary.BigEndian, uint16(100))
+	_, _ = buf.Write([]byte("short"))
 
 	_, err := ReadUDPFrame(&buf)
 	if err == nil {
@@ -159,7 +159,7 @@ func TestUDPRelay_Bidirectional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("启动 UDP echo 服务失败: %v", err)
 	}
-	defer echoConn.Close()
+	defer func() { _ = echoConn.Close() }()
 	echoAddr := echoConn.LocalAddr()
 
 	go func() {
@@ -169,7 +169,7 @@ func TestUDPRelay_Bidirectional(t *testing.T) {
 			if err != nil {
 				return
 			}
-			echoConn.WriteTo(buf[:n], addr) // echo back
+			_, _ = echoConn.WriteTo(buf[:n], addr) // echo back
 		}
 	}()
 
@@ -224,7 +224,7 @@ func TestUDPRelay_MultiplePackets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("启动 UDP echo 服务失败: %v", err)
 	}
-	defer echoConn.Close()
+	defer func() { _ = echoConn.Close() }()
 
 	go func() {
 		buf := make([]byte, 65535)
@@ -233,7 +233,7 @@ func TestUDPRelay_MultiplePackets(t *testing.T) {
 			if err != nil {
 				return
 			}
-			echoConn.WriteTo(buf[:n], addr)
+			_, _ = echoConn.WriteTo(buf[:n], addr)
 		}
 	}()
 
@@ -266,7 +266,7 @@ func TestUDPRelay_StreamCloseEndsRelay(t *testing.T) {
 	// stream 关闭后 Relay 应结束
 
 	echoConn, _ := net.ListenPacket("udp", "127.0.0.1:0")
-	defer echoConn.Close()
+	defer func() { _ = echoConn.Close() }()
 
 	go func() {
 		buf := make([]byte, 65535)
@@ -275,7 +275,7 @@ func TestUDPRelay_StreamCloseEndsRelay(t *testing.T) {
 			if err != nil {
 				return
 			}
-			echoConn.WriteTo(buf[:n], addr)
+			_, _ = echoConn.WriteTo(buf[:n], addr)
 		}
 	}()
 

@@ -54,7 +54,7 @@ jobs:
         run: tar -xzf web-dist-archive/web-dist.tgz -C web
       - uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1
+          version: v2.11
 
   govulncheck:
     runs-on: ubuntu-latest

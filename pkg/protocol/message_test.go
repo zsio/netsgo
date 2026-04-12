@@ -373,10 +373,10 @@ func TestUnicodeFields(t *testing.T) {
 	// JSON 往返
 	data, _ := json.Marshal(msg)
 	var restored Message
-	json.Unmarshal(data, &restored)
+	_ = json.Unmarshal(data, &restored)
 
 	var parsed AuthRequest
-	restored.ParsePayload(&parsed)
+	_ = restored.ParsePayload(&parsed)
 
 	if parsed.Client.Hostname != "中文主机名" {
 		t.Errorf("中文 Hostname 丢失: 得到 %q", parsed.Client.Hostname)
@@ -498,7 +498,7 @@ func TestAllStructs_JSONTags(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			data, _ := json.Marshal(tt.value)
 			var m map[string]any
-			json.Unmarshal(data, &m)
+			_ = json.Unmarshal(data, &m)
 
 			for _, key := range tt.expectedKeys {
 				if _, ok := m[key]; !ok {

@@ -148,7 +148,6 @@ function resolveTunnelStatusFromStates(
       return {
         key: 'offline',
         label: '客户端离线',
-        description: '配置已保存，等待 Client 上线后恢复',
       };
     case 'idle':
       return {

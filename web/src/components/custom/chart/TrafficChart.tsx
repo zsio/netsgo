@@ -213,7 +213,6 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
       ) : !hasTrafficData ? (
         <div className="flex h-72 flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/30 text-center">
           <p className="text-sm font-medium text-foreground">该时间范围内暂无流量数据</p>
-          <p className="mt-1 text-sm text-muted-foreground">切换到另一个时间范围，或等待下一次自动刷新。</p>
         </div>
       ) : (
         <div className="h-80 w-full">

@@ -1,20 +1,31 @@
 import { useMemo, useState } from 'react';
-import { motion, useSpring, useTransform } from 'motion/react';
 import {
   Server as ServerIcon, LayoutDashboard,
   Settings, Key,
-  Monitor, Zap, Plus
+  Plus, LogOut
 } from 'lucide-react';
-import { Link, useMatch, useRouterState } from '@tanstack/react-router';
+import { Link, useMatch, useRouterState, useNavigate } from '@tanstack/react-router';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
-import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
-import { useConsoleSummary } from '@/hooks/use-console-summary';
 import { AddClientDialog } from './AddClientDialog';
+import { api } from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
+  SidebarGroupAction,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
@@ -24,22 +35,11 @@ import {
   SidebarMenuButton,
   SidebarMenuBadge,
   SidebarRail,
-  SidebarSeparator,
 } from '@/components/ui/sidebar';
 
 interface ClientSidebarProps {
   clients: Client[];
   isLoading: boolean;
-}
-
-function AnimatedNumber({ value, className }: { value: number; className?: string }) {
-  const spring = useSpring(value, { stiffness: 80, damping: 20 });
-  const display = useTransform(spring, (v) => Math.round(v).toString());
-
-  // Update spring target when value changes
-  spring.set(value);
-
-  return <motion.span className={className}>{display}</motion.span>;
 }
 
 const ADMIN_NAV = [
@@ -49,6 +49,18 @@ const ADMIN_NAV = [
 
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const [showAddClient, setShowAddClient] = useState(false);
+  const navigate = useNavigate();
+  const logout = useAuthStore((state) => state.logout);
+
+  const handleLogout = async () => {
+    try {
+      await api.post('/api/auth/logout');
+    } catch {
+      // ignore logout failures and clear local state anyway
+    }
+    logout();
+    navigate({ to: '/login' });
+  };
 
   // 从路由匹配获取当前选中的 clientId
   const clientMatch = useMatch({ from: '/dashboard/clients/$clientId', shouldThrow: false });
@@ -69,19 +81,13 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
     });
   }, [clients]);
 
-  const { data: summary = EMPTY_CONSOLE_SUMMARY } = useConsoleSummary();
-  const onlineCount = summary.online_clients;
-  const totalCount = summary.total_clients;
-  const activeTunnels = summary.active_tunnels;
-  const totalTunnels = summary.total_tunnels;
-
   return (
     <Sidebar collapsible="offcanvas">
       <SidebarHeader className="p-0">
-        <div className="h-14 flex flex-row items-center border-b border-border/40 px-4 shrink-0">
+        <div className="h-14 flex flex-row items-center px-4 shrink-0 mt-0 mb-0 border-b border-border/40">
           <Link
             to="/dashboard"
-            className="flex items-center gap-2.5 w-full select-none hover:opacity-80 transition-opacity"
+            className="flex items-center gap-2.5 w-full select-none hover:opacity-90 transition-opacity"
           >
             <img src="/logo.svg" alt="NetsGo" className="h-8 w-8" />
             <div className="flex flex-col -space-y-0.5">
@@ -90,59 +96,10 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
             </div>
           </Link>
         </div>
-        <div className="flex items-center gap-1.5 px-3 py-3 w-full">
-          {/* Node Status Card */}
-          <div className="flex-1 flex flex-col bg-muted/40 rounded-lg p-2 border border-border/50 text-xs shadow-sm shadow-black/5">
-            <div className="flex items-center justify-between opacity-80 mb-1.5">
-              <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
-                <Monitor className="h-3 w-3" />
-                <span>节点</span>
-              </div>
-              <div className="relative flex h-1.5 w-1.5">
-                {onlineCount > 0 ? (
-                  <>
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
-                  </>
-                ) : (
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-muted-foreground/50" />
-                )}
-              </div>
-            </div>
-            <div className="flex items-baseline gap-1">
-              <span className="text-sm font-bold font-mono tracking-tight">{onlineCount}</span>
-              <span className="text-[10px] text-muted-foreground/60 font-mono">/ {totalCount}</span>
-            </div>
-          </div>
-
-          {/* Tunnel Status Card */}
-          <div className="flex-1 flex flex-col bg-muted/40 rounded-lg p-2 border border-border/50 text-xs shadow-sm shadow-black/5">
-            <div className="flex items-center justify-between opacity-80 mb-1.5">
-              <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
-                <Zap className="h-3 w-3" />
-                <span>隧道</span>
-              </div>
-              <div className="relative flex h-1.5 w-1.5">
-                {activeTunnels > 0 ? (
-                  <>
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
-                  </>
-                ) : (
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-muted-foreground/50" />
-                )}
-              </div>
-            </div>
-            <div className="flex items-baseline gap-1">
-              <AnimatedNumber value={activeTunnels} className="text-sm font-bold font-mono tracking-tight" />
-              <span className="text-[10px] text-muted-foreground/60 font-mono">/ {totalTunnels}</span>
-            </div>
-          </div>
-        </div>
       </SidebarHeader>
 
-      <SidebarContent>
-        {/* Dashboard 概览入口 */}
+      <SidebarContent className="gap-0 mt-2">
+        {/* 主要入口 - Dashboard */}
         <SidebarGroup>
           <SidebarMenu>
             <SidebarMenuItem>
@@ -150,22 +107,31 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                 asChild 
                 isActive={isOverview} 
                 tooltip="Dashboard"
-                className="data-active:bg-primary/15 data-active:text-primary hover:data-active:bg-primary/20"
+                className="data-[active=true]:bg-background data-[active=true]:shadow-sm data-[active=true]:border-l-2 data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium"
               >
                 <Link to="/dashboard">
-                  <LayoutDashboard />
-                  <span>Dashboard</span>
+                  <LayoutDashboard className="h-4 w-4" />
+                  <span>Dashboard概览</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
 
-        <SidebarSeparator />
-
-        {/* Client 列表 */}
-        <SidebarGroup>
-          <SidebarGroupContent>
+        {/* 客户端列表 */}
+        <SidebarGroup className="group/clients mt-4">
+          <SidebarGroupLabel className="text-[11px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em] px-2 mb-1 transition-colors group-hover/clients:text-muted-foreground/70">
+            客户端 / Client
+          </SidebarGroupLabel>
+          <SidebarGroupAction 
+            onClick={() => setShowAddClient(true)} 
+            title="添加客户端"
+            className="top-4 opacity-0 text-muted-foreground transition-opacity group-hover/clients:opacity-100 hover:text-foreground"
+          >
+            <Plus />
+            <span className="sr-only">添加客户端</span>
+          </SidebarGroupAction>
+          <SidebarGroupContent className='mt-1'>
             {isLoading ? (
               <div className="flex flex-col gap-2 px-2 pt-2">
                 {[1, 2, 3].map((i) => (
@@ -203,7 +169,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                         asChild
                         isActive={isSelected}
                         tooltip={client.display_name ? `${client.display_name} (${client.info.hostname})` : client.info.hostname}
-                        className={`data-active:bg-primary/15 data-active:text-primary hover:data-active:bg-primary/20 ${!isOnline && !isSelected ? 'opacity-60' : ''}`}
+                        className={`data-[active=true]:bg-background data-[active=true]:shadow-[0_1px_2px_rgba(0,0,0,0.05)] data-[active=true]:border-l-[3px] data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground ${!isOnline && !isSelected ? 'opacity-60' : ''}`}
                       >
                         <Link
                           to="/dashboard/clients/$clientId"
@@ -236,10 +202,11 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
       </SidebarContent>
 
       {/* 底部 — 系统设置 */}
-      <SidebarFooter>
-        <SidebarSeparator />
+      <SidebarFooter className="pb-4">
         <SidebarGroup>
-          <SidebarGroupLabel>系统设置</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-[11px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em] px-2 mb-1">
+            系统设置
+          </SidebarGroupLabel>
           <SidebarMenu>
             {ADMIN_NAV.map((item) => (
               <SidebarMenuItem key={item.path}>
@@ -247,7 +214,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                   asChild
                   isActive={pathname === item.path}
                   tooltip={item.name}
-                  className="data-active:bg-primary/15 data-active:text-primary hover:data-active:bg-primary/20"
+                  className="data-[active=true]:bg-background data-[active=true]:shadow-[0_1px_2px_rgba(0,0,0,0.05)] data-[active=true]:border-l-[3px] data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
                 >
                   <Link to={item.path}>
                     <item.icon />
@@ -256,6 +223,36 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
+          </SidebarMenu>
+        </SidebarGroup>
+        
+        <SidebarGroup className="mt-2 text-muted-foreground/80">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <SidebarMenuButton
+                    tooltip="退出登录"
+                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                  >
+                    <LogOut className="h-4 w-4" />
+                    <span>退出登录</span>
+                  </SidebarMenuButton>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>确认退出？</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      退出后需要重新登录才能访问控制台。
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>取消</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleLogout}>确认退出</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
       </SidebarFooter>
