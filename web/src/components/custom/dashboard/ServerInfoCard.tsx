@@ -1,7 +1,7 @@
 import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp } from 'lucide-react';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatUptime, formatBytes, formatInstallAge, formatTimestamp, describeFreshness } from '@/lib/format';
+import { formatUptime, formatBytes } from '@/lib/format';
 import {
   HoverCard,
   HoverCardContent,
@@ -47,9 +47,6 @@ export function ServerInfoCard() {
           <div className={`w-2 h-2 rounded-full ${status?.status === 'running' ? 'bg-emerald-500' : 'bg-destructive'}`} />
           <div className="flex flex-col items-end leading-tight">
             <span className="font-medium text-muted-foreground">{status?.status === 'running' ? '正常运行' : '异常'}</span>
-            <span className="text-[11px] text-muted-foreground/70" title={formatTimestamp(status?.generated_at)}>
-              {describeFreshness(status?.generated_at, status?.fresh_until)}
-            </span>
           </div>
         </div>
       </div>
@@ -85,20 +82,14 @@ export function ServerInfoCard() {
                 {formatUptime(status?.uptime ?? 0)}
               </span>
             </HoverCardTrigger>
-            <HoverCardContent className="w-[220px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
-              <div className="flex flex-col gap-1.5">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">系统开机</span>
-                  <span className="font-medium text-foreground">{formatUptime(status?.system_uptime ?? 0)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">系统安装</span>
-                  <span className="font-medium text-foreground">{formatInstallAge(status?.os_install_time ?? 0)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">程序启动</span>
-                  <span className="font-medium text-foreground">{formatUptime(status?.uptime ?? 0)}</span>
-                </div>
+            <HoverCardContent className="w-[200px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
+              <div className="text-muted-foreground">
+                启动于 {new Date(Date.now() - (status?.uptime ?? 0) * 1000).toLocaleString('zh-CN', {
+                  month: 'numeric',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}
               </div>
             </HoverCardContent>
           </HoverCard>

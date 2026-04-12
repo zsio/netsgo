@@ -18,10 +18,21 @@ build-web:
 	cd web && bun install --frozen-lockfile && bun run build
 	@echo "✅ 前端构建完成: web/dist/"
 
+# 版本信息（可被外部覆盖）
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# ldflags 用于注入版本信息
+LDFLAGS := -s -w \
+	-X netsgo/pkg/version.Current=$(VERSION) \
+	-X netsgo/pkg/version.Commit=$(COMMIT) \
+	-X netsgo/pkg/version.Date=$(DATE)
+
 # 仅构建后端（需要先构建前端，否则 go:embed 会失败）
 build-go:
 	@echo "🔨 编译 netsgo..."
-	go build -o $(BIN_DIR)/netsgo ./cmd/netsgo/
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/netsgo ./cmd/netsgo/
 	@echo "✅ 编译完成: $(BIN_DIR)/netsgo"
 
 # 清理

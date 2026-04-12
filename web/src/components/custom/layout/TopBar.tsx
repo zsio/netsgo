@@ -1,28 +1,15 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  UserPlus, LogOut, Monitor, Zap, MonitorOff, Pause
+  UserPlus, Monitor, Zap, MonitorOff, Pause
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
 import { useNavigate } from '@tanstack/react-router';
-import { api } from '@/lib/api';
-import { useAuthStore } from '@/stores/auth-store';
 import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
 import { useConsoleSummary } from '@/hooks/use-console-summary';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog';
 
 import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
@@ -86,7 +73,6 @@ function TopBarInner() {
   const navigate = useNavigate();
   const [showAddClient, setShowAddClient] = useState(false);
   const { data: summary = EMPTY_CONSOLE_SUMMARY } = useConsoleSummary();
-  const logout = useAuthStore((state) => state.logout);
 
   const totalClients = summary.total_clients;
   const onlineClientCount = summary.online_clients;
@@ -94,16 +80,6 @@ function TopBarInner() {
   const activeTunnels = summary.active_tunnels;
   const totalTunnels = summary.total_tunnels;
   const inactiveTunnels = summary.inactive_tunnels;
-
-  const handleLogout = async () => {
-    try {
-      await api.post('/api/auth/logout');
-    } catch {
-      // ignore logout failures and clear local state anyway
-    }
-    logout();
-    navigate({ to: '/login' });
-  };
 
   const { state: sidebarState, isMobile, openMobile } = useSidebar();
   const sidebarOpen = sidebarState === 'expanded';
@@ -235,33 +211,6 @@ function TopBarInner() {
             <UserPlus className="h-4 w-4 mr-1.5" />
             <span className="hidden sm:inline">添加 Client</span>
           </Button>
-
-          <div className="w-px h-5 bg-border mx-1 sm:mx-2" />
-
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground hover:text-destructive"
-              >
-                <LogOut className="h-4 w-4 mr-1.5" />
-                <span className="hidden sm:inline">退出</span>
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>确认退出？</AlertDialogTitle>
-                <AlertDialogDescription>
-                  退出后需要重新登录才能访问控制台。
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
-                <AlertDialogAction onClick={handleLogout}>确认退出</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
         </div>
       </header>
 

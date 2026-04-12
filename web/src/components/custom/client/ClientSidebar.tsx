@@ -3,14 +3,27 @@ import { motion, useSpring, useTransform } from 'motion/react';
 import {
   Server as ServerIcon, LayoutDashboard,
   Settings, Key,
-  Monitor, Zap, Plus
+  Monitor, Zap, Plus, LogOut
 } from 'lucide-react';
-import { Link, useMatch, useRouterState } from '@tanstack/react-router';
+import { Link, useMatch, useRouterState, useNavigate } from '@tanstack/react-router';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
 import { useConsoleSummary } from '@/hooks/use-console-summary';
 import { AddClientDialog } from './AddClientDialog';
+import { api } from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import {
   Sidebar,
   SidebarContent,
@@ -49,6 +62,18 @@ const ADMIN_NAV = [
 
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const [showAddClient, setShowAddClient] = useState(false);
+  const navigate = useNavigate();
+  const logout = useAuthStore((state) => state.logout);
+
+  const handleLogout = async () => {
+    try {
+      await api.post('/api/auth/logout');
+    } catch {
+      // ignore logout failures and clear local state anyway
+    }
+    logout();
+    navigate({ to: '/login' });
+  };
 
   // 从路由匹配获取当前选中的 clientId
   const clientMatch = useMatch({ from: '/dashboard/clients/$clientId', shouldThrow: false });
@@ -256,6 +281,36 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
+          </SidebarMenu>
+        </SidebarGroup>
+        <SidebarSeparator />
+        <SidebarGroup>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <SidebarMenuButton
+                    tooltip="退出登录"
+                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                  >
+                    <LogOut className="h-4 w-4" />
+                    <span>退出登录</span>
+                  </SidebarMenuButton>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>确认退出？</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      退出后需要重新登录才能访问控制台。
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>取消</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleLogout}>确认退出</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
       </SidebarFooter>
