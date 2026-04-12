@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Monitor, Network, Clock, Cpu, HardDrive, Database,
   Box, CircleHelp, Globe, ArrowDownCircle, ArrowUpCircle,
@@ -45,6 +46,16 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
   const diskPercent = stats?.disk_total ? (stats.disk_used / stats.disk_total) * 100 : 0;
   const diskPartitions = stats?.disk_partitions || [];
   const multipleDisks = diskPartitions.length > 1;
+
+  const [now] = useState(() => Date.now());
+  const startTimeText = stats?.process_uptime
+    ? new Date(now - stats.process_uptime * 1000).toLocaleString('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    : '-';
 
   return (
     <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden flex flex-col">
@@ -98,14 +109,7 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
             </HoverCardTrigger>
             <HoverCardContent className="w-[200px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
               <div className="text-muted-foreground">
-                启动于 {stats?.process_uptime
-                  ? new Date(Date.now() - stats.process_uptime * 1000).toLocaleString('zh-CN', {
-                      month: 'numeric',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })
-                  : '-'}
+                启动于 {startTimeText}
               </div>
             </HoverCardContent>
           </HoverCard>

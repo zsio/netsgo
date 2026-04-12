@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp } from 'lucide-react';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -25,6 +26,7 @@ function ProgressBar({ value, label, total, colorClass = "bg-primary" }: { value
 
 export function ServerInfoCard() {
   const { data: status, isLoading } = useServerStatus();
+  const [now] = useState(() => Date.now());
 
   if (isLoading) {
     return <Skeleton className="h-[300px] w-full rounded-xl" />;
@@ -35,6 +37,13 @@ export function ServerInfoCard() {
 
   const diskPartitions = status?.disk_partitions || [];
   const multipleDisks = diskPartitions.length > 1;
+
+  const startTimeText = new Date(now - (status?.uptime ?? 0) * 1000).toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 
   return (
     <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden flex flex-col">
@@ -84,12 +93,7 @@ export function ServerInfoCard() {
             </HoverCardTrigger>
             <HoverCardContent className="w-[200px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
               <div className="text-muted-foreground">
-                启动于 {new Date(Date.now() - (status?.uptime ?? 0) * 1000).toLocaleString('zh-CN', {
-                  month: 'numeric',
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}
+                启动于 {startTimeText}
               </div>
             </HoverCardContent>
           </HoverCard>
