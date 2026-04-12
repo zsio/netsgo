@@ -17,11 +17,6 @@ builds:
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
-      - goos: darwin
-        goarch: arm
     flags:
       - -trimpath
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -48,14 +43,11 @@ archives:
   - id: release-bundles
     files:
       - README.md
+      - LICENSE
     formats:
       - tar.gz
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if and (eq .Arch "arm") .Arm }}v{{ .Arm }}{{ end }}
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
 
 checksum:
   name_template: checksums.txt

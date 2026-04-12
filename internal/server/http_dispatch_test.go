@@ -179,6 +179,7 @@ func dialWSWithHost(t *testing.T, ts *httptest.Server, host, path string, subpro
 	t.Helper()
 
 	dialer := *websocket.DefaultDialer
+	dialer.Proxy = nil // disable proxy to prevent CONNECT tunnel when local http_proxy is set
 	dialer.Subprotocols = subprotocols
 	dialer.NetDialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 		var nd net.Dialer
