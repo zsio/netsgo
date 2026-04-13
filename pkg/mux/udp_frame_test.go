@@ -196,7 +196,7 @@ func TestUDPRelay_Bidirectional(t *testing.T) {
 	}
 
 	// 读取回复帧
-	testSide.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, testSide, time.Now().Add(2*time.Second))
 	reply, err := ReadUDPFrame(testSide)
 	if err != nil {
 		t.Fatalf("读取回复帧失败: %v", err)
@@ -207,7 +207,7 @@ func TestUDPRelay_Bidirectional(t *testing.T) {
 	}
 
 	// 6. 关闭 testSide，Relay 应该结束
-	testSide.Close()
+	mustClose(t, testSide)
 
 	select {
 	case <-relayDone:
@@ -249,7 +249,7 @@ func TestUDPRelay_MultiplePackets(t *testing.T) {
 			t.Fatalf("写入帧 #%d 失败: %v", i, err)
 		}
 
-		testSide.SetReadDeadline(time.Now().Add(2 * time.Second))
+		mustSetReadDeadline(t, testSide, time.Now().Add(2*time.Second))
 		reply, err := ReadUDPFrame(testSide)
 		if err != nil {
 			t.Fatalf("读取回复帧 #%d 失败: %v", i, err)
@@ -259,7 +259,7 @@ func TestUDPRelay_MultiplePackets(t *testing.T) {
 		}
 	}
 
-	testSide.Close()
+	mustClose(t, testSide)
 }
 
 func TestUDPRelay_StreamCloseEndsRelay(t *testing.T) {
@@ -290,7 +290,7 @@ func TestUDPRelay_StreamCloseEndsRelay(t *testing.T) {
 	}()
 
 	// 立即关闭 testSide（stream 对端）
-	testSide.Close()
+	mustClose(t, testSide)
 
 	done := make(chan struct{})
 	go func() {

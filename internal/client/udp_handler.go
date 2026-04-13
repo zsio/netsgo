@@ -18,7 +18,7 @@ import (
 // Each stream represents a virtual UDP session identified by the external srcAddr.
 // The server guarantees that packets from the same srcAddr use the same stream.
 func (c *Client) handleUDPStream(stream *yamux.Stream, cfg protocol.ProxyNewRequest) {
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	localAddr := net.JoinHostPort(cfg.LocalIP, fmt.Sprintf("%d", cfg.LocalPort))
 	localConn, err := net.Dial("udp", localAddr)
@@ -26,7 +26,7 @@ func (c *Client) handleUDPStream(stream *yamux.Stream, cfg protocol.ProxyNewRequ
 		log.Printf("⚠️ Failed to connect UDP local service [%s → %s]: %v", cfg.Name, localAddr, err)
 		return
 	}
-	defer localConn.Close()
+	defer func() { _ = localConn.Close() }()
 
 	// Relay traffic in both directions: stream (framed) ↔ localConn (raw UDP)
 	mux.UDPRelay(stream, localConn)

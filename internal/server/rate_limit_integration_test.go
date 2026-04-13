@@ -240,9 +240,11 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 			},
 		}
 		msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
-		conn.WriteJSON(msg)
+		if err := conn.WriteJSON(msg); err != nil {
+			t.Fatalf("WriteJSON failed: %v", err)
+		}
 
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 		var resp protocol.Message
 		if err := conn.ReadJSON(&resp); err != nil {
 			t.Fatalf("failed to read auth response for wrong-key attempt #%d: %v", i+1, err)
@@ -266,7 +268,7 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 		if authResp.ClearToken {
 			t.Fatalf("wrong-key attempt #%d should not request token clearing", i+1)
 		}
-		conn.Close()
+		_ = conn.Close()
 	}
 
 	// 4th connection: even with the correct key, it should be rejected due to rate limiting
@@ -274,7 +276,7 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WebSocket connection failed: %v", err)
 	}
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
@@ -287,9 +289,11 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 		},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
-	conn.WriteJSON(msg)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
 		t.Fatalf("failed to read rate-limited auth response: %v", err)
@@ -321,7 +325,7 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WebSocket connection failed after lockout expiry: %v", err)
 	}
-	defer conn2.Close()
+	defer mustClose(t, conn2)
 
 	authReq2 := protocol.AuthRequest{
 		Key:       "test-key",
@@ -334,9 +338,11 @@ func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
 		},
 	}
 	msg2, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq2)
-	conn2.WriteJSON(msg2)
+	if err := conn2.WriteJSON(msg2); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
-	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn2, time.Now().Add(2*time.Second))
 	var recoveryResp protocol.Message
 	if err := conn2.ReadJSON(&recoveryResp); err != nil {
 		t.Fatalf("authentication should succeed after lockout expiry: %v", err)

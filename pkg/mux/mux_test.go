@@ -187,7 +187,7 @@ func TestMultipleStreams_Concurrent(t *testing.T) {
 				errors <- fmt.Errorf("Client Open #%d: %v", idx, err)
 				return
 			}
-			defer stream.Close()
+			defer func() { _ = stream.Close() }()
 
 			msg := fmt.Sprintf("stream-%d-data", idx)
 			if _, err := stream.Write([]byte(msg)); err != nil {

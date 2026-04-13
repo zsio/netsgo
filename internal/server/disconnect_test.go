@@ -93,8 +93,8 @@ func TestDisconnect_DuringActiveRelay(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 🔥 突然断开底层连接（模拟网络抖动）
-	clientPipe.Close()
-	serverPipe.Close()
+	_ = clientPipe.Close()
+	_ = serverPipe.Close()
 
 	// 验证所有 goroutine 在合理时间内退出
 	timeout := time.After(5 * time.Second)
@@ -159,7 +159,7 @@ func TestDisconnect_RelayGoroutineCleanup(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// 断开一端
-	a1.Close()
+	_ = a1.Close()
 
 	// Relay 应在合理时间内退出
 	select {
@@ -169,5 +169,5 @@ func TestDisconnect_RelayGoroutineCleanup(t *testing.T) {
 		t.Fatal("Relay goroutine did not exit within 3s — goroutine leak")
 	}
 
-	b2.Close()
+	_ = b2.Close()
 }

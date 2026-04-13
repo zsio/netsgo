@@ -25,8 +25,12 @@ func TestTLSConfig_Validate_Custom_Valid(t *testing.T) {
 
 	certPath := filepath.Join(tmpDir, "cert.pem")
 	keyPath := filepath.Join(tmpDir, "key.pem")
-	os.WriteFile(certPath, certPEM, 0600)
-	os.WriteFile(keyPath, keyPEM, 0600)
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	cfg := &TLSConfig{
 		Mode:     TLSModeCustom,
@@ -343,8 +347,12 @@ func TestCustomTLS_Load(t *testing.T) {
 
 	certPath := filepath.Join(tmpDir, "cert.pem")
 	keyPath := filepath.Join(tmpDir, "key.pem")
-	os.WriteFile(certPath, certPEM, 0600)
-	os.WriteFile(keyPath, keyPEM, 0600)
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	cfg := &TLSConfig{
 		Mode:     TLSModeCustom,

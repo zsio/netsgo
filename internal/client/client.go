@@ -109,15 +109,6 @@ func (rt *sessionRuntime) writeMessage(messageType int, data []byte) error {
 	return rt.conn.WriteMessage(messageType, data)
 }
 
-func (rt *sessionRuntime) writeControl(messageType int, data []byte, deadline time.Time) error {
-	rt.connMu.Lock()
-	defer rt.connMu.Unlock()
-	if rt.conn == nil {
-		return fmt.Errorf("control channel unavailable")
-	}
-	return rt.conn.WriteControl(messageType, data, deadline)
-}
-
 func (rt *sessionRuntime) detachConn() *websocket.Conn {
 	rt.connMu.Lock()
 	defer rt.connMu.Unlock()
@@ -451,12 +442,6 @@ func (c *Client) Shutdown() {
 	log.Printf("✅ Graceful client shutdown complete")
 }
 
-func (c *Client) closeDone() {
-	if rt := c.getCurrentRuntime(); rt != nil {
-		rt.closeDone()
-	}
-}
-
 func (c *Client) stopRuntime(rt *sessionRuntime, reason string) {
 	if rt == nil {
 		return
@@ -509,10 +494,6 @@ func (c *Client) failRuntime(rt *sessionRuntime, reason string) {
 	c.stopRuntime(rt, reason)
 }
 
-func (c *Client) failCurrentSession(reason string) {
-	c.failRuntime(c.getCurrentRuntime(), reason)
-}
-
 // connectAndRun performs the full connection flow and blocks until disconnected.
 // A nil return means the connection was established and later dropped (reconnect is allowed).
 // A non-nil error means connection or authentication failed.
@@ -545,7 +526,7 @@ func (c *Client) connectAndRun() error {
 
 	if useTLS && !c.TLSSkipVerify {
 		if err := c.checkTLSFingerprint(conn); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			c.clearCurrentRuntime(rt)
 			return fmt.Errorf("TLS certificate fingerprint verification failed: %w", err)
 		}
@@ -602,12 +583,6 @@ func (c *Client) connectAndRun() error {
 	return nil
 }
 
-// authenticate sends the authentication request.
-// It prefers Token first and falls back to Key on failure.
-func (c *Client) authenticate() error {
-	return c.authenticateRuntime(c.runtimeForStandaloneUse())
-}
-
 func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 	hostname, _ := os.Hostname()
 	localIP := netutil.GetOutboundIP()
@@ -655,10 +630,6 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 
 	c.applyAuthSuccess(authResp)
 	return nil
-}
-
-func (c *Client) sendAuthRequest(authReq protocol.AuthRequest) (protocol.AuthResponse, error) {
-	return c.sendAuthRequestRuntime(c.runtimeForStandaloneUse(), authReq)
 }
 
 func (c *Client) sendAuthRequestRuntime(rt *sessionRuntime, authReq protocol.AuthRequest) (protocol.AuthResponse, error) {
@@ -779,39 +750,45 @@ func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
 		return fmt.Errorf("failed to open data-channel WebSocket: %w", err)
 	}
 	wsConn.SetReadLimit(wsDataMaxMessageSize)
-	wsConn.SetReadDeadline(time.Now().Add(c.dataHandshakeTimeout))
+	if err := wsConn.SetReadDeadline(time.Now().Add(c.dataHandshakeTimeout)); err != nil {
+		_ = wsConn.Close()
+		return fmt.Errorf("failed to set data-channel handshake read deadline: %w", err)
+	}
 
 	clientID, dataToken, _ := c.currentAuthState()
 	handshake := protocol.EncodeDataHandshake(clientID, dataToken)
 	if err := wsConn.WriteMessage(websocket.BinaryMessage, handshake); err != nil {
-		wsConn.Close()
+		_ = wsConn.Close()
 		return fmt.Errorf("failed to send data-channel handshake: %w", err)
 	}
 
 	messageType, payload, err := wsConn.ReadMessage()
 	if err != nil {
-		wsConn.Close()
+		_ = wsConn.Close()
 		return fmt.Errorf("failed to read data-channel handshake response: %w", err)
 	}
 	if messageType != websocket.BinaryMessage {
-		wsConn.Close()
+		_ = wsConn.Close()
 		return fmt.Errorf("invalid data-channel handshake response type: %d", messageType)
 	}
 	if len(payload) != 1 {
-		wsConn.Close()
+		_ = wsConn.Close()
 		return fmt.Errorf("invalid data-channel handshake response length: %d", len(payload))
 	}
 	if payload[0] != protocol.DataHandshakeOK {
-		wsConn.Close()
+		_ = wsConn.Close()
 		return fmt.Errorf("data-channel handshake rejected (status: 0x%02x)", payload[0])
 	}
 
-	wsConn.SetReadDeadline(time.Time{})
+	if err := wsConn.SetReadDeadline(time.Time{}); err != nil {
+		_ = wsConn.Close()
+		return fmt.Errorf("failed to clear data-channel read deadline: %w", err)
+	}
 
 	// Create the yamux client session.
 	session, err := mux.NewClientSession(mux.NewWSConn(wsConn), mux.DefaultConfig())
 	if err != nil {
-		wsConn.Close()
+		_ = wsConn.Close()
 		return fmt.Errorf("failed to create yamux session: %w", err)
 	}
 
@@ -915,7 +892,7 @@ func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
 // 3. Dial the local service
 // 4. Relay(stream, localConn)
 func (c *Client) handleStream(stream *yamux.Stream) {
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	// Read StreamHeader: [2B name length] [NB proxy_name]
 	var lenBuf [2]byte
@@ -981,11 +958,6 @@ func (c *Client) requestProxyRuntime(rt *sessionRuntime, cfg protocol.ProxyNewRe
 		cfg.Name, cfg.LocalIP, cfg.LocalPort, cfg.RemotePort)
 }
 
-// heartbeatLoop sends heartbeats periodically.
-func (c *Client) heartbeatLoop() {
-	c.heartbeatLoopRuntime(c.runtimeForStandaloneUse())
-}
-
 func (c *Client) heartbeatLoopRuntime(rt *sessionRuntime) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -1006,11 +978,6 @@ func (c *Client) heartbeatLoopRuntime(rt *sessionRuntime) {
 	}
 }
 
-// probeLoop collects and reports system status periodically.
-func (c *Client) probeLoop() {
-	c.probeLoopRuntime(c.runtimeForStandaloneUse())
-}
-
 func (c *Client) probeLoopRuntime(rt *sessionRuntime) {
 	// Report once immediately on startup.
 	c.reportProbeRuntime(rt)
@@ -1026,11 +993,6 @@ func (c *Client) probeLoopRuntime(rt *sessionRuntime) {
 			return
 		}
 	}
-}
-
-// reportProbe collects and reports system status.
-func (c *Client) reportProbe() {
-	c.reportProbeRuntime(c.runtimeForStandaloneUse())
 }
 
 func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
@@ -1076,11 +1038,6 @@ func (c *Client) refreshPublicIPs() {
 		c.publicIPv6 = ipv6
 	}
 	c.publicIPFetched = time.Now()
-}
-
-// controlLoop listens for control messages sent by the server.
-func (c *Client) controlLoop() {
-	c.controlLoopRuntime(c.runtimeForStandaloneUse())
 }
 
 func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
@@ -1158,24 +1115,3 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 	}
 }
 
-// checkBackendHealth verifies whether the backend service is reachable.
-// proxyType: tcp/udp/http
-// backendAddr: format "ip:port"
-func checkBackendHealth(proxyType, backendAddr string) error {
-	var network string
-	switch proxyType {
-	case protocol.ProxyTypeTCP, protocol.ProxyTypeHTTP:
-		network = "tcp"
-	case protocol.ProxyTypeUDP:
-		network = "udp"
-	default:
-		return fmt.Errorf("unsupported proxy type: %s", proxyType)
-	}
-
-	conn, err := net.DialTimeout(network, backendAddr, 5*time.Second)
-	if err != nil {
-		return err
-	}
-	conn.Close()
-	return nil
-}

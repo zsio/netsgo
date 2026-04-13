@@ -172,7 +172,7 @@ func (s *TrafficStore) QueryWithResolution(clientID, tunnelName string, from, to
 }
 
 func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Time, resolution TrafficResolution) TrafficQueryResult {
-	buckets := make([]TrafficBucket, 0)
+	buckets := make([]TrafficBucket, 0, len(s.minuteBuckets)+len(s.hourBuckets))
 	if resolution == TrafficResolutionMinute {
 		for _, bucket := range s.minuteBuckets {
 			if !bucketMatches(bucket, clientID, tunnelName) {
@@ -254,7 +254,7 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 			series = &TunnelTrafficSeries{
 				TunnelName: bucket.TunnelName,
 				TunnelType: bucket.TunnelType,
-				Points:     make([]TrafficPoint, 0),
+				Points:     []TrafficPoint{},
 			}
 			seriesMap[key] = series
 		}

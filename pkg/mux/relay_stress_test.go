@@ -47,7 +47,7 @@ func TestRelay_LargeData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("写入测试数据失败: %v", err)
 	}
-	srcConn.Close()
+	_ = srcConn.Close()
 
 	// 等待 Relay 结束
 	relayWg.Wait()
@@ -119,13 +119,12 @@ func TestRelay_ConcurrentStreams(t *testing.T) {
 	clientSession, _ := NewClientSession(clientConn, DefaultConfig())
 	serverSession, _ := NewServerSession(serverConn, DefaultConfig())
 
-	defer clientSession.Close()
-	defer serverSession.Close()
+	defer func() { _ = clientSession.Close() }()
+	defer func() { _ = serverSession.Close() }()
 
 	type result struct {
 		idx  int
 		hash [32]byte
-		data []byte
 	}
 
 	results := make(chan result, streamCount)

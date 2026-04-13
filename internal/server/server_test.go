@@ -45,7 +45,7 @@ func setupWSTest(t *testing.T) (*Server, *websocket.Conn, *httptest.Server, func
 	}
 
 	cleanup := func() {
-		conn.Close()
+		_ = conn.Close()
 		ts.Close()
 	}
 	return s, conn, ts, cleanup
@@ -159,20 +159,26 @@ func dialDataWSForClient(ts *httptest.Server, authResp protocol.AuthResponse) (*
 		return nil, fmt.Errorf("data channel WebSocket connection failed: %w", err)
 	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(authResp.ClientID, authResp.DataToken)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to send data channel handshake: %w", err)
 	}
-	conn.SetReadDeadline(time.Now().Add(testReadTimeout(2 * time.Second)))
+	if err := conn.SetReadDeadline(time.Now().Add(testReadTimeout(2 * time.Second))); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("failed to set data channel read deadline: %w", err)
+	}
 	messageType, payload, err := conn.ReadMessage()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to read data channel handshake response: %w", err)
 	}
 	if messageType != websocket.BinaryMessage || len(payload) != 1 || payload[0] != protocol.DataHandshakeOK {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("data channel handshake was unsuccessful: type=%d payload=%v", messageType, payload)
 	}
-	conn.SetReadDeadline(time.Time{})
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("failed to clear data channel read deadline: %w", err)
+	}
 	return conn, nil
 }
 
@@ -185,7 +191,7 @@ func connectAndAuthWithInstallID(t *testing.T, ts *httptest.Server, hostname, in
 	}
 	authResp := doAuthWithInstallID(t, conn, hostname, installID, "test-key")
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	t.Cleanup(func() { dataConn.Close() })
+	t.Cleanup(func() { _ = dataConn.Close() })
 	return conn, authResp
 }
 
@@ -216,10 +222,12 @@ func getAPIJSON(t *testing.T, s *Server, ts *httptest.Server, path string) map[s
 	if err != nil {
 		t.Fatalf("HTTP GET %s failed: %v", path, err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	var result map[string]any
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := mustDecodeJSON(t, resp.Body, &result); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
 	return result
 }
 
@@ -257,7 +265,9 @@ func TestAPI_Status_NoClients(t *testing.T) {
 	}
 
 	var result map[string]any
-	json.Unmarshal(w.Body.Bytes(), &result)
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
 
 	if result["status"] != "running" {
 		t.Errorf("status: want 'running', got %v", result["status"])
@@ -370,7 +380,7 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 
 	authResp := doAuthWithInstallID(t, conn, "online-summary-host", "install-online-summary-host", "test-key")
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 	time.Sleep(50 * time.Millisecond)
 
 	val, ok := s.clients.Load(authResp.ClientID)
@@ -458,7 +468,7 @@ func TestAPI_Status_WithClients(t *testing.T) {
 	defer cleanup()
 
 	conn2, _ := connectAndAuth(t, ts, "client-host")
-	defer conn2.Close()
+	defer mustClose(t, conn2)
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -479,7 +489,7 @@ func TestAPI_Status_AfterDisconnect(t *testing.T) {
 	result := getAPIJSON(t, s, ts, "/api/status")
 	before := result["client_count"].(float64)
 
-	conn2.Close()
+	_ = conn2.Close()
 	time.Sleep(100 * time.Millisecond)
 
 	result2 := getAPIJSON(t, s, ts, "/api/status")
@@ -507,11 +517,11 @@ func TestAPI_Clients_Multiple(t *testing.T) {
 	defer cleanup()
 
 	conn1, _ := connectAndAuth(t, ts, "host-A")
-	defer conn1.Close()
+	defer mustClose(t, conn1)
 	conn2, _ := connectAndAuth(t, ts, "host-B")
-	defer conn2.Close()
+	defer mustClose(t, conn2)
 	conn3, _ := connectAndAuth(t, ts, "host-C")
-	defer conn3.Close()
+	defer mustClose(t, conn3)
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -521,10 +531,12 @@ func TestAPI_Clients_Multiple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to request clients: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	var clients []map[string]any
-	json.NewDecoder(resp.Body).Decode(&clients)
+	if err := mustDecodeJSON(t, resp.Body, &clients); err != nil {
+		t.Fatalf("decode clients failed: %v", err)
+	}
 
 	if len(clients) < 3 {
 		t.Errorf("expected at least 3 clients, got %d", len(clients))
@@ -545,11 +557,13 @@ func TestAPI_Clients_WithStats(t *testing.T) {
 	defer cleanup()
 
 	conn1, _ := connectAndAuth(t, ts, "stats-host")
-	defer conn1.Close()
+	defer mustClose(t, conn1)
 
 	stats := protocol.SystemStats{CPUUsage: 55.5, MemUsage: 70.0, NumCPU: 8}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
-	conn1.WriteJSON(msg)
+	if err := conn1.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/clients", nil)
@@ -558,10 +572,12 @@ func TestAPI_Clients_WithStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to request clients: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	var clients []map[string]any
-	json.NewDecoder(resp.Body).Decode(&clients)
+	if err := mustDecodeJSON(t, resp.Body, &clients); err != nil {
+		t.Fatalf("decode clients failed: %v", err)
+	}
 
 	if len(clients) == 0 {
 		t.Fatal("expected at least 1 client")
@@ -609,7 +625,7 @@ func TestAPI_Clients_OfflineLegacyRunningTunnelUsesDesiredAndRuntimeStates(t *te
 	}
 
 	var clients []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &clients); err != nil {
 		t.Fatalf("failed to parse clients response: %v", err)
 	}
 
@@ -656,7 +672,7 @@ func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *test
 	}
 
 	var clients []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &clients); err != nil {
 		t.Fatalf("failed to parse clients response: %v", err)
 	}
 
@@ -689,7 +705,7 @@ func TestAPI_Clients_LiveTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
 	defer cleanup()
 
 	wsConn, authResp := connectAndAuth(t, ts, "live-state-host")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
@@ -719,7 +735,7 @@ func TestAPI_Clients_LiveTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to request clients: %v", err)
 	}
-	defer respClients.Body.Close()
+	defer mustClose(t, respClients.Body)
 
 	var clientViews []map[string]any
 	if err := json.NewDecoder(respClients.Body).Decode(&clientViews); err != nil {
@@ -789,16 +805,20 @@ func TestAPI_Clients_StatsUpdated(t *testing.T) {
 	defer cleanup()
 
 	conn1, authResp := connectAndAuth(t, ts, "update-host")
-	defer conn1.Close()
+	defer mustClose(t, conn1)
 
 	stats1 := protocol.SystemStats{CPUUsage: 20.0}
 	msg1, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats1)
-	conn1.WriteJSON(msg1)
+	if err := conn1.WriteJSON(msg1); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 	time.Sleep(50 * time.Millisecond)
 
 	stats2 := protocol.SystemStats{CPUUsage: 80.0}
 	msg2, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats2)
-	conn1.WriteJSON(msg2)
+	if err := conn1.WriteJSON(msg2); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 	time.Sleep(50 * time.Millisecond)
 
 	val, ok := s.clients.Load(authResp.ClientID)
@@ -959,7 +979,7 @@ func TestSSE_NoCORSHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SSE request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if cors := resp.Header.Get("Access-Control-Allow-Origin"); cors != "" {
 		t.Errorf("SSE endpoint should not set Access-Control-Allow-Origin, got %q", cors)
@@ -981,7 +1001,7 @@ func TestWebSocket_DefaultOriginCheck_NoOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connection without an Origin header should succeed, but failed: %v", err)
 	}
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Errorf("want 101 Switching Protocols, got %d", resp.StatusCode)
@@ -999,7 +1019,7 @@ func TestWebSocket_DefaultOriginCheck_CrossOrigin(t *testing.T) {
 
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, header)
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 	}
 
 	if err == nil {
@@ -1064,7 +1084,7 @@ func TestAuth_UninitializedServerRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WebSocket connection failed: %v", err)
 	}
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	authResp := doAuthWithInstallID(t, conn, "host", "install-uninitialized", "test-key")
 	if authResp.Success {
@@ -1109,7 +1129,7 @@ func TestAuth_ReconnectSameInstallIDRejectedWhileSessionAlive(t *testing.T) {
 	defer cleanup()
 
 	conn1, auth1 := connectAndAuthWithInstallID(t, ts, "stable-host", "install-stable-host")
-	defer conn1.Close()
+	defer mustClose(t, conn1)
 
 	time.Sleep(50 * time.Millisecond)
 	current, ok := s.clients.Load(auth1.ClientID)
@@ -1125,7 +1145,7 @@ func TestAuth_ReconnectSameInstallIDRejectedWhileSessionAlive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second control connection failed: %v", err)
 	}
-	defer conn2.Close()
+	defer mustClose(t, conn2)
 
 	auth2 := doAuthWithInstallID(t, conn2, "stable-host", "install-stable-host", "test-key")
 	if auth2.Success {
@@ -1199,9 +1219,11 @@ func TestAuth_WrongMsgType(t *testing.T) {
 	defer cleanup()
 
 	msg, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
-	conn.WriteJSON(msg)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	var resp protocol.Message
 	err := conn.ReadJSON(&resp)
 	if err == nil {
@@ -1218,11 +1240,13 @@ func TestAuth_MalformedJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connection failed: %v", err)
 	}
-	defer conn.Close()
+	defer mustClose(t, conn)
 
-	conn.WriteMessage(websocket.TextMessage, []byte(`{invalid json!!!`))
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{invalid json!!!`)); err != nil {
+		t.Fatalf("WriteMessage failed: %v", err)
+	}
 
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	_, _, readErr := conn.ReadMessage()
 	if readErr == nil {
 		t.Error("server should close the connection after receiving malformed JSON")
@@ -1247,11 +1271,11 @@ func TestAuth_TimeoutNoMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WebSocket connection failed: %v", err)
 	}
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	// send nothing after connecting and wait for the server to close on timeout
 	start := time.Now()
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(5*time.Second))
 	_, _, readErr := conn.ReadMessage()
 	elapsed := time.Since(start)
 
@@ -1278,12 +1302,14 @@ func TestHeartbeat_PingPong(t *testing.T) {
 
 	authResp := doAuth(t, conn)
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
-	conn.WriteJSON(ping)
+	if err := conn.WriteJSON(ping); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
 		t.Fatalf("failed to read Pong: %v", err)
@@ -1299,7 +1325,7 @@ func TestHeartbeat_MultiplePings(t *testing.T) {
 
 	authResp := doAuth(t, conn)
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 
 	for i := 0; i < 10; i++ {
 		ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
@@ -1307,7 +1333,7 @@ func TestHeartbeat_MultiplePings(t *testing.T) {
 			t.Fatalf("failed to send Ping #%d: %v", i, err)
 		}
 
-		conn.SetReadDeadline(time.Now().Add(testReadTimeout(2 * time.Second)))
+		mustSetReadDeadline(t, conn, time.Now().Add(testReadTimeout(2*time.Second)))
 		var resp protocol.Message
 		if err := conn.ReadJSON(&resp); err != nil {
 			t.Fatalf("failed to read Pong #%d: %v", i, err)
@@ -1328,7 +1354,7 @@ func TestProbe_SingleReport(t *testing.T) {
 
 	authResp := doAuth(t, conn)
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 
 	stats := protocol.SystemStats{
 		CPUUsage: 42.5,
@@ -1338,7 +1364,9 @@ func TestProbe_SingleReport(t *testing.T) {
 		NumCPU:   4,
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
-	conn.WriteJSON(msg)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -1367,7 +1395,7 @@ func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
 
 	authResp := doAuth(t, conn)
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 
 	stats := protocol.SystemStats{
 		CPUUsage: 42.5,
@@ -1380,7 +1408,7 @@ func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	conn.Close()
+	_ = conn.Close()
 	time.Sleep(100 * time.Millisecond)
 
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/clients", nil)
@@ -1389,10 +1417,10 @@ func TestProbe_ReportPersistedAfterDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request to /api/clients failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	var clients []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &clients); err != nil {
 		t.Fatalf("failed to parse /api/clients response: %v", err)
 	}
 
@@ -1440,7 +1468,7 @@ func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 	}
 
 	conn, authResp := connectAndAuthWithInstallID(t, ts, "persisted-host", "install-persisted-host")
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -1450,10 +1478,10 @@ func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request to /api/clients failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	var clients []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &clients); err != nil {
 		t.Fatalf("failed to parse /api/clients response: %v", err)
 	}
 
@@ -1483,13 +1511,15 @@ func TestProbe_MultipleReports(t *testing.T) {
 
 	authResp := doAuth(t, conn)
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 
 	for i := 0; i < 5; i++ {
 		cpuVal := float64(i+1) * 10.0
 		stats := protocol.SystemStats{CPUUsage: cpuVal, NumCPU: 8}
 		msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
-		conn.WriteJSON(msg)
+		if err := conn.WriteJSON(msg); err != nil {
+			t.Fatalf("WriteJSON failed: %v", err)
+		}
 		time.Sleep(30 * time.Millisecond)
 	}
 
@@ -1520,17 +1550,23 @@ func TestLifecycle_Full(t *testing.T) {
 	}
 
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
-	conn.WriteJSON(ping)
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.WriteJSON(ping); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	var pong protocol.Message
-	conn.ReadJSON(&pong)
+	if err := conn.ReadJSON(&pong); err != nil {
+		t.Fatalf("ReadJSON failed: %v", err)
+	}
 	if pong.Type != protocol.MsgTypePong {
 		t.Errorf("heartbeat: want pong, got %s", pong.Type)
 	}
 
 	stats := protocol.SystemStats{CPUUsage: 33.3, NumCPU: 2}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProbeReport, stats)
-	conn.WriteJSON(msg)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 	time.Sleep(50 * time.Millisecond)
 
 	val, _ := s.clients.Load(authResp.ClientID)
@@ -1538,7 +1574,7 @@ func TestLifecycle_Full(t *testing.T) {
 		t.Error("probe data was not updated correctly")
 	}
 
-	conn.Close()
+	_ = conn.Close()
 	time.Sleep(100 * time.Millisecond)
 
 	_, ok = s.clients.Load(authResp.ClientID)
@@ -1565,7 +1601,7 @@ func TestMultipleClients_Concurrent(t *testing.T) {
 				errors <- err
 				return
 			}
-			defer conn.Close()
+			defer mustClose(t, conn)
 
 			authReq := protocol.AuthRequest{
 				Key:       "test-key",
@@ -1573,17 +1609,23 @@ func TestMultipleClients_Concurrent(t *testing.T) {
 				Client:    protocol.ClientInfo{Hostname: hostname, OS: "linux", Arch: "amd64", Version: "0.1.0"},
 			}
 			msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
-			conn.WriteJSON(msg)
+			if err := conn.WriteJSON(msg); err != nil {
+				errors <- fmt.Errorf("write auth JSON failed: %w", err)
+				return
+			}
 
 			var resp protocol.Message
-			conn.SetReadDeadline(time.Now().Add(testReadTimeout(10 * time.Second)))
+			mustSetReadDeadline(t, conn, time.Now().Add(testReadTimeout(10*time.Second)))
 			if err := conn.ReadJSON(&resp); err != nil {
 				errors <- err
 				return
 			}
 
 			var authResp protocol.AuthResponse
-			resp.ParsePayload(&authResp)
+			if err := resp.ParsePayload(&authResp); err != nil {
+				errors <- fmt.Errorf("parse auth payload failed: %w", err)
+				return
+			}
 			if !authResp.Success {
 				errors <- fmt.Errorf("auth failed: %s", authResp.Message)
 				return
@@ -1594,14 +1636,14 @@ func TestMultipleClients_Concurrent(t *testing.T) {
 				errors <- err
 				return
 			}
-			defer dataConn.Close()
+			defer mustClose(t, dataConn)
 
 			ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
 			if err := conn.WriteJSON(ping); err != nil {
 				errors <- err
 				return
 			}
-			conn.SetReadDeadline(time.Now().Add(testReadTimeout(10 * time.Second)))
+			mustSetReadDeadline(t, conn, time.Now().Add(testReadTimeout(10*time.Second)))
 			if err := conn.ReadJSON(&resp); err != nil {
 				errors <- err
 				return
@@ -1632,7 +1674,7 @@ func TestClient_DisconnectCleansUp(t *testing.T) {
 		t.Fatal("both clients should be registered")
 	}
 
-	conn2.Close()
+	_ = conn2.Close()
 	time.Sleep(100 * time.Millisecond)
 
 	_, ok1 = s.clients.Load(auth1.ClientID)
@@ -1644,7 +1686,7 @@ func TestClient_DisconnectCleansUp(t *testing.T) {
 		t.Error("Client2 should be removed")
 	}
 
-	conn1.Close()
+	_ = conn1.Close()
 }
 
 func TestControlLoop_ProxyMessages(t *testing.T) {
@@ -1652,7 +1694,7 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	defer cleanup()
 
 	conn, authResp := connectAndAuth(t, ts, "proxy-msg-host")
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	// clients.Store has already completed inside handleAuth before the auth response is sent,
 	// so the client must already be in the map when connectAndAuth returns.
@@ -1662,8 +1704,8 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	}
 	client := val.(*ClientConn)
 	cPipe, sPipe := net.Pipe()
-	defer cPipe.Close()
-	defer sPipe.Close()
+	defer mustClose(t, cPipe)
+	defer mustClose(t, sPipe)
 	client.dataMu.Lock()
 	client.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
 	client.dataMu.Unlock()
@@ -1675,10 +1717,12 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 		RemotePort: reserveTCPPort(t),
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, protocol.ProxyCreateRequest(req))
-	conn.WriteJSON(msg)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
 	var resp protocol.Message
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	if err := conn.ReadJSON(&resp); err != nil {
 		t.Fatalf("failed to read create-proxy response: %v", err)
 	}
@@ -1690,7 +1734,9 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	// Test MsgTypeProxyClose
 	closeReq := protocol.ProxyCloseRequest{Name: "ws-tunnel-1"}
 	closeMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyClose, closeReq)
-	conn.WriteJSON(closeMsg)
+	if err := conn.WriteJSON(closeMsg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	client.proxyMu.RLock()
@@ -1707,7 +1753,7 @@ func TestControlLoop_ProxyCreateResponse(t *testing.T) {
 	defer cleanup()
 
 	conn, authResp := connectAndAuth(t, ts, "legacy-proxy-create-host")
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	val, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
@@ -1715,8 +1761,8 @@ func TestControlLoop_ProxyCreateResponse(t *testing.T) {
 	}
 	client := val.(*ClientConn)
 	cPipe, sPipe := net.Pipe()
-	defer cPipe.Close()
-	defer sPipe.Close()
+	defer mustClose(t, cPipe)
+	defer mustClose(t, sPipe)
 	client.dataMu.Lock()
 	client.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
 	client.dataMu.Unlock()
@@ -1727,10 +1773,12 @@ func TestControlLoop_ProxyCreateResponse(t *testing.T) {
 		RemotePort: reserveTCPPort(t),
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, req)
-	conn.WriteJSON(msg)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
 	var resp protocol.Message
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	if err := conn.ReadJSON(&resp); err != nil {
 		t.Fatalf("failed to read create-proxy response: %v", err)
 	}
@@ -1764,7 +1812,7 @@ func TestControlLoop_ProxyCreateWaitsForPendingDataChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WebSocket connection failed: %v", err)
 	}
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	authResp := doAuthWithInstallID(t, conn, "pending-proxy-create-host", "install-pending-proxy-create", "test-key")
 
@@ -1788,10 +1836,10 @@ func TestControlLoop_ProxyCreateWaitsForPendingDataChannel(t *testing.T) {
 	}
 
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 
 	var resp protocol.Message
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	if err := conn.ReadJSON(&resp); err != nil {
 		t.Fatalf("failed to read create-proxy response: %v", err)
 	}
@@ -1825,19 +1873,23 @@ func TestControlLoop_UnknownMsgType(t *testing.T) {
 	defer cleanup()
 
 	conn, _ := connectAndAuth(t, ts, "unknown-msg-host")
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	// send an unknown message type
 	unknownMsg, _ := protocol.NewMessage("unknown_type_xyz", nil)
-	conn.WriteJSON(unknownMsg)
+	if err := conn.WriteJSON(unknownMsg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
 	// server should not crash and should continue working normally
 	// send a ping to verify the connection is still healthy
 	time.Sleep(50 * time.Millisecond)
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
-	conn.WriteJSON(ping)
+	if err := conn.WriteJSON(ping); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
 		t.Fatalf("connection should remain healthy after sending an unknown message: %v", err)
@@ -1858,12 +1910,16 @@ func TestControlLoop_MalformedProbeReport(t *testing.T) {
 		Type:    protocol.MsgTypeProbeReport,
 		Payload: json.RawMessage(`{"cpu_usage": "not_a_number", "mem_usage": "bad"}`),
 	}
-	conn.WriteJSON(badMsg)
+	if err := conn.WriteJSON(badMsg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
 	// connection should still be healthy — send a ping to verify (if controlLoop did not crash, it should reply with pong)
 	ping, _ := protocol.NewMessage(protocol.MsgTypePing, nil)
-	conn.WriteJSON(ping)
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.WriteJSON(ping); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
 		t.Fatalf("connection should remain healthy after sending malformed probe data: %v", err)
@@ -1882,7 +1938,7 @@ func TestControlLoop_MalformedProbeReport(t *testing.T) {
 		t.Error("malformed probe_report should not cause stats to be updated")
 	}
 
-	conn.Close()
+	_ = conn.Close()
 	cleanup()
 }
 
@@ -1901,13 +1957,17 @@ func TestServer_StartHTTPOnly(t *testing.T) {
 func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	// 1. initialize server with DB
 	tmpDir, _ := os.MkdirTemp("", "tunnel_api_test_*")
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, _ := NewAdminStore(dbPath)
 	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
-	store.Initialize("admin", "password123", "localhost", nil)
-	store.AddAPIKey("default", "test-key", []string{"connect"}, nil)
+	if err := store.Initialize("admin", "password123", "localhost", nil); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+	if _, err := store.AddAPIKey("default", "test-key", []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	s := New(0)
 	s.auth.adminStore = store
@@ -1931,10 +1991,12 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("API request failed %s: %v", path, err)
 		}
-		defer resp.Body.Close()
+		defer mustClose(t, resp.Body)
 
 		var result map[string]any
-		json.NewDecoder(resp.Body).Decode(&result)
+		if err := mustDecodeJSON(t, resp.Body, &result); err != nil {
+			t.Fatalf("decode response failed: %v", err)
+		}
 		return resp.StatusCode, result
 	}
 
@@ -1955,12 +2017,12 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 			resultCh <- apiResult{code: code, body: resp}
 		}()
 
-		wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		mustSetReadDeadline(t, wsConn, time.Now().Add(2*time.Second))
 		var serverMsg protocol.Message
 		if err := wsConn.ReadJSON(&serverMsg); err != nil {
 			t.Fatalf("failed to read server proxy_provision: %v", err)
 		}
-		wsConn.SetReadDeadline(time.Time{})
+		mustSetReadDeadline(t, wsConn, time.Time{})
 		if serverMsg.Type != protocol.MsgTypeProxyProvision {
 			t.Fatalf("expected server to send %s, got %s", protocol.MsgTypeProxyProvision, serverMsg.Type)
 		}
@@ -2024,7 +2086,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WebSocket connection failed: %v", err)
 	}
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
@@ -2032,16 +2094,22 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		Client:    protocol.ClientInfo{Hostname: "lifecycle-client", OS: "linux", Version: "1.0.0"},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
-	wsConn.WriteJSON(msg)
+	if err := wsConn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
 	var authRespMsg protocol.Message
-	wsConn.ReadJSON(&authRespMsg)
+	if err := wsConn.ReadJSON(&authRespMsg); err != nil {
+		t.Fatalf("ReadJSON failed: %v", err)
+	}
 	var authResp protocol.AuthResponse
-	authRespMsg.ParsePayload(&authResp)
+	if err := authRespMsg.ParsePayload(&authResp); err != nil {
+		t.Fatalf("ParsePayload failed: %v", err)
+	}
 
 	clientID = authResp.ClientID
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 
 	time.Sleep(50 * time.Millisecond) // wait for client to become live
 
@@ -2078,12 +2146,12 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	if tunnel.DesiredState != protocol.ProxyDesiredStateStopped || tunnel.RuntimeState != protocol.ProxyRuntimeStateIdle {
 		t.Errorf("after stop, tunnel state should be stopped/idle, got %s/%s", tunnel.DesiredState, tunnel.RuntimeState)
 	}
-	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, wsConn, time.Now().Add(2*time.Second))
 	var closeMsg protocol.Message
 	if err := wsConn.ReadJSON(&closeMsg); err != nil {
 		t.Fatalf("failed to read proxy_close after stop: %v", err)
 	}
-	wsConn.SetReadDeadline(time.Time{})
+	mustSetReadDeadline(t, wsConn, time.Time{})
 	if closeMsg.Type != protocol.MsgTypeProxyClose {
 		t.Fatalf("after stop, expected %s, got %s", protocol.MsgTypeProxyClose, closeMsg.Type)
 	}
@@ -2123,7 +2191,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	if respDel.StatusCode != http.StatusNoContent {
 		t.Errorf("delete tunnel: want 204 No Content, got %d", respDel.StatusCode)
 	}
-	respDel.Body.Close()
+	_ = respDel.Body.Close()
 
 	if _, ok := s.store.GetTunnel(clientID, "test-tunnel"); ok {
 		t.Error("Store should no longer contain this tunnel after deletion")
@@ -2140,7 +2208,7 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	}
 
 	wsConn, authResp := connectAndAuth(t, ts, "timeout-client")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
@@ -2171,10 +2239,10 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 			errCh <- err
 			return
 		}
-		defer resp.Body.Close()
+		defer mustClose(t, resp.Body)
 
 		var body map[string]any
-		_ = json.NewDecoder(resp.Body).Decode(&body)
+		_ = mustDecodeJSON(t, resp.Body, &body)
 		resultCh <- apiResult{code: resp.StatusCode, body: body}
 	}()
 
@@ -2251,7 +2319,7 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	}
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-conflict-create")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	seedStoredTunnel(t, s, "client-other", protocol.ProxyNewRequest{
 		Name:      "existing-http",
@@ -2276,14 +2344,14 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tunnel request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("HTTP domain conflict: want 409, got %d", resp.StatusCode)
 	}
 
 	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 	if body["error_code"] != protocol.TunnelMutationErrorCodeHTTPTunnelConflict {
@@ -2309,7 +2377,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	}
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-conflict-update")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	seedStoredTunnel(t, s, "client-other", protocol.ProxyNewRequest{
 		Name:      "existing-http",
@@ -2362,14 +2430,14 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update tunnel request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("HTTP domain conflict: want 409, got %d", resp.StatusCode)
 	}
 
 	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 	if body["error_code"] != protocol.TunnelMutationErrorCodeHTTPTunnelConflict {
@@ -2389,7 +2457,7 @@ func TestServer_CreateTunnelHTTPInvalidDomainReturns400WithTypedError(t *testing
 	defer cleanup()
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-invalid-domain-create")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
@@ -2407,14 +2475,14 @@ func TestServer_CreateTunnelHTTPInvalidDomainReturns400WithTypedError(t *testing
 	if err != nil {
 		t.Fatalf("create tunnel request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid HTTP domain: want 400, got %d", resp.StatusCode)
 	}
 
 	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 	if body["error_code"] != protocol.TunnelMutationErrorCodeDomainInvalid {
@@ -2432,7 +2500,7 @@ func TestServer_CreateTunnelHTTPManagementHostConflictReturnsTypedError(t *testi
 	defer cleanup()
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-server-addr-conflict-create")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
 	token, err := s.GenerateAdminToken(session)
@@ -2450,14 +2518,14 @@ func TestServer_CreateTunnelHTTPManagementHostConflictReturnsTypedError(t *testi
 	if err != nil {
 		t.Fatalf("create tunnel request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("HTTP management domain conflict: want 409, got %d", resp.StatusCode)
 	}
 
 	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 	if body["error_code"] != protocol.TunnelMutationErrorCodeServerAddrConflict {
@@ -2479,7 +2547,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	}
 
 	wsConn, authResp := connectAndAuth(t, ts, "resume-post-ack-fail")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -2506,10 +2574,10 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 		if err != nil {
 			t.Fatalf("HTTP request failed %s %s: %v", method, path, err)
 		}
-		defer resp.Body.Close()
+		defer mustClose(t, resp.Body)
 
 		var payload map[string]any
-		_ = json.NewDecoder(resp.Body).Decode(&payload)
+		_ = mustDecodeJSON(t, resp.Body, &payload)
 		return resp.StatusCode, payload
 	}
 
@@ -2564,12 +2632,12 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, wsConn, time.Now().Add(2*time.Second))
 	var resumeMsg protocol.Message
 	if err := wsConn.ReadJSON(&resumeMsg); err != nil {
 		t.Fatalf("failed to read proxy_provision during resume phase: %v", err)
 	}
-	wsConn.SetReadDeadline(time.Time{})
+	mustSetReadDeadline(t, wsConn, time.Time{})
 	if resumeMsg.Type != protocol.MsgTypeProxyProvision {
 		t.Fatalf("resume phase: want %s, got %s", protocol.MsgTypeProxyProvision, resumeMsg.Type)
 	}
@@ -2601,12 +2669,12 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 		t.Fatal("timed out waiting for resume API to return")
 	}
 
-	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, wsConn, time.Now().Add(2*time.Second))
 	var rollbackCloseMsg protocol.Message
 	if err := wsConn.ReadJSON(&rollbackCloseMsg); err != nil {
 		t.Fatalf("failed to read rollback proxy_close: %v", err)
 	}
-	wsConn.SetReadDeadline(time.Time{})
+	mustSetReadDeadline(t, wsConn, time.Time{})
 	if rollbackCloseMsg.Type != protocol.MsgTypeProxyClose {
 		t.Fatalf("after rollback: want %s, got %s", protocol.MsgTypeProxyClose, rollbackCloseMsg.Type)
 	}
@@ -2688,7 +2756,7 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("control channel connection failed: %v", err)
 	}
-	defer controlConn.Close()
+	defer mustClose(t, controlConn)
 
 	authResp := doAuthWithInstallID(t, controlConn, "restore-post-ack-fail", "install-restore-post-ack-fail", "test-key")
 	if !authResp.Success {
@@ -2699,14 +2767,14 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	}
 
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 
-	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	mustSetReadDeadline(t, controlConn, time.Now().Add(3*time.Second))
 	var restoreMsg protocol.Message
 	if err := controlConn.ReadJSON(&restoreMsg); err != nil {
 		t.Fatalf("failed to read proxy_provision during restore phase: %v", err)
 	}
-	controlConn.SetReadDeadline(time.Time{})
+	mustSetReadDeadline(t, controlConn, time.Time{})
 	if restoreMsg.Type != protocol.MsgTypeProxyProvision {
 		t.Fatalf("restore phase: want %s, got %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
 	}
@@ -2732,12 +2800,12 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 		t.Fatalf("failed to send restore ack: %v", err)
 	}
 
-	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	mustSetReadDeadline(t, controlConn, time.Now().Add(3*time.Second))
 	var closeMsg protocol.Message
 	if err := controlConn.ReadJSON(&closeMsg); err != nil {
 		t.Fatalf("failed to read proxy_close after restore failure: %v", err)
 	}
-	controlConn.SetReadDeadline(time.Time{})
+	mustSetReadDeadline(t, controlConn, time.Time{})
 	if closeMsg.Type != protocol.MsgTypeProxyClose {
 		t.Fatalf("after restore failure: want %s, got %s", protocol.MsgTypeProxyClose, closeMsg.Type)
 	}
@@ -2814,7 +2882,7 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("control channel connection failed: %v", err)
 	}
-	defer controlConn.Close()
+	defer mustClose(t, controlConn)
 
 	authResp := doAuthWithInstallID(t, controlConn, "restore-http-host", "install-restore-http", "test-key")
 	if !authResp.Success {
@@ -2825,14 +2893,14 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 	}
 
 	dataConn := connectDataWSForClient(t, ts, authResp)
-	defer dataConn.Close()
+	defer mustClose(t, dataConn)
 
-	controlConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	mustSetReadDeadline(t, controlConn, time.Now().Add(3*time.Second))
 	var restoreMsg protocol.Message
 	if err := controlConn.ReadJSON(&restoreMsg); err != nil {
 		t.Fatalf("failed to read proxy_provision during HTTP restore phase: %v", err)
 	}
-	controlConn.SetReadDeadline(time.Time{})
+	mustSetReadDeadline(t, controlConn, time.Time{})
 
 	if restoreMsg.Type != protocol.MsgTypeProxyProvision {
 		t.Fatalf("HTTP restore phase: want %s, got %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
@@ -2855,33 +2923,39 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 
 func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	tmpDir, _ := os.MkdirTemp("", "tunnel_restore_test_*")
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
 	store, _ := NewAdminStore(dbPath)
 	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
-	store.Initialize("admin", "password123", "localhost", nil)
+	if err := store.Initialize("admin", "password123", "localhost", nil); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
 
 	tunnelStorePath := filepath.Join(tmpDir, "tunnels.json")
 	tStore, _ := NewTunnelStore(tunnelStorePath)
 
 	// prewrite two tunnels into Store (representing persisted data read on server restart)
-	tStore.AddTunnel(StoredTunnel{
+	if err := tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel1", Type: "tcp", RemotePort: 1234},
 		DesiredState:    protocol.ProxyDesiredStateRunning,
 		RuntimeState:    protocol.ProxyRuntimeStateExposed,
 		ClientID:        "client-1",
 		Hostname:        "restore-host",
 		Binding:         TunnelBindingClientID,
-	})
-	tStore.AddTunnel(StoredTunnel{
+	}); err != nil {
+		t.Fatalf("AddTunnel tunnel1 failed: %v", err)
+	}
+	if err := tStore.AddTunnel(StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{Name: "tunnel2", Type: "tcp", RemotePort: 5678},
 		DesiredState:    protocol.ProxyDesiredStateStopped,
 		RuntimeState:    protocol.ProxyRuntimeStateIdle,
 		ClientID:        "client-1",
 		Hostname:        "restore-host",
 		Binding:         TunnelBindingClientID,
-	})
+	}); err != nil {
+		t.Fatalf("AddTunnel tunnel2 failed: %v", err)
+	}
 
 	s := New(0)
 	s.auth.adminStore = store
@@ -2903,8 +2977,8 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	client.dataSession = sess
 	client.dataMu.Unlock()
 	defer func() {
-		cPipe.Close()
-		sPipe.Close()
+		_ = cPipe.Close()
+		_ = sPipe.Close()
 	}()
 
 	// pretend there is a WebSocket connection
@@ -2921,7 +2995,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	defer wsServer.Close()
 	wsURL := "ws" + strings.TrimPrefix(wsServer.URL, "http")
 	clientConn, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
-	defer clientConn.Close()
+	defer mustClose(t, clientConn)
 
 	select {
 	case <-connReady:
@@ -3147,12 +3221,18 @@ func TestAuth_KeyExchange_ReturnsToken(t *testing.T) {
 		},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
-	conn.WriteJSON(msg)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
 	var resp protocol.Message
-	conn.ReadJSON(&resp)
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("ReadJSON failed: %v", err)
+	}
 	var authResp protocol.AuthResponse
-	resp.ParsePayload(&authResp)
+	if err := resp.ParsePayload(&authResp); err != nil {
+		t.Fatalf("ParsePayload failed: %v", err)
+	}
 
 	if !authResp.Success {
 		t.Fatalf("authentication should succeed: %s", authResp.Message)
@@ -3183,7 +3263,7 @@ func TestAuth_TokenReconnect(t *testing.T) {
 	useCountBefore := keys[0].UseCount
 
 	// disconnect
-	conn1.Close()
+	_ = conn1.Close()
 	time.Sleep(200 * time.Millisecond)
 
 	// 2. reconnect with the newly generated token (the original token would be needed, but it cannot be recovered after hashing)
@@ -3219,12 +3299,18 @@ func TestAuth_OldClientWithoutToken(t *testing.T) {
 		// Token field is empty (omitempty)
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
-	conn.WriteJSON(msg)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 
 	var resp protocol.Message
-	conn.ReadJSON(&resp)
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("ReadJSON failed: %v", err)
+	}
 	var authResp protocol.AuthResponse
-	resp.ParsePayload(&authResp)
+	if err := resp.ParsePayload(&authResp); err != nil {
+		t.Fatalf("ParsePayload failed: %v", err)
+	}
 
 	if !authResp.Success {
 		t.Fatalf("old client key authentication should succeed: %s", authResp.Message)
@@ -3289,7 +3375,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	// complete authentication
 	authReq := protocol.AuthRequest{
@@ -3303,10 +3389,14 @@ func TestServer_GracefulShutdown(t *testing.T) {
 		},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
-	conn.WriteJSON(msg)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
 	var authMsg protocol.Message
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	conn.ReadJSON(&authMsg)
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
+	if err := conn.ReadJSON(&authMsg); err != nil {
+		t.Fatalf("ReadJSON failed: %v", err)
+	}
 
 	// confirm that the client is registered
 	clientCount := 0
@@ -3399,7 +3489,7 @@ func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -3408,7 +3498,7 @@ func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
 		t.Fatalf("Shutdown failed: %v", err)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	mustSetReadDeadline(t, conn, time.Now().Add(500*time.Millisecond))
 	var msg protocol.Message
 	err = conn.ReadJSON(&msg)
 	if err == nil {

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -83,18 +82,15 @@ const (
 )
 
 func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.collectConsoleStatus())
+	encodeJSON(w, http.StatusOK, s.collectConsoleStatus())
 }
 
 func (s *Server) handleAPIConsoleSnapshot(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.collectSnapshot())
+	encodeJSON(w, http.StatusOK, s.collectSnapshot())
 }
 
 func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.collectClientViews())
+	encodeJSON(w, http.StatusOK, s.collectClientViews())
 }
 
 func (s *Server) collectSnapshot() consoleSnapshot {
@@ -149,7 +145,7 @@ func (s *Server) collectClientViews() []clientView {
 		if !client.isLive() {
 			return true
 		}
-		proxies := make([]protocol.ProxyConfig, 0)
+		proxies := make([]protocol.ProxyConfig, 0, len(client.proxies))
 		client.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
 			proxies = append(proxies, proxyConfigForClientView(tunnel.Config, true))
 			return true

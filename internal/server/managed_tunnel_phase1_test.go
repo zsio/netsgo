@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -16,7 +15,7 @@ func TestServer_CreateTunnel_TCPWithoutRemotePortReturns400(t *testing.T) {
 	defer cleanup()
 
 	wsConn, authResp := connectAndAuth(t, ts, "missing-remote-port")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	reqBody := []byte(`{"name":"tcp-missing-port","type":"tcp","local_ip":"127.0.0.1","local_port":8080}`)
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels", authResp.ClientID), bytes.NewReader(reqBody))
@@ -28,14 +27,14 @@ func TestServer_CreateTunnel_TCPWithoutRemotePortReturns400(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tunnel request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 when remote_port missing, got %d", resp.StatusCode)
 	}
 
 	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 		t.Fatalf("parse response failed: %v", err)
 	}
 	if success, _ := payload["success"].(bool); success {
@@ -57,7 +56,7 @@ func TestServer_UpdateErrorHTTPTunnel_RestartFailureReturnsError(t *testing.T) {
 	s.store = store
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-update-restart-fail")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	seedStoredTunnel(t, s, authResp.ClientID, protocol.ProxyNewRequest{
 		Name:      "broken-http",
@@ -106,14 +105,14 @@ func TestServer_UpdateErrorHTTPTunnel_RestartFailureReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update tunnel request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode < 400 {
 		t.Fatalf("api must return failure when auto-restart failed, got %d", resp.StatusCode)
 	}
 
 	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 		t.Fatalf("parse response failed: %v", err)
 	}
 	if success, _ := payload["success"].(bool); success {

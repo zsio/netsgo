@@ -26,16 +26,6 @@ func (c *ClientConn) isLive() bool {
 	return c.getState() == clientStateLive
 }
 
-func (c *ClientConn) stopPendingTimer() {
-	c.stateMu.Lock()
-	timer := c.pendingTimer
-	c.pendingTimer = nil
-	c.stateMu.Unlock()
-	if timer != nil {
-		timer.Stop()
-	}
-}
-
 func (s *Server) nextClientGeneration() uint64 {
 	return s.sessions.nextClientGeneration()
 }

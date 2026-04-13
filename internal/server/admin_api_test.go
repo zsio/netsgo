@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -53,63 +52,10 @@ func setupTestServerWithDB(t *testing.T, initialized bool) (*Server, func()) {
 	s.auth.adminStore = store
 
 	cleanup := func() {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 	}
 
 	return s, cleanup
-}
-
-func loginAdminToken(t *testing.T, ts *httptest.Server, username, password string) string {
-	t.Helper()
-
-	body := []byte(`{"username":"` + username + `","password":"` + password + `"}`)
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/login", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("failed to create login request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("login request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("login: want 200, got %d", resp.StatusCode)
-	}
-
-	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		t.Fatalf("failed to parse login response: %v", err)
-	}
-
-	token, _ := payload["token"].(string)
-	if token == "" {
-		t.Fatal("login response did not return a token")
-	}
-	return token
-}
-
-func doAuthorizedRequest(t *testing.T, client *http.Client, method, url, token string, body []byte) *http.Response {
-	t.Helper()
-
-	req, err := http.NewRequest(method, url, bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("failed to create request: %v", err)
-	}
-	if len(body) > 0 {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	return resp
 }
 
 func doMuxRequest(t *testing.T, handler http.Handler, method, path, token string, body []byte) *httptest.ResponseRecorder {
@@ -201,7 +147,7 @@ func loginAdminTokenLocal(t *testing.T, handler http.Handler, username, password
 	}
 
 	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 		t.Fatalf("failed to parse login response: %v", err)
 	}
 
@@ -228,7 +174,9 @@ func TestAPI_Login_Success(t *testing.T) {
 	}
 
 	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := mustDecodeJSON(t, w.Body, &resp); err != nil {
+		t.Fatalf("decode login response failed: %v", err)
+	}
 	if resp["token"] == nil || resp["token"] == "" {
 		t.Errorf("successful login did not return a token")
 	}
@@ -334,7 +282,9 @@ func TestAPI_AdminKeys_CreateAndList(t *testing.T) {
 	}
 
 	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := mustDecodeJSON(t, w.Body, &resp); err != nil {
+		t.Fatalf("decode key creation response failed: %v", err)
+	}
 	if resp["raw_key"] == nil || resp["raw_key"] == "" {
 		t.Errorf("creating a key should return raw_key and other frontend-facing fields")
 	}
@@ -354,7 +304,9 @@ func TestAPI_AdminKeys_CreateAndList(t *testing.T) {
 	}
 
 	var keys []map[string]any
-	json.NewDecoder(w2.Body).Decode(&keys)
+	if err := mustDecodeJSON(t, w2.Body, &keys); err != nil {
+		t.Fatalf("decode keys response failed: %v", err)
+	}
 
 	// test-key = 1
 	if len(keys) != 1 {
@@ -399,7 +351,9 @@ func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 	}
 
 	var config map[string]any
-	json.NewDecoder(w.Body).Decode(&config)
+	if err := mustDecodeJSON(t, w.Body, &config); err != nil {
+		t.Fatalf("decode config response failed: %v", err)
+	}
 	if config["server_addr"] != "http://localhost" {
 		t.Errorf("initial server_addr should be http://localhost, got %v", config["server_addr"])
 	}
@@ -420,7 +374,9 @@ func TestAPI_AdminConfig_GetAndUpdate(t *testing.T) {
 	s.handleAPIAdminConfig(w3, req3)
 
 	var updated map[string]any
-	json.NewDecoder(w3.Body).Decode(&updated)
+	if err := mustDecodeJSON(t, w3.Body, &updated); err != nil {
+		t.Fatalf("decode updated config response failed: %v", err)
+	}
 	if updated["server_addr"] != "https://tunnel.example.com" {
 		t.Errorf("updated server_addr should be https://tunnel.example.com, got %v", updated["server_addr"])
 	}
@@ -511,7 +467,7 @@ func TestAdminConfigResponse(t *testing.T) {
 		}
 
 		var payload map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 			t.Fatalf("failed to parse response: %v", err)
 		}
 
@@ -538,7 +494,7 @@ func TestAdminConfigResponse(t *testing.T) {
 		}
 
 		var payload map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 			t.Fatalf("failed to parse response: %v", err)
 		}
 
@@ -572,7 +528,7 @@ func TestAdminConfigDryRun(t *testing.T) {
 		}
 
 		var payload map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 			t.Fatalf("failed to parse response: %v", err)
 		}
 
@@ -606,7 +562,7 @@ func TestAdminConfigDryRun(t *testing.T) {
 		}
 
 		var payload map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 			t.Fatalf("failed to parse response: %v", err)
 		}
 
@@ -633,7 +589,7 @@ func TestAdminConfigUpdateRejectsWhenLocked(t *testing.T) {
 	}
 
 	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 
@@ -678,7 +634,7 @@ func TestAdminConfigResponse_InvalidEnvDoesNotOverrideOrLock(t *testing.T) {
 	}
 
 	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 
@@ -709,7 +665,7 @@ func TestAdminConfigUpdateRejectsWhenHTTPDomainConflicts(t *testing.T) {
 	}
 
 	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 

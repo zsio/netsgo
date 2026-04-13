@@ -134,15 +134,11 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 	tunnel, exists := client.proxies[tunnelName]
 	client.proxyMu.RUnlock()
 	if !exists {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": "tunnel not found"})
+		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 		return
 	}
 	if !canResumeTunnel(tunnel.Config) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "only stopped/idle or running/error tunnels can be resumed"})
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "only stopped/idle or running/error tunnels can be resumed"})
 		return
 	}
 
@@ -188,9 +184,7 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 	_, exists := client.proxies[tunnelName]
 	client.proxyMu.RUnlock()
 	if !exists {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": "tunnel not found"})
+		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 		return
 	}
 
@@ -228,16 +222,12 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	tunnel, exists := client.proxies[tunnelName]
 	client.proxyMu.RUnlock()
 	if !exists {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": "tunnel not found"})
+		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 		return
 	}
 
 	if !canEditOrDeleteLiveTunnel(tunnel.Config) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{
+		encodeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": fmt.Sprintf("tunnel is currently in state %s/%s; only stopped/idle or running/error tunnels can be deleted", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
 		})
 		return

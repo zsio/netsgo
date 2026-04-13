@@ -2,14 +2,6 @@ package server
 
 import "netsgo/pkg/protocol"
 
-func (s *Server) registerTunnelProvisionAckWaiter(client *ClientConn, name string) (<-chan provisionAckResult, error) {
-	return s.tunnels.registerProvisionAckWaiter(client, name)
-}
-
-func (s *Server) unregisterTunnelProvisionAckWaiter(client *ClientConn, name string) {
-	s.tunnels.unregisterProvisionAckWaiter(client, name)
-}
-
 func (s *Server) resolveTunnelProvisionAckWaiter(clientID string, generation uint64, resp provisionAckResult) bool {
 	return s.tunnels.resolveProvisionAckWaiter(clientID, generation, resp)
 }

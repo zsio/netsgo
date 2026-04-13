@@ -60,7 +60,7 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	}
 	release := s.trackManagedConn(conn)
 	defer release()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	conn.SetReadLimit(wsMaxMessageSize)
 
@@ -106,14 +106,18 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 	if authTimeout == 0 {
 		authTimeout = 30 * time.Second
 	}
-	conn.SetReadDeadline(time.Now().Add(authTimeout))
+	if err := conn.SetReadDeadline(time.Now().Add(authTimeout)); err != nil {
+		return nil, fmt.Errorf("failed to set auth read deadline: %w", err)
+	}
 
 	var msg protocol.Message
 	if err := conn.ReadJSON(&msg); err != nil {
 		return nil, fmt.Errorf("failed to read authentication message: %w", err)
 	}
 
-	conn.SetReadDeadline(time.Time{})
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("failed to clear auth read deadline: %w", err)
+	}
 	if msg.Type != protocol.MsgTypeAuth {
 		return nil, fmt.Errorf("expected authentication message, got: %s", msg.Type)
 	}
