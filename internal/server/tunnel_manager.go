@@ -662,20 +662,6 @@ func (s *Server) emitTunnelChanged(clientID string, tunnel protocol.ProxyConfig,
 	s.events.PublishJSON("tunnel_changed", payload)
 }
 
-func (s *Server) readClientFromPath(w http.ResponseWriter, r *http.Request) (*ClientConn, bool) {
-	clientID := r.PathValue("id")
-	client, ok := s.loadLiveClient(clientID)
-	if !ok {
-		http.Error(w, `{"error":"client not found"}`, http.StatusNotFound)
-		return nil, false
-	}
-	return client, true
-}
-
-func (s *Server) forceDisconnectClient(client *ClientConn) {
-	_ = s.invalidateLogicalSessionIfCurrent(client.ID, client.generation, "force_disconnect")
-}
-
 func encodeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

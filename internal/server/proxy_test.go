@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -66,13 +67,13 @@ func TestStartProxy_Success(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unable to dial the bound public port, which indicates the listener is broken: %v", err)
 	} else {
-		testConn.Close()
+		_ = testConn.Close()
 	}
 
 	// Cleanup
 	s.StopAllProxies(client)
-	cConn.Close()
-	sConn.Close()
+	_ = cConn.Close()
+	_ = sConn.Close()
 }
 
 func TestStartProxy_NoDataChannel(t *testing.T) {
@@ -231,8 +232,8 @@ func TestStartProxy_DuplicateName(t *testing.T) {
 	}
 
 	s.StopAllProxies(client)
-	cConn.Close()
-	sConn.Close()
+	_ = cConn.Close()
+	_ = sConn.Close()
 }
 
 func TestStopProxy(t *testing.T) {
@@ -270,8 +271,8 @@ func TestStopProxy(t *testing.T) {
 		t.Errorf("The proxy has stopped, but port %d can still be connected to", port)
 	}
 
-	cConn.Close()
-	sConn.Close()
+	_ = cConn.Close()
+	_ = sConn.Close()
 }
 
 func TestStopAllProxies(t *testing.T) {
@@ -310,8 +311,8 @@ func TestStopAllProxies(t *testing.T) {
 	if countAf != 0 {
 		t.Errorf("The proxy map should be empty after StopAllProxies, got length %d", countAf)
 	}
-	cConn.Close()
-	sConn.Close()
+	_ = cConn.Close()
+	_ = sConn.Close()
 }
 
 // ============================================================
@@ -329,8 +330,8 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 
 	// 1. Simulate a network channel (for Yamux multiplexing)
 	pipeC, pipeS := net.Pipe()
-	defer pipeC.Close()
-	defer pipeS.Close()
+	defer mustClose(t, pipeC)
+	defer mustClose(t, pipeS)
 
 	// Initialize the Yamux server/client session
 	var serverSession *yamux.Session
@@ -344,8 +345,8 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	wg.Wait()
 
 	cc.dataSession = serverSession
-	defer serverSession.Close()
-	defer clientSession.Close()
+	defer mustClose(t, serverSession)
+	defer mustClose(t, clientSession)
 
 	// 2. Start proxy listening
 	tunnelName := "echo-http-tunnel"
@@ -359,7 +360,7 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start proxy: %v", err)
 	}
-	defer s.StopProxy(cc, tunnelName)
+	defer func() { _ = s.StopProxy(cc, tunnelName) }()
 
 	cc.proxyMu.RLock()
 	remotePort := cc.proxies[tunnelName].Config.RemotePort
@@ -370,7 +371,9 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	localBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Proxy-Target", "hit")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("hello from backend"))
+		if _, err := w.Write([]byte("hello from backend")); err != nil {
+			t.Fatalf("write backend response failed: %v", err)
+		}
 	}))
 	defer localBackend.Close()
 
@@ -381,20 +384,24 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 				return
 			}
 			go func(stream net.Conn) {
-				defer stream.Close()
+				defer func() { _ = stream.Close() }()
 				// Discard the 2-byte length and Name header sent by the proxy (mock client parsing)
 				var ln [2]byte
-				stream.Read(ln[:])
+				if _, err := io.ReadFull(stream, ln[:]); err != nil {
+					return
+				}
 				nameLen := int(ln[0])<<8 | int(ln[1])
 				nameBuf := make([]byte, nameLen)
-				stream.Read(nameBuf)
+				if _, err := io.ReadFull(stream, nameBuf); err != nil {
+					return
+				}
 
 				// Dial the real local backend
 				backendConn, err := net.Dial("tcp", localBackend.Listener.Addr().String())
 				if err != nil {
 					return
 				}
-				defer backendConn.Close()
+				defer func() { _ = backendConn.Close() }()
 				mux.Relay(stream, backendConn)
 			}(stream)
 		}
@@ -406,7 +413,7 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to request the proxy address: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status code 200, got %d", resp.StatusCode)
@@ -429,7 +436,7 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 		t.Fatalf("Failed to preallocate port: %v", err)
 	}
 	contestedPort := ln.Addr().(*net.TCPAddr).Port
-	ln.Close() // Release the port so two clients can race for it
+	_ = ln.Close() // Release the port so two clients can race for it
 
 	// Create two clients, each with its own data session
 	makeClient := func(id string) *ClientConn {
@@ -442,9 +449,9 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 		session, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
 		client.dataSession = session
 		t.Cleanup(func() {
-			cConn.Close()
-			sConn.Close()
-			session.Close()
+			_ = cConn.Close()
+			_ = sConn.Close()
+			_ = session.Close()
 		})
 		return client
 	}
@@ -720,7 +727,7 @@ func TestHandleProxyConn_OpenStreamFailureMarksTunnelError(t *testing.T) {
 	mustAddStableTunnel(t, s.store, storedTunnelFromRuntime(client, tunnel))
 
 	peerConn, extConn := net.Pipe()
-	defer peerConn.Close()
+	defer mustClose(t, peerConn)
 
 	done := make(chan struct{})
 	go func() {

@@ -12,7 +12,7 @@ func capturePrintSummary(title string, rows [][2]string) string {
 	orig := os.Stdout
 	os.Stdout = w
 	PrintSummary(title, rows)
-	w.Close()
+	_ = w.Close()
 	os.Stdout = orig
 	out, _ := io.ReadAll(r)
 	return string(out)

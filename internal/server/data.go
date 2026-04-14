@@ -30,10 +30,13 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	}
 	release := s.trackManagedConn(conn)
 	defer release()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	conn.SetReadLimit(wsDataMaxMessageSize)
-	conn.SetReadDeadline(time.Now().Add(s.sessions.dataHandshakeTimeout))
+	if err := conn.SetReadDeadline(time.Now().Add(s.sessions.dataHandshakeTimeout)); err != nil {
+		log.Printf("❌ data channel: set handshake read deadline failed: %v", err)
+		return
+	}
 
 	messageType, payload, err := conn.ReadMessage()
 	if err != nil {
@@ -52,14 +55,18 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	clientID, dataToken, err := protocol.DecodeDataHandshake(payload)
 	if err != nil {
 		log.Printf("❌ data channel handshake parse failed: %v", err)
-		s.writeDataHandshakeResult(conn, protocol.DataHandshakeFail)
+		if writeErr := s.writeDataHandshakeResult(conn, protocol.DataHandshakeFail); writeErr != nil {
+			log.Printf("❌ data channel handshake fail response write failed: %v", writeErr)
+		}
 		return
 	}
 
 	value, ok := s.clients.Load(clientID)
 	if !ok {
 		log.Printf("❌ data channel: Client [%s] not registered", clientID)
-		s.writeDataHandshakeResult(conn, protocol.DataHandshakeFail)
+		if writeErr := s.writeDataHandshakeResult(conn, protocol.DataHandshakeFail); writeErr != nil {
+			log.Printf("❌ data channel missing client response write failed: %v", writeErr)
+		}
 		return
 	}
 	client := value.(*ClientConn)
@@ -67,17 +74,23 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 
 	if client.dataToken == "" || subtle.ConstantTimeCompare([]byte(client.dataToken), []byte(dataToken)) != 1 {
 		log.Printf("❌ data channel: DataToken verification failed [%s]", clientID)
-		s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail)
+		if writeErr := s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail); writeErr != nil {
+			log.Printf("❌ data channel auth fail response write failed: %v", writeErr)
+		}
 		return
 	}
 	if client.getState() == clientStateClosing {
 		log.Printf("❌ data channel: session already closing [%s]", clientID)
-		s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail)
+		if writeErr := s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail); writeErr != nil {
+			log.Printf("❌ data channel closing response write failed: %v", writeErr)
+		}
 		return
 	}
 
 	if !s.isCurrentGeneration(clientID, generation) {
-		s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail)
+		if writeErr := s.writeDataHandshakeResult(conn, protocol.DataHandshakeAuthFail); writeErr != nil {
+			log.Printf("❌ data channel stale generation response write failed: %v", writeErr)
+		}
 		return
 	}
 
@@ -86,8 +99,14 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn.SetReadDeadline(time.Time{})
-	conn.SetWriteDeadline(time.Time{})
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		log.Printf("❌ data channel: clear read deadline failed [%s]: %v", clientID, err)
+		return
+	}
+	if err := conn.SetWriteDeadline(time.Time{}); err != nil {
+		log.Printf("❌ data channel: clear write deadline failed [%s]: %v", clientID, err)
+		return
+	}
 
 	wsConn := mux.NewWSConn(conn)
 	session, err := mux.NewServerSession(wsConn, mux.DefaultConfig())
@@ -140,8 +159,12 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) error {
-	conn.SetWriteDeadline(time.Now().Add(s.sessions.dataHandshakeAckTimeout))
-	defer conn.SetWriteDeadline(time.Time{})
+	if err := conn.SetWriteDeadline(time.Now().Add(s.sessions.dataHandshakeAckTimeout)); err != nil {
+		return fmt.Errorf("set handshake ack write deadline failed: %w", err)
+	}
+	defer func() {
+		_ = conn.SetWriteDeadline(time.Time{})
+	}()
 	return conn.WriteMessage(websocket.BinaryMessage, []byte{status})
 }
 
@@ -149,7 +172,7 @@ func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) err
 // writes a StreamHeader to tell the client which proxy this stream belongs to.
 func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.Conn, error) {
 	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
-		return nil, fmt.Errorf("Client [%s] is not online", client.ID)
+		return nil, fmt.Errorf("client [%s] is not online", client.ID)
 	}
 
 	client.dataMu.RLock()
@@ -157,7 +180,7 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 	client.dataMu.RUnlock()
 
 	if session == nil || session.IsClosed() {
-		return nil, fmt.Errorf("Client [%s] data channel not established", client.ID)
+		return nil, fmt.Errorf("client [%s] data channel not established", client.ID)
 	}
 
 	stream, err := session.Open()
@@ -170,11 +193,11 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 	var lenBuf [2]byte
 	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
 	if _, err := stream.Write(lenBuf[:]); err != nil {
-		stream.Close()
+		_ = stream.Close()
 		return nil, fmt.Errorf("write StreamHeader length failed: %w", err)
 	}
 	if _, err := stream.Write(nameBytes); err != nil {
-		stream.Close()
+		_ = stream.Close()
 		return nil, fmt.Errorf("write StreamHeader name failed: %w", err)
 	}
 

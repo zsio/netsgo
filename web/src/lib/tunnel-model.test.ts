@@ -61,7 +61,7 @@ describe('tunnel-model', () => {
 
     expect(view.status.key).toBe('offline');
     expect(view.status.label).toBe('客户端离线');
-    expect(view.status.description).toContain('等待 Client 上线');
+    expect(view.status.description).toBeUndefined();
   });
 
   test('idle 时统一展示已停止', () => {

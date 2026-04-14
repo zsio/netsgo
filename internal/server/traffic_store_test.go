@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,10 +17,10 @@ func newTestTrafficStore(t *testing.T) (*TrafficStore, func()) {
 	}
 	ts, err := NewTrafficStore(filepath.Join(dir, "traffic.json"))
 	if err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		t.Fatalf("Failed to create TrafficStore: %v", err)
 	}
-	return ts, func() { os.RemoveAll(dir) }
+	return ts, func() { _ = os.RemoveAll(dir) }
 }
 
 func mustSingleSeries(t *testing.T, result TrafficQueryResult, tunnelName string) TunnelTrafficSeries {
@@ -230,7 +229,7 @@ func TestTrafficStore_FlushAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	path := filepath.Join(dir, "traffic.json")
 	ts, err := NewTrafficStore(path)
@@ -370,7 +369,7 @@ func TestTrafficAPI_Query(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	defer os.RemoveAll(trafficDir)
+	defer func() { _ = os.RemoveAll(trafficDir) }()
 
 	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
 	if err != nil {
@@ -393,7 +392,7 @@ func TestTrafficAPI_Query(t *testing.T) {
 	}
 
 	var resp TrafficQueryResult
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := mustDecodeJSON(t, w.Body, &resp); err != nil {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
 
@@ -431,7 +430,7 @@ func TestTrafficAPI_DefaultTimeRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	defer os.RemoveAll(trafficDir)
+	defer func() { _ = os.RemoveAll(trafficDir) }()
 
 	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
 	if err != nil {
@@ -445,7 +444,7 @@ func TestTrafficAPI_DefaultTimeRange(t *testing.T) {
 	}
 
 	var resp TrafficQueryResult
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := mustDecodeJSON(t, w.Body, &resp); err != nil {
 		t.Fatalf("Failed to parse default time range response: %v", err)
 	}
 	if resp.Resolution != TrafficResolutionMinute {
@@ -461,7 +460,7 @@ func TestTrafficAPI_InvalidResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	defer os.RemoveAll(trafficDir)
+	defer func() { _ = os.RemoveAll(trafficDir) }()
 
 	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
 	if err != nil {
@@ -483,7 +482,7 @@ func TestTrafficAPI_InvalidTimeRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	defer os.RemoveAll(trafficDir)
+	defer func() { _ = os.RemoveAll(trafficDir) }()
 
 	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
 	if err != nil {
@@ -508,7 +507,7 @@ func TestTrafficAPI_TimeRangeTooLarge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	defer os.RemoveAll(trafficDir)
+	defer func() { _ = os.RemoveAll(trafficDir) }()
 
 	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
 	if err != nil {

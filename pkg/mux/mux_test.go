@@ -43,8 +43,8 @@ func TestNewSession_ClientServer(t *testing.T) {
 		t.Fatalf("创建 Client Session 失败: %v", cErr)
 	}
 
-	defer serverSession.Close()
-	defer clientSession.Close()
+	defer func() { _ = serverSession.Close() }()
+	defer func() { _ = clientSession.Close() }()
 }
 
 func TestNewSession_NilConfig(t *testing.T) {
@@ -74,8 +74,8 @@ func TestNewSession_NilConfig(t *testing.T) {
 		t.Fatalf("nil config 创建 Client Session 失败: %v", cErr)
 	}
 
-	defer serverSession.Close()
-	defer clientSession.Close()
+	defer func() { _ = serverSession.Close() }()
+	defer func() { _ = clientSession.Close() }()
 }
 
 // ============================================================
@@ -87,8 +87,8 @@ func TestStream_ReadWrite(t *testing.T) {
 	cfg := DefaultConfig()
 
 	serverSess, clientSess := mustCreateSessions(t, serverConn, clientConn, cfg)
-	defer serverSess.Close()
-	defer clientSess.Close()
+	defer func() { _ = serverSess.Close() }()
+	defer func() { _ = clientSess.Close() }()
 
 	// Client 打开 Stream，Server 接受
 	var stream1, stream2 net.Conn
@@ -113,13 +113,13 @@ func TestStream_ReadWrite(t *testing.T) {
 	if err2 != nil {
 		t.Fatalf("AcceptStream 失败: %v", err2)
 	}
-	defer stream1.Close()
-	defer stream2.Close()
+	defer func() { _ = stream1.Close() }()
+	defer func() { _ = stream2.Close() }()
 
 	// 双向读写
 	testData := []byte("hello from client")
 	go func() {
-		stream1.Write(testData)
+		_, _ = stream1.Write(testData)
 	}()
 
 	buf := make([]byte, 256)
@@ -134,7 +134,7 @@ func TestStream_ReadWrite(t *testing.T) {
 	// 反向
 	replyData := []byte("hello from server")
 	go func() {
-		stream2.Write(replyData)
+		_, _ = stream2.Write(replyData)
 	}()
 
 	n, err = stream1.Read(buf)
@@ -155,8 +155,8 @@ func TestMultipleStreams_Concurrent(t *testing.T) {
 	cfg := DefaultConfig()
 
 	serverSess, clientSess := mustCreateSessions(t, serverConn, clientConn, cfg)
-	defer serverSess.Close()
-	defer clientSess.Close()
+	defer func() { _ = serverSess.Close() }()
+	defer func() { _ = clientSess.Close() }()
 
 	const numStreams = 10
 	errors := make(chan error, numStreams*2)
@@ -170,8 +170,8 @@ func TestMultipleStreams_Concurrent(t *testing.T) {
 				return
 			}
 			go func(s net.Conn) {
-				defer s.Close()
-				io.Copy(s, s) // echo
+				defer func() { _ = s.Close() }()
+				_, _ = io.Copy(s, s) // echo
 			}(stream)
 		}
 	}()
@@ -187,7 +187,7 @@ func TestMultipleStreams_Concurrent(t *testing.T) {
 				errors <- fmt.Errorf("Client Open #%d: %v", idx, err)
 				return
 			}
-			defer stream.Close()
+			defer func() { _ = stream.Close() }()
 
 			msg := fmt.Sprintf("stream-%d-data", idx)
 			if _, err := stream.Write([]byte(msg)); err != nil {
@@ -235,7 +235,7 @@ func TestRelay_BidirectionalCopy(t *testing.T) {
 
 	// 外部用户写入请求
 	testReq := []byte("GET / HTTP/1.1\r\n\r\n")
-	go extClient.Write(testReq)
+	go func() { _, _ = extClient.Write(testReq) }()
 
 	// 本地服务读取请求
 	buf := make([]byte, 256)
@@ -249,8 +249,8 @@ func TestRelay_BidirectionalCopy(t *testing.T) {
 
 	// 本地服务回复并关闭
 	testResp := []byte("HTTP/1.1 200 OK\r\n\r\nhello")
-	localServer.Write(testResp)
-	localServer.Close()
+	_, _ = localServer.Write(testResp)
+	_ = localServer.Close()
 
 	// 外部用户读取回复
 	result, err := io.ReadAll(extClient)
@@ -263,7 +263,7 @@ func TestRelay_BidirectionalCopy(t *testing.T) {
 
 	// extClient 的读端已经 EOF（因为 Relay 关闭了 extServer）
 	// 关闭 extClient 让另一方向也结束
-	extClient.Close()
+	_ = extClient.Close()
 
 	// 等待 Relay 结束
 	select {
@@ -290,7 +290,7 @@ func TestSession_Close(t *testing.T) {
 		t.Error("Session 关闭后 Accept 应返回 error")
 	}
 
-	serverSess.Close()
+	_ = serverSess.Close()
 }
 
 // ============================================================

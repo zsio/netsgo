@@ -27,13 +27,13 @@ func BenchmarkDataChannelTransport_YamuxOverPipe_vs_WSConn(b *testing.B) {
 			if err != nil {
 				b.Fatalf("创建服务端 yamux session 失败: %v", err)
 			}
-			defer serverSession.Close()
+			defer func() { _ = serverSession.Close() }()
 
 			clientSession, err := NewClientSession(clientConn, DefaultConfig())
 			if err != nil {
 				b.Fatalf("创建客户端 yamux session 失败: %v", err)
 			}
-			defer clientSession.Close()
+			defer func() { _ = clientSession.Close() }()
 
 			serverErr := make(chan error, 1)
 			go func() {
@@ -44,7 +44,7 @@ func BenchmarkDataChannelTransport_YamuxOverPipe_vs_WSConn(b *testing.B) {
 						return
 					}
 					go func(stream net.Conn) {
-						defer stream.Close()
+						defer func() { _ = stream.Close() }()
 						if _, err := io.Copy(stream, stream); err != nil {
 							serverErr <- err
 						}

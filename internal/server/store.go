@@ -241,7 +241,7 @@ func (s *TunnelStore) GetTunnelsByClientID(clientID string) []StoredTunnel {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]StoredTunnel, 0)
+	result := make([]StoredTunnel, 0, len(s.tunnels))
 	for _, tunnel := range s.tunnels {
 		if tunnel.Binding == TunnelBindingClientID && tunnel.ClientID == clientID {
 			result = append(result, tunnel)
@@ -255,7 +255,7 @@ func (s *TunnelStore) GetTunnelsByHostname(hostname string) []StoredTunnel {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]StoredTunnel, 0)
+	result := make([]StoredTunnel, 0, len(s.tunnels))
 	for _, tunnel := range s.tunnels {
 		if tunnel.Hostname == hostname {
 			result = append(result, tunnel)

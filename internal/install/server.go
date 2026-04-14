@@ -104,12 +104,14 @@ func InstallServerWith(deps serverDeps) error {
 	}
 	trustedProxies, err := deps.UI.Input("Trusted proxy CIDRs", tui.InputOptions{
 		Placeholder: "e.g. 127.0.0.1/8,192.168.0.0/16",
-		Description: "Comma-separated list of trusted proxy CIDRs (leave empty if not behind a proxy)",
+		Description: "Comma-separated list of trusted proxy CIDRs; default fits common local/reverse-proxy setups, clear it if not behind a proxy",
+		Default:     "127.0.0.1/8",
 	})
+	if err != nil {
+		return err
+	}
 	if tlsMode != "off" {
 		trustedProxies = ""
-	} else if err != nil {
-		return err
 	}
 	tlsCert := ""
 	tlsKey := ""
@@ -284,8 +286,8 @@ func defaultServerDeps() serverDeps {
 		ValidateCustomTLS: func(certPath, keyPath string) error {
 			return validateReadableCustomTLSFiles(certPath, keyPath, svcmgr.SystemUser)
 		},
-		DaemonReload:      svcmgr.DaemonReload,
-		EnableAndStart:    svcmgr.EnableAndStart,
+		DaemonReload:   svcmgr.DaemonReload,
+		EnableAndStart: svcmgr.EnableAndStart,
 	}
 }
 

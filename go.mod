@@ -1,6 +1,6 @@
 module netsgo
 
-go 1.25.5
+go 1.25.9
 
 require (
 	github.com/charmbracelet/huh v1.0.0

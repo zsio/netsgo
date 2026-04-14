@@ -281,7 +281,9 @@ func TestAdminStore_ValidateClientKey_NoKeysAfterInit(t *testing.T) {
 func TestAdminStore_ValidateClientKey_Valid(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-test-key-123"
-	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	valid, err := store.ValidateClientKey(rawKey)
 	if !valid || err != nil {
@@ -291,7 +293,9 @@ func TestAdminStore_ValidateClientKey_Valid(t *testing.T) {
 
 func TestAdminStore_ValidateClientKey_Invalid(t *testing.T) {
 	store := newTestAdminStore(t)
-	store.AddAPIKey("test", "sk-real-key", []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("test", "sk-real-key", []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	valid, err := store.ValidateClientKey("sk-wrong-key")
 	if valid {
@@ -304,7 +308,9 @@ func TestAdminStore_ValidateClientKey_Invalid(t *testing.T) {
 
 func TestAdminStore_ValidateClientKey_EmptyWhenKeysExist(t *testing.T) {
 	store := newTestAdminStore(t)
-	store.AddAPIKey("test", "sk-real-key", []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("test", "sk-real-key", []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	valid, err := store.ValidateClientKey("")
 	if valid {
@@ -318,7 +324,9 @@ func TestAdminStore_ValidateClientKey_EmptyWhenKeysExist(t *testing.T) {
 func TestAdminStore_ValidateClientKey_Expired(t *testing.T) {
 	store := newTestAdminStore(t)
 	past := time.Now().Add(-1 * time.Hour)
-	store.AddAPIKey("expired", "sk-expired-key", []string{"connect"}, &past)
+	if _, err := store.AddAPIKey("expired", "sk-expired-key", []string{"connect"}, &past); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	valid, err := store.ValidateClientKey("sk-expired-key")
 	if valid {
@@ -339,7 +347,9 @@ func TestAdminStore_AddAndGetAPIKeys(t *testing.T) {
 		t.Errorf("should be empty initially, got %d", len(keys))
 	}
 
-	store.AddAPIKey("key1", "sk-key1", []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("key1", "sk-key1", []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 	if _, err := store.AddAPIKey("key2", "sk-key2", []string{"manage"}, nil); err == nil {
 		t.Fatal("unsupported permission should return error")
 	}
@@ -618,7 +628,9 @@ func TestAdminStore_GetServerConfig(t *testing.T) {
 func TestAdminStore_Token_ExchangeAndValidate(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-test-key"
-	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	// 兑换 Token
 	tokenStr, clientToken, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
@@ -674,7 +686,9 @@ func TestAdminStore_Token_ExchangeSaveFailureRollsBack(t *testing.T) {
 func TestAdminStore_Token_ExchangeConsumesKeyUseCount(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-counted-key"
-	store.AddAPIKey("counted", rawKey, []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("counted", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	// 兑换 Token — 应消耗 Key use_count
 	_, _, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
@@ -705,7 +719,9 @@ func TestAdminStore_Token_ExchangeConsumesKeyUseCount(t *testing.T) {
 func TestAdminStore_Token_ValidateExpired(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-expiry-key"
-	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	tokenStr, _, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
 	if err != nil {
@@ -773,7 +789,9 @@ func TestAdminStore_Token_ValidateSaveFailureReturnsError(t *testing.T) {
 func TestAdminStore_Token_ValidateRevoked(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-revoke-key"
-	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	tokenStr, clientToken, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
 	if err != nil {
@@ -797,7 +815,9 @@ func TestAdminStore_Token_ValidateRevoked(t *testing.T) {
 func TestAdminStore_Token_ReuseExistingToken(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-reuse-key"
-	store.AddAPIKey("reuse", rawKey, []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("reuse", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
 	// 首次兑换
 	_, _, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
@@ -833,9 +853,13 @@ func TestAdminStore_Token_ReuseExistingToken(t *testing.T) {
 func TestAdminStore_Token_CleanExpired(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-clean-key"
-	store.AddAPIKey("test", rawKey, []string{"connect"}, nil)
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
 
-	store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678")
+	if _, _, err := store.ExchangeToken(rawKey, "install-1", "client-1", "1.2.3.4:5678"); err != nil {
+		t.Fatalf("ExchangeToken failed: %v", err)
+	}
 
 	// 手动设置为过期
 	store.mu.Lock()

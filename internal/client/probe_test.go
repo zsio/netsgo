@@ -165,7 +165,9 @@ func TestProbe_JSONRoundTrip(t *testing.T) {
 
 	// Verify that the JSON contains all 11 fields
 	var m map[string]any
-	json.Unmarshal(data, &m)
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal probe JSON failed: %v", err)
+	}
 	expectedKeys := []string{
 		"cpu_usage", "mem_total", "mem_used", "mem_usage",
 		"disk_total", "disk_used", "disk_usage",

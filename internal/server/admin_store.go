@@ -872,7 +872,7 @@ func (s *AdminStore) GetTokensByKeyID(keyID string) []ClientToken {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]ClientToken, 0)
+	result := make([]ClientToken, 0, len(s.data.ClientTokens))
 	for _, t := range s.data.ClientTokens {
 		if t.KeyID == keyID {
 			result = append(result, t)

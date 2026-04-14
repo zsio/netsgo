@@ -147,7 +147,7 @@ func addLiveHTTPDispatchTunnel(t *testing.T, s *Server, clientID, tunnelName, do
 }
 
 func relayDispatchStreamToBackend(stream *yamux.Stream, expectedTunnelName, backendAddr string) {
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
@@ -170,7 +170,7 @@ func relayDispatchStreamToBackend(stream *yamux.Stream, expectedTunnelName, back
 	if err != nil {
 		return
 	}
-	defer backendConn.Close()
+	defer func() { _ = backendConn.Close() }()
 
 	mux.Relay(stream, backendConn)
 }
@@ -200,7 +200,7 @@ func TestDispatch_InternalControl_ValidSubprotocol_OnNonManagementHost(t *testin
 	defer ts.Close()
 
 	conn, _ := dialWSWithHost(t, ts, "app.example.com", "/ws/control", []string{protocol.WSSubProtocolControl})
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	if got := conn.Subprotocol(); got != protocol.WSSubProtocolControl {
 		t.Fatalf("Control channel negotiated subprotocol should be %q, got %q", protocol.WSSubProtocolControl, got)
@@ -214,7 +214,7 @@ func TestDispatch_InternalData_ValidSubprotocol_OnNonManagementHost(t *testing.T
 	defer ts.Close()
 
 	conn, _ := dialWSWithHost(t, ts, "app.example.com", "/ws/data", []string{protocol.WSSubProtocolData})
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	if got := conn.Subprotocol(); got != protocol.WSSubProtocolData {
 		t.Fatalf("Data channel negotiated subprotocol should be %q, got %q", protocol.WSSubProtocolData, got)
@@ -246,7 +246,7 @@ func TestDispatch_InternalControl_MissingSubprotocol_RoutesToBusinessTunnel(t *t
 	if err != nil {
 		t.Fatalf("Failed to send request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("Should continue to business proxy when subprotocol is missing, got %d", resp.StatusCode)
@@ -281,7 +281,7 @@ func TestDispatch_HTTPTunnel_ManagementAPI_Blocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to send request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("Should not enter admin API when business domain matches, got %d", resp.StatusCode)
@@ -529,7 +529,7 @@ func TestDispatch_BusinessWebSocket_CanUpgrade(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer mustClose(t, conn)
 		mt, message, err := conn.ReadMessage()
 		if err != nil {
 			return
@@ -545,7 +545,7 @@ func TestDispatch_BusinessWebSocket_CanUpgrade(t *testing.T) {
 	defer ts.Close()
 
 	conn, _ := dialWSWithHost(t, ts, "app.example.com", "/ws/chat", nil)
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
 		t.Fatalf("Failed to send business WebSocket message: %v", err)
@@ -590,7 +590,7 @@ func TestDispatch_SSE_ImmediateFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to send request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("SSE proxy status code expected 200, got %d", resp.StatusCode)

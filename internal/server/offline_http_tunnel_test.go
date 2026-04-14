@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -54,7 +53,7 @@ func TestOfflineHTTPTunnel_Update_StoreFirst(t *testing.T) {
 	}
 
 	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 		t.Fatalf("failed to parse update response: %v", err)
 	}
 	if success, _ := payload["success"].(bool); !success {
@@ -216,7 +215,7 @@ func TestLifecycle_ClientDisconnect_DoesNotRewriteStoreState(t *testing.T) {
 	s.store = store
 
 	wsConn, authResp := connectAndAuth(t, ts, "disconnect-http-store")
-	defer wsConn.Close()
+	defer mustClose(t, wsConn)
 
 	deadline := time.Now().Add(2 * time.Second)
 	var liveClient *ClientConn

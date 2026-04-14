@@ -28,7 +28,7 @@ func (s *UDPProxyState) Close() {
 	s.closeOnce.Do(func() {
 		close(s.done)
 		if s.packetConn != nil {
-			s.packetConn.Close()
+			_ = s.packetConn.Close()
 		}
 		// Close all sessions. sess.Close() triggers ReadUDPFrame in udpSessionReverse to
 		// return an error, which then calls removeSession in its defer. Both sides race for
@@ -114,7 +114,7 @@ func (s *UDPSession) Close() {
 	s.closeOnce.Do(func() {
 		close(s.done)
 		if s.stream != nil {
-			s.stream.Close()
+			_ = s.stream.Close()
 		}
 	})
 }
@@ -294,7 +294,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			actual, added := state.storeSession(key, sess)
 			if !added {
 				// Another goroutine already created one; close ours.
-				stream.Close()
+				_ = stream.Close()
 				val = actual
 			} else {
 				val = sess

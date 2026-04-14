@@ -35,7 +35,7 @@ func setupMockAdminStore(t *testing.T) (*AdminStore, func()) {
 	}
 
 	cleanup := func() {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 	}
 
 	return store, cleanup

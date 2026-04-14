@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -49,7 +48,7 @@ func TestOfflineManagedTunnel_Create_StoreFirstAcrossTypes(t *testing.T) {
 			}
 
 			var payload map[string]any
-			if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
 				t.Fatalf("Failed to parse create response: %v", err)
 			}
 			if success, _ := payload["success"].(bool); !success {

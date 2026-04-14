@@ -143,7 +143,9 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 
 		// Sync server-addr back to env so internal/server's isServerAddrLocked() can read it
 		if addr := viper.GetString("server-addr"); addr != "" {
-			os.Setenv("NETSGO_SERVER_ADDR", addr)
+			if err := os.Setenv("NETSGO_SERVER_ADDR", addr); err != nil {
+				log.Fatalf("❌ Failed to set NETSGO_SERVER_ADDR: %v", err)
+			}
 		}
 
 		tlsMode := viper.GetString("tls-mode")
@@ -214,18 +216,44 @@ func init() {
 	serverCmd.Flags().String("server-addr", "", "Force-override server external address or domain")
 	serverCmd.Flags().Bool("allow-loopback-management-host", false, "Explicitly allow localhost/127.0.0.1/::1 as fallback management Host")
 
-	viper.BindPFlag("port", serverCmd.Flags().Lookup("port"))
-	viper.BindPFlag("data-dir", serverCmd.Flags().Lookup("data-dir"))
-	viper.BindPFlag("tls-mode", serverCmd.Flags().Lookup("tls-mode"))
-	viper.BindPFlag("tls-cert", serverCmd.Flags().Lookup("tls-cert"))
-	viper.BindPFlag("tls-key", serverCmd.Flags().Lookup("tls-key"))
-	viper.BindPFlag("tls-auto-dir", serverCmd.Flags().Lookup("tls-auto-dir"))
-	viper.BindPFlag("trusted-proxies", serverCmd.Flags().Lookup("trusted-proxies"))
-	viper.BindPFlag("init-admin-username", serverCmd.Flags().Lookup("init-admin-username"))
-	viper.BindPFlag("init-admin-password", serverCmd.Flags().Lookup("init-admin-password"))
-	viper.BindPFlag("init-server-addr", serverCmd.Flags().Lookup("init-server-addr"))
-	viper.BindPFlag("init-allowed-ports", serverCmd.Flags().Lookup("init-allowed-ports"))
-	viper.BindPFlag("server-addr", serverCmd.Flags().Lookup("server-addr"))
-	viper.BindPFlag("allow-loopback-management-host", serverCmd.Flags().Lookup("allow-loopback-management-host"))
+	if err := viper.BindPFlag("port", serverCmd.Flags().Lookup("port")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("data-dir", serverCmd.Flags().Lookup("data-dir")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("tls-mode", serverCmd.Flags().Lookup("tls-mode")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("tls-cert", serverCmd.Flags().Lookup("tls-cert")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("tls-key", serverCmd.Flags().Lookup("tls-key")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("tls-auto-dir", serverCmd.Flags().Lookup("tls-auto-dir")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("trusted-proxies", serverCmd.Flags().Lookup("trusted-proxies")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("init-admin-username", serverCmd.Flags().Lookup("init-admin-username")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("init-admin-password", serverCmd.Flags().Lookup("init-admin-password")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("init-server-addr", serverCmd.Flags().Lookup("init-server-addr")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("init-allowed-ports", serverCmd.Flags().Lookup("init-allowed-ports")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("server-addr", serverCmd.Flags().Lookup("server-addr")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("allow-loopback-management-host", serverCmd.Flags().Lookup("allow-loopback-management-host")); err != nil {
+		panic(err)
+	}
 	rootCmd.AddCommand(serverCmd)
 }

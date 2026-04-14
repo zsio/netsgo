@@ -111,11 +111,21 @@ func init() {
 	clientCmd.Flags().Bool("tls-skip-verify", false, "Skip TLS certificate verification (dev/test only)")
 	clientCmd.Flags().String("tls-fingerprint", "", "Pin server certificate SHA-256 fingerprint (AA:BB:CC:... format)")
 
-	viper.BindPFlag("server", clientCmd.Flags().Lookup("server"))
-	viper.BindPFlag("key", clientCmd.Flags().Lookup("key"))
-	viper.BindPFlag("data-dir", clientCmd.Flags().Lookup("data-dir"))
-	viper.BindPFlag("tls-skip-verify", clientCmd.Flags().Lookup("tls-skip-verify"))
-	viper.BindPFlag("tls-fingerprint", clientCmd.Flags().Lookup("tls-fingerprint"))
+	if err := viper.BindPFlag("server", clientCmd.Flags().Lookup("server")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("key", clientCmd.Flags().Lookup("key")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("data-dir", clientCmd.Flags().Lookup("data-dir")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("tls-skip-verify", clientCmd.Flags().Lookup("tls-skip-verify")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("tls-fingerprint", clientCmd.Flags().Lookup("tls-fingerprint")); err != nil {
+		panic(err)
+	}
 
 	rootCmd.AddCommand(clientCmd)
 }

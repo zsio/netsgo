@@ -1,8 +1,9 @@
+import { useState } from 'react';
 import {
   Monitor, Network, Clock, Cpu, HardDrive, Database,
   Box, CircleHelp, Globe, ArrowDownCircle, ArrowUpCircle,
 } from 'lucide-react';
-import { formatBytes, formatUptime, formatNetSpeed, formatInstallAge, formatTimestamp, describeFreshness } from '@/lib/format';
+import { formatBytes, formatUptime, formatNetSpeed } from '@/lib/format';
 import {
   HoverCard,
   HoverCardContent,
@@ -46,6 +47,16 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
   const diskPartitions = stats?.disk_partitions || [];
   const multipleDisks = diskPartitions.length > 1;
 
+  const [now] = useState(() => Date.now());
+  const startTimeText = stats?.process_uptime
+    ? new Date(now - stats.process_uptime * 1000).toLocaleString('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    : '-';
+
   return (
     <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden flex flex-col">
       {/* Header */}
@@ -61,15 +72,6 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
           <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500' : 'bg-destructive'}`} />
           <div className="flex flex-col items-end leading-tight">
             <span className="font-medium text-muted-foreground">{isOnline ? '在线' : '离线'}</span>
-            {stats?.updated_at ? (
-              <span className="text-[11px] text-muted-foreground/70" title={formatTimestamp(stats.updated_at)}>
-                {describeFreshness(stats.updated_at, stats.fresh_until)}
-              </span>
-            ) : client.last_seen ? (
-              <span className="text-[11px] text-muted-foreground/70" title={formatTimestamp(client.last_seen)}>
-                最后上报 {formatTimestamp(client.last_seen)}
-              </span>
-            ) : null}
           </div>
         </div>
       </div>
@@ -105,20 +107,9 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
                 {stats?.process_uptime ? formatUptime(stats.process_uptime) : (stats?.uptime ? formatUptime(stats.uptime) : '-')}
               </span>
             </HoverCardTrigger>
-            <HoverCardContent className="w-[220px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
-              <div className="flex flex-col gap-1.5">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">系统开机</span>
-                  <span className="font-medium text-foreground">{stats?.uptime ? formatUptime(stats.uptime) : '-'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">系统安装</span>
-                  <span className="font-medium text-foreground">{formatInstallAge(stats?.os_install_time ?? 0)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">程序启动</span>
-                  <span className="font-medium text-foreground">{stats?.process_uptime ? formatUptime(stats.process_uptime) : '-'}</span>
-                </div>
+            <HoverCardContent className="w-[200px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
+              <div className="text-muted-foreground">
+                启动于 {startTimeText}
               </div>
             </HoverCardContent>
           </HoverCard>

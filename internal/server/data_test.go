@@ -78,7 +78,7 @@ func testWebSocketURL(raw string) (string, error) {
 
 func readHandshakeStatus(t *testing.T, conn *websocket.Conn) byte {
 	t.Helper()
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	messageType, payload, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("Failed to read handshake response: %v", err)
@@ -111,7 +111,7 @@ func TestDataChannel_HandshakeSuccess(t *testing.T) {
 	s.clients.Store(clientID, cc)
 
 	conn := dialDataWS(t, ts)
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, testDataToken)); err != nil {
 		t.Fatalf("Failed to send handshake: %v", err)
@@ -138,7 +138,7 @@ func TestDataChannel_Handshake_InvalidLength(t *testing.T) {
 	defer cleanup()
 
 	conn := dialDataWS(t, ts)
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	if err := conn.WriteMessage(websocket.BinaryMessage, []byte{0x00, 0x00}); err != nil {
 		t.Fatalf("Failed to send illegal handshake: %v", err)
@@ -154,7 +154,7 @@ func TestDataChannel_Handshake_UnregisteredClient(t *testing.T) {
 	defer cleanup()
 
 	conn := dialDataWS(t, ts)
-	defer conn.Close()
+	defer mustClose(t, conn)
 
 	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake("ghost-client", "some-token")); err != nil {
 		t.Fatalf("Failed to send handshake: %v", err)
@@ -175,7 +175,7 @@ func TestDataChannel_Handshake_ReconnectClosesOldSession(t *testing.T) {
 	s.clients.Store(clientID, cc)
 
 	conn1 := dialDataWS(t, ts)
-	defer conn1.Close()
+	defer mustClose(t, conn1)
 	if err := conn1.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, testDataToken)); err != nil {
 		t.Fatalf("Failed to send first handshake: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestDataChannel_Handshake_ReconnectClosesOldSession(t *testing.T) {
 	}
 
 	conn2 := dialDataWS(t, ts)
-	defer conn2.Close()
+	defer mustClose(t, conn2)
 	if err := conn2.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, testDataToken)); err != nil {
 		t.Fatalf("Failed to send second handshake: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestDataChannel_Handshake_WrongToken(t *testing.T) {
 	s.clients.Store(clientID, cc)
 
 	conn := dialDataWS(t, ts)
-	defer conn.Close()
+	defer mustClose(t, conn)
 	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, "wrong-token")); err != nil {
 		t.Fatalf("Failed to send handshake: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestDataChannel_Handshake_EmptyToken(t *testing.T) {
 	s.clients.Store(clientID, cc)
 
 	conn := dialDataWS(t, ts)
-	defer conn.Close()
+	defer mustClose(t, conn)
 	payload := protocol.EncodeDataHandshake(clientID, "")
 	if err := conn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
 		t.Fatalf("Failed to send handshake: %v", err)
@@ -263,7 +263,7 @@ func TestDataChannel_Handshake_ClientHasNoToken(t *testing.T) {
 	s.clients.Store(clientID, cc)
 
 	conn := dialDataWS(t, ts)
-	defer conn.Close()
+	defer mustClose(t, conn)
 	if err := conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeDataHandshake(clientID, "any-token")); err != nil {
 		t.Fatalf("Failed to send handshake: %v", err)
 	}
@@ -282,12 +282,12 @@ func TestDataChannel_Handshake_NonBinaryFrame(t *testing.T) {
 	s.clients.Store(clientID, cc)
 
 	conn := dialDataWS(t, ts)
-	defer conn.Close()
+	defer mustClose(t, conn)
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("not-binary")); err != nil {
 		t.Fatalf("Failed to send text frame: %v", err)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	if _, _, err := conn.ReadMessage(); err == nil {
 		t.Fatal("Should be closed when first frame is not binary")
 	}
@@ -301,7 +301,7 @@ func TestDataChannel_NonUpgradeRequestReturns426(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HTTP GET /ws/data failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusUpgradeRequired {
 		t.Fatalf("Status code should be 426, got %d", resp.StatusCode)
@@ -320,8 +320,8 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 	s.clients.Store(clientID, cc)
 
 	clientPipe, serverPipe := net.Pipe()
-	defer clientPipe.Close()
-	defer serverPipe.Close()
+	defer mustClose(t, clientPipe)
+	defer mustClose(t, serverPipe)
 
 	serverReady := make(chan error, 1)
 	go func() {
@@ -335,7 +335,7 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client Yamux Session: %v", err)
 	}
-	defer clientSession.Close()
+	defer mustClose(t, clientSession)
 
 	select {
 	case err := <-serverReady:
@@ -360,7 +360,7 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Client accepting stream failed: %v", err)
 	}
-	defer clientStream.Close()
+	defer mustClose(t, clientStream)
 
 	var lenBuf [2]byte
 	if _, err := clientStream.Read(lenBuf[:]); err != nil {

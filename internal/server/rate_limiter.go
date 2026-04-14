@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -278,7 +279,9 @@ func writeRateLimitResponse(w http.ResponseWriter, retryAfter time.Duration) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Retry-After", retryAfterString(retryAfter))
 	w.WriteHeader(http.StatusTooManyRequests)
-	w.Write([]byte(`{"error":"too many requests, please try again later"}`))
+	if _, err := w.Write([]byte(`{"error":"too many requests, please try again later"}`)); err != nil {
+		log.Printf("⚠️ Failed to write rate limit response: %v", err)
+	}
 }
 
 // retryAfterString converts a Duration to a seconds string.

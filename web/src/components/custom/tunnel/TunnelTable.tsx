@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
-import { ArrowRightLeft } from 'lucide-react';
+import { ArrowRightLeft, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
+import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
 import { useClientTraffic } from '@/hooks/use-client-traffic';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
@@ -55,9 +56,16 @@ export function TunnelTable({ client }: TunnelTableProps) {
       showActions
       showSearch
       emptyAction={
-        <Button variant="outline" className="mt-4">
-          + 立即创建
-        </Button>
+        <TunnelDialog
+          mode="create"
+          clientId={client.id}
+          trigger={
+            <Button variant="outline" className="mt-4">
+              <Plus className="h-4 w-4 mr-1" />
+              立即创建
+            </Button>
+          }
+        />
       }
     />
   );

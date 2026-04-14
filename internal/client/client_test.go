@@ -70,7 +70,7 @@ func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	ms.mu.Lock()
 	ms.conns = append(ms.conns, conn)
@@ -90,11 +90,15 @@ func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case protocol.MsgTypeAuth:
 			resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, ms.authResp)
-			ms.writeControlJSON(conn, resp)
+			if err := ms.writeControlJSON(conn, resp); err != nil {
+				return
+			}
 
 		case protocol.MsgTypePing:
 			pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
-			ms.writeControlJSON(conn, pong)
+			if err := ms.writeControlJSON(conn, pong); err != nil {
+				return
+			}
 
 		case protocol.MsgTypeProbeReport:
 			// The server does not reply to probe reports
@@ -102,7 +106,9 @@ func (ms *mockServer) controlHandler(w http.ResponseWriter, r *http.Request) {
 		default:
 			if ms.onMessage != nil {
 				if reply := ms.onMessage(msg); reply != nil {
-					ms.writeControlJSON(conn, reply)
+					if err := ms.writeControlJSON(conn, reply); err != nil {
+						return
+					}
 				}
 			}
 		}
@@ -120,7 +126,7 @@ func (ms *mockServer) dataHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	ms.mu.Lock()
 	ms.dataConns = append(ms.dataConns, conn)
@@ -176,13 +182,13 @@ func (ms *mockServer) closeConns() {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	for _, conn := range ms.conns {
-		conn.Close()
+		_ = conn.Close()
 	}
 	for _, conn := range ms.dataConns {
-		conn.Close()
+		_ = conn.Close()
 	}
 	for _, session := range ms.dataSessions {
-		session.Close()
+		_ = session.Close()
 	}
 	ms.conns = nil
 	ms.dataConns = nil
@@ -278,7 +284,7 @@ func TestClientControlDial_SendsSubprotocol(t *testing.T) {
 	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -304,7 +310,7 @@ func TestClient_HeartbeatSent(t *testing.T) {
 	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 
 	// The data channel connection fails quickly (~1s), then the heartbeat interval is 5s, so waiting 8s should observe at least one heartbeat
 	time.Sleep(8 * time.Second)
@@ -331,7 +337,7 @@ func TestClient_ProbeReportSent(t *testing.T) {
 	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 
 	// Probe reporting happens after the data channel fails (~2s), and CPU sampling takes about 1s, so 5s is enough
 	time.Sleep(5 * time.Second)
@@ -379,7 +385,7 @@ func TestClient_ServerDisconnect_WithReconnect(t *testing.T) {
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		c.Start()
+		_ = c.Start()
 	}()
 	<-started
 
@@ -453,7 +459,7 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		ms.mu.Lock()
 		ms.conns = append(ms.conns, conn)
@@ -471,10 +477,14 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 				authCount++
 				authMu.Unlock()
 				resp, _ := protocol.NewMessage(protocol.MsgTypeAuthResp, ms.authResp)
-				ms.writeControlJSON(conn, resp)
+				if err := ms.writeControlJSON(conn, resp); err != nil {
+					return
+				}
 			case protocol.MsgTypePing:
 				pong, _ := protocol.NewMessage(protocol.MsgTypePong, nil)
-				ms.writeControlJSON(conn, pong)
+				if err := ms.writeControlJSON(conn, pong); err != nil {
+					return
+				}
 			}
 		}
 	})
@@ -487,7 +497,7 @@ func TestClient_Reconnect_AfterDisconnect(t *testing.T) {
 	// Do not set DisableReconnect so reconnect can take effect
 
 	// Start the client in the background
-	go c.Start()
+	go func() { _ = c.Start() }()
 	time.Sleep(1 * time.Second)
 
 	// Verify that the first authentication completed
@@ -567,8 +577,8 @@ func TestClient_Cleanup(t *testing.T) {
 	}
 	c.dataMu.RUnlock()
 
-	serverConn.Close()
-	clientConn.Close()
+	_ = serverConn.Close()
+	_ = clientConn.Close()
 }
 
 // ============================================================
@@ -589,9 +599,9 @@ func TestClient_AcceptStreamLoop_SessionClosed(t *testing.T) {
 	c.dataSession = session
 
 	// Close the session immediately to simulate a disconnect
-	session.Close()
-	serverConn.Close()
-	clientConn.Close()
+	_ = session.Close()
+	_ = serverConn.Close()
+	_ = clientConn.Close()
 
 	// It should exit safely
 	c.acceptStreamLoop()
@@ -623,7 +633,7 @@ func TestClient_RequestProxy(t *testing.T) {
 	c.DisableReconnect = true
 
 	// Start the client (it blocks in controlLoop in the background)
-	go c.Start()
+	go func() { _ = c.Start() }()
 	time.Sleep(500 * time.Millisecond) // Wait for authentication and the data channel attempt to complete
 
 	// Call requestProxy manually
@@ -670,7 +680,7 @@ func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 	time.Sleep(500 * time.Millisecond)
 
 	// The server proactively sends proxy_create_resp (success)
@@ -704,7 +714,7 @@ func TestClient_ControlLoop_ProxyCreateResp_Failure(t *testing.T) {
 	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 	time.Sleep(500 * time.Millisecond)
 
 	// The server proactively sends proxy_create_resp (failure)
@@ -750,7 +760,7 @@ func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
 	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 	time.Sleep(500 * time.Millisecond)
 
 	ms.mu.Lock()
@@ -808,7 +818,7 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 	time.Sleep(500 * time.Millisecond)
 
 	ms.mu.Lock()

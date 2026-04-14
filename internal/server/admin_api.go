@@ -108,8 +108,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 
 	s.setSessionCookie(w, r, token, int(sessionDefaultTTL.Seconds()))
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	encodeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
 		"user": map[string]any{
 			"id":       user.ID,
@@ -139,8 +138,7 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 
 	s.clearSessionCookie(w, r)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"success": true})
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 // ========= API Keys =========
@@ -154,8 +152,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		keys := s.auth.adminStore.GetAPIKeys()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sanitizeAPIKeys(keys))
+		encodeJSON(w, http.StatusOK, sanitizeAPIKeys(keys))
 
 	case http.MethodPost:
 		var req struct {
@@ -185,9 +182,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 		rawKey := "sk-" + generateUUID()
 		key, err := s.auth.adminStore.AddAPIKey(req.Name, rawKey, req.Permissions, expiresAt)
 		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{
+			encodeJSON(w, http.StatusBadRequest, map[string]any{
 				"error": err.Error(),
 			})
 			return
@@ -209,10 +204,8 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 			serverAddr = s.auth.adminStore.GetServerConfig().ServerAddr
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
 		// return the full response including the raw key (only visible at creation time!)
-		json.NewEncoder(w).Encode(map[string]any{
+		encodeJSON(w, http.StatusCreated, map[string]any{
 			"key":         sanitizeAPIKey(*key),
 			"raw_key":     rawKey, // tell the frontend to display this to the user
 			"server_addr": serverAddr,
@@ -256,8 +249,7 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Info("API Key status changed", "action", actionText, "key_id", keyID, "module", "admin")
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"success": true})
+		encodeJSON(w, http.StatusOK, map[string]any{"success": true})
 
 	case http.MethodDelete:
 		if err := s.auth.adminStore.DeleteAPIKey(keyID); err != nil {
@@ -305,9 +297,7 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 
 		normalizedServerAddr, err := normalizeServerAddrForConfigUpdate(config.ServerAddr, current.ServerAddr)
 		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{
+			encodeJSON(w, http.StatusBadRequest, map[string]any{
 				"error": err.Error(),
 			})
 			return
@@ -317,9 +307,7 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		// validate port range
 		for _, pr := range config.AllowedPorts {
 			if pr.Start < 1 || pr.End > 65535 || pr.Start > pr.End {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{
+				encodeJSON(w, http.StatusBadRequest, map[string]any{
 					"error": "invalid port range: start must be >= 1, end must be <= 65535, and start <= end",
 				})
 				return

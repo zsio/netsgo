@@ -92,7 +92,7 @@ func startTLSWSServer(t *testing.T, cert tls.Certificate) (*httptest.Server, str
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
 				return
@@ -180,7 +180,7 @@ func TestCheckTLSFingerprint_NonTLSConn_Skipped(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
 				return
@@ -195,7 +195,7 @@ func TestCheckTLSFingerprint_NonTLSConn_Skipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connection failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	c := New("ws://localhost", "key")
 	// Calling checkTLSFingerprint on a non-TLS connection should return nil directly
@@ -210,7 +210,7 @@ func TestCheckTLSFingerprint_TOFU_FirstConnect_RecordsFingerprint(t *testing.T) 
 	defer ts.Close()
 
 	conn := dialTLSWS(t, wsURL)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	c := New("wss://localhost", "key")
 	// Empty TLSFingerprint -> first TOFU connection
@@ -232,7 +232,7 @@ func TestCheckTLSFingerprint_TOFU_SameFingerprint_Passes(t *testing.T) {
 	expectedFP := computeTestFingerprint(x509Cert.Raw)
 
 	conn := dialTLSWS(t, wsURL)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	c := New("wss://localhost", "key")
 	c.TLSFingerprint = expectedFP // Simulate an existing fingerprint
@@ -248,7 +248,7 @@ func TestCheckTLSFingerprint_TOFU_DifferentFingerprint_Rejects(t *testing.T) {
 	defer ts.Close()
 
 	conn := dialTLSWS(t, wsURL)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	c := New("wss://localhost", "key")
 	c.TLSFingerprint = "AA:BB:CC:DD:FAKE:FINGERPRINT" // Forged old fingerprint
@@ -271,7 +271,7 @@ func TestCheckTLSFingerprint_TOFU_PersistsToStateFile(t *testing.T) {
 	defer ts.Close()
 
 	conn := dialTLSWS(t, wsURL)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	tmpDir := t.TempDir()
 	statePath := filepath.Join(tmpDir, "client", "client.json")
@@ -357,8 +357,12 @@ func TestEnsureInstallID_LoadsTLSFingerprint(t *testing.T) {
 		TLSFingerprint: "11:22:33:44:55:66",
 	}
 	data, _ := json.MarshalIndent(state, "", "  ")
-	os.MkdirAll(filepath.Dir(statePath), 0o755)
-	os.WriteFile(statePath, data, 0o600)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(statePath, data, 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	// Have a new client load the state
 	c := New("wss://localhost", "key")
@@ -389,8 +393,12 @@ func TestEnsureInstallID_DoesNotOverwriteExistingFingerprint(t *testing.T) {
 		TLSFingerprint: "OLD:FP",
 	}
 	data, _ := json.MarshalIndent(state, "", "  ")
-	os.MkdirAll(filepath.Dir(statePath), 0o755)
-	os.WriteFile(statePath, data, 0o600)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(statePath, data, 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 
 	// The client already has a new fingerprint
 	c := New("wss://localhost", "key")
@@ -463,7 +471,7 @@ func TestScenario_TLS_ConnectAndAuth(t *testing.T) {
 	c.DisableReconnect = true
 	c.DataDir = t.TempDir()
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 	time.Sleep(3 * time.Second)
 
 	if c.CurrentClientID() != "mock_client_1" {
@@ -501,7 +509,7 @@ func TestScenario_PlainWS_NoTLSUsed(t *testing.T) {
 	c.DisableReconnect = true
 	c.DataDir = t.TempDir()
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 	time.Sleep(2 * time.Second)
 
 	if c.UsesTLS() {
@@ -531,7 +539,7 @@ func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
 	c.DisableReconnect = true
 	c.DataDir = t.TempDir()
 
-	go c.Start()
+	go func() { _ = c.Start() }()
 	time.Sleep(3 * time.Second)
 
 	// TLSSkipVerify=true -> checkTLSFingerprint is not called -> the fingerprint is not recorded
@@ -622,7 +630,7 @@ func TestScenario_TLS_FingerprintPersistedAndLoadedOnRestart(t *testing.T) {
 	if err := c1.checkTLSFingerprint(conn1); err != nil {
 		t.Fatalf("first connection should not error: %v", err)
 	}
-	conn1.Close()
+	_ = conn1.Close()
 
 	if c1.TLSFingerprint != expectedFP {
 		t.Fatalf("the fingerprint should be recorded after the first connection")
@@ -641,7 +649,7 @@ func TestScenario_TLS_FingerprintPersistedAndLoadedOnRestart(t *testing.T) {
 
 	// ---- Reconnect to the same server: the fingerprint should match ----
 	conn2 := dialTLSWS(t, wsURL)
-	defer conn2.Close()
+	defer func() { _ = conn2.Close() }()
 
 	if err := c2.checkTLSFingerprint(conn2); err != nil {
 		t.Errorf("reconnecting to the same server after restart should pass fingerprint verification: %v", err)
@@ -661,7 +669,7 @@ func TestScenario_TLS_TOFU_ReconnectSameCert_Passes(t *testing.T) {
 	if err := c.checkTLSFingerprint(conn1); err != nil {
 		t.Fatalf("first connection failed: %v", err)
 	}
-	conn1.Close()
+	_ = conn1.Close()
 
 	fp := c.CurrentTLSFingerprint()
 	if fp == "" {
@@ -670,7 +678,7 @@ func TestScenario_TLS_TOFU_ReconnectSameCert_Passes(t *testing.T) {
 
 	// Second connection to the same server -> should pass
 	conn2 := dialTLSWS(t, wsURL)
-	defer conn2.Close()
+	defer func() { _ = conn2.Close() }()
 
 	if err := c.checkTLSFingerprint(conn2); err != nil {
 		t.Errorf("reconnecting to the same certificate should pass: %v", err)
@@ -694,7 +702,7 @@ func TestScenario_TLS_TOFU_DetectsCertChange(t *testing.T) {
 	if err := c.checkTLSFingerprint(conn1); err != nil {
 		t.Fatalf("first connection failed: %v", err)
 	}
-	conn1.Close()
+	_ = conn1.Close()
 	ts1.Close()
 
 	savedFP := c.CurrentTLSFingerprint()
@@ -707,7 +715,7 @@ func TestScenario_TLS_TOFU_DetectsCertChange(t *testing.T) {
 	defer ts2.Close()
 
 	conn2 := dialTLSWS(t, wsURL2)
-	defer conn2.Close()
+	defer func() { _ = conn2.Close() }()
 
 	err := c.checkTLSFingerprint(conn2)
 	if err == nil {

@@ -31,7 +31,7 @@ func TestRelay_LargeData(t *testing.T) {
 	recvWg.Add(1)
 	go func() {
 		defer recvWg.Done()
-		io.Copy(&received, dstConn)
+		_, _ = io.Copy(&received, dstConn)
 	}()
 
 	// 启动 Relay
@@ -47,7 +47,7 @@ func TestRelay_LargeData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("写入测试数据失败: %v", err)
 	}
-	srcConn.Close()
+	_ = srcConn.Close()
 
 	// 等待 Relay 结束
 	relayWg.Wait()
@@ -83,7 +83,7 @@ func TestRelay_LargeData_ReverseDirection(t *testing.T) {
 	recvWg.Add(1)
 	go func() {
 		defer recvWg.Done()
-		io.Copy(&received, srcConn) // 这次从 srcConn 读取（反向）
+		_, _ = io.Copy(&received, srcConn) // 这次从 srcConn 读取（反向）
 	}()
 
 	var relayWg sync.WaitGroup
@@ -94,8 +94,8 @@ func TestRelay_LargeData_ReverseDirection(t *testing.T) {
 	}()
 
 	// 从 dstConn 写入（反方向）
-	dstConn.Write(testData)
-	dstConn.Close()
+	_, _ = dstConn.Write(testData)
+	_ = dstConn.Close()
 
 	relayWg.Wait()
 	recvWg.Wait()
@@ -119,13 +119,12 @@ func TestRelay_ConcurrentStreams(t *testing.T) {
 	clientSession, _ := NewClientSession(clientConn, DefaultConfig())
 	serverSession, _ := NewServerSession(serverConn, DefaultConfig())
 
-	defer clientSession.Close()
-	defer serverSession.Close()
+	defer func() { _ = clientSession.Close() }()
+	defer func() { _ = serverSession.Close() }()
 
 	type result struct {
 		idx  int
 		hash [32]byte
-		data []byte
 	}
 
 	results := make(chan result, streamCount)
@@ -141,8 +140,8 @@ func TestRelay_ConcurrentStreams(t *testing.T) {
 				return
 			}
 			go func() {
-				io.Copy(stream, stream) // echo
-				stream.Close()
+				_, _ = io.Copy(stream, stream) // echo
+				_ = stream.Close()
 			}()
 		}
 	}()
@@ -166,13 +165,13 @@ func TestRelay_ConcurrentStreams(t *testing.T) {
 
 			// 写入并半关闭写入方向
 			go func() {
-				stream.Write(data)
-				stream.Close()
+				_, _ = stream.Write(data)
+				_ = stream.Close()
 			}()
 
 			// 读取 echo
 			var buf bytes.Buffer
-			io.Copy(&buf, stream)
+			_, _ = io.Copy(&buf, stream)
 
 			actualHash := sha256.Sum256(buf.Bytes())
 			if expectedHash != actualHash {

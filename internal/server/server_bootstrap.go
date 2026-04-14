@@ -108,12 +108,12 @@ func (s *Server) Start() error {
 		s.Port = addr.Port
 	}
 
-	var serveLn net.Listener = ln
+	serveLn := ln
 	if s.TLS != nil && s.TLS.IsEnabled() {
 		dataDir := s.getDataDir()
 		tlsConfig, fingerprint, err := s.TLS.loadOrBuildTLSConfig(dataDir)
 		if err != nil {
-			ln.Close()
+			_ = ln.Close()
 			return fmt.Errorf("TLS initialization failed: %w", err)
 		}
 		s.TLSFingerprint = fingerprint

@@ -1,7 +1,7 @@
 package server
 
 import (
-	"fmt"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -14,7 +14,9 @@ func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
 
 	if s.webFS == nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, devModeHTML)
+		if _, err := w.Write([]byte(devModeHTML)); err != nil {
+			log.Printf("⚠️ Failed to write dev mode HTML: %v", err)
+		}
 		return
 	}
 
@@ -26,7 +28,9 @@ func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
 	filePath := strings.TrimPrefix(path, "/")
 	f, err := s.webFS.Open(filePath)
 	if err == nil {
-		f.Close()
+		if err := f.Close(); err != nil {
+			log.Printf("⚠️ Failed to close embedded web file: %v", err)
+		}
 		s.webHandler.ServeHTTP(w, r)
 		return
 	}
@@ -36,7 +40,7 @@ func (s *Server) handleWeb(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	defer indexFile.Close()
+	defer func() { _ = indexFile.Close() }()
 
 	stat, err := indexFile.Stat()
 	if err != nil {

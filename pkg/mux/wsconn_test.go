@@ -48,7 +48,7 @@ func setupWSPair(t *testing.T, handler func(*websocket.Conn)) (*WSConn, func()) 
 
 func TestWSConnReadSpansBinaryMessages(t *testing.T) {
 	wsConn, cleanup := setupWSPair(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("hello"))
 		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("world"))
 	})
@@ -66,7 +66,7 @@ func TestWSConnReadSpansBinaryMessages(t *testing.T) {
 func TestWSConnWriteProducesBinaryMessages(t *testing.T) {
 	received := make(chan [][]byte, 1)
 	wsConn, cleanup := setupWSPair(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		payloads := make([][]byte, 0, 2)
 		for i := 0; i < 2; i++ {
 			messageType, data, err := conn.ReadMessage()
@@ -112,7 +112,7 @@ func TestWSConnConcurrentWrites(t *testing.T) {
 
 	received := make(chan [][]byte, 1)
 	wsConn, cleanup := setupWSPair(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		payloads := make([][]byte, 0, writers)
 		for i := 0; i < writers; i++ {
@@ -170,7 +170,7 @@ func TestWSConnConcurrentWrites(t *testing.T) {
 
 func TestWSConnCloseIdempotent(t *testing.T) {
 	wsConn, cleanup := setupWSPair(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _, _ = conn.ReadMessage()
 	})
 	defer cleanup()
@@ -185,7 +185,7 @@ func TestWSConnCloseIdempotent(t *testing.T) {
 
 func TestWSConnCloseConcurrentWithWrite(t *testing.T) {
 	wsConn, cleanup := setupWSPair(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		time.Sleep(200 * time.Millisecond)
 	})
 	defer cleanup()
@@ -208,7 +208,7 @@ func TestWSConnCloseConcurrentWithWrite(t *testing.T) {
 
 func TestWSConnReadRejectsNonBinaryMessages(t *testing.T) {
 	wsConn, cleanup := setupWSPair(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("not-binary"))
 	})
 	defer cleanup()
@@ -221,7 +221,7 @@ func TestWSConnReadRejectsNonBinaryMessages(t *testing.T) {
 
 func TestWSConnLocalAndRemoteAddr(t *testing.T) {
 	wsConn, cleanup := setupWSPair(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		time.Sleep(50 * time.Millisecond)
 	})
 	defer cleanup()

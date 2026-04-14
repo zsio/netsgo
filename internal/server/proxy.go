@@ -164,7 +164,7 @@ func (s *Server) ensureClientDataReady(client *ClientConn) error {
 	hasData := client.dataSession != nil && !client.dataSession.IsClosed()
 	client.dataMu.RUnlock()
 	if !hasData {
-		return fmt.Errorf("Client [%s] data channel not established, cannot create proxy", client.ID)
+		return fmt.Errorf("client [%s] data channel not established, cannot create proxy", client.ID)
 	}
 	return nil
 }
@@ -247,7 +247,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	current, exists := client.proxies[tunnel.Config.Name]
 	if !exists || current != tunnel {
 		client.proxyMu.Unlock()
-		ln.Close()
+		_ = ln.Close()
 		return fmt.Errorf("proxy tunnel %q not found", tunnel.Config.Name)
 	}
 	tunnel.Listener = ln
@@ -279,7 +279,7 @@ func closeTunnelRuntimeResources(tunnel *ProxyTunnel) {
 			tunnel.UDPState.Close()
 		}
 		if tunnel.Listener != nil {
-			tunnel.Listener.Close()
+			_ = tunnel.Listener.Close()
 		}
 	})
 	tunnel.Listener = nil
@@ -314,18 +314,6 @@ func (s *Server) stageTunnelPending(client *ClientConn, name string) (protocol.P
 	}
 	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, "")
 	return tunnel.Config, nil
-}
-
-func (s *Server) setTunnelError(client *ClientConn, name, message string) (protocol.ProxyConfig, bool) {
-	client.proxyMu.Lock()
-	defer client.proxyMu.Unlock()
-
-	tunnel, exists := client.proxies[name]
-	if !exists {
-		return protocol.ProxyConfig{}, false
-	}
-	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
-	return tunnel.Config, true
 }
 
 // StartProxy starts a new proxy tunnel, listening on RemotePort and forwarding each connection to the client via yamux.
@@ -374,7 +362,7 @@ func (s *Server) markTCPProxyRuntimeErrorIfCurrent(
 // proxyAcceptLoop continuously accepts external connections and forwards them via yamux.
 // It holds a snapshot of the listener/done for this activation to prevent stale loops from interfering with newer runtimes.
 func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, done <-chan struct{}) {
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	for {
 		extConn, err := listener.Accept()
@@ -396,7 +384,7 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listen
 // handleProxyConn handles a single external connection: opens a stream on the yamux session,
 // writes the StreamHeader (proxyName), then relays data bidirectionally.
 func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, extConn net.Conn) {
-	defer extConn.Close()
+	defer func() { _ = extConn.Close() }()
 
 	stream, err := s.openStreamToClient(client, tunnel.Config.Name)
 	if err != nil {
