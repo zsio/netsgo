@@ -56,7 +56,7 @@ func TestProxyE2E(t *testing.T) {
 		AdminUsername: "admin",
 		AdminPassword: "password123",
 		ServerAddr:    "http://" + managementHost,
-		AllowedPorts:  "1-65535",
+		AllowedPorts:  "10000-11000",
 	}); err != nil {
 		t.Fatalf("初始化 E2E 服务端失败: %v", err)
 	}

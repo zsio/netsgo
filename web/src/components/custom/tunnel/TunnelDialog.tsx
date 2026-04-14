@@ -300,7 +300,7 @@ function TunnelDialogForm({
                 可用端口范围：
                 {status.allowed_ports.length > 0
                   ? status.allowed_ports.map(p => p.start === p.end ? p.start : `${p.start}-${p.end}`).join(', ')
-                  : '1-65535 (无限制)'}
+                  : '10000-11000'}
               </p>
             )}
           </div>
