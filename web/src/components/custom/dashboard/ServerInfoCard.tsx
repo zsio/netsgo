@@ -38,12 +38,15 @@ export function ServerInfoCard() {
   const diskPartitions = status?.disk_partitions || [];
   const multipleDisks = diskPartitions.length > 1;
 
-  const startTimeText = new Date(now - (status?.uptime ?? 0) * 1000).toLocaleString('zh-CN', {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+  const hasValidUptime = (status?.uptime ?? 0) > 0;
+  const startTimeText = hasValidUptime
+    ? new Date(now - (status?.uptime ?? 0) * 1000).toLocaleString('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    : '-';
 
   return (
     <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden flex flex-col">

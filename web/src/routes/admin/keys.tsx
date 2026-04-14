@@ -17,7 +17,6 @@ import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
@@ -204,40 +203,41 @@ function AdminKeysPage() {
                       )}
                     </td>
                     <td className="px-6 py-3">
-                      <TooltipProvider>
-                        <div className="flex items-center justify-end gap-1">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className={`h-8 w-8 ${key.is_active ? 'hover:text-amber-500 hover:bg-amber-500/10' : 'hover:text-emerald-500 hover:bg-emerald-500/10'}`}
-                                onClick={() => key.is_active ? disableKey.mutate(key.id) : enableKey.mutate(key.id)}
-                              >                                {key.is_active ? (
-                                  <PowerOff className="h-4 w-4 text-muted-foreground" />
-                                ) : (
-                                  <Power className="h-4 w-4 text-muted-foreground" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>{key.is_active ? '禁用' : '启用'}</TooltipContent>
-                          </Tooltip>
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={key.is_active ? '禁用 API Key' : '启用 API Key'}
+                              className={`h-8 w-8 ${key.is_active ? 'hover:text-amber-500 hover:bg-amber-500/10' : 'hover:text-emerald-500 hover:bg-emerald-500/10'}`}
+                              onClick={() => key.is_active ? disableKey.mutate(key.id) : enableKey.mutate(key.id)}
+                            >
+                              {key.is_active ? (
+                                <PowerOff className="h-4 w-4" />
+                              ) : (
+                                <Power className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{key.is_active ? '禁用' : '启用'}</TooltipContent>
+                        </Tooltip>
 
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                                onClick={() => setDeleteTarget({ id: key.id, name: key.name })}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>删除</TooltipContent>
-                          </Tooltip>
-                        </div>
-                      </TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label="删除 API Key"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                              onClick={() => setDeleteTarget({ id: key.id, name: key.name })}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>删除</TooltipContent>
+                        </Tooltip>
+                      </div>
                     </td>
                   </tr>
                 ))
