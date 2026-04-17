@@ -42,7 +42,7 @@ func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 		Detect:        func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateHistoricalDataOnly },
 		SelectTLSMode: func(ui uiProvider) (string, error) { return "off", nil },
 		LoadRecoverable: func() (server.InitParams, error) {
-			return server.InitParams{ServerAddr: "https://panel.example.com", AllowedPorts: "1-65535"}, nil
+			return server.InitParams{ServerAddr: "https://panel.example.com", AllowedPorts: "10000-11000"}, nil
 		},
 		EnsureUser: func(name string) error { return nil },
 		EnsureDirs: func() error { return nil },
@@ -95,7 +95,7 @@ func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 		Detect:        func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateHistoricalDataOnly },
 		SelectTLSMode: func(ui uiProvider) (string, error) { return "off", nil },
 		LoadRecoverable: func() (server.InitParams, error) {
-			return server.InitParams{ServerAddr: "https://panel.example.com", AllowedPorts: "1-65535"}, nil
+			return server.InitParams{ServerAddr: "https://panel.example.com", AllowedPorts: "10000-11000"}, nil
 		},
 		EnsureUser:        func(name string) error { return nil },
 		EnsureDirs:        func() error { return nil },
@@ -124,7 +124,7 @@ func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 
 func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"9527", "127.0.0.1/32", "/tmp/cert.pem", "/tmp/key.pem", "https://panel.example.com", "admin", "1-65535"},
+		inputs:    []string{"9527", "127.0.0.1/32", "/tmp/cert.pem", "/tmp/key.pem", "https://panel.example.com", "admin", "10000-11000"},
 		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{true},
 	}
@@ -182,7 +182,7 @@ func TestInstallServerWithBrokenStateFails(t *testing.T) {
 
 func TestInstallServerWithConfirmNoPrintsCancelledSummary(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"9527", "127.0.0.1/32", "https://panel.example.com", "admin", "1-65535"},
+		inputs:    []string{"9527", "127.0.0.1/32", "https://panel.example.com", "admin", "10000-11000"},
 		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{false},
 	}

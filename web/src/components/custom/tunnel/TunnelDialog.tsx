@@ -295,14 +295,14 @@ function TunnelDialogForm({
               min={1}
               max={65535}
             />
-            {status?.allowed_ports && (
-              <p className="text-[11px] text-muted-foreground mt-1.5">
-                可用端口范围：
-                {status.allowed_ports.length > 0
+            <p className="text-[11px] text-muted-foreground mt-1.5">
+              可用端口范围：
+              {status?.allowed_ports === undefined
+                ? '10000-11000'
+                : status.allowed_ports.length > 0
                   ? status.allowed_ports.map(p => p.start === p.end ? p.start : `${p.start}-${p.end}`).join(', ')
-                  : '1-65535 (无限制)'}
-              </p>
-            )}
+                  : '无限制'}
+            </p>
           </div>
         )}
 

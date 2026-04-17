@@ -203,14 +203,30 @@ func TestClient_HandleStream_InvalidHeader(t *testing.T) {
 	serverSession, _ := mux.NewServerSession(serverConn, mux.DefaultConfig())
 	defer mustClose(t, serverSession)
 
+	errCh := make(chan error, 1)
 	go func() {
-		stream, _ := serverSession.Open()
-		mustWriteAll(t, stream, []byte{0x00, 0x00})
-		mustClose(t, stream)
+		stream, err := serverSession.Open()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if _, err := stream.Write([]byte{0x00, 0x00}); err != nil {
+			_ = stream.Close()
+			errCh <- err
+			return
+		}
+		errCh <- stream.Close()
 	}()
 
-	stream, _ := clientSession.AcceptStream()
+	stream, err := clientSession.AcceptStream()
+	if err != nil {
+		t.Fatalf("Client AcceptStream failed: %v", err)
+	}
 	c.handleStream(stream)
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("server stream write failed: %v", err)
+	}
 }
 
 func TestClient_HandleStream_DialFail(t *testing.T) {
