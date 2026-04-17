@@ -133,7 +133,7 @@ sudo netsgo install
 ./netsgo client --server https://your-netsgo-domain.com --key <your-client-key>
 ```
 
-服务端地址支持以下格式，客户端会自动处理：
+直接运行 `netsgo client` 时，服务端地址支持以下格式，客户端会自动处理：
 
 - `ws://host:port`
 - `wss://host:port`
@@ -243,7 +243,7 @@ netsgo server --tls-mode off --trusted-proxies 127.0.0.1/32,10.0.0.0/8
 # 连接远端 HTTPS / WSS 服务端
 netsgo client --server https://1.2.3.4:9527 --key mykey
 
-# 交互式 install 时使用 WebSocket 地址
+# 也可以显式传入 WebSocket 地址
 netsgo client --server wss://1.2.3.4:9527 --key mykey
 
 # 仅用于测试：跳过 TLS 校验
