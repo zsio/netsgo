@@ -18,6 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Reject npm lockfiles in Bun-managed web app
+        run: |
+          ! find web -maxdepth 1 \( -name 'package-lock.json' -o -name 'npm-shrinkwrap.json' \) | grep -q . || {
+            echo "npm lockfiles must not exist in web/; use Bun and web/bun.lock instead."
+            exit 1
+          }
       - uses: oven-sh/setup-bun@v2
       - name: Install web dependencies
         working-directory: web

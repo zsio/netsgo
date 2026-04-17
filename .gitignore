@@ -51,6 +51,8 @@ Desktop.ini
 web/node_modules/
 web/dist/
 web/dist-ssr/
+web/npm-shrinkwrap.json
+web/package-lock.json
 !web/dist/placeholder.md
 *.local
 logs/
