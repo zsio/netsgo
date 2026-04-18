@@ -78,3 +78,17 @@ func (a *ClientConn) RangeProxies(fn func(name string, tunnel *ProxyTunnel) bool
 		}
 	}
 }
+
+func (a *ClientConn) ProxyConfigsSnapshot() []protocol.ProxyConfig {
+	a.proxyMu.RLock()
+	defer a.proxyMu.RUnlock()
+
+	configs := make([]protocol.ProxyConfig, 0, len(a.proxies))
+	for _, tunnel := range a.proxies {
+		config := tunnel.Config
+		config.Capabilities = nil
+		configs = append(configs, config)
+	}
+
+	return configs
+}

@@ -145,11 +145,11 @@ func (s *Server) collectClientViews() []clientView {
 		if !client.isLive() {
 			return true
 		}
-		proxies := make([]protocol.ProxyConfig, 0, len(client.proxies))
-		client.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
-			proxies = append(proxies, proxyConfigForClientView(tunnel.Config, true))
-			return true
-		})
+		configs := client.ProxyConfigsSnapshot()
+		proxies := make([]protocol.ProxyConfig, 0, len(configs))
+		for _, config := range configs {
+			proxies = append(proxies, proxyConfigForClientView(config, true))
+		}
 		sort.Slice(proxies, func(i, j int) bool { return proxies[i].Name < proxies[j].Name })
 
 		view, ok := views[client.ID]

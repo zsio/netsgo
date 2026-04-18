@@ -154,37 +154,54 @@ func udpSourceIPKey(addr net.Addr) string {
 	return addr.String()
 }
 
-// startUDPProxy starts a UDP proxy tunnel.
-// It listens for UDP on RemotePort and creates a new yamux session for each new srcAddr,
-// forwarding packets to the client.
-func (s *Server) startUDPProxy(client *ClientConn, tunnel *ProxyTunnel) error {
+type udpProxyRuntime struct {
+	actualPort int
+	state      *UDPProxyState
+}
+
+// bindUDPProxyRuntime opens the UDP listener and prepares detached runtime state.
+func (s *Server) bindUDPProxyRuntime(tunnel *ProxyTunnel) (*udpProxyRuntime, error) {
 	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
 	packetConn, err := net.ListenPacket("udp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to listen on UDP port %d: %w", tunnel.Config.RemotePort, err)
+		return nil, fmt.Errorf("failed to listen on UDP port %d: %w", tunnel.Config.RemotePort, err)
 	}
 
 	actualPort := packetConn.LocalAddr().(*net.UDPAddr).Port
-	tunnel.Config.RemotePort = actualPort
 
 	state := &UDPProxyState{
 		packetConn: packetConn,
 		sessionIPs: make(map[string]int),
 		done:       make(chan struct{}),
 	}
-	tunnel.UDPState = state
 
-	log.Printf("🚇 UDP proxy tunnel created: %s [:%d → %s:%d] Client [%s]",
-		tunnel.Config.Name, actualPort, tunnel.Config.LocalIP, tunnel.Config.LocalPort, client.ID)
+	return &udpProxyRuntime{
+		actualPort: actualPort,
+		state:      state,
+	}, nil
+}
 
-	// Note: udpReadLoop must run in a single goroutine. If made concurrent,
-	// the Load-then-Add upper-bound check on sessionCount must be changed to a CAS atomic operation.
-	go s.udpReadLoop(client, tunnel, state)
+func (s *Server) publishUDPProxyRuntime(client *ClientConn, tunnel *ProxyTunnel, runtime *udpProxyRuntime) (protocol.ProxyConfig, *UDPProxyState, error) {
+	client.proxyMu.Lock()
+	current, exists := client.proxies[tunnel.Config.Name]
+	if !exists || current != tunnel {
+		client.proxyMu.Unlock()
+		if runtime != nil && runtime.state != nil {
+			runtime.state.Close()
+		}
+		return protocol.ProxyConfig{}, nil, fmt.Errorf("proxy tunnel %q not found", tunnel.Config.Name)
+	}
 
-	// Start the periodic stale-session reaper.
-	go s.udpReaper(state)
+	current.done = make(chan struct{})
+	current.once = sync.Once{}
+	current.Config.RemotePort = runtime.actualPort
+	current.UDPState = runtime.state
+	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+	config := current.Config
+	state := current.UDPState
+	client.proxyMu.Unlock()
 
-	return nil
+	return config, state, nil
 }
 
 func (s *Server) markUDPProxyRuntimeErrorIfCurrent(

@@ -212,7 +212,9 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 }
 
 func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel) error {
-	if err := s.validateProxyRequestWithExclusions(client, tunnel.Config.ToProxyNewRequest(), tunnel.Config.Name, client.ID); err != nil {
+	req := tunnel.Config.ToProxyNewRequest()
+	name := tunnel.Config.Name
+	if err := s.validateProxyRequestWithExclusions(client, req, name, client.ID); err != nil {
 		return err
 	}
 	if err := s.ensureClientDataReady(client); err != nil {
@@ -220,18 +222,31 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	}
 
 	if tunnel.Config.Type == protocol.ProxyTypeHTTP {
-		setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+		client.proxyMu.Lock()
+		current, exists := client.proxies[name]
+		if !exists || current != tunnel {
+			client.proxyMu.Unlock()
+			return fmt.Errorf("proxy tunnel %q not found", name)
+		}
+		setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+		client.proxyMu.Unlock()
 		return nil
 	}
 
 	if tunnel.Config.Type == protocol.ProxyTypeUDP {
-		tunnel.done = make(chan struct{})
-		tunnel.once = sync.Once{}
-		tunnel.Config.Error = ""
-		if err := s.startUDPProxy(client, tunnel); err != nil {
+		runtime, err := s.bindUDPProxyRuntime(tunnel)
+		if err != nil {
 			return err
 		}
-		setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+		config, state, err := s.publishUDPProxyRuntime(client, tunnel, runtime)
+		if err != nil {
+			return err
+		}
+		log.Printf("🚇 UDP proxy tunnel created: %s [:%d → %s:%d] Client [%s]",
+			config.Name, config.RemotePort, config.LocalIP, config.LocalPort, client.ID)
+
+		go s.udpReadLoop(client, tunnel, state)
+		go s.udpReaper(state)
 		return nil
 	}
 
