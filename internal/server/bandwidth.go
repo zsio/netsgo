@@ -407,6 +407,9 @@ func copyWithBandwidth(dst io.Writer, src io.Reader, slots ...*budgetSlot) (int6
 		if nr > 0 {
 			nw, ew := writeFull(dst, buf[:nr])
 			total += int64(nw)
+			if unwritten := nr - nw; unwritten > 0 {
+				refundBandwidthAllowance(unwritten, slots...)
+			}
 			if ew != nil {
 				return total, ew
 			}

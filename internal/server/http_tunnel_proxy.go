@@ -47,6 +47,9 @@ func (c *countingConn) Write(b []byte) (int, error) {
 	for written < len(b) {
 		allowed := waitForBandwidthAllowance(len(b)-written, c.ingressSlots...)
 		n, err := c.Conn.Write(b[written : written+allowed])
+		if unused := allowed - n; unused > 0 {
+			refundBandwidthAllowance(unused, c.ingressSlots...)
+		}
 		if n > 0 {
 			written += n
 			c.written.Add(int64(n))

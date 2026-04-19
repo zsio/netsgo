@@ -244,6 +244,33 @@ func (c *singleByteEOFConn) Read(p []byte) (int, error) {
 	return 1, io.EOF
 }
 
+type partialWriteThenErrorWriter struct {
+	wrote int
+	limit int
+}
+
+func (w *partialWriteThenErrorWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	w.wrote += w.limit
+	return w.limit, io.ErrUnexpectedEOF
+}
+
+type partialWriteThenErrorConn struct {
+	net.Conn
+	limit int
+	wrote int
+}
+
+func (c *partialWriteThenErrorConn) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	c.wrote += c.limit
+	return c.limit, io.ErrUnexpectedEOF
+}
+
 func TestCountingConnRead_WaitsBeforeReadingEgressPayload(t *testing.T) {
 	clock := newBlockingBandwidthClock(time.Unix(600, 0))
 	slot := newBudgetSlot(1, clock)
@@ -297,6 +324,42 @@ func TestCountingConnRead_RefundsUnusedReservedBytes(t *testing.T) {
 	}
 	if got := slot.Preview(10); got != 9 {
 		t.Fatalf("unused HTTP reserved bytes should be refunded, remaining preview=%d", got)
+	}
+}
+
+func TestCopyWithBandwidth_RefundsUnwrittenBytesOnWriteError(t *testing.T) {
+	clock := &fakeBandwidthClock{now: time.Unix(700, 0)}
+	slot := newBudgetSlot(10, clock)
+	src := bytes.NewBufferString("abcd")
+	dst := &partialWriteThenErrorWriter{limit: 2}
+
+	n, err := copyWithBandwidth(dst, src, slot)
+	if err == nil {
+		t.Fatal("copyWithBandwidth should return a write error")
+	}
+	if n != 2 {
+		t.Fatalf("copyWithBandwidth written bytes: want 2, got %d", n)
+	}
+	if got := slot.Preview(10); got != 8 {
+		t.Fatalf("unwritten bytes should be refunded after write error, remaining preview=%d", got)
+	}
+}
+
+func TestCountingConnWrite_RefundsReservedBytesOnPartialWriteError(t *testing.T) {
+	clock := &fakeBandwidthClock{now: time.Unix(750, 0)}
+	slot := newBudgetSlot(10, clock)
+	probe := &partialWriteThenErrorConn{limit: 2}
+	conn := &countingConn{Conn: probe, ingressSlots: []*budgetSlot{slot}}
+
+	n, err := conn.Write([]byte("abcd"))
+	if err == nil {
+		t.Fatal("countingConn.Write should return a write error")
+	}
+	if n != 2 {
+		t.Fatalf("countingConn.Write written bytes: want 2, got %d", n)
+	}
+	if got := slot.Preview(10); got != 8 {
+		t.Fatalf("unused HTTP write reservation should be refunded, remaining preview=%d", got)
 	}
 }
 
