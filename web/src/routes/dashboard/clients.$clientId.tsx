@@ -58,7 +58,7 @@ function ClientDetailPage() {
       <motion.div variants={fadeUp}><ClientInfoCard client={client} /></motion.div>
       <motion.div variants={fadeUp}><TunnelTable client={client} /></motion.div>
       <motion.div variants={fadeUp}>
-        <TrafficChart clientId={clientId} tunnels={client.proxies ?? []} />
+        <TrafficChart clientId={clientId} />
       </motion.div>
     </motion.div>
   );
