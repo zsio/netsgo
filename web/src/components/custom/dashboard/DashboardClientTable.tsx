@@ -4,6 +4,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Laptop, Cpu, HardDrive } from 'lucide-react';
 import { formatPercent } from '@/lib/format';
 import { Button } from '@/components/ui/button';
+import { CompactTrafficChart } from '@/components/custom/chart/CompactTrafficChart';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 
@@ -83,13 +84,14 @@ export function DashboardClientTable() {
               <th className="px-6 py-3 font-medium">状态</th>
               <th className="px-6 py-3 font-medium">系统/架构</th>
               <th className="px-6 py-3 font-medium">CPU / 内存</th>
+              <th className="px-6 py-3 font-medium">网络趋势 (1h)</th>
               <th className="px-6 py-3 font-medium text-right">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/40">
             {(!clients || clients.length === 0) ? (
               <tr>
-                <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
+                <td colSpan={7} className="px-6 py-8 text-center text-muted-foreground">
                   暂无 Client 连接
                 </td>
               </tr>
@@ -121,6 +123,9 @@ export function DashboardClientTable() {
                     ) : (
                       <span className="text-muted-foreground">-</span>
                     )}
+                  </td>
+                  <td className="px-6 py-3">
+                    <CompactTrafficChart clientId={client.id} />
                   </td>
                   <td className="px-6 py-3 text-right">
                     <Button variant="ghost" size="sm" onClick={() => navigateToClient(client.id)}>
