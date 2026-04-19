@@ -16,6 +16,8 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): TunnelEntry {
     remote_port: 18080,
     domain: '',
     client_id: 'client-1',
+    ingress_bps: 0,
+    egress_bps: 0,
     desired_state: 'running',
     runtime_state: 'exposed',
     capabilities: {

@@ -120,6 +120,8 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 		log.Printf("⚠️ Failed to parse proxy request [%s]: %v", client.ID, err)
 		return
 	}
+	req.IngressBPS = 0
+	req.EgressBPS = 0
 
 	if !s.isCurrentLive(client.ID, client.generation) {
 		if err := s.waitForCurrentDataReady(client, s.sessions.pendingDataTimeout); err != nil {
@@ -196,15 +198,21 @@ func (s *Server) handleProxyCloseMessage(client *ClientConn, msg protocol.Messag
 		return
 	}
 
+	config := protocol.ProxyConfig{
+		Name:     req.Name,
+		ClientID: client.ID,
+	}
+	client.proxyMu.RLock()
+	if tunnel, exists := client.proxies[req.Name]; exists {
+		config = tunnel.Config
+	}
+	client.proxyMu.RUnlock()
+
 	if err := s.StopProxy(client, req.Name); err != nil {
 		log.Printf("⚠️ Failed to close proxy [%s]: %v", client.ID, err)
 		return
 	}
 
-	s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
-		Name:         req.Name,
-		ClientID:     client.ID,
-		DesiredState: protocol.ProxyDesiredStateStopped,
-		RuntimeState: protocol.ProxyRuntimeStateIdle,
-	}, "closed_by_client")
+	setProxyConfigStates(&config, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
+	s.emitTunnelChanged(client.ID, config, "closed_by_client")
 }

@@ -191,8 +191,8 @@ func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, e
 	return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
 }
 
-// UpdateTunnel updates the mutable tunnel configuration (local_ip, local_port, remote_port, domain) and persists it.
-func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localPort, remotePort int, domain string) error {
+// UpdateTunnel updates the mutable tunnel configuration and persists it.
+func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -203,6 +203,8 @@ func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localP
 			s.tunnels[i].LocalPort = localPort
 			s.tunnels[i].RemotePort = remotePort
 			s.tunnels[i].Domain = domain
+			s.tunnels[i].IngressBPS = ingressBPS
+			s.tunnels[i].EgressBPS = egressBPS
 			if err := s.save(); err != nil {
 				s.tunnels[i] = previous
 				return err

@@ -242,6 +242,7 @@ func (s *Server) deleteManagedTunnel(client *ClientConn, name string) error {
 	if err != nil {
 		return err
 	}
+	deletedConfig := tunnel.Config
 
 	client.proxyMu.Lock()
 	delete(client.proxies, name)
@@ -256,17 +257,12 @@ func (s *Server) deleteManagedTunnel(client *ClientConn, name string) error {
 		}
 	}
 
-	s.emitTunnelChanged(client.ID, protocol.ProxyConfig{
-		Name:         tunnel.Config.Name,
-		Type:         tunnel.Config.Type,
-		ClientID:     client.ID,
-		DesiredState: protocol.ProxyDesiredStateStopped,
-		RuntimeState: protocol.ProxyRuntimeStateIdle,
-	}, "deleted")
+	setProxyConfigStates(&deletedConfig, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
+	s.emitTunnelChanged(client.ID, deletedConfig, "deleted")
 	return nil
 }
 
-func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP string, localPort, remotePort int, domain string) (protocol.ProxyConfig, error) {
+func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) (protocol.ProxyConfig, error) {
 	tunnel, err := s.mustGetTunnel(client, name)
 	if err != nil {
 		return protocol.ProxyConfig{}, err
@@ -275,12 +271,13 @@ func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP st
 	wasError := tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && tunnel.Config.RuntimeState == protocol.ProxyRuntimeStateError
 	tunnelType := tunnel.Config.Type
 	req := protocol.ProxyNewRequest{
-		Name:       name,
-		Type:       tunnelType,
-		LocalIP:    localIP,
-		LocalPort:  localPort,
-		RemotePort: remotePort,
-		Domain:     domain,
+		Name:              name,
+		Type:              tunnelType,
+		LocalIP:           localIP,
+		LocalPort:         localPort,
+		RemotePort:        remotePort,
+		Domain:            domain,
+		BandwidthSettings: protocol.BandwidthSettings{IngressBPS: ingressBPS, EgressBPS: egressBPS},
 	}
 	if err := s.validateProxyRequestWithExclusions(client, req, name, client.ID); err != nil {
 		return protocol.ProxyConfig{}, err
@@ -292,6 +289,13 @@ func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP st
 	tunnel.Config.LocalPort = localPort
 	tunnel.Config.RemotePort = remotePort
 	tunnel.Config.Domain = domain
+	tunnel.Config.IngressBPS = ingressBPS
+	tunnel.Config.EgressBPS = egressBPS
+	if tunnel.limits == nil {
+		tunnel.limits = newDirectionalBandwidthRuntime(tunnel.Config.BandwidthSettings, realBandwidthClock{})
+	} else {
+		tunnel.limits.Update(tunnel.Config.BandwidthSettings)
+	}
 	if wasError {
 		setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
 	}
@@ -300,7 +304,7 @@ func (s *Server) updateManagedTunnel(client *ClientConn, name string, localIP st
 
 	// Persist the configuration change to storage.
 	if s.store != nil {
-		if err := s.store.UpdateTunnel(client.ID, name, localIP, localPort, remotePort, domain); err != nil {
+		if err := s.store.UpdateTunnel(client.ID, name, localIP, localPort, remotePort, domain, ingressBPS, egressBPS); err != nil {
 			return protocol.ProxyConfig{}, err
 		}
 	}
@@ -437,13 +441,14 @@ func (s *Server) rollbackResumedTunnelAfterReady(client *ClientConn, name, previ
 
 func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, errMsg string) protocol.ProxyConfig {
 	config := protocol.ProxyConfig{
-		Name:       req.Name,
-		Type:       req.Type,
-		LocalIP:    req.LocalIP,
-		LocalPort:  req.LocalPort,
-		RemotePort: req.RemotePort,
-		Domain:     req.Domain,
-		ClientID:   client.ID,
+		Name:              req.Name,
+		Type:              req.Type,
+		LocalIP:           req.LocalIP,
+		LocalPort:         req.LocalPort,
+		RemotePort:        req.RemotePort,
+		Domain:            req.Domain,
+		ClientID:          client.ID,
+		BandwidthSettings: req.BandwidthSettings,
 	}
 	setProxyConfigStates(&config, desiredState, runtimeState, errMsg)
 	client.proxyMu.Lock()
@@ -452,6 +457,7 @@ func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyN
 	}
 	client.proxies[req.Name] = &ProxyTunnel{
 		Config: config,
+		limits: newDirectionalBandwidthRuntime(req.BandwidthSettings, realBandwidthClock{}),
 		done:   make(chan struct{}),
 	}
 	client.proxyMu.Unlock()
@@ -468,13 +474,14 @@ func (s *Server) failRestoredTunnelAfterReady(client *ClientConn, stored StoredT
 
 func storedTunnelToProxyConfig(stored StoredTunnel) protocol.ProxyConfig {
 	config := protocol.ProxyConfig{
-		Name:       stored.Name,
-		Type:       stored.Type,
-		LocalIP:    stored.LocalIP,
-		LocalPort:  stored.LocalPort,
-		RemotePort: stored.RemotePort,
-		Domain:     stored.Domain,
-		ClientID:   stored.ClientID,
+		Name:              stored.Name,
+		Type:              stored.Type,
+		LocalIP:           stored.LocalIP,
+		LocalPort:         stored.LocalPort,
+		RemotePort:        stored.RemotePort,
+		Domain:            stored.Domain,
+		ClientID:          stored.ClientID,
+		BandwidthSettings: stored.BandwidthSettings,
 	}
 	setProxyConfigStates(&config, stored.DesiredState, stored.RuntimeState, stored.Error)
 	return config
@@ -522,19 +529,20 @@ func offlineManagedStateAfterUpdate(stored StoredTunnel) (string, string, string
 	}
 }
 
-func (s *Server) updateOfflineManagedTunnel(clientID, name, localIP string, localPort, remotePort int, domain string) (protocol.ProxyConfig, error) {
+func (s *Server) updateOfflineManagedTunnel(clientID, name, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) (protocol.ProxyConfig, error) {
 	stored, err := s.loadOfflineManagedTunnel(clientID, name)
 	if err != nil {
 		return protocol.ProxyConfig{}, err
 	}
 
 	req := protocol.ProxyNewRequest{
-		Name:       name,
-		Type:       stored.Type,
-		LocalIP:    localIP,
-		LocalPort:  localPort,
-		RemotePort: remotePort,
-		Domain:     domain,
+		Name:              name,
+		Type:              stored.Type,
+		LocalIP:           localIP,
+		LocalPort:         localPort,
+		RemotePort:        remotePort,
+		Domain:            domain,
+		BandwidthSettings: protocol.BandwidthSettings{IngressBPS: ingressBPS, EgressBPS: egressBPS},
 	}
 	if req.Type == protocol.ProxyTypeHTTP {
 		req.RemotePort = 0
@@ -542,7 +550,7 @@ func (s *Server) updateOfflineManagedTunnel(clientID, name, localIP string, loca
 	if err := s.validateProxyRequestWithExclusions(nil, req, name, clientID); err != nil {
 		return protocol.ProxyConfig{}, err
 	}
-	if err := s.store.UpdateTunnel(clientID, name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain); err != nil {
+	if err := s.store.UpdateTunnel(clientID, name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS); err != nil {
 		return protocol.ProxyConfig{}, err
 	}
 	desiredState, runtimeState, errMsg := offlineManagedStateAfterUpdate(stored)
@@ -606,18 +614,13 @@ func (s *Server) deleteOfflineManagedTunnel(clientID, name string) error {
 	if err != nil {
 		return err
 	}
+	deletedConfig := storedTunnelToProxyConfig(stored)
 	if err := s.store.RemoveTunnel(clientID, name); err != nil {
 		return err
 	}
 
-	s.emitTunnelChanged(clientID, protocol.ProxyConfig{
-		Name:         stored.Name,
-		Type:         stored.Type,
-		Domain:       stored.Domain,
-		ClientID:     clientID,
-		DesiredState: protocol.ProxyDesiredStateStopped,
-		RuntimeState: protocol.ProxyRuntimeStateIdle,
-	}, "deleted")
+	setProxyConfigStates(&deletedConfig, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
+	s.emitTunnelChanged(clientID, deletedConfig, "deleted")
 	return nil
 }
 
@@ -782,6 +785,15 @@ func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affecte
 func (s *Server) markTunnelsPortNotAllowed(affected []affectedTunnel) {
 	for _, a := range affected {
 		errMsg := fmt.Sprintf("port %d is not allowed", a.RemotePort)
+		hasEventConfig := false
+		eventConfig := protocol.ProxyConfig{
+			Name:         a.TunnelName,
+			RemotePort:   a.RemotePort,
+			ClientID:     a.ClientID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateError,
+			Error:        errMsg,
+		}
 
 		// Update runtime state for online clients.
 		if value, ok := s.clients.Load(a.ClientID); ok {
@@ -795,18 +807,21 @@ func (s *Server) markTunnelsPortNotAllowed(affected []affectedTunnel) {
 					}(client, a.TunnelName)
 				}
 				setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
+				eventConfig = tunnel.Config
+				hasEventConfig = true
 			}
 			client.proxyMu.Unlock()
-
-			s.emitTunnelChanged(a.ClientID, protocol.ProxyConfig{
-				Name:         a.TunnelName,
-				RemotePort:   a.RemotePort,
-				ClientID:     a.ClientID,
-				DesiredState: protocol.ProxyDesiredStateRunning,
-				RuntimeState: protocol.ProxyRuntimeStateError,
-				Error:        errMsg,
-			}, "port_not_allowed")
 		}
+
+		if !hasEventConfig && s.store != nil {
+			if stored, exists := s.store.GetTunnel(a.ClientID, a.TunnelName); exists {
+				eventConfig = storedTunnelToProxyConfig(stored)
+				setProxyConfigStates(&eventConfig, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
+				hasEventConfig = true
+			}
+		}
+
+		s.emitTunnelChanged(a.ClientID, eventConfig, "port_not_allowed")
 
 		_ = s.persistTunnelStates(a.ClientID, a.TunnelName, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 

@@ -80,6 +80,58 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 	}
 }
 
+func TestTunnelStore_BandwidthSettingsRoundTripAndUpdate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tunnels.json")
+
+	store1, err := NewTunnelStore(path)
+	if err != nil {
+		t.Fatalf("NewTunnelStore failed: %v", err)
+	}
+	mustAddStableTunnel(t, store1, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name:       "limited",
+			Type:       protocol.ProxyTypeTCP,
+			LocalIP:    "127.0.0.1",
+			LocalPort:  80,
+			RemotePort: 8080,
+			BandwidthSettings: protocol.BandwidthSettings{
+				IngressBPS: 1000,
+				EgressBPS:  2000,
+			},
+		},
+		ClientID: "client-1",
+		Hostname: "host-1",
+	})
+
+	store2, err := NewTunnelStore(path)
+	if err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	loaded, ok := store2.GetTunnel("client-1", "limited")
+	if !ok {
+		t.Fatal("should find reloaded tunnel")
+	}
+	if loaded.IngressBPS != 1000 || loaded.EgressBPS != 2000 {
+		t.Fatalf("stored bandwidth settings did not round-trip: %+v", loaded.BandwidthSettings)
+	}
+
+	if err := store2.UpdateTunnel("client-1", "limited", "127.0.0.2", 81, 8081, "", 0, 0); err != nil {
+		t.Fatalf("UpdateTunnel failed: %v", err)
+	}
+	store3, err := NewTunnelStore(path)
+	if err != nil {
+		t.Fatalf("second reload failed: %v", err)
+	}
+	updated, ok := store3.GetTunnel("client-1", "limited")
+	if !ok {
+		t.Fatal("should find updated tunnel")
+	}
+	if updated.IngressBPS != 0 || updated.EgressBPS != 0 {
+		t.Fatalf("explicit zero bandwidth settings should persist as unlimited: %+v", updated.BandwidthSettings)
+	}
+}
+
 func TestTunnelStore_LoadExistingStatesKeepsDesiredAndRuntimeState(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tunnels.json")

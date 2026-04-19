@@ -17,6 +17,8 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
     remote_port: 18080,
     domain: '',
     client_id: 'client-1',
+    ingress_bps: 0,
+    egress_bps: 0,
     desired_state: 'running',
     runtime_state: 'exposed',
     capabilities: {
@@ -142,6 +144,8 @@ describe('tunnel-model', () => {
       local_port: 3000,
       remote_port: 0,
       domain: 'app.example.com',
+      ingress_bps: 0,
+      egress_bps: 0,
     });
 
     expect(
@@ -157,6 +161,29 @@ describe('tunnel-model', () => {
       local_port: 22,
       remote_port: 2200,
       domain: '',
+      ingress_bps: 0,
+      egress_bps: 0,
+    });
+  });
+
+  test('带宽字段通过共享 payload builder 统一透传', () => {
+    expect(
+      buildTunnelMutationPayload({
+        type: 'tcp',
+        local_ip: '127.0.0.1',
+        local_port: 22,
+        remote_port: 2200,
+        domain: '',
+        ingress_bps: 2048,
+        egress_bps: 4096,
+      }),
+    ).toEqual({
+      local_ip: '127.0.0.1',
+      local_port: 22,
+      remote_port: 2200,
+      domain: '',
+      ingress_bps: 2048,
+      egress_bps: 4096,
     });
   });
 

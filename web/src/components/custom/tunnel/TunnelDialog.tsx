@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import toast from 'react-hot-toast';
 import { useCreateTunnel, useUpdateTunnel } from '@/hooks/use-tunnel-mutations';
 import { getTunnelMutationErrorMessage } from '@/lib/tunnel-model';
+import { bpsToMbpsInput, parseMbpsInputToBps } from '@/lib/format';
 import { useServerStatus } from '@/hooks/use-server-status';
 import type { ProxyType, ProxyConfig } from '@/types';
 
@@ -46,6 +47,8 @@ interface TunnelFormState {
   localPort: string;
   remotePort: string;
   domain: string;
+  ingressBps: string;
+  egressBps: string;
 }
 
 function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
@@ -57,6 +60,8 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
       localPort: String(props.tunnel.local_port || ''),
       remotePort: String(props.tunnel.remote_port || ''),
       domain: props.tunnel.domain || '',
+      ingressBps: bpsToMbpsInput(props.tunnel.ingress_bps),
+      egressBps: bpsToMbpsInput(props.tunnel.egress_bps),
     };
   }
 
@@ -67,6 +72,8 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
     localPort: '',
     remotePort: '',
     domain: '',
+    ingressBps: '',
+    egressBps: '',
   };
 }
 
@@ -129,6 +136,8 @@ function TunnelDialogForm({
   const [localPort, setLocalPort] = useState(initialForm.localPort);
   const [remotePort, setRemotePort] = useState(initialForm.remotePort);
   const [domain, setDomain] = useState(initialForm.domain);
+  const [ingressBps, setIngressBps] = useState(initialForm.ingressBps);
+  const [egressBps, setEgressBps] = useState(initialForm.egressBps);
 
   const isHttp = type === 'http';
 
@@ -146,6 +155,13 @@ function TunnelDialogForm({
     e.preventDefault();
     const parsedLocalPort = Number.parseInt(localPort, 10);
     const parsedRemotePort = remotePort ? Number.parseInt(remotePort, 10) : 0;
+    const parsedIngressBps = parseMbpsInputToBps(ingressBps);
+    const parsedEgressBps = parseMbpsInputToBps(egressBps);
+
+    if (parsedIngressBps == null || parsedEgressBps == null) {
+      toast.error('带宽限制必须是非负数');
+      return;
+    }
 
     if (props.mode === 'edit') {
       const tunnel = props.tunnel;
@@ -160,6 +176,8 @@ function TunnelDialogForm({
           local_port: parsedLocalPort,
           remote_port: parsedRemotePort,
           domain,
+          ingress_bps: parsedIngressBps,
+          egress_bps: parsedEgressBps,
         },
         {
           onSuccess: () => {
@@ -183,6 +201,8 @@ function TunnelDialogForm({
         local_port: parsedLocalPort,
         remote_port: parsedRemotePort,
         domain,
+        ingress_bps: parsedIngressBps,
+        egress_bps: parsedEgressBps,
       },
       {
         onSuccess: () => {
@@ -197,9 +217,24 @@ function TunnelDialogForm({
   };
 
   const parsedRemotePort = Number.parseInt(remotePort, 10);
+  const parsedIngressBps = parseMbpsInputToBps(ingressBps);
+  const parsedEgressBps = parseMbpsInputToBps(egressBps);
   const isValid = isEdit
-    ? Boolean(localPort && Number.parseInt(localPort, 10) > 0 && (isHttp ? domain.trim() : parsedRemotePort > 0))
-    : Boolean(name.trim() && localPort && Number.parseInt(localPort, 10) > 0 && (isHttp ? domain.trim() : parsedRemotePort > 0));
+    ? Boolean(
+      localPort
+      && Number.parseInt(localPort, 10) > 0
+      && (isHttp ? domain.trim() : parsedRemotePort > 0)
+      && parsedIngressBps !== null
+      && parsedEgressBps !== null,
+    )
+    : Boolean(
+      name.trim()
+      && localPort
+      && Number.parseInt(localPort, 10) > 0
+      && (isHttp ? domain.trim() : parsedRemotePort > 0)
+      && parsedIngressBps !== null
+      && parsedEgressBps !== null,
+    );
 
   return (
     <DialogContent className="sm:max-w-md">
@@ -305,6 +340,34 @@ function TunnelDialogForm({
             </p>
           </div>
         )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">入站限速</label>
+            <Input
+              type="number"
+              step="any"
+              placeholder="0"
+              value={ingressBps}
+              onChange={(e) => setIngressBps(e.target.value)}
+              min={0}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">出站限速</label>
+            <Input
+              type="number"
+              step="any"
+              placeholder="0"
+              value={egressBps}
+              onChange={(e) => setEgressBps(e.target.value)}
+              min={0}
+            />
+          </div>
+        </div>
+        <p className="text-[11px] text-muted-foreground -mt-1">
+          单位为 MiB/s，留空或填写 0 表示不限速。
+        </p>
 
         {mutation.isError && (
           <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg mt-2">

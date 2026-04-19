@@ -1505,6 +1505,128 @@ func TestAPI_Clients_FallbackToPersistedStatsBeforeNextReport(t *testing.T) {
 	t.Fatalf("Client %s not found", authResp.ClientID)
 }
 
+func TestAPI_Clients_ExposeTopLevelBandwidthFields(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	offlineInfo := protocol.ClientInfo{
+		Hostname: "offline-bandwidth",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}
+	offlineRecord, err := s.auth.adminStore.GetOrCreateClient("install-offline-bandwidth", offlineInfo, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("failed to create offline client record: %v", err)
+	}
+	if err := s.auth.adminStore.UpdateClientBandwidthSettings(offlineRecord.ID, protocol.BandwidthSettings{IngressBPS: 512, EgressBPS: 1536}); err != nil {
+		t.Fatalf("failed to update offline client bandwidth: %v", err)
+	}
+
+	liveInfo := protocol.ClientInfo{
+		Hostname: "live-bandwidth",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}
+	liveRecord, err := s.auth.adminStore.GetOrCreateClient("install-live-bandwidth", liveInfo, "127.0.0.1:10002")
+	if err != nil {
+		t.Fatalf("failed to create live client record: %v", err)
+	}
+	liveClient := &ClientConn{
+		ID:         liveRecord.ID,
+		Info:       liveInfo,
+		RemoteAddr: "127.0.0.1:10002",
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	if err := liveClient.SetBandwidthSettings(protocol.BandwidthSettings{IngressBPS: 1024, EgressBPS: 2048}); err != nil {
+		t.Fatalf("failed to set live client bandwidth: %v", err)
+	}
+	s.clients.Store(liveRecord.ID, liveClient)
+
+	resp := doMuxRequest(t, handler, http.MethodGet, "/api/clients", token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("GET /api/clients: want 200, got %d", resp.Code)
+	}
+
+	var clients []map[string]any
+	if err := mustDecodeJSON(t, resp.Body, &clients); err != nil {
+		t.Fatalf("failed to decode /api/clients response: %v", err)
+	}
+
+	seenOffline := false
+	seenLive := false
+	for _, client := range clients {
+		switch client["id"] {
+		case offlineRecord.ID:
+			seenOffline = true
+			if client["ingress_bps"] != float64(512) || client["egress_bps"] != float64(1536) {
+				t.Fatalf("offline client bandwidth mismatch: %+v", client)
+			}
+		case liveRecord.ID:
+			seenLive = true
+			if client["ingress_bps"] != float64(1024) || client["egress_bps"] != float64(2048) {
+				t.Fatalf("live client bandwidth mismatch: %+v", client)
+			}
+		}
+	}
+
+	if !seenOffline {
+		t.Fatalf("offline client %s missing from /api/clients", offlineRecord.ID)
+	}
+	if !seenLive {
+		t.Fatalf("live client %s missing from /api/clients", liveRecord.ID)
+	}
+}
+
+func TestAuth_RehydratesPersistedClientBandwidthSettings(t *testing.T) {
+	s, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	info := protocol.ClientInfo{
+		Hostname: "persisted-bandwidth-host",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}
+	record, err := s.auth.adminStore.GetOrCreateClient("install-persisted-bandwidth-host", info, "127.0.0.1:12345")
+	if err != nil {
+		t.Fatalf("failed to pre-create client record: %v", err)
+	}
+	if err := s.auth.adminStore.UpdateClientBandwidthSettings(record.ID, protocol.BandwidthSettings{
+		IngressBPS: 777,
+		EgressBPS:  888,
+	}); err != nil {
+		t.Fatalf("failed to prewrite client bandwidth: %v", err)
+	}
+
+	conn, authResp := connectAndAuthWithInstallID(t, ts, "persisted-bandwidth-host", "install-persisted-bandwidth-host")
+	defer mustClose(t, conn)
+
+	time.Sleep(100 * time.Millisecond)
+
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("live client %s missing after auth", authResp.ClientID)
+	}
+	client := value.(*ClientConn)
+	settings := client.GetBandwidthSettings()
+	if settings.IngressBPS != 777 || settings.EgressBPS != 888 {
+		t.Fatalf("rehydrated client bandwidth mismatch: %+v", settings)
+	}
+	if client.BandwidthRuntime() == nil {
+		t.Fatal("client bandwidth runtime should be initialized during auth")
+	}
+	if got := client.BandwidthRuntime().Budget(payloadDirectionIngress).Preview(4096); got != 777 {
+		t.Fatalf("ingress preview mismatch after auth rehydrate: want 777, got %d", got)
+	}
+	if got := client.BandwidthRuntime().Budget(payloadDirectionEgress).Preview(4096); got != 888 {
+		t.Fatalf("egress preview mismatch after auth rehydrate: want 888, got %d", got)
+	}
+}
+
 func TestProbe_MultipleReports(t *testing.T) {
 	s, conn, ts, cleanup := setupWSTest(t)
 	defer cleanup()
@@ -1710,11 +1832,18 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	client.dataSession, _ = mux.NewServerSession(sPipe, mux.DefaultConfig())
 	client.dataMu.Unlock()
 
+	eventsCh := s.events.Subscribe()
+	defer s.events.Unsubscribe(eventsCh)
+
 	// Test MsgTypeProxyCreate
 	req := protocol.ProxyNewRequest{
 		Name:       "ws-tunnel-1",
 		Type:       protocol.ProxyTypeTCP,
 		RemotePort: reserveTCPPort(t),
+		BandwidthSettings: protocol.BandwidthSettings{
+			IngressBPS: 1234,
+			EgressBPS:  5678,
+		},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, protocol.ProxyCreateRequest(req))
 	if err := conn.WriteJSON(msg); err != nil {
@@ -1731,6 +1860,13 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 		t.Errorf("want returned %s, got %s", protocol.MsgTypeProxyCreateResp, resp.Type)
 	}
 
+	client.proxyMu.Lock()
+	if tunnel, exists := client.proxies["ws-tunnel-1"]; exists {
+		tunnel.Config.IngressBPS = 1234
+		tunnel.Config.EgressBPS = 5678
+	}
+	client.proxyMu.Unlock()
+
 	// Test MsgTypeProxyClose
 	closeReq := protocol.ProxyCloseRequest{Name: "ws-tunnel-1"}
 	closeMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyClose, closeReq)
@@ -1746,6 +1882,9 @@ func TestControlLoop_ProxyMessages(t *testing.T) {
 	if exists {
 		t.Error("proxy tunnel still exists after sending ProxyClose")
 	}
+
+	tunnelPayload := waitForTunnelChangedEvent(t, eventsCh, "closed_by_client", "ws-tunnel-1")
+	assertTunnelBandwidthFields(t, tunnelPayload, 1234, 5678)
 }
 
 func TestControlLoop_ProxyCreateResponse(t *testing.T) {
@@ -3141,6 +3280,10 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 			LocalPort:  8080,
 			RemotePort: 19090,
 			Domain:     domain,
+			BandwidthSettings: protocol.BandwidthSettings{
+				IngressBPS: 1234,
+				EgressBPS:  5678,
+			},
 		},
 		DesiredState: protocol.ProxyDesiredStateRunning,
 		RuntimeState: protocol.ProxyRuntimeStateExposed,
@@ -3194,6 +3337,7 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 			if got, _ := tunnelPayload["domain"].(string); got != domain {
 				t.Fatalf("port_not_allowed event should retain domain=%q, got %q", domain, got)
 			}
+			assertTunnelBandwidthFields(t, tunnelPayload, 1234, 5678)
 			return
 		case <-time.After(20 * time.Millisecond):
 		}
@@ -3242,6 +3386,239 @@ func TestAuth_KeyExchange_ReturnsToken(t *testing.T) {
 	}
 	if authResp.ClientID == "" {
 		t.Error("ClientID should not be empty")
+	}
+}
+
+func TestRestoreTunnels_PortNotAllowedPreservesBandwidthFields(t *testing.T) {
+	s := New(0)
+
+	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.json"))
+	if err != nil {
+		t.Fatalf("failed to create AdminStore: %v", err)
+	}
+	adminStore.bcryptCost = bcrypt.MinCost
+	if err := adminStore.Initialize("admin", "password123", "localhost", []PortRange{{Start: 20000, End: 20010}}); err != nil {
+		t.Fatalf("failed to initialize AdminStore: %v", err)
+	}
+	s.auth.adminStore = adminStore
+
+	storePath := filepath.Join(t.TempDir(), "tunnels.json")
+	rawStore := `[
+  {
+    "name": "http-port-blocked-bandwidth",
+    "type": "http",
+    "local_ip": "127.0.0.1",
+    "local_port": 8080,
+    "remote_port": 19090,
+    "domain": "blocked.example.com",
+    "desired_state": "running",
+    "runtime_state": "exposed",
+    "client_id": "client-port-blocked-bandwidth",
+    "hostname": "restore-host",
+    "binding": "client_id",
+    "ingress_bps": 1234,
+    "egress_bps": 5678
+  }
+]`
+	if err := os.WriteFile(storePath, []byte(rawStore), 0o600); err != nil {
+		t.Fatalf("failed to seed raw tunnel store: %v", err)
+	}
+
+	store, err := NewTunnelStore(storePath)
+	if err != nil {
+		t.Fatalf("failed to load TunnelStore: %v", err)
+	}
+	s.store = store
+
+	client := &ClientConn{
+		ID:         "client-port-blocked-bandwidth",
+		Info:       protocol.ClientInfo{Hostname: "restore-host"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	s.clients.Store(client.ID, client)
+
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+
+	s.restoreTunnels(client)
+
+	client.proxyMu.RLock()
+	runtimeTunnel := client.proxies["http-port-blocked-bandwidth"]
+	client.proxyMu.RUnlock()
+	if runtimeTunnel == nil {
+		t.Fatal("restore should create an in-memory error placeholder")
+	}
+
+	runtimeBytes, err := json.Marshal(runtimeTunnel.Config)
+	if err != nil {
+		t.Fatalf("failed to marshal runtime tunnel config: %v", err)
+	}
+	var runtimePayload map[string]any
+	if err := json.Unmarshal(runtimeBytes, &runtimePayload); err != nil {
+		t.Fatalf("failed to decode runtime tunnel config: %v", err)
+	}
+	if runtimePayload["ingress_bps"] != float64(1234) {
+		t.Fatalf("runtime ingress_bps: want 1234, got %v", runtimePayload["ingress_bps"])
+	}
+	if runtimePayload["egress_bps"] != float64(5678) {
+		t.Fatalf("runtime egress_bps: want 5678, got %v", runtimePayload["egress_bps"])
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case ev := <-ch:
+			if ev.Type != "tunnel_changed" {
+				continue
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(ev.Data), &payload); err != nil {
+				t.Fatalf("failed to decode tunnel_changed event: %v", err)
+			}
+			tunnelPayload, ok := payload["tunnel"].(map[string]any)
+			if !ok {
+				t.Fatalf("tunnel payload missing: %v", payload)
+			}
+			if tunnelPayload["name"] != "http-port-blocked-bandwidth" {
+				continue
+			}
+			if tunnelPayload["ingress_bps"] != float64(1234) {
+				t.Fatalf("event ingress_bps: want 1234, got %v", tunnelPayload["ingress_bps"])
+			}
+			if tunnelPayload["egress_bps"] != float64(5678) {
+				t.Fatalf("event egress_bps: want 5678, got %v", tunnelPayload["egress_bps"])
+			}
+			return
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	t.Fatal("timed out waiting for tunnel_changed event with bandwidth fields")
+}
+
+func TestDeleteManagedTunnel_EventPreservesBandwidthFields(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+
+	client := &ClientConn{
+		ID:         "client-delete-bandwidth",
+		Info:       protocol.ClientInfo{Hostname: "delete-host"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	s.clients.Store(client.ID, client)
+
+	req := protocol.ProxyNewRequest{
+		Name:       "delete-bandwidth",
+		Type:       protocol.ProxyTypeTCP,
+		RemotePort: reserveTCPPort(t),
+		BandwidthSettings: protocol.BandwidthSettings{
+			IngressBPS: 4321,
+			EgressBPS:  8765,
+		},
+	}
+	config := s.upsertTunnelPlaceholder(client, req, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
+	if err := s.store.AddTunnel(storedTunnelFromRuntime(client, client.proxies[req.Name])); err != nil {
+		t.Fatalf("failed to persist tunnel: %v", err)
+	}
+
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+
+	if err := s.deleteManagedTunnel(client, req.Name); err != nil {
+		t.Fatalf("deleteManagedTunnel failed: %v", err)
+	}
+
+	tunnelPayload := waitForTunnelChangedEvent(t, ch, "deleted", req.Name)
+	assertTunnelBandwidthFields(t, tunnelPayload, config.IngressBPS, config.EgressBPS)
+}
+
+func TestDeleteOfflineManagedTunnel_EventPreservesBandwidthFields(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	clientID := registerOfflineHTTPTestClient(t, s, "offline-delete-bandwidth")
+	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
+		Name:       "offline-delete-bandwidth",
+		Type:       protocol.ProxyTypeTCP,
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8080,
+		RemotePort: reserveTCPPort(t),
+		BandwidthSettings: protocol.BandwidthSettings{
+			IngressBPS: 2468,
+			EgressBPS:  8642,
+		},
+	}, protocol.ProxyStatusStopped)
+
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+
+	resp := doMuxRequest(t, handler, http.MethodDelete, fmt.Sprintf("/api/clients/%s/tunnels/offline-delete-bandwidth", clientID), token, nil)
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("delete offline tunnel: want 204, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	tunnelPayload := waitForTunnelChangedEvent(t, ch, "deleted", "offline-delete-bandwidth")
+	assertTunnelBandwidthFields(t, tunnelPayload, 2468, 8642)
+}
+
+func TestRestoreTunnels_StoppedTunnelPreservesBandwidthRuntime(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+
+	store := newTestTunnelStore(t)
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name:       "stopped-bandwidth",
+			Type:       protocol.ProxyTypeTCP,
+			LocalIP:    "127.0.0.1",
+			LocalPort:  8080,
+			RemotePort: 18080,
+			BandwidthSettings: protocol.BandwidthSettings{
+				IngressBPS: 321,
+				EgressBPS:  654,
+			},
+		},
+		ClientID:     "client-stopped-bandwidth",
+		Hostname:     "restore-host",
+		DesiredState: protocol.ProxyDesiredStateStopped,
+		RuntimeState: protocol.ProxyRuntimeStateIdle,
+	})
+	s.store = store
+
+	client := &ClientConn{
+		ID:         "client-stopped-bandwidth",
+		Info:       protocol.ClientInfo{Hostname: "restore-host"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	s.clients.Store(client.ID, client)
+
+	s.restoreTunnels(client)
+
+	client.proxyMu.RLock()
+	tunnel := client.proxies["stopped-bandwidth"]
+	client.proxyMu.RUnlock()
+	if tunnel == nil {
+		t.Fatal("restore should create an in-memory stopped tunnel")
+	}
+	if tunnel.Config.IngressBPS != 321 || tunnel.Config.EgressBPS != 654 {
+		t.Fatalf("restored tunnel config lost bandwidth fields: %+v", tunnel.Config.BandwidthSettings)
+	}
+	if tunnel.limits == nil {
+		t.Fatal("restored tunnel runtime limiter should not be nil")
+	}
+	if got := tunnel.limits.Budget(payloadDirectionIngress).Preview(4096); got != 321 {
+		t.Fatalf("restored tunnel ingress runtime mismatch: want 321, got %d", got)
+	}
+	if got := tunnel.limits.Budget(payloadDirectionEgress).Preview(4096); got != 654 {
+		t.Fatalf("restored tunnel egress runtime mismatch: want 654, got %d", got)
 	}
 }
 

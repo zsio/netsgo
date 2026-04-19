@@ -316,12 +316,14 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			} else {
 				val = sess
 				// Start the reverse read loop: stream → reply to srcAddr.
-				go s.udpSessionReverse(state, sess, client.ID, tunnel.Config.Name)
+				go s.udpSessionReverse(state, sess, client.ID, tunnel.Config.Name, client.BandwidthRuntime(), tunnel.limits)
 			}
 		}
 
 		sess := val.(*UDPSession)
 		sess.Touch()
+
+		reserveFullPayloadBandwidth(n, payloadBudgetSlots(payloadDirectionIngress, client.BandwidthRuntime(), tunnel.limits)...)
 
 		// Frame and write the UDP packet into the yamux stream.
 		if err := mux.WriteUDPFrame(sess.stream, buf[:n]); err != nil {
@@ -342,7 +344,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 // external client via packetConn.
 // Exit mechanism: the goroutine blocks on ReadUDPFrame and exits when sess.Close()→stream.Close()
 // is called — this is intentional and no separate ReadDeadline is needed for ReadUDPFrame.
-func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clientID, proxyName string) {
+func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clientID, proxyName string, clientRuntime, tunnelRuntime *directionalBandwidthRuntime) {
 	defer func() {
 		sess.Close()
 		state.removeSession(sess.srcAddr.String())
@@ -369,6 +371,7 @@ func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clien
 		}
 
 		sess.Touch()
+		reserveFullPayloadBandwidth(len(payload), payloadBudgetSlots(payloadDirectionEgress, clientRuntime, tunnelRuntime)...)
 
 		if _, err := state.packetConn.WriteTo(payload, sess.srcAddr); err != nil {
 			log.Printf("⚠️ UDP proxy [%s] WriteTo failed [%s]: %v",

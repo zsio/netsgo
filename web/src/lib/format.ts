@@ -4,6 +4,8 @@
  */
 
 const UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
+const BYTES_PER_MEBIBYTE = 1024 * 1024;
+const NET_SPEED_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
 
 /** 将字节数转换为人类可读格式: 1073741824 → "1.0 GB" */
 export function formatBytes(bytes: number): string {
@@ -33,9 +35,41 @@ export function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
-/** 格式化网速 (bytes/s): 1048576 → "1.0 MB/s" */
+/** 格式化网速 (bytes/s): 1048576 → "1.0 MiB/s" */
 export function formatNetSpeed(bytesPerSec: number): string {
-  return `${formatBytes(bytesPerSec)}/s`;
+  if (bytesPerSec === 0) return '0 B/s';
+  const i = Math.floor(Math.log(bytesPerSec) / Math.log(1024));
+  const idx = Math.min(i, NET_SPEED_UNITS.length - 1);
+  return `${(bytesPerSec / Math.pow(1024, idx)).toFixed(1)} ${NET_SPEED_UNITS[idx]}/s`;
+}
+
+function trimTrailingZeros(value: string): string {
+  return value.replace(/(?:\.0+|(\.\d+?)0+)$/, '$1');
+}
+
+export function bpsToMbpsInput(bytes?: number | null): string {
+  if (!bytes || bytes <= 0) return '';
+
+  const value = bytes / BYTES_PER_MEBIBYTE;
+  for (let decimals = 0; decimals <= 20; decimals += 1) {
+    const formatted = trimTrailingZeros(value.toFixed(decimals));
+    if (Math.round(Number.parseFloat(formatted) * BYTES_PER_MEBIBYTE) === bytes) {
+      return formatted;
+    }
+  }
+
+  return trimTrailingZeros(value.toFixed(20));
+}
+
+/** 
+ * 将输入框的 MiB/s 字符串解析为 bytes/s (取整)，留空返回 0
+ */
+export function parseMbpsInputToBps(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed === '') return 0;
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.round(parsed * BYTES_PER_MEBIBYTE);
 }
 
 /** 将 Unix 时间戳转换为距今时长: 1609459200 → "5 年 73 天" */

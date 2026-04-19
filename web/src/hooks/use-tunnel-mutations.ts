@@ -70,6 +70,8 @@ export function useUpdateTunnel() {
       local_port,
       remote_port,
       domain,
+      ingress_bps,
+      egress_bps,
     }: {
       clientId: string;
       tunnelName: string;
@@ -78,6 +80,8 @@ export function useUpdateTunnel() {
       local_port: number;
       remote_port: number;
       domain: string;
+      ingress_bps?: number;
+      egress_bps?: number;
     }) =>
       api.put(`/api/clients/${clientId}/tunnels/${tunnelName}`, buildTunnelMutationPayload({
         type,
@@ -85,6 +89,8 @@ export function useUpdateTunnel() {
         local_port,
         remote_port,
         domain,
+        ingress_bps,
+        egress_bps,
       })),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });

@@ -21,6 +21,36 @@ func (c *ClientConn) SetInfo(info protocol.ClientInfo) {
 	c.infoMu.Unlock()
 }
 
+func (c *ClientConn) GetBandwidthSettings() protocol.BandwidthSettings {
+	c.bandwidthMu.RLock()
+	defer c.bandwidthMu.RUnlock()
+	return c.bandwidth
+}
+
+func (c *ClientConn) SetBandwidthSettings(settings protocol.BandwidthSettings) error {
+	if err := validateBandwidthSettings(settings); err != nil {
+		return err
+	}
+
+	c.bandwidthMu.Lock()
+	defer c.bandwidthMu.Unlock()
+
+	c.bandwidth = settings
+	if c.bandwidthRT == nil {
+		c.bandwidthRT = newDirectionalBandwidthRuntime(settings, realBandwidthClock{})
+		return nil
+	}
+
+	c.bandwidthRT.Update(settings)
+	return nil
+}
+
+func (c *ClientConn) BandwidthRuntime() *directionalBandwidthRuntime {
+	c.bandwidthMu.RLock()
+	defer c.bandwidthMu.RUnlock()
+	return c.bandwidthRT
+}
+
 func (c *ClientConn) writeJSON(v any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

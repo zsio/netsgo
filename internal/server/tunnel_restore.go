@@ -29,29 +29,18 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			log.Printf("⚠️ tunnel %s port %d is outside the currently allowed range, marking as error", st.Name, st.RemotePort)
 			errMsg := fmt.Sprintf("port %d is not within the allowed range", st.RemotePort)
 			client.proxyMu.Lock()
-			config := protocol.ProxyConfig{
-				Name:       st.Name,
-				Type:       st.Type,
-				LocalIP:    st.LocalIP,
-				LocalPort:  st.LocalPort,
-				RemotePort: st.RemotePort,
-				Domain:     st.Domain,
-				ClientID:   client.ID,
-			}
+			config := storedTunnelToProxyConfig(st)
 			setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 			client.proxies[st.Name] = &ProxyTunnel{
 				Config: config,
+				limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
 				done:   make(chan struct{}),
 			}
 			client.proxyMu.Unlock()
 			_ = s.persistTunnelStates(client.ID, st.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
-			eventConfig := protocol.ProxyConfig{
-				Name:       st.Name,
-				Type:       st.Type,
-				RemotePort: st.RemotePort,
-				Domain:     st.Domain,
-				ClientID:   client.ID,
-			}
+			eventConfig := storedTunnelToProxyConfig(st)
+			eventConfig.LocalIP = ""
+			eventConfig.LocalPort = 0
 			setProxyConfigStates(&eventConfig, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 			s.emitTunnelChanged(client.ID, eventConfig, "port_not_allowed")
 			restoredCount++
@@ -69,19 +58,12 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			restoredCount++
 
 		default:
-			config := protocol.ProxyConfig{
-				Name:       st.Name,
-				Type:       st.Type,
-				LocalIP:    st.LocalIP,
-				LocalPort:  st.LocalPort,
-				RemotePort: st.RemotePort,
-				Domain:     st.Domain,
-				ClientID:   client.ID,
-			}
+			config := storedTunnelToProxyConfig(st)
 			setProxyConfigStates(&config, st.DesiredState, st.RuntimeState, st.Error)
 			client.proxyMu.Lock()
 			client.proxies[st.Name] = &ProxyTunnel{
 				Config: config,
+				limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
 				done:   make(chan struct{}),
 			}
 			client.proxyMu.Unlock()

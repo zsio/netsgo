@@ -678,6 +678,221 @@ func TestAdminConfigUpdateRejectsWhenHTTPDomainConflicts(t *testing.T) {
 	}
 }
 
+func TestAPI_UpdateClientBandwidthSettingsContract(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	record, err := s.auth.adminStore.GetOrCreateClient("install-bandwidth-client", protocol.ClientInfo{
+		Hostname: "bandwidth-host",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:12345")
+	if err != nil {
+		t.Fatalf("failed to create client record: %v", err)
+	}
+
+	resp := doMuxRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/api/clients/"+record.ID+"/bandwidth-settings",
+		token,
+		[]byte(`{"ingress_bps":2048,"egress_bps":4096}`),
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("PUT /api/clients/{id}/bandwidth-settings: want 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var payload map[string]any
+	if err := mustDecodeJSON(t, resp.Body, &payload); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if success, ok := payload["success"].(bool); !ok || !success {
+		t.Fatalf("success: want true, got %v", payload["success"])
+	}
+
+	settings, ok := payload["bandwidth_settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("bandwidth_settings object missing: %v", payload)
+	}
+	if settings["ingress_bps"] != float64(2048) {
+		t.Fatalf("ingress_bps: want 2048, got %v", settings["ingress_bps"])
+	}
+	if settings["egress_bps"] != float64(4096) {
+		t.Fatalf("egress_bps: want 4096, got %v", settings["egress_bps"])
+	}
+}
+
+func TestAPI_CreateOfflineTunnelRejectsNegativeBandwidthValues(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	record, err := s.auth.adminStore.GetOrCreateClient("install-offline-negative-bandwidth", protocol.ClientInfo{
+		Hostname: "offline-negative-bandwidth",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:22345")
+	if err != nil {
+		t.Fatalf("failed to create client record: %v", err)
+	}
+
+	resp := doMuxRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/api/clients/"+record.ID+"/tunnels",
+		token,
+		[]byte(`{"name":"neg-bandwidth","type":"tcp","local_ip":"127.0.0.1","local_port":22,"remote_port":2200,"ingress_bps":-1,"egress_bps":0}`),
+	)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/clients/{id}/tunnels with negative bandwidth: want 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestAPI_CreateOfflineTunnelBandwidthDefaultsPersistAsZero(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	record, err := s.auth.adminStore.GetOrCreateClient("install-offline-bandwidth-defaults", protocol.ClientInfo{
+		Hostname: "offline-bandwidth-defaults",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:32345")
+	if err != nil {
+		t.Fatalf("failed to create client record: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "omitted-default",
+			body: `{"name":"omitted-default","type":"tcp","local_ip":"127.0.0.1","local_port":22,"remote_port":2201}`,
+		},
+		{
+			name: "explicit-zero",
+			body: `{"name":"explicit-zero","type":"tcp","local_ip":"127.0.0.1","local_port":22,"remote_port":2202,"ingress_bps":0,"egress_bps":0}`,
+		},
+	}
+
+	for _, tc := range tests {
+		resp := doMuxRequest(
+			t,
+			handler,
+			http.MethodPost,
+			"/api/clients/"+record.ID+"/tunnels",
+			token,
+			[]byte(tc.body),
+		)
+		if resp.Code != http.StatusCreated {
+			t.Fatalf("%s: want 201, got %d body=%s", tc.name, resp.Code, resp.Body.String())
+		}
+
+		stored, ok := s.store.GetTunnel(record.ID, tc.name)
+		if !ok {
+			t.Fatalf("%s: expected tunnel in store", tc.name)
+		}
+		if stored.IngressBPS != 0 || stored.EgressBPS != 0 {
+			t.Fatalf("%s: expected persisted unlimited zeros, got %+v", tc.name, stored.BandwidthSettings)
+		}
+	}
+}
+
+func TestAPI_UpdateClientBandwidthSettingsMutatesLiveRuntimeInPlace(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	record, err := s.auth.adminStore.GetOrCreateClient("install-live-bandwidth-runtime", protocol.ClientInfo{
+		Hostname: "live-bandwidth-runtime",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:42345")
+	if err != nil {
+		t.Fatalf("failed to create client record: %v", err)
+	}
+
+	liveClient := &ClientConn{
+		ID:         record.ID,
+		Info:       record.Info,
+		RemoteAddr: "127.0.0.1:42345",
+		proxies: map[string]*ProxyTunnel{
+			"stable": {
+				Config: protocol.ProxyConfig{
+					Name:         "stable",
+					Type:         protocol.ProxyTypeTCP,
+					ClientID:     record.ID,
+					DesiredState: protocol.ProxyDesiredStateRunning,
+					RuntimeState: protocol.ProxyRuntimeStateExposed,
+				},
+				limits: newDirectionalBandwidthRuntime(protocol.BandwidthSettings{IngressBPS: 64, EgressBPS: 128}, realBandwidthClock{}),
+				done:   make(chan struct{}),
+			},
+		},
+		generation: 1,
+		state:      clientStateLive,
+	}
+	if err := liveClient.SetBandwidthSettings(protocol.BandwidthSettings{IngressBPS: 32, EgressBPS: 48}); err != nil {
+		t.Fatalf("failed to set initial client bandwidth: %v", err)
+	}
+	runtimeBefore := liveClient.BandwidthRuntime()
+	s.clients.Store(record.ID, liveClient)
+
+	resp := doMuxRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/api/clients/"+record.ID+"/bandwidth-settings",
+		token,
+		[]byte(`{"ingress_bps":2048,"egress_bps":4096}`),
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("PUT /api/clients/{id}/bandwidth-settings: want 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	currentValue, ok := s.clients.Load(record.ID)
+	if !ok {
+		t.Fatalf("live client %s missing after update", record.ID)
+	}
+	current := currentValue.(*ClientConn)
+	if current != liveClient {
+		t.Fatal("live client update should mutate the existing ClientConn in place")
+	}
+	if current.BandwidthRuntime() != runtimeBefore {
+		t.Fatal("live client update should mutate the existing runtime limiter in place")
+	}
+	settings := current.GetBandwidthSettings()
+	if settings.IngressBPS != 2048 || settings.EgressBPS != 4096 {
+		t.Fatalf("live client settings mismatch after update: %+v", settings)
+	}
+	runtimeBefore.ingress.mu.Lock()
+	ingressLimit := runtimeBefore.ingress.limit
+	runtimeBefore.ingress.mu.Unlock()
+	runtimeBefore.egress.mu.Lock()
+	egressLimit := runtimeBefore.egress.limit
+	runtimeBefore.egress.mu.Unlock()
+	if ingressLimit != 2048 || egressLimit != 4096 {
+		t.Fatalf("runtime limits mismatch after update: ingress=%d egress=%d", ingressLimit, egressLimit)
+	}
+	if record, ok := s.auth.adminStore.GetRegisteredClient(record.ID); !ok || record.IngressBPS != 2048 || record.EgressBPS != 4096 {
+		t.Fatalf("persisted client settings mismatch after update: %+v %v", record, ok)
+	}
+
+	liveClient.proxyMu.RLock()
+	tunnel := liveClient.proxies["stable"]
+	liveClient.proxyMu.RUnlock()
+	if tunnel == nil {
+		t.Fatal("live tunnel disappeared after client bandwidth update")
+	}
+	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("client bandwidth update should not alter tunnel state, got %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
+	}
+}
+
 // ========== P5: Cookie set/clear tests ==========
 
 func TestAPI_Login_SetsCookie(t *testing.T) {

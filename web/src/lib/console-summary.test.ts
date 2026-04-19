@@ -13,6 +13,8 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
     remote_port: 18080,
     domain: '',
     client_id: 'client-1',
+    ingress_bps: 0,
+    egress_bps: 0,
     desired_state: 'running',
     runtime_state: 'exposed',
     capabilities: {
@@ -28,6 +30,8 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
 function createClient(overrides: Partial<Client> = {}): Client {
   return {
     id: 'client-1',
+    ingress_bps: 0,
+    egress_bps: 0,
     info: {
       hostname: 'demo-host',
       os: 'linux',

@@ -41,23 +41,28 @@ interface TunnelMutationPayloadInput {
   type: ProxyType;
   local_ip: string;
   local_port: number;
-  remote_port: number;
+  remote_port?: number;
   domain?: string;
+  ingress_bps?: number;
+  egress_bps?: number;
 }
 
 export function buildTunnelMutationPayload(input: TunnelMutationPayloadInput) {
   const localIP = input.local_ip.trim();
   const domain = (input.domain ?? '').trim();
+  const remotePort = input.remote_port ?? 0;
 
-  if (input.type !== 'http' && (!Number.isInteger(input.remote_port) || input.remote_port < 1 || input.remote_port > 65535)) {
+  if (input.type !== 'http' && (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535)) {
     throw new Error('TCP/UDP 隧道必须填写明确的公网端口');
   }
 
   return {
     local_ip: localIP,
     local_port: input.local_port,
-    remote_port: input.type === 'http' ? 0 : input.remote_port,
+    remote_port: input.type === 'http' ? 0 : remotePort,
     domain: input.type === 'http' ? domain : '',
+    ingress_bps: normalizeBandwidthLimit(input.ingress_bps),
+    egress_bps: normalizeBandwidthLimit(input.egress_bps),
   };
 }
 
@@ -183,4 +188,14 @@ function requireTunnelCapabilities(
   }
 
   return capabilities as TunnelCapabilities;
+}
+
+function normalizeBandwidthLimit(value?: number): number {
+  if (value == null) {
+    return 0;
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error('带宽限制必须是非负整数');
+  }
+  return value;
 }

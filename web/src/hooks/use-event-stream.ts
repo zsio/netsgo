@@ -67,6 +67,8 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
               ...base,
               {
                 id: parsed.client_id,
+                ingress_bps: 0,
+                egress_bps: 0,
                 info: parsed.info,
                 stats: null,
                 proxies: [],

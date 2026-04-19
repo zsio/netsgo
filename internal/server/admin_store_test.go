@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"netsgo/pkg/protocol"
 )
 
 // ============================================================
@@ -212,6 +214,43 @@ func TestAdminStore_NewCorruptedFileFails(t *testing.T) {
 
 	if _, err := NewAdminStore(path); err == nil {
 		t.Fatal("corrupted admin.json should cause NewAdminStore to return error")
+	}
+}
+
+func TestAdminStore_ClientBandwidthSettingsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "admin.json")
+	store, err := NewAdminStore(path)
+	if err != nil {
+		t.Fatalf("NewAdminStore failed: %v", err)
+	}
+
+	client, err := store.GetOrCreateClient("install-bandwidth-roundtrip", protocol.ClientInfo{
+		Hostname: "bandwidth-roundtrip",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("GetOrCreateClient failed: %v", err)
+	}
+	if err := store.UpdateClientBandwidthSettings(client.ID, protocol.BandwidthSettings{
+		IngressBPS: 123,
+		EgressBPS:  456,
+	}); err != nil {
+		t.Fatalf("UpdateClientBandwidthSettings failed: %v", err)
+	}
+
+	reloaded, err := NewAdminStore(path)
+	if err != nil {
+		t.Fatalf("reloading AdminStore failed: %v", err)
+	}
+	record, ok := reloaded.GetRegisteredClient(client.ID)
+	if !ok {
+		t.Fatalf("client %s missing after reload", client.ID)
+	}
+	if record.IngressBPS != 123 || record.EgressBPS != 456 {
+		t.Fatalf("bandwidth settings did not round-trip: %+v", record)
 	}
 }
 

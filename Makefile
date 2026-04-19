@@ -66,7 +66,7 @@ STACK_PROXY_COMPOSE := $(CURDIR)/test/e2e/docker-compose.stack.$(STACK_PROXY).ym
 
 # 启动服务端（-tags dev 跳过 go:embed，使用 Vite 独立前端）
 dev-server:
-	go run -tags dev ./cmd/netsgo/ server --port $(DEV_PORT)
+	go run -tags dev ./cmd/netsgo/ server --port $(DEV_PORT) --allow-loopback-management-host
 
 # 启动客户端，连接本地服务端
 dev-client:
