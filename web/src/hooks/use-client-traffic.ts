@@ -6,6 +6,11 @@ const TRAFFIC_RANGE_CONFIG: Record<
   ClientTrafficRange,
   { durationHours: number; resolution: TrafficResolution; refetchInterval: number }
 > = {
+  '1h': {
+    durationHours: 1,
+    resolution: 'minute',
+    refetchInterval: 30_000,
+  },
   '24h': {
     durationHours: 24,
     resolution: 'minute',

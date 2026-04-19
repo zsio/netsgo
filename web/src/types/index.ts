@@ -96,7 +96,7 @@ export interface CreateTunnelInput {
 }
 
 export type TrafficResolution = 'minute' | 'hour';
-export type ClientTrafficRange = '24h' | '7d';
+export type ClientTrafficRange = '1h' | '24h' | '7d';
 
 export interface TrafficPoint {
   bucket_start: string;
