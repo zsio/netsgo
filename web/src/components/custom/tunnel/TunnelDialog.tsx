@@ -366,7 +366,7 @@ function TunnelDialogForm({
           </div>
         </div>
         <p className="text-[11px] text-muted-foreground -mt-1">
-          单位为 MB/s，留空或填写 0 表示不限速。
+          单位为 MiB/s，留空或填写 0 表示不限速。
         </p>
 
         {mutation.isError && (

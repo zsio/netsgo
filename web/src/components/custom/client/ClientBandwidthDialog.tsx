@@ -81,7 +81,7 @@ export function ClientBandwidthDialog({ client }: ClientBandwidthDialogProps) {
         <DialogHeader>
           <DialogTitle>编辑客户端带宽</DialogTitle>
           <DialogDescription>
-            配置当前 Client 的聚合入站与出站限速，单位为 MB/s。
+            配置当前 Client 的聚合入站与出站限速，单位为 MiB/s。
           </DialogDescription>
         </DialogHeader>
 
