@@ -40,6 +40,73 @@ func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+func validateBandwidthSettings(settings protocol.BandwidthSettings) error {
+	if settings.IngressBPS < 0 {
+		return fmt.Errorf("ingress_bps must be non-negative")
+	}
+	if settings.EgressBPS < 0 {
+		return fmt.Errorf("egress_bps must be non-negative")
+	}
+	return nil
+}
+
+func (s *Server) handleUpdateBandwidthSettings(w http.ResponseWriter, r *http.Request) {
+	clientID := r.PathValue("id")
+	if clientID == "" {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing client id"})
+		return
+	}
+
+	var req struct {
+		IngressBPS *int64 `json:"ingress_bps"`
+		EgressBPS  *int64 `json:"egress_bps"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	if req.IngressBPS == nil || req.EgressBPS == nil {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "ingress_bps and egress_bps are required"})
+		return
+	}
+
+	settings := protocol.BandwidthSettings{
+		IngressBPS: *req.IngressBPS,
+		EgressBPS:  *req.EgressBPS,
+	}
+	if err := validateBandwidthSettings(settings); err != nil {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	if s.auth.adminStore == nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "admin store unavailable"})
+		return
+	}
+
+	if err := s.auth.adminStore.UpdateClientBandwidthSettings(clientID, settings); err != nil {
+		switch {
+		case errors.Is(err, ErrRegisteredClientNotFound):
+			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+		default:
+			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		}
+		return
+	}
+
+	if current, ok := s.clients.Load(clientID); ok {
+		if err := current.(*ClientConn).SetBandwidthSettings(settings); err != nil {
+			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+	}
+
+	encodeJSON(w, http.StatusOK, map[string]any{
+		"success":            true,
+		"bandwidth_settings": settings,
+	})
+}
+
 func tunnelMutationErrorStatusAndBody(err error) (int, tunnelMutationErrorResponse) {
 	status := http.StatusInternalServerError
 	payload := tunnelMutationErrorResponse{
@@ -250,6 +317,8 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		LocalPort  int    `json:"local_port"`
 		RemotePort int    `json:"remote_port"`
 		Domain     string `json:"domain"`
+		IngressBPS int64  `json:"ingress_bps"`
+		EgressBPS  int64  `json:"egress_bps"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
@@ -258,7 +327,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		updated, err := s.updateOfflineManagedTunnel(clientID, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain)
+		updated, err := s.updateOfflineManagedTunnel(clientID, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS)
 		if err != nil {
 			status, payload := tunnelMutationErrorStatusAndBody(err)
 			encodeJSON(w, status, payload)
@@ -288,7 +357,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := s.updateManagedTunnel(client, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain)
+	updated, err := s.updateManagedTunnel(client, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS)
 	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)

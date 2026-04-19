@@ -132,6 +132,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 
 	var newToken string
 	var clientID string
+	var bandwidthSettings protocol.BandwidthSettings
 
 	if s.auth.adminStore != nil {
 		if !s.auth.adminStore.IsInitialized() {
@@ -170,6 +171,9 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 			}
 
 			clientID = clientToken.ClientID
+			if registered, ok := s.auth.adminStore.GetRegisteredClient(clientID); ok {
+				bandwidthSettings = registeredClientBandwidthSettings(registered)
+			}
 			if current, loaded := s.clients.Load(clientID); loaded {
 				currentClient := current.(*ClientConn)
 				if currentClient.getState() != clientStateClosing {
@@ -194,6 +198,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 				return nil, fmt.Errorf("failed to register client: %w", err)
 			}
 			clientID = record.ID
+			bandwidthSettings = registeredClientBandwidthSettings(*record)
 
 			if current, loaded := s.clients.Load(clientID); loaded {
 				currentClient := current.(*ClientConn)
@@ -243,6 +248,9 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 		dataToken:  generateDataToken(),
 		generation: s.nextClientGeneration(),
 		state:      clientStatePendingData,
+	}
+	if err := client.SetBandwidthSettings(bandwidthSettings); err != nil {
+		return nil, fmt.Errorf("invalid persisted bandwidth settings for client %s: %w", clientID, err)
 	}
 	s.clients.Store(clientID, client)
 

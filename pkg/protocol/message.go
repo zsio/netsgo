@@ -79,12 +79,13 @@ type AuthResponse struct {
 
 // ProxyNewRequest 请求创建一条新的代理隧道
 type ProxyNewRequest struct {
-	Name       string `json:"name"`        // 隧道名称
-	Type       string `json:"type"`        // tcp / udp / http
-	LocalIP    string `json:"local_ip"`    // 内网目标 IP
-	LocalPort  int    `json:"local_port"`  // 内网目标端口
-	RemotePort int    `json:"remote_port"` // 公网暴露端口（TCP/UDP 类型时使用）
-	Domain     string `json:"domain"`      // 域名（HTTP 类型时使用）
+	Name              string `json:"name"`        // 隧道名称
+	Type              string `json:"type"`        // tcp / udp / http
+	LocalIP           string `json:"local_ip"`    // 内网目标 IP
+	LocalPort         int    `json:"local_port"`  // 内网目标端口
+	RemotePort        int    `json:"remote_port"` // 公网暴露端口（TCP/UDP 类型时使用）
+	Domain            string `json:"domain"`      // 域名（HTTP 类型时使用）
+	BandwidthSettings        // payload bytes/sec; 0 = unlimited
 }
 
 // ProxyCreateRequest 表示 client 主动请求 server 创建 tunnel 的消息体。

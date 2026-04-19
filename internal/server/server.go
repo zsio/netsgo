@@ -48,6 +48,9 @@ type ClientConn struct {
 	Info         protocol.ClientInfo
 	infoMu       sync.RWMutex
 	RemoteAddr   string
+	bandwidthMu  sync.RWMutex
+	bandwidth    protocol.BandwidthSettings
+	bandwidthRT  *directionalBandwidthRuntime
 	stats        *protocol.SystemStats
 	prevStats    *protocol.SystemStats // previous probe snapshot (used to compute rates)
 	prevStatsAt  time.Time             // time of previous snapshot

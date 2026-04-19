@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"sync"
 
-	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
 
@@ -17,6 +16,7 @@ type ProxyTunnel struct {
 	Config   protocol.ProxyConfig
 	Listener net.Listener   // public listener on RemotePort (TCP tunnels only)
 	UDPState *UDPProxyState // UDP proxy runtime state (nil for TCP tunnels)
+	limits   *directionalBandwidthRuntime
 	done     chan struct{}
 	once     sync.Once
 }
@@ -61,6 +61,17 @@ func (s *Server) validateProxyRequest(client *ClientConn, req protocol.ProxyNewR
 }
 
 func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, excludeName, excludeClientID string) error {
+	if err := validateBandwidthSettings(req.BandwidthSettings); err != nil {
+		switch {
+		case req.IngressBPS < 0:
+			return newProxyRequestValidationError(err, protocol.TunnelMutationFieldIngressBPS, "", http.StatusBadRequest)
+		case req.EgressBPS < 0:
+			return newProxyRequestValidationError(err, protocol.TunnelMutationFieldEgressBPS, "", http.StatusBadRequest)
+		default:
+			return newProxyRequestValidationError(err, "", "", http.StatusBadRequest)
+		}
+	}
+
 	if req.Type == protocol.ProxyTypeHTTP {
 		if err := validateDomain(req.Domain); err != nil {
 			return newProxyRequestValidationError(err, protocol.TunnelMutationFieldDomain, protocol.TunnelMutationErrorCodeDomainInvalid, http.StatusBadRequest)
@@ -194,15 +205,17 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 	}
 	tunnel := &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:       req.Name,
-			Type:       req.Type,
-			LocalIP:    req.LocalIP,
-			LocalPort:  req.LocalPort,
-			RemotePort: req.RemotePort,
-			Domain:     req.Domain,
-			ClientID:   client.ID,
+			Name:              req.Name,
+			Type:              req.Type,
+			LocalIP:           req.LocalIP,
+			LocalPort:         req.LocalPort,
+			RemotePort:        req.RemotePort,
+			Domain:            req.Domain,
+			ClientID:          client.ID,
+			BandwidthSettings: req.BandwidthSettings,
 		},
-		done: make(chan struct{}),
+		limits: newDirectionalBandwidthRuntime(req.BandwidthSettings, realBandwidthClock{}),
+		done:   make(chan struct{}),
 	}
 	setProxyConfigStates(&tunnel.Config, desiredState, runtimeState, "")
 
@@ -408,10 +421,25 @@ func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listen
 		return
 	}
 
-	atob, btoa := mux.Relay(stream, extConn)
+	ingress, egress := relayTunnelPayload(stream, extConn, client.BandwidthRuntime(), tunnel.limits)
 	if s.trafficStore != nil {
-		s.trafficStore.RecordBytes(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(btoa), uint64(atob))
+		s.trafficStore.RecordBytes(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(ingress), uint64(egress))
 	}
+}
+
+func (s *Server) tunnelBandwidthRuntime(client *ClientConn, name string) *directionalBandwidthRuntime {
+	if client == nil {
+		return nil
+	}
+
+	client.proxyMu.RLock()
+	defer client.proxyMu.RUnlock()
+
+	tunnel, ok := client.proxies[name]
+	if !ok {
+		return nil
+	}
+	return tunnel.limits
 }
 
 // StopProxy stops a proxy tunnel.

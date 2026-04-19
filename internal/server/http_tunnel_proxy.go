@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -15,8 +16,10 @@ import (
 
 type countingConn struct {
 	net.Conn
-	read    atomic.Int64
-	written atomic.Int64
+	ingressSlots []*budgetSlot
+	egressSlots  []*budgetSlot
+	read         atomic.Int64
+	written      atomic.Int64
 }
 
 func (c *countingConn) ingressEgressBytes() (uint64, uint64) {
@@ -24,19 +27,38 @@ func (c *countingConn) ingressEgressBytes() (uint64, uint64) {
 }
 
 func (c *countingConn) Read(b []byte) (int, error) {
-	n, err := c.Conn.Read(b)
-	if n > 0 {
-		c.read.Add(int64(n))
+	for {
+		allowed := waitForBandwidthAllowance(len(b), c.egressSlots...)
+		n, err := c.Conn.Read(b[:allowed])
+		if unused := allowed - n; unused > 0 {
+			refundBandwidthAllowance(unused, c.egressSlots...)
+		}
+		if n > 0 {
+			c.read.Add(int64(n))
+		}
+		if n > 0 || err != nil {
+			return n, err
+		}
 	}
-	return n, err
 }
 
 func (c *countingConn) Write(b []byte) (int, error) {
-	n, err := c.Conn.Write(b)
-	if n > 0 {
-		c.written.Add(int64(n))
+	written := 0
+	for written < len(b) {
+		allowed := waitForBandwidthAllowance(len(b)-written, c.ingressSlots...)
+		n, err := c.Conn.Write(b[written : written+allowed])
+		if n > 0 {
+			written += n
+			c.written.Add(int64(n))
+		}
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrShortWrite
+		}
 	}
-	return n, err
+	return written, nil
 }
 
 type httpTunnelRoute struct {
@@ -232,7 +254,12 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 			if err != nil {
 				return nil, err
 			}
-			cc = &countingConn{Conn: conn}
+			tunnelRuntime := s.tunnelBandwidthRuntime(route.client, route.config.Name)
+			cc = &countingConn{
+				Conn:         conn,
+				ingressSlots: payloadBudgetSlots(payloadDirectionIngress, route.client.BandwidthRuntime(), tunnelRuntime),
+				egressSlots:  payloadBudgetSlots(payloadDirectionEgress, route.client.BandwidthRuntime(), tunnelRuntime),
+			}
 			return cc, nil
 		},
 	}

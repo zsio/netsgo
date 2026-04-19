@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -261,5 +262,123 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	}
 	if !bytes.Equal(buf[:n], testMsg) {
 		t.Fatalf("unexpected UDP reply: %q", buf[:n])
+	}
+}
+
+func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
+	s := New(0)
+	clientID := "udp-traffic-client"
+	client := &ClientConn{ID: clientID, proxies: make(map[string]*ProxyTunnel)}
+	s.clients.Store(clientID, client)
+
+	trafficStore, err := NewTrafficStore(filepath.Join(t.TempDir(), "traffic.json"))
+	if err != nil {
+		t.Fatalf("failed to create TrafficStore: %v", err)
+	}
+	s.trafficStore = trafficStore
+
+	echoConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to start echo service: %v", err)
+	}
+	defer func() { _ = echoConn.Close() }()
+	echoPort := echoConn.LocalAddr().(*net.UDPAddr).Port
+
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, addr, err := echoConn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = echoConn.WriteTo(buf[:n], addr)
+		}
+	}()
+
+	pipeC, pipeS := net.Pipe()
+	defer mustClose(t, pipeC)
+	defer mustClose(t, pipeS)
+
+	var serverSession *yamux.Session
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		serverSession, _ = mux.NewServerSession(pipeS, mux.DefaultConfig())
+		wg.Done()
+	}()
+	clientSession, _ := mux.NewClientSession(pipeC, mux.DefaultConfig())
+	wg.Wait()
+
+	client.dataSession = serverSession
+	defer mustClose(t, serverSession)
+	defer mustClose(t, clientSession)
+
+	go func() {
+		for {
+			stream, err := clientSession.AcceptStream()
+			if err != nil {
+				return
+			}
+			go func(s *yamux.Stream) {
+				defer func() { _ = s.Close() }()
+				var lenBuf [2]byte
+				_, _ = io.ReadFull(s, lenBuf[:])
+				nameLen := int(lenBuf[0])<<8 | int(lenBuf[1])
+				nameBuf := make([]byte, nameLen)
+				_, _ = io.ReadFull(s, nameBuf)
+				localConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", echoPort))
+				if err != nil {
+					return
+				}
+				defer func() { _ = localConn.Close() }()
+				mux.UDPRelay(s, localConn)
+			}(stream)
+		}
+	}()
+
+	tunnelName := "udp-traffic-tunnel"
+	req := protocol.ProxyNewRequest{Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
+	if err := s.StartProxy(client, req); err != nil {
+		t.Fatalf("Failed to start UDP proxy: %v", err)
+	}
+	defer func() { _ = s.StopProxy(client, tunnelName) }()
+
+	client.proxyMu.RLock()
+	remotePort := client.proxies[tunnelName].Config.RemotePort
+	client.proxyMu.RUnlock()
+
+	extConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+	if err != nil {
+		t.Fatalf("External client connection failed: %v", err)
+	}
+	defer mustClose(t, extConn)
+
+	payload := []byte("udp-payload-only")
+	if _, err := extConn.Write(payload); err != nil {
+		t.Fatalf("Failed to send UDP packet: %v", err)
+	}
+	mustSetReadDeadline(t, extConn, time.Now().Add(5*time.Second))
+	reply := make([]byte, 1024)
+	n, err := extConn.Read(reply)
+	if err != nil {
+		t.Fatalf("Failed to read UDP reply: %v", err)
+	}
+	if !bytes.Equal(reply[:n], payload) {
+		t.Fatalf("unexpected UDP echo reply: want %q, got %q", payload, reply[:n])
+	}
+
+	result := trafficStore.Query(clientID, tunnelName, time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
+	if len(result.Items) != 1 {
+		t.Fatalf("traffic items: want 1, got %d", len(result.Items))
+	}
+	points := result.Items[0].Points
+	if len(points) != 1 {
+		t.Fatalf("traffic points: want 1, got %d", len(points))
+	}
+	if points[0].IngressBytes != uint64(len(payload)) {
+		t.Fatalf("ingress bytes should count only UDP payload bytes: want %d, got %d", len(payload), points[0].IngressBytes)
+	}
+	if points[0].EgressBytes != uint64(len(payload)) {
+		t.Fatalf("egress bytes should count only UDP payload bytes: want %d, got %d", len(payload), points[0].EgressBytes)
 	}
 }

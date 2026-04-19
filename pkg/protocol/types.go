@@ -2,6 +2,13 @@ package protocol
 
 import "time"
 
+// BandwidthSettings carries directional payload-byte-per-second limits.
+// A zero value means unlimited.
+type BandwidthSettings struct {
+	IngressBPS int64 `json:"ingress_bps"`
+	EgressBPS  int64 `json:"egress_bps"`
+}
+
 // ClientInfo 描述一个 Client 的基本信息，在认证时发送给 Server
 type ClientInfo struct {
 	Hostname   string `json:"hostname"`              // 主机名
@@ -56,28 +63,30 @@ type TunnelCapabilities struct {
 
 // ProxyConfig 代理隧道的完整配置
 type ProxyConfig struct {
-	Name         string              `json:"name"`                   // 隧道名称（唯一标识）
-	Type         string              `json:"type"`                   // 隧道类型: tcp, udp, http
-	LocalIP      string              `json:"local_ip"`               // 内网目标服务 IP
-	LocalPort    int                 `json:"local_port"`             // 内网目标服务端口
-	RemotePort   int                 `json:"remote_port"`            // 公网暴露端口
-	Domain       string              `json:"domain"`                 // HTTP 类型时的域名
-	ClientID     string              `json:"client_id"`              // 所属 Client ID
-	DesiredState string              `json:"desired_state"`          // 用户目标状态: running, stopped
-	RuntimeState string              `json:"runtime_state"`          // 实际运行状态: pending, exposed, offline, idle, error
-	Error        string              `json:"error,omitempty"`        // 错误状态时的具体原因
-	Capabilities *TunnelCapabilities `json:"capabilities,omitempty"` // 可执行操作（服务端计算，仅供前端使用）
+	Name              string              `json:"name"`        // 隧道名称（唯一标识）
+	Type              string              `json:"type"`        // 隧道类型: tcp, udp, http
+	LocalIP           string              `json:"local_ip"`    // 内网目标服务 IP
+	LocalPort         int                 `json:"local_port"`  // 内网目标服务端口
+	RemotePort        int                 `json:"remote_port"` // 公网暴露端口
+	Domain            string              `json:"domain"`      // HTTP 类型时的域名
+	ClientID          string              `json:"client_id"`   // 所属 Client ID
+	BandwidthSettings                     // 聚合带宽限制（payload bytes/sec，0 = unlimited）
+	DesiredState      string              `json:"desired_state"`          // 用户目标状态: running, stopped
+	RuntimeState      string              `json:"runtime_state"`          // 实际运行状态: pending, exposed, offline, idle, error
+	Error             string              `json:"error,omitempty"`        // 错误状态时的具体原因
+	Capabilities      *TunnelCapabilities `json:"capabilities,omitempty"` // 可执行操作（服务端计算，仅供前端使用）
 }
 
 // ToProxyNewRequest 将 ProxyConfig 转换为 ProxyNewRequest（用于发送给 Client）
 func (c ProxyConfig) ToProxyNewRequest() ProxyNewRequest {
 	return ProxyNewRequest{
-		Name:       c.Name,
-		Type:       c.Type,
-		LocalIP:    c.LocalIP,
-		LocalPort:  c.LocalPort,
-		RemotePort: c.RemotePort,
-		Domain:     c.Domain,
+		Name:              c.Name,
+		Type:              c.Type,
+		LocalIP:           c.LocalIP,
+		LocalPort:         c.LocalPort,
+		RemotePort:        c.RemotePort,
+		Domain:            c.Domain,
+		BandwidthSettings: c.BandwidthSettings,
 	}
 }
 
@@ -92,6 +101,8 @@ const (
 const (
 	TunnelMutationFieldDomain     = "domain"
 	TunnelMutationFieldRemotePort = "remote_port"
+	TunnelMutationFieldIngressBPS = "ingress_bps"
+	TunnelMutationFieldEgressBPS  = "egress_bps"
 )
 
 // Tunnel mutation error code constants used by the admin HTTP API.

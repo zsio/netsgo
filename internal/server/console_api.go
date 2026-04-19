@@ -30,6 +30,8 @@ type clientView struct {
 	Stats       *protocol.SystemStats  `json:"stats,omitempty"`
 	Proxies     []protocol.ProxyConfig `json:"proxies"`
 	Online      bool                   `json:"online"`
+	IngressBPS  int64                  `json:"ingress_bps"`
+	EgressBPS   int64                  `json:"egress_bps"`
 	LastSeen    *time.Time             `json:"last_seen,omitempty"`
 	LastIP      string                 `json:"last_ip,omitempty"`
 }
@@ -126,6 +128,8 @@ func (s *Server) collectClientViews() []clientView {
 				Stats:       registered.Stats,
 				Proxies:     []protocol.ProxyConfig{},
 				Online:      false,
+				IngressBPS:  registered.IngressBPS,
+				EgressBPS:   registered.EgressBPS,
 				LastSeen:    &lastSeen,
 				LastIP:      registered.LastIP,
 			}
@@ -160,6 +164,7 @@ func (s *Server) collectClientViews() []clientView {
 				Proxies: []protocol.ProxyConfig{},
 			}
 		}
+		settings := client.GetBandwidthSettings()
 		now := time.Now()
 		view.Info = client.GetInfo()
 		if liveStats := client.GetStats(); liveStats != nil {
@@ -167,6 +172,8 @@ func (s *Server) collectClientViews() []clientView {
 		}
 		view.Proxies = proxies
 		view.Online = true
+		view.IngressBPS = settings.IngressBPS
+		view.EgressBPS = settings.EgressBPS
 		view.LastSeen = &now
 		view.LastIP = remoteIP(client.RemoteAddr)
 		views[client.ID] = view

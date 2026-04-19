@@ -36,6 +36,8 @@ type RegisteredClient struct {
 	DisplayName string                `json:"display_name,omitempty"` // custom display name (falls back to hostname if empty)
 	Info        protocol.ClientInfo   `json:"info"`
 	Stats       *protocol.SystemStats `json:"stats,omitempty"`
+	IngressBPS  int64                 `json:"ingress_bps"`
+	EgressBPS   int64                 `json:"egress_bps"`
 	CreatedAt   time.Time             `json:"created_at"`
 	LastSeen    time.Time             `json:"last_seen"`
 	LastIP      string                `json:"last_ip"`

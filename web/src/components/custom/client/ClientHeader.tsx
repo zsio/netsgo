@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
+import { ClientBandwidthDialog } from '@/components/custom/client/ClientBandwidthDialog';
 import { Pencil, Check, X, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
@@ -222,6 +223,7 @@ export function ClientHeader({ client }: ClientHeaderProps) {
       </div>
 
       <div className="flex gap-2">
+        <ClientBandwidthDialog client={client} />
         <TunnelDialog mode="create" clientId={client.id} />
       </div>
     </div>

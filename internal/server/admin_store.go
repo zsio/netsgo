@@ -61,6 +61,7 @@ var (
 	ErrClientTokenRevoked         = errors.New("client token revoked")
 	ErrClientTokenExpired         = errors.New("client token expired")
 	ErrClientTokenInstallMismatch = errors.New("client token install mismatch")
+	ErrRegisteredClientNotFound   = errors.New("registered client not found")
 )
 
 func generateUUID() string {
@@ -462,6 +463,29 @@ func (s *AdminStore) GetRegisteredClient(clientID string) (RegisteredClient, boo
 		}
 	}
 	return RegisteredClient{}, false
+}
+
+func registeredClientBandwidthSettings(client RegisteredClient) protocol.BandwidthSettings {
+	return protocol.BandwidthSettings{
+		IngressBPS: client.IngressBPS,
+		EgressBPS:  client.EgressBPS,
+	}
+}
+
+func (s *AdminStore) UpdateClientBandwidthSettings(clientID string, settings protocol.BandwidthSettings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	previous := cloneAdminData(s.data)
+	for i, client := range s.data.Clients {
+		if client.ID == clientID {
+			s.data.Clients[i].IngressBPS = settings.IngressBPS
+			s.data.Clients[i].EgressBPS = settings.EgressBPS
+			return s.saveWithRollbackLocked(previous)
+		}
+	}
+
+	return ErrRegisteredClientNotFound
 }
 
 // ========== Display Name ==========

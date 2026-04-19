@@ -42,6 +42,8 @@ export interface SystemStats {
 export interface Client {
   id: string;
   display_name?: string;
+  ingress_bps: number;
+  egress_bps: number;
   info: ClientInfo;
   stats: SystemStats | null;
   proxies?: ProxyConfig[];
@@ -72,6 +74,8 @@ export interface ProxyConfig {
   remote_port: number;
   domain: string;
   client_id: string;
+  ingress_bps: number;
+  egress_bps: number;
   desired_state: ProxyDesiredState;
   runtime_state: ProxyRuntimeState;
   error?: string;
@@ -85,8 +89,10 @@ export interface CreateTunnelInput {
   type: ProxyType;
   local_ip: string;
   local_port: number;
-  remote_port: number;
+  remote_port?: number;
   domain?: string;
+  ingress_bps?: number;
+  egress_bps?: number;
 }
 
 export type TrafficResolution = 'minute' | 'hour';
@@ -108,6 +114,14 @@ export interface TunnelTrafficSeries {
 export interface ClientTrafficResponse {
   resolution: TrafficResolution;
   items: TunnelTrafficSeries[];
+}
+
+export interface ClientBandwidthSettingsResponse {
+  success: boolean;
+  bandwidth_settings: {
+    ingress_bps: number;
+    egress_bps: number;
+  };
 }
 
 // --- SSE Events ---
