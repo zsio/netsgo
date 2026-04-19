@@ -30,6 +30,8 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
 function createClient(overrides: Partial<Client> = {}): Client {
   return {
     id: 'client-1',
+    ingress_bps: 0,
+    egress_bps: 0,
     info: {
       hostname: 'demo-host',
       os: 'linux',
