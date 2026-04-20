@@ -108,4 +108,38 @@ describe('TunnelListTable', () => {
     expect(markup).toContain('24 小时流量');
     expect(markup).toContain('1.5 KB');
   });
+
+  test('仅在详情表启用速率图标动作', () => {
+    const client = new QueryClient();
+    const enabledMarkup = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(TunnelListTable, {
+          tunnels: [createTunnel()],
+          title: '下属隧道',
+          showActions: true,
+          showSearch: false,
+          showTraffic24h: true,
+        }),
+      ),
+    );
+
+    const disabledMarkup = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client: new QueryClient() },
+        createElement(TunnelListTable, {
+          tunnels: [createTunnel()],
+          title: '全部隧道列表',
+          showActions: true,
+          showSearch: false,
+          showTraffic24h: false,
+        }),
+      ),
+    );
+
+    expect(enabledMarkup).toContain('title="速率趋势"');
+    expect(disabledMarkup).not.toContain('title="速率趋势"');
+  });
 });

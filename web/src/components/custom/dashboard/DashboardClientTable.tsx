@@ -4,8 +4,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Laptop, Cpu, HardDrive } from 'lucide-react';
 import { formatPercent } from '@/lib/format';
 import { Button } from '@/components/ui/button';
+import { CompactTrafficChart } from '@/components/custom/chart/CompactTrafficChart';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
+import { useRowVisibility, type RowVisibilityHook } from '@/hooks/use-row-visibility';
+import { canRenderDashboardTrafficSparkline } from '@/lib/dashboard-traffic-visibility';
+import type { ReactNode } from 'react';
 
 function ClientMobileCard({ client, onNavigate }: { client: Client; onNavigate: () => void }) {
   return (
@@ -41,16 +45,83 @@ function ClientMobileCard({ client, onNavigate }: { client: Client; onNavigate: 
   );
 }
 
-export function DashboardClientTable() {
-  const { data: clients, isLoading } = useClients();
-  const navigate = useNavigate();
+interface DashboardClientTableContentProps {
+  clients?: Client[];
+  onNavigate: (clientId: string) => void;
+  rowVisibilityHook?: RowVisibilityHook;
+  renderSparkline?: (clientId: string) => ReactNode;
+}
 
-  if (isLoading) {
-    return <Skeleton className="h-64 rounded-xl" />;
-  }
+function defaultRenderSparkline(clientId: string) {
+  return <CompactTrafficChart clientId={clientId} />;
+}
 
+function DashboardClientDesktopRow({
+  client,
+  onNavigate,
+  rowVisibilityHook,
+  renderSparkline,
+}: {
+  client: Client;
+  onNavigate: (clientId: string) => void;
+  rowVisibilityHook: RowVisibilityHook;
+  renderSparkline: (clientId: string) => ReactNode;
+}) {
+  const { ref, hasVisibilitySupport, isDesktop, isVisible } = rowVisibilityHook();
+  const showSparkline = canRenderDashboardTrafficSparkline({
+    hasVisibilitySupport,
+    isDesktop,
+    isVisible,
+  });
+
+  return (
+    <tr ref={ref} className="hover:bg-muted/30 transition-colors">
+      <td className="px-6 py-3 font-medium text-foreground">{getClientDisplayName(client)}</td>
+      <td className="px-6 py-3">{client.last_ip || client.info.ip || '-'}</td>
+      <td className="px-6 py-3">
+        {client.online ? (
+          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-500 text-xs font-medium">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            在线
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted text-muted-foreground text-xs font-medium">
+            <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground" />
+            离线
+          </span>
+        )}
+      </td>
+      <td className="px-6 py-3 text-muted-foreground">{client.info.os} / {client.info.arch}</td>
+      <td className="px-6 py-3">
+        {client.stats ? (
+          <div className="flex items-center gap-3">
+            <span className="flex items-center gap-1"><Cpu className="w-3 h-3 text-muted-foreground" /> {formatPercent(client.stats.cpu_usage)}</span>
+            <span className="flex items-center gap-1"><HardDrive className="w-3 h-3 text-muted-foreground" /> {formatPercent(client.stats.mem_usage)}</span>
+          </div>
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        )}
+      </td>
+      <td className="px-6 py-3">
+        {showSparkline ? renderSparkline(client.id) : <span className="text-muted-foreground">-</span>}
+      </td>
+      <td className="px-6 py-3 text-right">
+        <Button variant="ghost" size="sm" onClick={() => onNavigate(client.id)}>
+          查看详情
+        </Button>
+      </td>
+    </tr>
+  );
+}
+
+export function DashboardClientTableContent({
+  clients,
+  onNavigate,
+  rowVisibilityHook = useRowVisibility,
+  renderSparkline = defaultRenderSparkline,
+}: DashboardClientTableContentProps) {
   const navigateToClient = (clientId: string) => {
-    navigate({ to: '/dashboard/clients/$clientId', params: { clientId } });
+    onNavigate(clientId);
   };
 
   return (
@@ -83,56 +154,49 @@ export function DashboardClientTable() {
               <th className="px-6 py-3 font-medium">状态</th>
               <th className="px-6 py-3 font-medium">系统/架构</th>
               <th className="px-6 py-3 font-medium">CPU / 内存</th>
+              <th className="px-6 py-3 font-medium">网络趋势 (1h)</th>
               <th className="px-6 py-3 font-medium text-right">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/40">
             {(!clients || clients.length === 0) ? (
               <tr>
-                <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
+                <td colSpan={7} className="px-6 py-8 text-center text-muted-foreground">
                   暂无 Client 连接
                 </td>
               </tr>
             ) : (
               clients.map((client) => (
-                <tr key={client.id} className="hover:bg-muted/30 transition-colors">
-                  <td className="px-6 py-3 font-medium text-foreground">{getClientDisplayName(client)}</td>
-                  <td className="px-6 py-3">{client.last_ip || client.info.ip || '-'}</td>
-                  <td className="px-6 py-3">
-                    {client.online ? (
-                      <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-500 text-xs font-medium">
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                        在线
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted text-muted-foreground text-xs font-medium">
-                        <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground" />
-                        离线
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-3 text-muted-foreground">{client.info.os} / {client.info.arch}</td>
-                  <td className="px-6 py-3">
-                    {client.stats ? (
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center gap-1"><Cpu className="w-3 h-3 text-muted-foreground" /> {formatPercent(client.stats.cpu_usage)}</span>
-                        <span className="flex items-center gap-1"><HardDrive className="w-3 h-3 text-muted-foreground" /> {formatPercent(client.stats.mem_usage)}</span>
-                      </div>
-                    ) : (
-                      <span className="text-muted-foreground">-</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-3 text-right">
-                    <Button variant="ghost" size="sm" onClick={() => navigateToClient(client.id)}>
-                      查看详情
-                    </Button>
-                  </td>
-                </tr>
+                <DashboardClientDesktopRow
+                  key={client.id}
+                  client={client}
+                  onNavigate={navigateToClient}
+                  rowVisibilityHook={rowVisibilityHook}
+                  renderSparkline={renderSparkline}
+                />
               ))
             )}
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+export function DashboardClientTable() {
+  const { data: clients, isLoading } = useClients();
+  const navigate = useNavigate();
+
+  if (isLoading) {
+    return <Skeleton className="h-64 rounded-xl" />;
+  }
+
+  return (
+    <DashboardClientTableContent
+      clients={clients}
+      onNavigate={(clientId) => {
+        navigate({ to: '/dashboard/clients/$clientId', params: { clientId } });
+      }}
+    />
   );
 }
