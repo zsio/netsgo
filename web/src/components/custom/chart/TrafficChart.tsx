@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/chart';
 import { useClientTraffic } from '@/hooks/use-client-traffic';
 import { formatBytes } from '@/lib/format';
-import type { ClientTrafficRange, ProxyConfig, ProxyType } from '@/types';
+import type { ClientTrafficRange, ClientTrafficResponse, ProxyConfig, ProxyType } from '@/types';
 
 interface TrafficChartProps {
   clientId: string;
@@ -83,84 +83,92 @@ function getErrorMessage(error: unknown) {
   return '流量数据加载失败';
 }
 
+function buildTrafficTrendChartState(
+  data: ClientTrafficResponse | undefined,
+  tunnels: Pick<ProxyConfig, 'name' | 'type'>[],
+) {
+  const knownTunnels = new Map<string, Pick<TunnelMeta, 'name' | 'type'>>();
+
+  for (const tunnel of tunnels) {
+    knownTunnels.set(getTunnelSeriesKey(tunnel.name, tunnel.type), {
+      name: tunnel.name,
+      type: tunnel.type,
+    });
+  }
+
+  for (const item of data?.items ?? []) {
+    const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
+    if (!knownTunnels.has(seriesKey)) {
+      knownTunnels.set(seriesKey, {
+        name: item.tunnel_name,
+        type: item.tunnel_type,
+      });
+    }
+  }
+
+  const tunnelSeries: TunnelMeta[] = Array.from(knownTunnels.values())
+    .sort((left, right) => {
+      if (left.name !== right.name) {
+        return left.name.localeCompare(right.name);
+      }
+      return left.type.localeCompare(right.type);
+    })
+    .map((tunnel, index) => ({
+      key: getTunnelSeriesKey(tunnel.name, tunnel.type),
+      name: tunnel.name,
+      type: tunnel.type,
+      color: getTunnelColor(index),
+    }));
+
+  const chartConfig = tunnelSeries.reduce<ChartConfig>((config, tunnel) => {
+    config[tunnel.key] = {
+      label: `${tunnel.name} · ${tunnel.type.toUpperCase()}`,
+      color: tunnel.color,
+    };
+    return config;
+  }, {});
+
+  const pointsByTunnel = new Map<string, Map<number, number>>();
+  const timestamps = new Set<number>();
+
+  for (const item of data?.items ?? []) {
+    const pointMap = new Map<number, number>();
+
+    for (const point of item.points) {
+      const timestamp = new Date(point.bucket_start).getTime();
+      pointMap.set(timestamp, point.total_bytes);
+      timestamps.add(timestamp);
+    }
+
+    const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
+    pointsByTunnel.set(seriesKey, pointMap);
+  }
+
+  const chartData = Array.from(timestamps)
+    .sort((a, b) => a - b)
+    .map<ChartRow>((timestamp) => {
+      const row: ChartRow = { timestamp };
+      for (const tunnel of tunnelSeries) {
+        row[tunnel.key] = pointsByTunnel.get(tunnel.key)?.get(timestamp) ?? 0;
+      }
+      return row;
+    });
+
+  return {
+    chartConfig,
+    chartData,
+    tunnelSeries,
+  };
+}
+
 export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
   const [range, setRange] = useState<ClientTrafficRange>('24h');
   const { data, isLoading, isError, error, isFetching } = useClientTraffic(clientId, range);
 
-  const { chartConfig, chartData, tunnelSeries } = useMemo(() => {
-    const knownTunnels = new Map<string, Pick<TunnelMeta, 'name' | 'type'>>();
-
-    for (const tunnel of tunnels) {
-      knownTunnels.set(getTunnelSeriesKey(tunnel.name, tunnel.type), {
-        name: tunnel.name,
-        type: tunnel.type,
-      });
-    }
-
-    for (const item of data?.items ?? []) {
-      const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
-      if (!knownTunnels.has(seriesKey)) {
-        knownTunnels.set(seriesKey, {
-          name: item.tunnel_name,
-          type: item.tunnel_type,
-        });
-      }
-    }
-
-    const tunnelSeries: TunnelMeta[] = Array.from(knownTunnels.values())
-      .sort((left, right) => {
-        if (left.name !== right.name) {
-          return left.name.localeCompare(right.name);
-        }
-        return left.type.localeCompare(right.type);
-      })
-      .map((tunnel, index) => ({
-        key: getTunnelSeriesKey(tunnel.name, tunnel.type),
-        name: tunnel.name,
-        type: tunnel.type,
-        color: getTunnelColor(index),
-      }));
-
-    const chartConfig = tunnelSeries.reduce<ChartConfig>((config, tunnel) => {
-      config[tunnel.key] = {
-        label: `${tunnel.name} · ${tunnel.type.toUpperCase()}`,
-        color: tunnel.color,
-      };
-      return config;
-    }, {});
-
-    const pointsByTunnel = new Map<string, Map<number, number>>();
-    const timestamps = new Set<number>();
-
-    for (const item of data?.items ?? []) {
-      const pointMap = new Map<number, number>();
-
-      for (const point of item.points) {
-        const timestamp = new Date(point.bucket_start).getTime();
-        pointMap.set(timestamp, point.total_bytes);
-        timestamps.add(timestamp);
-      }
-
-      const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
-      pointsByTunnel.set(seriesKey, pointMap);
-    }
-
-    const chartData = Array.from(timestamps)
-      .sort((a, b) => a - b)
-      .map<ChartRow>((timestamp) => {
-        const row: ChartRow = { timestamp };
-        for (const tunnel of tunnelSeries) {
-          row[tunnel.key] = pointsByTunnel.get(tunnel.key)?.get(timestamp) ?? 0;
-        }
-        return row;
-      });
-
-    return {
-      chartConfig,
-      chartData,
-      tunnelSeries,
-    };
-  }, [data?.items, tunnels]);
+  const { chartConfig, chartData, tunnelSeries } = useMemo(
+    () => buildTrafficTrendChartState(data, tunnels),
+    [data, tunnels],
+  );
 
   const hasTunnels = tunnelSeries.length > 0;
   const hasTrafficData = chartData.length > 0;

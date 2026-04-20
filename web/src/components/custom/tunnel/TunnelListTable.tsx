@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import {
-  Search, Play, Square, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft,
+  Search, Play, Square, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft, Activity,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/tooltip';
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
 import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
+import { TunnelSpeedDialog } from '@/components/custom/tunnel/TunnelSpeedDialog';
 import toast from 'react-hot-toast';
 import {
   buildTunnelViewModel,
@@ -76,6 +77,7 @@ export function TunnelListTable({
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<{ name: string; clientId: string } | null>(null);
   const [editTarget, setEditTarget] = useState<TunnelEntry | null>(null);
+  const [speedTarget, setSpeedTarget] = useState<TunnelEntry | null>(null);
 
   const filteredTunnels = useMemo(() => {
     if (!searchQuery.trim()) return tunnels;
@@ -108,6 +110,15 @@ export function TunnelListTable({
 
     return (
       <div className="flex items-center justify-end gap-1">
+        {showTraffic24h && (
+          <button
+            className="p-1.5 hover:bg-primary/10 rounded text-primary"
+            title="速率趋势"
+            onClick={() => setSpeedTarget(tunnel)}
+          >
+            <Activity className="h-4 w-4" />
+          </button>
+        )}
         {canResume && (
           <button
             className="p-1.5 hover:bg-emerald-500/10 rounded text-emerald-500"
@@ -253,6 +264,12 @@ export function TunnelListTable({
             tunnel={editTarget}
             open={editTarget !== null}
             onOpenChange={(v) => { if (!v) setEditTarget(null); }}
+          />
+          <TunnelSpeedDialog
+            tunnel={speedTarget}
+            clientId={speedTarget?.clientId ?? ''}
+            open={speedTarget !== null}
+            onOpenChange={(v) => { if (!v) setSpeedTarget(null); }}
           />
         </>
       )}
