@@ -71,8 +71,17 @@ func AutoUpdate(channel DownloadChannel, currentVersion string) (*Result, error)
 	}
 	result.Stopped = stopped
 
+	// Ensure services are restarted if download or replace fails
+	var failed bool
+	defer func() {
+		if failed {
+			orch.StartServices(units)
+		}
+	}()
+
 	tmpDir, err := os.MkdirTemp("", "netsgo-update-*")
 	if err != nil {
+		failed = true
 		return result, fmt.Errorf("temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
@@ -80,15 +89,18 @@ func AutoUpdate(channel DownloadChannel, currentVersion string) (*Result, error)
 	url := platformAssetURL(channel, latest)
 	newBinary := filepath.Join(tmpDir, "netsgo")
 	if err := downloadAndExtract(url, newBinary, defaultHTTPClient); err != nil {
+		failed = true
 		return result, fmt.Errorf("download: %w", err)
 	}
 
 	if err := replaceBinary(newBinary, svcmgr.BinaryPath); err != nil {
+		failed = true
 		return result, fmt.Errorf("replace: %w", err)
 	}
 
 	started, err := orch.StartServices(units)
 	if err != nil {
+		failed = true
 		return result, err
 	}
 	result.Started = started

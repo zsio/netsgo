@@ -38,7 +38,8 @@ func extractBinary(r io.Reader, destPath string) error {
 		if err != nil {
 			return fmt.Errorf("extract: read tar: %w", err)
 		}
-		if header.Name == "netsgo" || filepath.Base(header.Name) == "netsgo" {
+		clean := filepath.Clean(header.Name)
+		if clean == "netsgo" || clean == "bin/netsgo" {
 			_ = os.MkdirAll(filepath.Dir(destPath), 0o755)
 			f, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 			if err != nil {

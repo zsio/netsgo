@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var forceUpgrade bool
+
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
 	Short: "Upgrade installed NetsGo binary with the currently running one",
@@ -22,7 +25,9 @@ running binary, then restarts all managed services.
 
 Requires root privileges (auto-elevates via sudo).
 Only works when services are installed via 'netsgo install'.
-If the current binary is already the installed one, does nothing.`,
+If the current binary is already the installed one, does nothing.
+
+Use --force to skip confirmation for development builds or downgrades.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if os.Getuid() != 0 {
 			return syscall.Exec("/usr/bin/sudo", append([]string{"sudo"}, os.Args...), os.Environ())
@@ -55,19 +60,27 @@ If the current binary is already the installed one, does nothing.`,
 			return nil
 		}
 
-		if isDevVersion(currentVersion) {
+		if isDevVersion(currentVersion) && !forceUpgrade {
 			fmt.Printf("Current version is '%s' (development build).\n", currentVersion)
-			fmt.Println("Upgrading with a development build is not recommended.")
-			return nil
+			fmt.Print("Upgrading with a development build is not recommended. Continue? [y/N]: ")
+			if !readConfirmation() {
+				fmt.Println("Aborted.")
+				return nil
+			}
 		}
 
 		if installedVersion != "" {
-			cmp, _ := buildversion.ParseSemver(currentVersion)
-			inst, _ := buildversion.ParseSemver(installedVersion)
-			if cmp.Compare(inst) < 0 {
-				fmt.Printf("Current %s is older than installed %s.\n", currentVersion, installedVersion)
-				fmt.Println("This would downgrade. Aborting.")
-				return nil
+			cmp, err1 := buildversion.ParseSemver(currentVersion)
+			inst, err2 := buildversion.ParseSemver(installedVersion)
+			if err1 == nil && err2 == nil && cmp.Compare(inst) < 0 {
+				if !forceUpgrade {
+					fmt.Printf("Current %s is older than installed %s.\n", currentVersion, installedVersion)
+					fmt.Print("This would downgrade. Continue? [y/N]: ")
+					if !readConfirmation() {
+						fmt.Println("Aborted.")
+						return nil
+					}
+				}
 			}
 		}
 
@@ -88,7 +101,15 @@ If the current binary is already the installed one, does nothing.`,
 }
 
 func init() {
+	upgradeCmd.Flags().BoolVar(&forceUpgrade, "force", false, "Skip confirmation for development builds or downgrades")
 	rootCmd.AddCommand(upgradeCmd)
+}
+
+func readConfirmation() bool {
+	reader := bufio.NewReader(os.Stdin)
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(strings.ToLower(input))
+	return input == "y" || input == "yes"
 }
 
 func installedUnits() []string {
