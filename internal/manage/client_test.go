@@ -50,7 +50,7 @@ func newInstalledClientDeps(t *testing.T, ui *fakeUI) (clientDeps, svcmgr.Servic
 }
 
 func TestManageClientInspectRedactsKey(t *testing.T) {
-	ui := &fakeUI{selects: []int{1, 7}}
+	ui := &fakeUI{selects: []int{1, 8}}
 	deps, _ := newInstalledClientDeps(t, ui)
 
 	err := ManageClientWith(deps)
@@ -67,7 +67,7 @@ func TestManageClientInspectRedactsKey(t *testing.T) {
 }
 
 func TestManageClientUninstallRemovesData(t *testing.T) {
-	ui := &fakeUI{selects: []int{6}, confirms: []bool{true}}
+	ui := &fakeUI{selects: []int{7}, confirms: []bool{true}}
 	removed := []string{}
 	deps, spec := newInstalledClientDeps(t, ui)
 	deps.RemovePaths = func(paths ...string) error {
@@ -90,7 +90,7 @@ func TestManageClientUninstallRemovesData(t *testing.T) {
 }
 
 func TestManageClientRestart(t *testing.T) {
-	ui := &fakeUI{selects: []int{5, 7}}
+	ui := &fakeUI{selects: []int{5, 8}}
 	stopped := false
 	started := false
 	deps, _ := newInstalledClientDeps(t, ui)
@@ -127,7 +127,7 @@ func TestManageClientLogs(t *testing.T) {
 }
 
 func TestManageClientStartPrintsSuccess(t *testing.T) {
-	ui := &fakeUI{selects: []int{3, 7}}
+	ui := &fakeUI{selects: []int{3, 8}}
 	deps, _ := newInstalledClientDeps(t, ui)
 
 	err := ManageClientWith(deps)
@@ -139,7 +139,7 @@ func TestManageClientStartPrintsSuccess(t *testing.T) {
 }
 
 func TestManageClientUninstallCancelPrintsCancelled(t *testing.T) {
-	ui := &fakeUI{selects: []int{6, 7}, confirms: []bool{false}}
+	ui := &fakeUI{selects: []int{7, 8}, confirms: []bool{false}}
 	deps, _ := newInstalledClientDeps(t, ui)
 
 	err := ManageClientWith(deps)
@@ -151,7 +151,7 @@ func TestManageClientUninstallCancelPrintsCancelled(t *testing.T) {
 }
 
 func TestManageClientUninstallLastRoleCanKeepSharedBinary(t *testing.T) {
-	ui := &fakeUI{selects: []int{6}, confirms: []bool{true, false}}
+	ui := &fakeUI{selects: []int{7}, confirms: []bool{true, false}}
 	binaryRemoved := false
 	deps, _ := newInstalledClientDeps(t, ui)
 	deps.DetectServer = func() svcmgr.InstallState { return svcmgr.StateNotInstalled }
