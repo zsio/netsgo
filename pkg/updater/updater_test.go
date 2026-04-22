@@ -123,3 +123,28 @@ func TestReplaceBinary(t *testing.T) {
 		t.Fatalf("binary not replaced")
 	}
 }
+
+func TestCheckUpdateNeeded(t *testing.T) {
+	tests := []struct {
+		current string
+		latest  string
+		want    bool
+		wantErr bool
+	}{
+		{"v1.0.0", "v1.1.0", true, false},
+		{"v1.1.0", "v1.1.0", false, false},
+		{"v1.2.0", "v1.1.0", false, false},
+		{"dev", "v1.1.0", false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.current+"_vs_"+tt.latest, func(t *testing.T) {
+			got, err := checkUpdateNeeded(tt.current, tt.latest)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
