@@ -103,3 +103,23 @@ func TestDownloadAndExtractNotFound(t *testing.T) {
 		t.Fatal("expected error for 404")
 	}
 }
+
+func TestReplaceBinary(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "netsgo")
+	dstPath := filepath.Join(dstDir, "netsgo")
+
+	os.WriteFile(srcPath, []byte("new binary"), 0o755)
+	os.WriteFile(dstPath, []byte("old binary"), 0o755)
+
+	err := replaceBinary(srcPath, dstPath)
+	if err != nil {
+		t.Fatalf("replaceBinary: %v", err)
+	}
+
+	data, _ := os.ReadFile(dstPath)
+	if string(data) != "new binary" {
+		t.Fatalf("binary not replaced")
+	}
+}
