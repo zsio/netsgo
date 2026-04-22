@@ -68,3 +68,4 @@ lerna-debug.log*
 .omx
 .omc
 .alma-snapshots
+.worktrees/
