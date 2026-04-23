@@ -2591,6 +2591,94 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	}
 }
 
+func TestServer_UpdateStoppedHTTPTunnel_ResponseIncludesCapabilities(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	var err error
+	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	if err != nil {
+		t.Fatalf("failed to create TunnelStore: %v", err)
+	}
+
+	wsConn, authResp := connectAndAuth(t, ts, "http-update-capabilities")
+	defer mustClose(t, wsConn)
+
+	seedStoredTunnel(t, s, authResp.ClientID, protocol.ProxyNewRequest{
+		Name:      "editable-http",
+		Type:      protocol.ProxyTypeHTTP,
+		Domain:    "editable.example.com",
+		LocalIP:   "127.0.0.1",
+		LocalPort: 3000,
+	}, protocol.ProxyStatusStopped)
+
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("client %s does not exist", authResp.ClientID)
+	}
+	client := value.(*ClientConn)
+	client.proxyMu.Lock()
+	client.proxies["editable-http"] = &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:         "editable-http",
+			Type:         protocol.ProxyTypeHTTP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    3000,
+			Domain:       "editable.example.com",
+			ClientID:     authResp.ClientID,
+			DesiredState: protocol.ProxyDesiredStateStopped,
+			RuntimeState: protocol.ProxyRuntimeStateIdle,
+		},
+		done: make(chan struct{}),
+	}
+	client.proxyMu.Unlock()
+
+	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("failed to generate admin token: %v", err)
+	}
+
+	reqBody := []byte(`{"local_ip":"127.0.0.1","local_port":3001,"remote_port":0,"domain":"updated.example.com"}`)
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels/editable-http", authResp.ClientID), bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "test")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("update tunnel request failed: %v", err)
+	}
+	defer mustClose(t, resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update stopped tunnel: want 200, got %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	tunnel, ok := body["tunnel"].(map[string]any)
+	if !ok {
+		t.Fatalf("response should include tunnel payload, got %v", body["tunnel"])
+	}
+	capabilities, ok := tunnel["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("response should include capabilities, got %v", tunnel["capabilities"])
+	}
+	for key, want := range map[string]bool{
+		"can_resume": true,
+		"can_stop":   false,
+		"can_edit":   true,
+		"can_delete": true,
+	} {
+		if capabilities[key] != want {
+			t.Fatalf("%s: want %v, got %v", key, want, capabilities[key])
+		}
+	}
+}
+
 func TestServer_CreateTunnelHTTPInvalidDomainReturns400WithTypedError(t *testing.T) {
 	s, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()

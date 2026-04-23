@@ -333,6 +333,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 			encodeJSON(w, status, payload)
 			return
 		}
+		updated = proxyConfigForClientView(updated, false)
 
 		encodeJSON(w, http.StatusOK, map[string]any{
 			"success": true,
@@ -363,6 +364,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		encodeJSON(w, status, payload)
 		return
 	}
+	updated = proxyConfigForClientView(updated, true)
 
 	encodeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
