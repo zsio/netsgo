@@ -46,9 +46,9 @@ func defaultUpgradeCommandDeps() upgradeCommandDeps {
 func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 	units := deps.installedUnits()
 	if len(units) == 0 {
-		fmt.Fprintln(deps.stderr, "No installed services found.")
-		fmt.Fprintln(deps.stderr, "Run 'netsgo install' first.")
-		fmt.Fprintln(deps.stderr, "To download a release binary manually, visit: https://github.com/zsio/netsgo/releases")
+		_, _ = fmt.Fprintln(deps.stderr, "No installed services found.")
+		_, _ = fmt.Fprintln(deps.stderr, "Run 'netsgo install' first.")
+		_, _ = fmt.Fprintln(deps.stderr, "To download a release binary manually, visit: https://github.com/zsio/netsgo/releases")
 		os.Exit(1)
 	}
 
@@ -58,8 +58,8 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 	}
 
 	if currentPath == svcmgr.BinaryPath {
-		fmt.Fprintln(deps.stdout, "Current binary is already the installed binary.")
-		fmt.Fprintln(deps.stdout, "Nothing to upgrade.")
+		_, _ = fmt.Fprintln(deps.stdout, "Current binary is already the installed binary.")
+		_, _ = fmt.Fprintln(deps.stdout, "Nothing to upgrade.")
 		return nil
 	}
 
@@ -68,25 +68,25 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 	normalizedCurrentVersion, currentErr := buildversion.NormalizeVersionString(currentVersion)
 
 	if installedVersionErr == nil && currentErr == nil && installedVersion == normalizedCurrentVersion {
-		fmt.Fprintf(deps.stdout, "Current version %s is the same as installed.\n", normalizedCurrentVersion)
-		fmt.Fprintln(deps.stdout, "Nothing to upgrade.")
+		_, _ = fmt.Fprintf(deps.stdout, "Current version %s is the same as installed.\n", normalizedCurrentVersion)
+		_, _ = fmt.Fprintln(deps.stdout, "Nothing to upgrade.")
 		return nil
 	}
 
 	if isDevVersion(currentVersion) && !force {
-		fmt.Fprintf(deps.stdout, "Current version is '%s' (development build).\n", currentVersion)
-		fmt.Fprint(deps.stdout, "Upgrading with a development build is not recommended. Continue? [y/N]: ")
+		_, _ = fmt.Fprintf(deps.stdout, "Current version is '%s' (development build).\n", currentVersion)
+		_, _ = fmt.Fprint(deps.stdout, "Upgrading with a development build is not recommended. Continue? [y/N]: ")
 		if !deps.confirm() {
-			fmt.Fprintln(deps.stdout, "Aborted.")
+			_, _ = fmt.Fprintln(deps.stdout, "Aborted.")
 			return nil
 		}
 	}
 
 	if installedVersionErr != nil && !force {
-		fmt.Fprintf(deps.stdout, "Warning: could not determine installed version: %v\n", installedVersionErr)
-		fmt.Fprint(deps.stdout, "Version safety checks cannot be completed. Continue anyway? [y/N]: ")
+		_, _ = fmt.Fprintf(deps.stdout, "Warning: could not determine installed version: %v\n", installedVersionErr)
+		_, _ = fmt.Fprint(deps.stdout, "Version safety checks cannot be completed. Continue anyway? [y/N]: ")
 		if !deps.confirm() {
-			fmt.Fprintln(deps.stdout, "Aborted.")
+			_, _ = fmt.Fprintln(deps.stdout, "Aborted.")
 			return nil
 		}
 	}
@@ -96,10 +96,10 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 		inst, err2 := buildversion.ParseSemver(installedVersion)
 		if err1 == nil && err2 == nil && cmp.Compare(inst) < 0 {
 			if !force {
-				fmt.Fprintf(deps.stdout, "Current %s is older than installed %s.\n", normalizedCurrentVersion, installedVersion)
-				fmt.Fprint(deps.stdout, "This would downgrade. Continue? [y/N]: ")
+				_, _ = fmt.Fprintf(deps.stdout, "Current %s is older than installed %s.\n", normalizedCurrentVersion, installedVersion)
+				_, _ = fmt.Fprint(deps.stdout, "This would downgrade. Continue? [y/N]: ")
 				if !deps.confirm() {
-					fmt.Fprintln(deps.stdout, "Aborted.")
+					_, _ = fmt.Fprintln(deps.stdout, "Aborted.")
 					return nil
 				}
 			}
@@ -114,18 +114,18 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 	if installedVersionErr != nil {
 		fromVersion = "unknown"
 	}
-	fmt.Fprintf(deps.stdout, "Upgrading %s -> %s\n", fromVersion, targetVersion)
-	fmt.Fprintf(deps.stdout, "Services to restart: %v\n", units)
-	fmt.Fprintln(deps.stdout)
+	_, _ = fmt.Fprintf(deps.stdout, "Upgrading %s -> %s\n", fromVersion, targetVersion)
+	_, _ = fmt.Fprintf(deps.stdout, "Services to restart: %v\n", units)
+	_, _ = fmt.Fprintln(deps.stdout)
 
 	result, err := deps.applyUpgrade(currentPath, installedVersion, targetVersion)
 	if err != nil {
 		return fmt.Errorf("upgrade failed: %w", err)
 	}
 
-	fmt.Fprintln(deps.stdout, "Upgraded successfully.")
-	fmt.Fprintf(deps.stdout, "Stopped: %v\n", result.Stopped)
-	fmt.Fprintf(deps.stdout, "Started: %v\n", result.Started)
+	_, _ = fmt.Fprintln(deps.stdout, "Upgraded successfully.")
+	_, _ = fmt.Fprintf(deps.stdout, "Stopped: %v\n", result.Stopped)
+	_, _ = fmt.Fprintf(deps.stdout, "Started: %v\n", result.Started)
 	return nil
 }
 

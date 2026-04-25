@@ -142,7 +142,7 @@ func validateSemverIdentifiers(value, field, input string) error {
 			return fmt.Errorf("invalid %s: %q", field, input)
 		}
 		for _, r := range identifier {
-			if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-') {
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
 				return fmt.Errorf("invalid %s: %q", field, input)
 			}
 		}
