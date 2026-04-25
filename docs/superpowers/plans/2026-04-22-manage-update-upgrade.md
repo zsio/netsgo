@@ -219,13 +219,13 @@ func TestFetchLatestVersion(t *testing.T) {
 
 func TestBuildDownloadURL(t *testing.T) {
 	got := buildDownloadURL(ChannelGitHub, "v1.2.3", "linux", "amd64")
-	want := "https://github.com/zsio/netsgo/releases/download/v1.2.3/netsgo_v1.2.3_linux_amd64.tar.gz"
+	want := "https://github.com/zsio/netsgo/releases/download/v1.2.3/netsgo_1.2.3_linux_amd64.tar.gz"
 	if got != want {
 		t.Fatalf("buildDownloadURL = %q, want %q", got, want)
 	}
 
 	got2 := buildDownloadURL(ChannelGhproxy, "v1.2.3", "linux", "amd64")
-	want2 := "https://ghproxy.com/https://github.com/zsio/netsgo/releases/download/v1.2.3/netsgo_v1.2.3_linux_amd64.tar.gz"
+	want2 := "https://ghproxy.com/https://github.com/zsio/netsgo/releases/download/v1.2.3/netsgo_1.2.3_linux_amd64.tar.gz"
 	if got2 != want2 {
 		t.Fatalf("buildDownloadURL ghproxy = %q, want %q", got2, want2)
 	}
