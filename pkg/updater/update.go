@@ -1,6 +1,7 @@
 package updater
 
 import (
+	"errors"
 	"fmt"
 	"netsgo/internal/svcmgr"
 	"netsgo/pkg/version"
@@ -8,12 +9,23 @@ import (
 	"path/filepath"
 )
 
+var downloadAndExtractFunc = downloadAndExtract
+var osMkdirTempFunc = os.MkdirTemp
+
 func checkUpdateNeeded(currentVersion, latestVersion string) (bool, error) {
-	current, err := version.ParseSemver(currentVersion)
+	currentNormalized, err := version.NormalizeVersionString(currentVersion)
 	if err != nil {
 		return false, fmt.Errorf("parse current: %w", err)
 	}
-	latest, err := version.ParseSemver(latestVersion)
+	latestNormalized, err := version.NormalizeVersionString(latestVersion)
+	if err != nil {
+		return false, fmt.Errorf("parse latest: %w", err)
+	}
+	current, err := version.ParseSemver(currentNormalized)
+	if err != nil {
+		return false, fmt.Errorf("parse current: %w", err)
+	}
+	latest, err := version.ParseSemver(latestNormalized)
 	if err != nil {
 		return false, fmt.Errorf("parse latest: %w", err)
 	}
@@ -38,71 +50,139 @@ type Result struct {
 	Started    []string
 }
 
-func AutoUpdate(channel DownloadChannel, currentVersion string) (*Result, error) {
+type updatePlan struct {
+	Result  *Result
+	Channel DownloadChannel
+}
+
+func CheckForUpdate(channel DownloadChannel, currentVersion string) (*Result, bool, error) {
 	result := &Result{OldVersion: currentVersion}
 
-	latest, err := fetchLatestVersion()
+	latest, err := fetchLatestVersionFunc(channel)
 	if err != nil {
-		return result, fmt.Errorf("check latest: %w", err)
+		return result, false, fmt.Errorf("check latest: %w", err)
 	}
 	result.NewVersion = latest
 
 	needed, err := checkUpdateNeeded(currentVersion, latest)
 	if err != nil {
-		return result, fmt.Errorf("compare: %w", err)
-	}
-	if !needed {
-		return result, nil
+		return result, false, fmt.Errorf("compare: %w", err)
 	}
 
-	units := installedUnits()
+	return result, needed, nil
+}
+
+func ApplyConfirmedUpdate(channel DownloadChannel, currentVersion, targetVersion string) (*Result, error) {
+	result := &Result{OldVersion: currentVersion, NewVersion: targetVersion}
+	return applyUpdate(&updatePlan{Result: result, Channel: channel})
+}
+
+func applyUpdate(plan *updatePlan) (*Result, error) {
+	result := plan.Result
+
+	units := detectInstalledUnitsFunc()
 	if len(units) == 0 {
 		return result, fmt.Errorf("no installed services")
 	}
 
 	orch := &Orchestrator{
-		DisableAndStop: svcmgr.DisableAndStop,
-		EnableAndStart: svcmgr.EnableAndStart,
+		DisableAndStop: disableAndStopFunc,
+		EnableAndStart: enableAndStartFunc,
 	}
 
-	stopped, err := orch.StopServices(units)
+	stopped := make([]string, 0, len(units))
+	stopPhaseArmed := true
+	defer recoverStoppedServicesOnPanic(orch, &stopped, &stopPhaseArmed)
+	err := orch.StopServices(units, &stopped)
 	if err != nil {
+		if rollbackErr := orch.RestartStoppedServices(stopped); rollbackErr != nil {
+			return result, fmt.Errorf("%w; %v", err, rollbackErr)
+		}
 		return result, err
 	}
 	result.Stopped = stopped
-
-	// Ensure services are restarted if download or replace fails
-	var failed bool
-	defer func() {
-		if failed {
-			_, _ = orch.StartServices(units)
-		}
-	}()
-
-	tmpDir, err := os.MkdirTemp("", "netsgo-update-*")
+	tmpDir, err := osMkdirTempFunc("", "netsgo-update-*")
 	if err != nil {
-		failed = true
+		if rollbackErr := orch.RestartStoppedServices(stopped); rollbackErr != nil {
+			return result, errors.Join(fmt.Errorf("temp dir: %w", err), rollbackErr)
+		}
 		return result, fmt.Errorf("temp dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
-	url := platformAssetURL(channel, latest)
+	started := make([]string, 0, len(units))
+	originalBinary := filepath.Join(tmpDir, filepath.Base(installedBinaryPath)+".backup")
+	backupAvailable := false
+	defer recoverUpdateOrUpgradeOnPanic(orch, &started, &stopped, &originalBinary, &backupAvailable)
+	stopPhaseArmed = false
+
+	url := platformAssetURL(plan.Channel, result.NewVersion)
 	newBinary := filepath.Join(tmpDir, "netsgo")
-	if err := downloadAndExtract(url, newBinary, defaultHTTPClient); err != nil {
-		failed = true
+	if err := downloadAndExtractFunc(url, newBinary, downloadHTTPClient); err != nil {
+		if rollbackErr := orch.RestartStoppedServices(stopped); rollbackErr != nil {
+			return result, errors.Join(fmt.Errorf("download: %w", err), rollbackErr)
+		}
 		return result, fmt.Errorf("download: %w", err)
 	}
 
-	if err := replaceBinary(newBinary, svcmgr.BinaryPath); err != nil {
-		failed = true
+	if err := replaceBinaryFunc(installedBinaryPath, originalBinary); err != nil {
+		if rollbackErr := orch.RestartStoppedServices(stopped); rollbackErr != nil {
+			return result, errors.Join(fmt.Errorf("backup: %w", err), rollbackErr)
+		}
+		return result, fmt.Errorf("backup: %w", err)
+	}
+	backupAvailable = true
+
+	if err := replaceBinaryFunc(newBinary, installedBinaryPath); err != nil {
+		rollbackErr := rollbackUpdateOrUpgrade(orch, nil, stopped, originalBinary, true)
+		if rollbackErr != nil {
+			return result, errors.Join(fmt.Errorf("replace: %w", err), rollbackErr)
+		}
 		return result, fmt.Errorf("replace: %w", err)
 	}
 
-	started, err := orch.StartServices(units)
+	err = orch.StartServices(units, &started)
 	if err != nil {
-		failed = true
+		rollbackErr := rollbackUpdateOrUpgrade(orch, started, stopped, originalBinary, true)
+		if rollbackErr != nil {
+			return result, errors.Join(err, rollbackErr)
+		}
 		return result, err
 	}
 	result.Started = started
 	return result, nil
+}
+
+func rollbackUpdateOrUpgrade(orch *Orchestrator, started, stopped []string, backupPath string, restoreBinary bool) error {
+	var rollbackErr error
+	if len(started) > 0 {
+		if err := orch.StopStartedServices(started); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+	}
+	if restoreBinary {
+		if err := restoreBinaryFunc(backupPath, installedBinaryPath); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore binary: %w", err))
+		}
+	}
+	if err := orch.RestartStoppedServices(stopped); err != nil {
+		rollbackErr = errors.Join(rollbackErr, err)
+	}
+	return rollbackErr
+}
+
+func recoverStoppedServicesOnPanic(orch *Orchestrator, stopped *[]string, armed *bool) {
+	if r := recover(); r != nil {
+		if *armed {
+			_ = orch.RestartStoppedServices(*stopped)
+		}
+		panic(r)
+	}
+}
+
+func recoverUpdateOrUpgradeOnPanic(orch *Orchestrator, started, stopped *[]string, backupPath *string, restoreBinary *bool) {
+	if r := recover(); r != nil {
+		_ = rollbackUpdateOrUpgrade(orch, *started, *stopped, *backupPath, *restoreBinary)
+		panic(r)
+	}
 }

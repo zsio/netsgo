@@ -3,6 +3,7 @@ package updater
 import (
 	"fmt"
 	"io"
+	"netsgo/internal/svcmgr"
 	"os"
 )
 
@@ -11,30 +12,64 @@ type Orchestrator struct {
 	EnableAndStart func(unitName string) error
 }
 
-func (o *Orchestrator) StopServices(units []string) ([]string, error) {
-	stopped := make([]string, 0, len(units))
+var disableAndStopFunc = svcmgr.DisableAndStop
+var enableAndStartFunc = svcmgr.EnableAndStart
+var detectInstalledUnitsFunc = installedUnits
+var replaceBinaryFunc = replaceBinary
+var restoreBinaryFunc = restoreBinary
+var installedBinaryPath = svcmgr.BinaryPath
+
+func (o *Orchestrator) StopServices(units []string, stopped *[]string) error {
+	*stopped = (*stopped)[:0]
 	for _, unit := range units {
 		if err := o.DisableAndStop(unit); err != nil {
-			return stopped, fmt.Errorf("stop %s: %w", unit, err)
+			return fmt.Errorf("stop %s: %w", unit, err)
 		}
-		stopped = append(stopped, unit)
+		*stopped = append(*stopped, unit)
 	}
-	return stopped, nil
+	return nil
 }
 
-func (o *Orchestrator) StartServices(units []string) ([]string, error) {
-	started := make([]string, 0, len(units))
+func (o *Orchestrator) RestartStoppedServices(stopped []string) error {
+	if len(stopped) == 0 {
+		return nil
+	}
+	var restarted []string
+	err := o.StartServices(stopped, &restarted)
+	if err != nil {
+		return fmt.Errorf("rollback: %w", err)
+	}
+	return nil
+}
+
+func (o *Orchestrator) StopStartedServices(started []string) error {
+	for i := len(started) - 1; i >= 0; i-- {
+		if err := o.DisableAndStop(started[i]); err != nil {
+			return fmt.Errorf("rollback stop %s: %w", started[i], err)
+		}
+	}
+	return nil
+}
+
+func (o *Orchestrator) StartServices(units []string, started *[]string) error {
+	*started = (*started)[:0]
 	for _, unit := range units {
 		if err := o.EnableAndStart(unit); err != nil {
-			return started, fmt.Errorf("start %s: %w", unit, err)
+			return fmt.Errorf("start %s: %w", unit, err)
 		}
-		started = append(started, unit)
+		*started = append(*started, unit)
 	}
-	return started, nil
+	return nil
 }
 
 func replaceBinary(srcPath, dstPath string) error {
 	tmpPath := dstPath + ".tmp"
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
 	src, err := os.Open(srcPath)
 	if err != nil {
@@ -56,5 +91,10 @@ func replaceBinary(srcPath, dstPath string) error {
 	if err := os.Rename(tmpPath, dstPath); err != nil {
 		return fmt.Errorf("rename: %w", err)
 	}
+	cleanupTmp = false
 	return nil
+}
+
+func restoreBinary(srcPath, dstPath string) error {
+	return replaceBinary(srcPath, dstPath)
 }
