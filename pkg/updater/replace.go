@@ -40,7 +40,7 @@ func replaceBinary(srcPath, dstPath string) error {
 	if err != nil {
 		return fmt.Errorf("open source: %w", err)
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	dst, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {

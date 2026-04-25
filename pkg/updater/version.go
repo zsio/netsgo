@@ -37,7 +37,7 @@ func fetchLatestVersionWithClient(url string, client *http.Client) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("fetch latest: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusFound {
 		return "", fmt.Errorf("unexpected status: %d", resp.StatusCode)

@@ -75,7 +75,7 @@ func AutoUpdate(channel DownloadChannel, currentVersion string) (*Result, error)
 	var failed bool
 	defer func() {
 		if failed {
-			orch.StartServices(units)
+			_, _ = orch.StartServices(units)
 		}
 	}()
 
@@ -84,7 +84,7 @@ func AutoUpdate(channel DownloadChannel, currentVersion string) (*Result, error)
 		failed = true
 		return result, fmt.Errorf("temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	url := platformAssetURL(channel, latest)
 	newBinary := filepath.Join(tmpDir, "netsgo")

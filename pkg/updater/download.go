@@ -15,7 +15,7 @@ func downloadAndExtract(url, destPath string, client *http.Client) error {
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download: status %d", resp.StatusCode)
 	}
@@ -27,7 +27,7 @@ func extractBinary(r io.Reader, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("extract: open gzip: %w", err)
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	tr := tar.NewReader(gr)
 	for {

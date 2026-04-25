@@ -55,14 +55,14 @@ func TestDownloadAndExtract(t *testing.T) {
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 	content := []byte("fake binary")
-	tw.WriteHeader(&tar.Header{Name: "netsgo", Mode: 0o755, Size: int64(len(content))})
-	tw.Write(content)
-	tw.Close()
-	gw.Close()
+	_ = tw.WriteHeader(&tar.Header{Name: "netsgo", Mode: 0o755, Size: int64(len(content))})
+	_, _ = tw.Write(content)
+	_ = tw.Close()
+	_ = gw.Close()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/gzip")
-		w.Write(buf.Bytes())
+		_, _ = w.Write(buf.Bytes())
 	}))
 	defer server.Close()
 
@@ -110,8 +110,8 @@ func TestReplaceBinary(t *testing.T) {
 	srcPath := filepath.Join(srcDir, "netsgo")
 	dstPath := filepath.Join(dstDir, "netsgo")
 
-	os.WriteFile(srcPath, []byte("new binary"), 0o755)
-	os.WriteFile(dstPath, []byte("old binary"), 0o755)
+	_ = os.WriteFile(srcPath, []byte("new binary"), 0o755)
+	_ = os.WriteFile(dstPath, []byte("old binary"), 0o755)
 
 	err := replaceBinary(srcPath, dstPath)
 	if err != nil {
