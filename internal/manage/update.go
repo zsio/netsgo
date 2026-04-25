@@ -8,7 +8,14 @@ import (
 	"netsgo/pkg/version"
 )
 
-func runUpdate(ui uiProvider, currentVersion string, hasInstalled func() bool, autoUpdate func(updater.DownloadChannel, string) (*updater.Result, error)) error {
+type updateChecker func(updater.DownloadChannel, string) (*updater.Result, bool, error)
+type confirmedUpdateApplier func(updater.DownloadChannel, string, string) (*updater.Result, error)
+
+func runUpdate(ui uiProvider, currentVersion string, hasInstalled func() bool) error {
+	return runUpdateWithChecker(ui, currentVersion, hasInstalled, updater.CheckForUpdate, updater.ApplyConfirmedUpdate)
+}
+
+func runUpdateWithChecker(ui uiProvider, currentVersion string, hasInstalled func() bool, checkForUpdate updateChecker, applyConfirmedUpdate confirmedUpdateApplier) error {
 	if hasInstalled == nil {
 		hasInstalled = func() bool {
 			return svcmgr.Detect(svcmgr.RoleServer) == svcmgr.StateInstalled ||
@@ -44,21 +51,51 @@ func runUpdate(ui uiProvider, currentVersion string, hasInstalled func() bool, a
 		{"Status", "Checking..."},
 	})
 
-	if autoUpdate == nil {
-		autoUpdate = updater.AutoUpdate
+	if checkForUpdate == nil {
+		checkForUpdate = updater.CheckForUpdate
+	}
+	if applyConfirmedUpdate == nil {
+		applyConfirmedUpdate = updater.ApplyConfirmedUpdate
 	}
 
-	result, err := autoUpdate(channel, currentVersion)
+	result, needsUpdate, err := checkForUpdate(channel, currentVersion)
 	if err != nil {
 		ui.PrintSummary("Update failed", [][2]string{{"Error", err.Error()}})
 		return nil
 	}
 
-	if result.NewVersion == currentVersion {
+	if !needsUpdate {
+		currentNormalized, normalizeErr := version.NormalizeVersionString(currentVersion)
+		if normalizeErr != nil {
+			currentNormalized = currentVersion
+		}
 		ui.PrintSummary("No update", [][2]string{
-			{"Current", currentVersion},
+			{"Current", currentNormalized},
 			{"Status", "Already latest"},
 		})
+		return nil
+	}
+
+	confirmRows := [][2]string{
+		{"Current", result.OldVersion},
+		{"Latest", result.NewVersion},
+		{"Channel", string(channel)},
+		{"Action", "Download, replace binary, and restart managed services"},
+	}
+	ui.PrintSummary("Update available", confirmRows)
+
+	confirmed, err := ui.Confirm("Download and apply this update?")
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		ui.PrintSummary("Update cancelled", [][2]string{{"Status", "No changes were made"}})
+		return nil
+	}
+
+	result, err = applyConfirmedUpdate(channel, currentVersion, result.NewVersion)
+	if err != nil {
+		ui.PrintSummary("Update failed", [][2]string{{"Error", err.Error()}})
 		return nil
 	}
 
