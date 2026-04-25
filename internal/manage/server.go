@@ -49,7 +49,7 @@ func ManageServerWith(deps serverDeps) error {
 			Start: deps.EnableAndStart,
 			Stop:  deps.DisableAndStop,
 			Update: func() error {
-				return runUpdate(deps.UI, version.Current, nil, nil)
+				return runUpdate(deps.UI, version.Current, nil)
 			},
 			Uninstall: func() (bool, error) {
 				return uninstallServer(deps)
