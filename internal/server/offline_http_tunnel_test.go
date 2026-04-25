@@ -59,6 +59,24 @@ func TestOfflineHTTPTunnel_Update_StoreFirst(t *testing.T) {
 	if success, _ := payload["success"].(bool); !success {
 		t.Fatalf("update response should return success=true, got %v", payload)
 	}
+	tunnel, ok := payload["tunnel"].(map[string]any)
+	if !ok {
+		t.Fatalf("update response should include tunnel payload, got %v", payload["tunnel"])
+	}
+	capabilities, ok := tunnel["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("update response should include capabilities, got %v", tunnel["capabilities"])
+	}
+	for key, want := range map[string]bool{
+		"can_resume": false,
+		"can_stop":   true,
+		"can_edit":   true,
+		"can_delete": true,
+	} {
+		if capabilities[key] != want {
+			t.Fatalf("%s: want %v, got %v", key, want, capabilities[key])
+		}
+	}
 
 	stored, exists := s.store.GetTunnel(clientID, "offline-http")
 	if !exists {
