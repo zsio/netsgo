@@ -585,7 +585,7 @@ git commit -m "feat: define server sqlite schema"
 - Modify: `internal/server/server_test.go`
 - Modify: `internal/server/test_helpers_test.go`
 
-- [ ] **Step 1: Add a failing AdminStore SQLite persistence test**
+- [x] **Step 1: Add a failing AdminStore SQLite persistence test**
 
 Append to `internal/server/admin_store_test.go`:
 
@@ -619,7 +619,7 @@ func TestAdminStore_UsesSQLiteFileAndNoJsonFile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the new AdminStore test and verify it fails**
+- [x] **Step 2: Run the new AdminStore test and verify it fails**
 
 Run:
 
@@ -629,7 +629,7 @@ go test ./internal/server -run TestAdminStore_UsesSQLiteFileAndNoJsonFile -count
 
 Expected: FAIL because `NewAdminStore` still reads and writes JSON.
 
-- [ ] **Step 3: Change AdminStore fields and constructor**
+- [x] **Step 3: Change AdminStore fields and constructor**
 
 In `internal/server/admin_store.go`, replace the JSON fields:
 
@@ -694,7 +694,7 @@ func (s *AdminStore) maybeFailSave() error {
 }
 ```
 
-- [ ] **Step 4: Replace AdminStore JSON snapshots with SQL helpers**
+- [x] **Step 4: Replace AdminStore JSON snapshots with SQL helpers**
 
 Add these helper signatures in `internal/server/admin_store.go` and use them from existing methods:
 
@@ -741,7 +741,7 @@ func rollbackUnlessCommitted(tx *sql.Tx, committed *bool) {
 }
 ```
 
-- [ ] **Step 5: Convert initialization and config methods**
+- [x] **Step 5: Convert initialization and config methods**
 
 Use one SQL transaction in `Initialize`:
 
@@ -765,7 +765,7 @@ INSERT INTO allowed_ports (start_port, end_port) VALUES (?, ?);
 
 `UpdateServerConfig` should update `server_config` and replace `allowed_ports` in one transaction.
 
-- [ ] **Step 6: Convert users, sessions, API keys, clients, and tokens**
+- [x] **Step 6: Convert users, sessions, API keys, clients, and tokens**
 
 Keep the existing public method names and return values. Use these SQL mappings:
 
@@ -806,7 +806,7 @@ DELETE FROM client_tokens WHERE is_revoked = 1 OR last_active_at <= ?;
 
 Run `maybeFailSave()` immediately before `tx.Commit()` in methods that previously used rollback injection.
 
-- [ ] **Step 7: Run AdminStore tests**
+- [x] **Step 7: Run AdminStore tests**
 
 Run:
 
@@ -816,7 +816,7 @@ go test ./internal/server -run 'TestAdminStore' -count=1
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add internal/server/admin_store.go internal/server/admin_store_test.go internal/server/auth_middleware_test.go internal/server/server_test.go internal/server/test_helpers_test.go
