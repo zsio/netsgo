@@ -63,7 +63,7 @@ Modify:
 - Modify: `go.mod`
 - Modify: `go.sum`
 
-- [ ] **Step 1: Write the failing shared storage tests**
+- [x] **Step 1: Write the failing shared storage tests**
 
 Create `internal/storage/sqlite_test.go`:
 
@@ -137,7 +137,7 @@ func assertPragmaValue(t *testing.T, db *sql.DB, name, want string) {
 }
 ```
 
-- [ ] **Step 2: Run the new tests and verify they fail**
+- [x] **Step 2: Run the new tests and verify they fail**
 
 Run:
 
@@ -147,7 +147,7 @@ go test ./internal/storage -run 'TestOpen' -count=1
 
 Expected: FAIL because `internal/storage` and `Open` do not exist.
 
-- [ ] **Step 3: Add the SQLite driver dependency**
+- [x] **Step 3: Add the SQLite driver dependency**
 
 Run:
 
@@ -157,7 +157,7 @@ go get modernc.org/sqlite
 
 Expected: `go.mod` and `go.sum` include `modernc.org/sqlite` and its transitive dependencies.
 
-- [ ] **Step 4: Implement the shared SQLite opener**
+- [x] **Step 4: Implement the shared SQLite opener**
 
 Create `internal/storage/sqlite.go`:
 
@@ -281,7 +281,7 @@ func migrationApplied(tx *sql.Tx, name string) (bool, error) {
 }
 ```
 
-- [ ] **Step 5: Run shared storage tests**
+- [x] **Step 5: Run shared storage tests**
 
 Run:
 
@@ -291,7 +291,7 @@ go test ./internal/storage -count=1
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add go.mod go.sum internal/storage/sqlite.go internal/storage/sqlite_test.go
