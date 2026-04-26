@@ -110,9 +110,13 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 		if err != nil {
 			log.Fatalf("❌ Failed to read server init state: %v", err)
 		}
+		adminInitialized := adminStore.IsInitialized()
+		if err := adminStore.Close(); err != nil {
+			log.Fatalf("❌ Failed to close server init state: %v", err)
+		}
 
 		initParams := buildInitParamsFromViper()
-		if err := validateInitFlagsForStartup(adminStore.IsInitialized(), initFlagValues{
+		if err := validateInitFlagsForStartup(adminInitialized, initFlagValues{
 			AdminUsername: initParams.AdminUsername,
 			AdminPassword: initParams.AdminPassword,
 			ServerAddr:    initParams.ServerAddr,
@@ -120,7 +124,7 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 		}); err != nil {
 			log.Fatalf("❌ %v", err)
 		}
-		if shouldWarnInitFlagsIgnored(adminStore.IsInitialized(), initFlagValues{
+		if shouldWarnInitFlagsIgnored(adminInitialized, initFlagValues{
 			AdminUsername: initParams.AdminUsername,
 			AdminPassword: initParams.AdminPassword,
 			ServerAddr:    initParams.ServerAddr,
@@ -129,7 +133,7 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 			log.Printf("ℹ️  Server already initialized, --init-* flags will be ignored")
 		}
 
-		if !adminStore.IsInitialized() {
+		if !adminInitialized {
 			if err := server.ApplyInit(s.DataDir, initParams); err != nil {
 				log.Fatalf("❌ Server initialization failed: %v", err)
 			}

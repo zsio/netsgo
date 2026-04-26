@@ -2,6 +2,8 @@ package netsgo_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -29,7 +31,7 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	adminStore, err := server.NewAdminStore(filepath.Join(tmpDir, "server", "admin.json"))
+	adminStore, err := server.NewAdminStore(filepath.Join(tmpDir, "server", server.ServerDBFileName))
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
@@ -39,12 +41,20 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 	if _, err := adminStore.AddAPIKey("e2e", "e2e-key", []string{"connect"}, nil); err != nil {
 		t.Fatalf("创建 E2E API Key 失败: %v", err)
 	}
+	if err := adminStore.Close(); err != nil {
+		t.Fatalf("关闭 AdminStore 失败: %v", err)
+	}
 
 	srv := server.New(serverPort)
 	srv.DataDir = tmpDir
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
 
 	go func() {
-		if err := srv.Start(); err != nil {
+		if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			panic(fmt.Sprintf("Server 启动失败: %v", err))
 		}
 	}()

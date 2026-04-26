@@ -154,8 +154,18 @@ func (s *Server) Start() error {
 
 	return s.httpServer.Serve(serveLn)
 }
-func (s *Server) Shutdown(ctx context.Context) error {
+func (s *Server) Shutdown(ctx context.Context) (err error) {
 	log.Printf("🛑 Starting graceful shutdown...")
+	defer func() {
+		if s.auth != nil && s.auth.adminStore != nil {
+			if closeErr := s.auth.adminStore.Close(); closeErr != nil {
+				log.Printf("⚠️ Failed to close admin store: %v", closeErr)
+				if err == nil {
+					err = closeErr
+				}
+			}
+		}
+	}()
 
 	close(s.done)
 

@@ -26,6 +26,7 @@ func ApplyInit(dataDir string, params InitParams) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = adminStore.Close() }()
 	if adminStore.IsInitialized() {
 		return nil
 	}
@@ -48,6 +49,7 @@ func LoadRecoverableInitParams(dataDir string) (InitParams, error) {
 	if err != nil {
 		return InitParams{}, err
 	}
+	defer func() { _ = adminStore.Close() }()
 	if !adminStore.IsInitialized() {
 		return InitParams{}, fmt.Errorf("server historical data has not been initialized")
 	}

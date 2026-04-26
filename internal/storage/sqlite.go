@@ -10,6 +10,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const privateFileMode = 0o600
+
 type Migration struct {
 	Name string
 	Up   string
@@ -21,6 +23,9 @@ func Open(path string, migrations []Migration) (*sql.DB, error) {
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create sqlite directory: %w", err)
+	}
+	if err := ensurePrivateSQLiteFile(path); err != nil {
+		return nil, err
 	}
 
 	db, err := sql.Open("sqlite", path)
@@ -36,11 +41,49 @@ func Open(path string, migrations []Migration) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := chmodSQLiteFiles(path); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := applyMigrations(db, migrations); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := chmodSQLiteFiles(path); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+func ensurePrivateSQLiteFile(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, privateFileMode)
+	if err != nil {
+		return fmt.Errorf("create sqlite database file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close sqlite database file: %w", err)
+	}
+	return chmodSQLiteFiles(path)
+}
+
+func chmodSQLiteFiles(path string) error {
+	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
+		if err := chmodIfExists(candidate, privateFileMode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func chmodIfExists(path string, mode os.FileMode) error {
+	if err := os.Chmod(path, mode); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("secure sqlite file %s: %w", path, err)
+	}
+	return nil
 }
 
 func configure(db *sql.DB) error {

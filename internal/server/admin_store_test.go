@@ -25,6 +25,7 @@ func newTestAdminStore(t *testing.T) *AdminStore {
 	if err != nil {
 		t.Fatalf("NewAdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	store.bcryptCost = bcrypt.MinCost // use minimum cost for testing to avoid bcrypt slowing down test suite
 	return store
 }

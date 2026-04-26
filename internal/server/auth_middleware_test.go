@@ -26,6 +26,7 @@ func setupMockAdminStore(t *testing.T) (*AdminStore, func()) {
 	if err != nil {
 		t.Fatalf("Failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	store.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 
 	// 初始化一个默认的 admin

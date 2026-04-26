@@ -2,7 +2,9 @@ package storage
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -55,6 +57,68 @@ func TestOpenRunsMigrationsOnce(t *testing.T) {
 	}
 }
 
+func TestOpenCreatesPrivateDatabaseFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix owner-only permission bits")
+	}
+
+	path := filepath.Join(t.TempDir(), "netsgo.db")
+	db, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	assertPrivateFileMode(t, path)
+}
+
+func TestOpenTightensExistingDatabaseFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix owner-only permission bits")
+	}
+
+	path := filepath.Join(t.TempDir(), "netsgo.db")
+	if err := os.WriteFile(path, nil, 0o666); err != nil {
+		t.Fatalf("write existing DB file: %v", err)
+	}
+
+	db, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	assertPrivateFileMode(t, path)
+}
+
+func TestOpenCreatesPrivateSQLiteSidecarFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix owner-only permission bits")
+	}
+
+	path := filepath.Join(t.TempDir(), "netsgo.db")
+	db, err := Open(path, []Migration{{
+		Name: "001_create_widgets",
+		Up:   `CREATE TABLE widgets (id TEXT PRIMARY KEY, name TEXT NOT NULL);`,
+	}})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`INSERT INTO widgets (id, name) VALUES ('w1', 'Widget')`); err != nil {
+		t.Fatalf("insert into migrated table failed: %v", err)
+	}
+
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(sidecar); err == nil {
+			assertPrivateFileMode(t, sidecar)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat sidecar %s: %v", sidecar, err)
+		}
+	}
+}
+
 func assertPragmaValue(t *testing.T, db *sql.DB, name, want string) {
 	t.Helper()
 	var got string
@@ -63,5 +127,16 @@ func assertPragmaValue(t *testing.T, db *sql.DB, name, want string) {
 	}
 	if got != want {
 		t.Fatalf("PRAGMA %s = %q, want %q", name, got, want)
+	}
+}
+
+func assertPrivateFileMode(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != privateFileMode {
+		t.Fatalf("%s mode = %o, want %o", path, got, privateFileMode)
 	}
 }

@@ -68,6 +68,7 @@ func initTestAdminStore(t *testing.T, s *Server) {
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := store.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("failed to initialize AdminStore: %v", err)

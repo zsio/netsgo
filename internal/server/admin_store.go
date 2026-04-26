@@ -103,6 +103,13 @@ func NewAdminStore(path string) (*AdminStore, error) {
 	return store, nil
 }
 
+func (s *AdminStore) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
 func (s *AdminStore) maybeFailSave() error {
 	if s.failSaveErr != nil && s.failSaveCount > 0 {
 		err := s.failSaveErr
