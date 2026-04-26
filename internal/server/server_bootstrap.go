@@ -33,7 +33,7 @@ func (s *Server) initStore() error {
 	s.auth.adminStore = adminStore
 	log.Printf("📦 System admin store: %s", adminPath)
 
-	trafficPath := filepath.Join(s.serverDataDir(), "traffic.json")
+	trafficPath := filepath.Join(s.serverDataDir(), serverDBFileName)
 	trafficStore, err := NewTrafficStore(trafficPath)
 	if err != nil {
 		_ = adminStore.Close()
@@ -184,6 +184,11 @@ func (s *Server) cleanupFailedStartup() {
 			log.Printf("⚠️ Failed to close tunnel store after startup failure: %v", err)
 		}
 	}
+	if s.trafficStore != nil {
+		if err := s.trafficStore.Close(); err != nil {
+			log.Printf("⚠️ Failed to close traffic store after startup failure: %v", err)
+		}
+	}
 }
 
 func (s *Server) closeDone() {
@@ -209,6 +214,14 @@ func (s *Server) Shutdown(ctx context.Context) (err error) {
 		if s.store != nil {
 			if closeErr := s.store.Close(); closeErr != nil {
 				log.Printf("⚠️ Failed to close tunnel store: %v", closeErr)
+				if err == nil {
+					err = closeErr
+				}
+			}
+		}
+		if s.trafficStore != nil {
+			if closeErr := s.trafficStore.Close(); closeErr != nil {
+				log.Printf("⚠️ Failed to close traffic store: %v", closeErr)
 				if err == nil {
 					err = closeErr
 				}
@@ -287,7 +300,9 @@ func (s *Server) trafficRollupLoop() {
 			return
 		case <-ticker.C:
 			if s.trafficStore != nil {
-				s.trafficStore.Compact(time.Now())
+				if err := s.trafficStore.Compact(time.Now()); err != nil {
+					log.Printf("⚠️ Failed to compact traffic data: %v", err)
+				}
 			}
 		}
 	}
