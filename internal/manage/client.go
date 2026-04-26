@@ -1,7 +1,6 @@
 package manage
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	clientstate "netsgo/internal/client"
 	"netsgo/internal/install"
 	"netsgo/internal/svcmgr"
 	"netsgo/pkg/version"
@@ -266,18 +266,13 @@ func clientDataPath(spec svcmgr.ServiceSpec) string {
 }
 
 func clientIdentitySummary(spec svcmgr.ServiceSpec) (string, error) {
-	path := filepath.Join(clientDataPath(spec), "client.json")
-	data, err := os.ReadFile(path)
+	path := filepath.Join(clientDataPath(spec), clientstate.ClientDBFileName)
+	state, ok, err := clientstate.LoadClientIdentity(path)
 	if err != nil {
 		return "", err
 	}
-	var state struct {
-		InstallID      string `json:"install_id"`
-		Token          string `json:"token,omitempty"`
-		TLSFingerprint string `json:"tls_fingerprint,omitempty"`
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		return "", err
+	if !ok {
+		return "state database present without usable identity data", nil
 	}
 
 	parts := []string{}
@@ -291,7 +286,7 @@ func clientIdentitySummary(spec svcmgr.ServiceSpec) (string, error) {
 		parts = append(parts, "saved TLS fingerprint")
 	}
 	if len(parts) == 0 {
-		return "state file present without usable identity data", nil
+		return "state database present without usable identity data", nil
 	}
 	return strings.Join(parts, ", "), nil
 }

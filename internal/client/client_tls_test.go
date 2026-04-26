@@ -9,12 +9,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/json"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,6 +78,35 @@ func computeTestFingerprint(certDER []byte) string {
 		parts = append(parts, hexStr[i:end])
 	}
 	return strings.Join(parts, ":")
+}
+
+func saveTestClientState(t *testing.T, path string, state persistedState) {
+	t.Helper()
+	store, err := newClientStateStore(path)
+	if err != nil {
+		t.Fatalf("newClientStateStore() error = %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+}
+
+func loadTestClientState(t *testing.T, path string) persistedState {
+	t.Helper()
+	store, err := newClientStateStore(path)
+	if err != nil {
+		t.Fatalf("newClientStateStore() error = %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	state, ok, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected saved client identity")
+	}
+	return state
 }
 
 // startTLSWSServer starts a TLS WebSocket server and returns the server and wss:// URL
@@ -274,7 +301,7 @@ func TestCheckTLSFingerprint_TOFU_PersistsToStateFile(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client", "client.json")
+	statePath := filepath.Join(tmpDir, "client", clientDBFileName)
 
 	c := New("wss://localhost", "key")
 	c.InstallID = "test-install-id"
@@ -284,16 +311,7 @@ func TestCheckTLSFingerprint_TOFU_PersistsToStateFile(t *testing.T) {
 		t.Fatalf("first TOFU connection should not error: %v", err)
 	}
 
-	// Verify that the fingerprint was persisted to the file
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("failed to read state file: %v", err)
-	}
-	var state persistedState
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("failed to parse state file: %v", err)
-	}
-
+	state := loadTestClientState(t, statePath)
 	expectedFP := computeTestFingerprint(x509Cert.Raw)
 	if state.TLSFingerprint != expectedFP {
 		t.Errorf("fingerprint in state file is incorrect:\nwant: %s\ngot: %s", expectedFP, state.TLSFingerprint)
@@ -306,7 +324,7 @@ func TestCheckTLSFingerprint_TOFU_PersistsToStateFile(t *testing.T) {
 
 func TestSaveTLSFingerprint_WritesCorrectly(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client", "client.json")
+	statePath := filepath.Join(tmpDir, "client", clientDBFileName)
 
 	c := New("wss://localhost", "key")
 	c.InstallID = "install-abc"
@@ -318,14 +336,7 @@ func TestSaveTLSFingerprint_WritesCorrectly(t *testing.T) {
 		t.Fatalf("failed to save fingerprint: %v", err)
 	}
 
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("failed to read state file: %v", err)
-	}
-	var state persistedState
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("failed to parse state: %v", err)
-	}
+	state := loadTestClientState(t, statePath)
 	if state.TLSFingerprint != fp {
 		t.Errorf("wrong fingerprint: want %q, got %q", fp, state.TLSFingerprint)
 	}
@@ -337,9 +348,10 @@ func TestSaveTLSFingerprint_WritesCorrectly(t *testing.T) {
 	}
 }
 
-func TestSaveTLSFingerprint_EmptyStatePath_NoOp(t *testing.T) {
+func TestSaveTLSFingerprint_WithInstallID(t *testing.T) {
 	c := New("wss://localhost", "key")
 	c.DataDir = t.TempDir()
+	c.InstallID = "install-with-fingerprint"
 
 	if err := c.saveTLSFingerprint("AA:BB"); err != nil {
 		t.Errorf("saveTLSFingerprint() error = %v", err)
@@ -348,21 +360,13 @@ func TestSaveTLSFingerprint_EmptyStatePath_NoOp(t *testing.T) {
 
 func TestEnsureInstallID_LoadsTLSFingerprint(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client", "client.json")
+	statePath := filepath.Join(tmpDir, "client", clientDBFileName)
 
-	// First write a state file that includes a fingerprint
-	state := persistedState{
+	saveTestClientState(t, statePath, persistedState{
 		InstallID:      "saved-install-id",
 		Token:          "saved-token",
 		TLSFingerprint: "11:22:33:44:55:66",
-	}
-	data, _ := json.MarshalIndent(state, "", "  ")
-	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
-		t.Fatalf("MkdirAll failed: %v", err)
-	}
-	if err := os.WriteFile(statePath, data, 0o600); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
-	}
+	})
 
 	// Have a new client load the state
 	c := New("wss://localhost", "key")
@@ -385,20 +389,12 @@ func TestEnsureInstallID_LoadsTLSFingerprint(t *testing.T) {
 
 func TestEnsureInstallID_DoesNotOverwriteExistingFingerprint(t *testing.T) {
 	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "client", "client.json")
+	statePath := filepath.Join(tmpDir, "client", clientDBFileName)
 
-	// The state file contains an old fingerprint
-	state := persistedState{
+	saveTestClientState(t, statePath, persistedState{
 		InstallID:      "install-old",
 		TLSFingerprint: "OLD:FP",
-	}
-	data, _ := json.MarshalIndent(state, "", "  ")
-	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
-		t.Fatalf("MkdirAll failed: %v", err)
-	}
-	if err := os.WriteFile(statePath, data, 0o600); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
-	}
+	})
 
 	// The client already has a new fingerprint
 	c := New("wss://localhost", "key")
