@@ -1650,8 +1650,9 @@ Review:
 - Modify: tests under `internal/server`, `internal/client`, `internal/manage`, `internal/svcmgr`
 - Modify: `docs/setup-manage-impl.md`
 - Modify: `docs/setup-manage-plan.md`
+- Modify: `docs/superpowers/specs/2026-04-22-manage-update-design.md`
 
-- [ ] **Step 1: Search for stale local JSON storage references**
+- [x] **Step 1: Search for stale local JSON storage references**
 
 Run:
 
@@ -1659,9 +1660,9 @@ Run:
 rg -n 'admin\.json|tunnels\.json|traffic\.json|client\.json|server\.json|ReadServerSpec|WriteServerSpec|ReadClientSpec|WriteClientSpec|ServiceSpec|SpecPath' internal cmd docs -g '*.go' -g '*.md'
 ```
 
-Expected: Only protocol/test fixture references unrelated to local storage remain. Runtime storage and manage spec references should be gone.
+Expected: Runtime storage and managed-service manifest references should be gone from code and user-facing docs. Negative tests may still name the old JSON filenames to assert they are not created. This execution plan may retain historical task snippets.
 
-- [ ] **Step 2: Update docs**
+- [x] **Step 2: Update docs**
 
 In `docs/setup-manage-impl.md` and `docs/setup-manage-plan.md`, replace local storage tables with:
 
@@ -1679,10 +1680,10 @@ In `docs/setup-manage-impl.md` and `docs/setup-manage-plan.md`, replace local st
 Add this policy text:
 
 ```markdown
-NetsGo does not maintain a separate managed-service JSON manifest. `netsgo manage` derives service state from systemd unit files, env files, fixed managed paths, runtime DB presence, and systemd active/enabled state.
+NetsGo does not maintain a separate managed-service JSON manifest. `netsgo manage` derives service state from systemd unit files, env files, fixed managed paths, binary, role runtime directories, server runtime DB presence (server only), and systemd active/enabled state.
 ```
 
-- [ ] **Step 3: Run stale-reference search again**
+- [x] **Step 3: Run stale-reference search again**
 
 Run:
 
@@ -1690,14 +1691,25 @@ Run:
 rg -n 'admin\.json|tunnels\.json|traffic\.json|client\.json|server\.json|ReadServerSpec|WriteServerSpec|ReadClientSpec|WriteClientSpec|ServiceSpec|SpecPath' internal cmd docs -g '*.go' -g '*.md'
 ```
 
-Expected: No runtime-storage or managed-service manifest references remain. References to JSON as REST/WebSocket/SSE payload encoding may remain.
+Expected: No runtime-storage or managed-service manifest references remain in code or user-facing docs. Remaining hits are negative tests that prevent old JSON files from being created and historical implementation snippets in this execution plan.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/setup-manage-impl.md docs/setup-manage-plan.md internal cmd
 git commit -m "docs: document sqlite local storage model"
 ```
+
+Completed in commit `d5b1902`.
+
+Validation:
+- `rg -n 'admin\.json|tunnels\.json|traffic\.json|client\.json|server\.json|ReadServerSpec|WriteServerSpec|ReadClientSpec|WriteClientSpec|ServiceSpec|SpecPath' internal cmd docs -g '*.go' -g '*.md'`
+- `rg -n '\bspec\b|spec / env|unit/spec|spec/env|managed mode|受管 spec|安装规格|ServiceSpec|SpecPath|\.json' docs/setup-manage-plan.md docs/setup-manage-impl.md docs/superpowers/specs/2026-04-22-manage-update-design.md`
+- `git diff --check`
+
+Review:
+- Spec review confirmed target docs no longer describe the old JSON service spec or local JSON storage model.
+- Quality review confirmed CLI/path snapshots and role-specific runtime DB rules match current code.
 
 ---
 
