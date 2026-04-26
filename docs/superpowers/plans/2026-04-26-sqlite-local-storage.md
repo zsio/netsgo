@@ -306,7 +306,7 @@ git commit -m "feat: add sqlite storage foundation"
 - Create: `internal/server/storage_schema.go`
 - Create: `internal/server/storage_schema_test.go`
 
-- [ ] **Step 1: Write schema tests**
+- [x] **Step 1: Write schema tests**
 
 Create `internal/server/storage_schema_test.go`:
 
@@ -363,7 +363,7 @@ func TestOpenServerDBDoesNotCreateJsonFiles(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run schema tests and verify they fail**
+- [x] **Step 2: Run schema tests and verify they fail**
 
 Run:
 
@@ -373,7 +373,7 @@ go test ./internal/server -run 'TestOpenServerDB' -count=1
 
 Expected: FAIL because `openServerDB` and `sqliteTableExists` do not exist.
 
-- [ ] **Step 3: Implement server schema**
+- [x] **Step 3: Implement server schema**
 
 Create `internal/server/storage_schema.go`:
 
@@ -398,7 +398,10 @@ func serverMigrations() []storage.Migration {
 		Up: `
 CREATE TABLE server_config (
 	id INTEGER PRIMARY KEY CHECK (id = 1),
-	server_addr TEXT NOT NULL DEFAULT ''
+	initialized INTEGER NOT NULL DEFAULT 0 CHECK (initialized IN (0, 1)),
+	jwt_secret TEXT NOT NULL DEFAULT '',
+	server_addr TEXT NOT NULL DEFAULT '',
+	CHECK (initialized = 0 OR jwt_secret <> '')
 );
 CREATE TABLE allowed_ports (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -552,7 +555,9 @@ func sqliteTableExists(t *testing.T, db interface {
 
 Also add `database/sql` to that test file imports.
 
-- [ ] **Step 4: Run schema tests**
+Add `TestOpenServerDBRejectsInitializedConfigWithoutJWTSecret` to verify `initialized` only accepts `0/1`, rejects `initialized=1` with an empty `jwt_secret`, and accepts `initialized=1` with a non-empty `jwt_secret`.
+
+- [x] **Step 4: Run schema tests**
 
 Run:
 
@@ -562,7 +567,7 @@ go test ./internal/server -run 'TestOpenServerDB' -count=1
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/server/storage_schema.go internal/server/storage_schema_test.go
