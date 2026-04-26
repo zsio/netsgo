@@ -16,32 +16,28 @@ import (
 )
 
 func (s *Server) initStore() error {
-	path := s.getStorePath()
+	path := s.serverDBPath()
 	store, err := NewTunnelStore(path)
 	if err != nil {
 		return err
 	}
 	s.store = store
-	log.Printf("📦 Tunnel configuration store: %s", path)
+	log.Printf("📦 SQLite server store: %s", path)
 
-	adminPath := filepath.Join(s.serverDataDir(), serverDBFileName)
-	adminStore, err := NewAdminStore(adminPath)
+	adminStore, err := NewAdminStore(path)
 	if err != nil {
 		_ = store.Close()
 		return err
 	}
 	s.auth.adminStore = adminStore
-	log.Printf("📦 System admin store: %s", adminPath)
 
-	trafficPath := filepath.Join(s.serverDataDir(), serverDBFileName)
-	trafficStore, err := NewTrafficStore(trafficPath)
+	trafficStore, err := NewTrafficStore(path)
 	if err != nil {
 		_ = adminStore.Close()
 		_ = store.Close()
 		return err
 	}
 	s.trafficStore = trafficStore
-	log.Printf("📦 Traffic history store: %s", trafficPath)
 
 	return nil
 }
@@ -57,11 +53,15 @@ func (s *Server) serverDataDir() string {
 	return filepath.Join(s.getDataDir(), "server")
 }
 
+func (s *Server) serverDBPath() string {
+	return filepath.Join(s.serverDataDir(), serverDBFileName)
+}
+
 func (s *Server) getStorePath() string {
 	if s.store != nil {
 		return s.store.path
 	}
-	return filepath.Join(s.serverDataDir(), serverDBFileName)
+	return s.serverDBPath()
 }
 
 func (s *Server) Start() error {

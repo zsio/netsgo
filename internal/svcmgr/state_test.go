@@ -46,7 +46,7 @@ func TestDetectWithPaths(t *testing.T) {
 		if err := os.MkdirAll(dataDir, 0o755); err != nil {
 			t.Fatalf("failed to create data dir: %v", err)
 		}
-		writeStateTestFile(t, filepath.Join(dataDir, "admin.json"), 0o644)
+		writeStateTestFile(t, recoverableServerDataPath(dataDir), 0o600)
 		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateHistoricalDataOnly {
 			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateHistoricalDataOnly)
 		}
@@ -59,10 +59,10 @@ func TestDetectWithPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("server installed missing admin store is broken", func(t *testing.T) {
+	t.Run("server installed missing sqlite store is broken", func(t *testing.T) {
 		unitPath, specPath, envPath, dataDir := writeInstalledState(t, RoleServer)
-		if err := os.Remove(filepath.Join(dataDir, "admin.json")); err != nil {
-			t.Fatalf("failed to remove admin.json: %v", err)
+		if err := os.Remove(recoverableServerDataPath(dataDir)); err != nil {
+			t.Fatalf("failed to remove server sqlite store: %v", err)
 		}
 		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateBroken {
 			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateBroken)
@@ -132,7 +132,7 @@ func writeInstalledState(t *testing.T, role Role) (string, string, string, strin
 		spec.ListenPort = 9527
 		spec.TLSMode = "off"
 		spec.ServerURL = "https://panel.example.com"
-		writeStateTestFile(t, filepath.Join(dataDir, "admin.json"), 0o600)
+		writeStateTestFile(t, recoverableServerDataPath(dataDir), 0o600)
 		if err := WriteServerSpec(spec); err != nil {
 			t.Fatalf("WriteServerSpec() failed: %v", err)
 		}

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 )
 
+const serverDBFileName = "netsgo.db"
+
 type InstallState int
 
 const (
@@ -133,7 +135,7 @@ func InspectWithPaths(role Role, unitPath, specPath, envPath, dataDir string) In
 		problems = append(problems, fmt.Sprintf("binary is missing or not executable: %s", spec.BinaryPath))
 	}
 	if role == RoleServer && !recoverableServerDataExists(dataDir) {
-		problems = append(problems, fmt.Sprintf("missing server initialization data: %s", filepath.Join(dataDir, "admin.json")))
+		problems = append(problems, fmt.Sprintf("missing server initialization data: %s", recoverableServerDataPath(dataDir)))
 	}
 
 	envSpec := spec
@@ -169,7 +171,11 @@ func InspectWithPaths(role Role, unitPath, specPath, envPath, dataDir string) In
 }
 
 func recoverableServerDataExists(dataDir string) bool {
-	return pathExists(dataDir + "/admin.json")
+	return pathExists(recoverableServerDataPath(dataDir))
+}
+
+func recoverableServerDataPath(dataDir string) string {
+	return filepath.Join(dataDir, serverDBFileName)
 }
 
 func pathExists(path string) bool {
