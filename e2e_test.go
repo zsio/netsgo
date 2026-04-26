@@ -35,6 +35,7 @@ func TestE2E_TCPProxyTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建 AdminStore 失败: %v", err)
 	}
+	t.Cleanup(func() { _ = adminStore.Close() })
 	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("初始化 AdminStore 失败: %v", err)
 	}

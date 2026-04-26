@@ -24,6 +24,7 @@ func TestServerInitStore_UsesDataDirLayout(t *testing.T) {
 	if err := s.initStore(); err != nil {
 		t.Fatalf("initStore() error = %v", err)
 	}
+	t.Cleanup(func() { _ = s.auth.adminStore.Close() })
 
 	if got, want := s.store.path, filepath.Join(dataDir, "server", "tunnels.json"); got != want {
 		t.Fatalf("store.path = %q, want %q", got, want)
