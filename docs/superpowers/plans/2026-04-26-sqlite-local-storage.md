@@ -838,7 +838,7 @@ git commit -m "feat: store admin state in sqlite"
 - Modify: `internal/server/managed_tunnel_phase1_test.go`
 - Modify: `internal/server/proxy_validation_test.go`
 
-- [ ] **Step 1: Add failing tunnel SQLite tests**
+- [x] **Step 1: Add failing tunnel SQLite tests**
 
 In `internal/server/store_test.go`, replace corrupted/legacy JSON tests with:
 
@@ -873,7 +873,7 @@ func TestTunnelStore_UsesSQLiteAndNoJsonFile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the new tunnel test and verify it fails**
+- [x] **Step 2: Run the new tunnel test and verify it fails**
 
 Run:
 
@@ -883,7 +883,7 @@ go test ./internal/server -run TestTunnelStore_UsesSQLiteAndNoJsonFile -count=1
 
 Expected: FAIL because `TunnelStore` still expects a JSON array.
 
-- [ ] **Step 3: Convert TunnelStore to SQL**
+- [x] **Step 3: Convert TunnelStore to SQL**
 
 Change `TunnelStore` to:
 
@@ -921,7 +921,9 @@ SELECT client_id, name, type, local_ip, local_port, remote_port, domain, ingress
 
 Keep `failSaveErr` injection by checking it before mutating SQL in write methods.
 
-- [ ] **Step 4: Run TunnelStore tests**
+- Added follow-up migration `002_rebuild_tunnels_without_registered_client_fk` so databases that already applied the earlier `001` schema rebuild `tunnels` without the `registered_clients` foreign key while preserving rows.
+
+- [x] **Step 4: Run TunnelStore tests**
 
 Run:
 
@@ -931,7 +933,7 @@ go test ./internal/server -run 'TestTunnelStore' -count=1
 
 Expected: PASS after removing JSON-specific legacy/corruption tests and replacing them with SQLite tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/server/store.go internal/server/store_test.go internal/server/*_test.go
