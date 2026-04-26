@@ -16,7 +16,7 @@ func newProxyValidationTestServer(t *testing.T, port int, serverAddr string, all
 
 	s := New(port)
 
-	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), serverDBFileName))
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}

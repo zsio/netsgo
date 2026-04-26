@@ -8,6 +8,8 @@ import (
 
 const serverDBFileName = "netsgo.db"
 
+const ServerDBFileName = serverDBFileName
+
 func openServerDB(path string) (*sql.DB, error) {
 	return storage.Open(path, serverMigrations())
 }

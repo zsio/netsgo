@@ -63,7 +63,7 @@ func setupWSTestNoConn(t *testing.T) (*Server, *httptest.Server, func()) {
 func initTestAdminStore(t *testing.T, s *Server) {
 	t.Helper()
 
-	storePath := filepath.Join(t.TempDir(), "admin.json")
+	storePath := filepath.Join(t.TempDir(), serverDBFileName)
 	store, err := NewAdminStore(storePath)
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
@@ -3343,7 +3343,7 @@ func TestRestoreTunnels_StoppedHTTPPlaceholderPreservesDomain(t *testing.T) {
 func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 	s := New(0)
 
-	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), serverDBFileName))
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
@@ -3480,7 +3480,7 @@ func TestAuth_KeyExchange_ReturnsToken(t *testing.T) {
 func TestRestoreTunnels_PortNotAllowedPreservesBandwidthFields(t *testing.T) {
 	s := New(0)
 
-	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), serverDBFileName))
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
@@ -3797,7 +3797,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	s.DataDir = tmpDir
 
 	// pre-create AdminStore
-	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "server", "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "server", serverDBFileName))
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
@@ -3907,7 +3907,7 @@ func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
 	s := New(0)
 	s.DataDir = tmpDir
 
-	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "server", "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(tmpDir, "server", serverDBFileName))
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}

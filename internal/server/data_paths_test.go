@@ -28,7 +28,7 @@ func TestServerInitStore_UsesDataDirLayout(t *testing.T) {
 	if got, want := s.store.path, filepath.Join(dataDir, "server", "tunnels.json"); got != want {
 		t.Fatalf("store.path = %q, want %q", got, want)
 	}
-	if got, want := s.auth.adminStore.path, filepath.Join(dataDir, "server", "admin.json"); got != want {
+	if got, want := s.auth.adminStore.path, filepath.Join(dataDir, "server", serverDBFileName); got != want {
 		t.Fatalf("adminStore.path = %q, want %q", got, want)
 	}
 	if got, want := s.trafficStore.path, filepath.Join(dataDir, "server", "traffic.json"); got != want {

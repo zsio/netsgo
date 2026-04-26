@@ -41,11 +41,21 @@ func setupMockAdminStore(t *testing.T) (*AdminStore, func()) {
 	return store, cleanup
 }
 
-func clearJWTSecretForTest(store *AdminStore) {
+func clearJWTSecretForTest(t *testing.T, store *AdminStore) {
+	t.Helper()
+
 	store.mu.Lock()
-	store.data.Initialized = true
-	store.data.JWTSecret = ""
-	store.mu.Unlock()
+	defer store.mu.Unlock()
+
+	if _, err := store.db.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("enable ignore_check_constraints: %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE server_config SET initialized = 1, jwt_secret = '' WHERE id = 1`); err != nil {
+		t.Fatalf("clear jwt_secret: %v", err)
+	}
+	if _, err := store.db.Exec(`PRAGMA ignore_check_constraints = OFF`); err != nil {
+		t.Fatalf("disable ignore_check_constraints: %v", err)
+	}
 }
 
 func TestAuthMiddleware_MissingHeader(t *testing.T) {
@@ -177,7 +187,7 @@ func TestGenerateAdminToken_MissingJWTSecret(t *testing.T) {
 
 	s := New(0)
 	s.auth.adminStore = store
-	clearJWTSecretForTest(store)
+	clearJWTSecretForTest(t, store)
 
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	_, err := s.GenerateAdminToken(session)
@@ -192,7 +202,7 @@ func TestAuthMiddleware_MissingJWTSecret(t *testing.T) {
 
 	s := New(0)
 	s.auth.adminStore = store
-	clearJWTSecretForTest(store)
+	clearJWTSecretForTest(t, store)
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer test-token")

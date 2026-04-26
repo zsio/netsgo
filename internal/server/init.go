@@ -22,7 +22,7 @@ func (p InitParams) IsComplete() bool {
 }
 
 func ApplyInit(dataDir string, params InitParams) error {
-	adminStore, err := NewAdminStore(filepath.Join(dataDir, "server", "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(dataDir, "server", serverDBFileName))
 	if err != nil {
 		return err
 	}
@@ -44,7 +44,7 @@ func ApplyInit(dataDir string, params InitParams) error {
 }
 
 func LoadRecoverableInitParams(dataDir string) (InitParams, error) {
-	adminStore, err := NewAdminStore(filepath.Join(dataDir, "server", "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(dataDir, "server", serverDBFileName))
 	if err != nil {
 		return InitParams{}, err
 	}

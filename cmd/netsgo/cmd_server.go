@@ -106,7 +106,7 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 		s.DataDir = viper.GetString("data-dir")
 		s.AllowLoopbackManagementHost = viper.GetBool("allow-loopback-management-host")
 
-		adminStore, err := server.NewAdminStore(filepath.Join(s.DataDir, "server", "admin.json"))
+		adminStore, err := server.NewAdminStore(filepath.Join(s.DataDir, "server", server.ServerDBFileName))
 		if err != nil {
 			log.Fatalf("❌ Failed to read server init state: %v", err)
 		}

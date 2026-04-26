@@ -23,7 +23,7 @@ func (s *Server) initStore() error {
 	s.store = store
 	log.Printf("📦 Tunnel configuration store: %s", path)
 
-	adminPath := filepath.Join(s.serverDataDir(), "admin.json")
+	adminPath := filepath.Join(s.serverDataDir(), serverDBFileName)
 	adminStore, err := NewAdminStore(adminPath)
 	if err != nil {
 		return err
