@@ -15,9 +15,10 @@ func openServerDB(path string) (*sql.DB, error) {
 }
 
 func serverMigrations() []storage.Migration {
-	return []storage.Migration{{
-		Name: "001_server_runtime_schema",
-		Up: `
+	return []storage.Migration{
+		{
+			Name: "001_server_runtime_schema",
+			Up: `
 CREATE TABLE server_config (
 	id INTEGER PRIMARY KEY CHECK (id = 1),
 	initialized INTEGER NOT NULL DEFAULT 0 CHECK (initialized IN (0, 1)),
@@ -158,5 +159,34 @@ CREATE TABLE traffic_buckets (
 );
 CREATE INDEX idx_traffic_query ON traffic_buckets(client_id, tunnel_name, resolution, bucket_start);
 `,
-	}}
+		},
+		{
+			Name: "002_rebuild_tunnels_without_registered_client_fk",
+			Up: `
+CREATE TABLE tunnels_new (
+	client_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	type TEXT NOT NULL DEFAULT '',
+	local_ip TEXT NOT NULL DEFAULT '',
+	local_port INTEGER NOT NULL DEFAULT 0,
+	remote_port INTEGER NOT NULL DEFAULT 0,
+	domain TEXT NOT NULL DEFAULT '',
+	ingress_bps INTEGER NOT NULL DEFAULT 0,
+	egress_bps INTEGER NOT NULL DEFAULT 0,
+	desired_state TEXT NOT NULL,
+	runtime_state TEXT NOT NULL,
+	error TEXT NOT NULL DEFAULT '',
+	hostname TEXT NOT NULL DEFAULT '',
+	binding TEXT NOT NULL,
+	PRIMARY KEY (client_id, name)
+);
+INSERT INTO tunnels_new (client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, desired_state, runtime_state, error, hostname, binding)
+SELECT client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, desired_state, runtime_state, error, hostname, binding
+FROM tunnels;
+DROP TABLE tunnels;
+ALTER TABLE tunnels_new RENAME TO tunnels;
+CREATE INDEX idx_tunnels_hostname ON tunnels(hostname);
+`,
+		},
+	}
 }

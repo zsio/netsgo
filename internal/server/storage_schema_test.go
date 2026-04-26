@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"netsgo/internal/storage"
+	"netsgo/pkg/protocol"
 )
 
 func TestOpenServerDBCreatesExpectedTables(t *testing.T) {
@@ -41,12 +44,80 @@ func TestOpenServerDBCreatesExpectedTables(t *testing.T) {
 		}
 	}
 
-	var tunnelClientFKCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_foreign_key_list('tunnels') WHERE "table" = 'registered_clients'`).Scan(&tunnelClientFKCount); err != nil {
-		t.Fatalf("query tunnels foreign keys failed: %v", err)
+	if got := countTunnelRegisteredClientFKs(t, db); got != 0 {
+		t.Fatalf("tunnels.client_id should not reference registered_clients, got %d FK(s)", got)
 	}
-	if tunnelClientFKCount != 0 {
-		t.Fatalf("tunnels.client_id should not reference registered_clients, got %d FK(s)", tunnelClientFKCount)
+}
+
+func TestOpenServerDBRebuildsOldTunnelsFKSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server", "netsgo.db")
+	oldDB, err := storage.Open(path, []storage.Migration{{
+		Name: "001_server_runtime_schema",
+		Up: `
+CREATE TABLE registered_clients (
+	id TEXT PRIMARY KEY
+);
+CREATE TABLE tunnels (
+	client_id TEXT NOT NULL REFERENCES registered_clients(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	type TEXT NOT NULL DEFAULT '',
+	local_ip TEXT NOT NULL DEFAULT '',
+	local_port INTEGER NOT NULL DEFAULT 0,
+	remote_port INTEGER NOT NULL DEFAULT 0,
+	domain TEXT NOT NULL DEFAULT '',
+	ingress_bps INTEGER NOT NULL DEFAULT 0,
+	egress_bps INTEGER NOT NULL DEFAULT 0,
+	desired_state TEXT NOT NULL,
+	runtime_state TEXT NOT NULL,
+	error TEXT NOT NULL DEFAULT '',
+	hostname TEXT NOT NULL DEFAULT '',
+	binding TEXT NOT NULL,
+	PRIMARY KEY (client_id, name)
+);
+CREATE INDEX idx_tunnels_hostname ON tunnels(hostname);
+INSERT INTO registered_clients (id) VALUES ('client-existing');
+INSERT INTO tunnels (client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, desired_state, runtime_state, error, hostname, binding)
+VALUES ('client-existing', 'existing', 'tcp', '127.0.0.1', 80, 18080, '', 100, 200, 'running', 'exposed', '', 'host-existing', 'client_id');
+`,
+	}})
+	if err != nil {
+		t.Fatalf("create old schema failed: %v", err)
+	}
+	if got := countTunnelRegisteredClientFKs(t, oldDB); got != 1 {
+		t.Fatalf("old schema should have registered_clients FK, got %d", got)
+	}
+	if err := oldDB.Close(); err != nil {
+		t.Fatalf("oldDB.Close() error = %v", err)
+	}
+
+	db, err := openServerDB(path)
+	if err != nil {
+		t.Fatalf("openServerDB() error = %v", err)
+	}
+	if got := countTunnelRegisteredClientFKs(t, db); got != 0 {
+		t.Fatalf("migration should remove registered_clients FK, got %d", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+
+	store, err := NewTunnelStore(path)
+	if err != nil {
+		t.Fatalf("NewTunnelStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, ok := store.GetTunnel("client-existing", "existing"); !ok {
+		t.Fatal("existing tunnel should survive FK rebuild")
+	}
+	if err := store.AddTunnel(StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "orphan", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 81, RemotePort: 18081},
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateExposed,
+		ClientID:        "client-without-registered-row",
+		Hostname:        "host-orphan",
+		Binding:         TunnelBindingClientID,
+	}); err != nil {
+		t.Fatalf("AddTunnel without registered client should succeed after FK rebuild: %v", err)
 	}
 }
 
@@ -99,6 +170,17 @@ func sqliteTableColumnExists(t *testing.T, db interface {
 	var name string
 	err := db.QueryRow(`SELECT name FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&name)
 	return err == nil && name == column
+}
+
+func countTunnelRegisteredClientFKs(t *testing.T, db interface {
+	QueryRow(query string, args ...any) *sql.Row
+}) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_foreign_key_list('tunnels') WHERE "table" = 'registered_clients'`).Scan(&count); err != nil {
+		t.Fatalf("query tunnels foreign keys failed: %v", err)
+	}
+	return count
 }
 
 func pathExists(path string) bool {
