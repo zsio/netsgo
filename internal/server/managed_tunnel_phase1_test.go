@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"testing"
 
 	"netsgo/pkg/protocol"
@@ -49,11 +48,7 @@ func TestServer_UpdateErrorHTTPTunnel_RestartFailureReturnsError(t *testing.T) {
 	s, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("create TunnelStore failed: %v", err)
-	}
-	s.store = store
+	s.store = newTestTunnelStore(t)
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-update-restart-fail")
 	defer mustClose(t, wsConn)

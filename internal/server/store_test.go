@@ -14,10 +14,17 @@ import (
 func newTestTunnelStore(t *testing.T) *TunnelStore {
 	t.Helper()
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
+	return newTestTunnelStoreAt(t, filepath.Join(t.TempDir(), serverDBFileName))
+}
+
+func newTestTunnelStoreAt(t *testing.T, path string) *TunnelStore {
+	t.Helper()
+
+	store, err := NewTunnelStore(path)
 	if err != nil {
 		t.Fatalf("NewTunnelStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
@@ -46,14 +53,47 @@ func TestTunnelStore_NewEmpty(t *testing.T) {
 	}
 }
 
+func TestTunnelStore_UsesSQLiteAndNoJsonFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, serverDBFileName)
+	store := newTestTunnelStoreAt(t, path)
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "web", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 80, RemotePort: 18080},
+		ClientID:        "client-1",
+		Hostname:        "host-1",
+	})
+
+	if _, err := os.Stat(filepath.Join(dir, "tunnels.json")); !os.IsNotExist(err) {
+		t.Fatalf("tunnels.json should not exist, stat error = %v", err)
+	}
+	db, err := openServerDB(path)
+	if err != nil {
+		t.Fatalf("open sqlite database failed: %v", err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tunnels WHERE client_id = ? AND name = ?`, "client-1", "web").Scan(&count); err != nil {
+		t.Fatalf("query sqlite tunnel failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("sqlite tunnels row count = %d, want 1", count)
+	}
+
+	reloaded := newTestTunnelStoreAt(t, path)
+	stored, ok := reloaded.GetTunnel("client-1", "web")
+	if !ok {
+		t.Fatal("expected reloaded tunnel")
+	}
+	if stored.RemotePort != 18080 {
+		t.Fatalf("RemotePort = %d, want 18080", stored.RemotePort)
+	}
+}
+
 func TestTunnelStore_LoadExisting(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "tunnels.json")
+	path := filepath.Join(dir, serverDBFileName)
 
-	store1, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("NewTunnelStore failed: %v", err)
-	}
+	store1 := newTestTunnelStoreAt(t, path)
 	mustAddStableTunnel(t, store1, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
 			Name: "t1", Type: "tcp", LocalIP: "127.0.0.1", LocalPort: 80, RemotePort: 8080,
@@ -64,10 +104,7 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 		Hostname:     "host-1",
 	})
 
-	store2, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("reload failed: %v", err)
-	}
+	store2 := newTestTunnelStoreAt(t, path)
 	tunnels := store2.GetAllTunnels()
 	if len(tunnels) != 1 {
 		t.Fatalf("expected to load 1 record, got %d", len(tunnels))
@@ -82,12 +119,9 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 
 func TestTunnelStore_BandwidthSettingsRoundTripAndUpdate(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "tunnels.json")
+	path := filepath.Join(dir, serverDBFileName)
 
-	store1, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("NewTunnelStore failed: %v", err)
-	}
+	store1 := newTestTunnelStoreAt(t, path)
 	mustAddStableTunnel(t, store1, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
 			Name:       "limited",
@@ -104,10 +138,7 @@ func TestTunnelStore_BandwidthSettingsRoundTripAndUpdate(t *testing.T) {
 		Hostname: "host-1",
 	})
 
-	store2, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("reload failed: %v", err)
-	}
+	store2 := newTestTunnelStoreAt(t, path)
 	loaded, ok := store2.GetTunnel("client-1", "limited")
 	if !ok {
 		t.Fatal("should find reloaded tunnel")
@@ -119,10 +150,7 @@ func TestTunnelStore_BandwidthSettingsRoundTripAndUpdate(t *testing.T) {
 	if err := store2.UpdateTunnel("client-1", "limited", "127.0.0.2", 81, 8081, "", 0, 0); err != nil {
 		t.Fatalf("UpdateTunnel failed: %v", err)
 	}
-	store3, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("second reload failed: %v", err)
-	}
+	store3 := newTestTunnelStoreAt(t, path)
 	updated, ok := store3.GetTunnel("client-1", "limited")
 	if !ok {
 		t.Fatal("should find updated tunnel")
@@ -134,12 +162,9 @@ func TestTunnelStore_BandwidthSettingsRoundTripAndUpdate(t *testing.T) {
 
 func TestTunnelStore_LoadExistingStatesKeepsDesiredAndRuntimeState(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "tunnels.json")
+	path := filepath.Join(dir, serverDBFileName)
 
-	store1, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("NewTunnelStore failed: %v", err)
-	}
+	store1 := newTestTunnelStoreAt(t, path)
 	mustAddStableTunnel(t, store1, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
 			Name: "legacy-active", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 80, RemotePort: 8080,
@@ -160,10 +185,7 @@ func TestTunnelStore_LoadExistingStatesKeepsDesiredAndRuntimeState(t *testing.T)
 		Hostname:     "host-1",
 	})
 
-	store2, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("reload failed: %v", err)
-	}
+	store2 := newTestTunnelStoreAt(t, path)
 
 	active, ok := store2.GetTunnel("client-1", "legacy-active")
 	if !ok {
@@ -191,75 +213,66 @@ func TestTunnelStore_LoadExistingStatesKeepsDesiredAndRuntimeState(t *testing.T)
 	}
 }
 
-func TestTunnelStore_LoadLegacyHostnameBindingFallsBackToEmptyStore(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "tunnels.json")
+func TestTunnelStore_AddTunnelRejectsNonClientIDBinding(t *testing.T) {
+	store := newTestTunnelStore(t)
 
-	legacyJSON := `[
-	  {
-	    "name": "legacy-tunnel",
-	    "type": "tcp",
-	    "hostname": "legacy-host",
-	    "binding": "legacy_hostname",
-	    "desired_state": "stopped",
-	    "runtime_state": "idle"
-	  }
-	]`
-	if err := os.WriteFile(path, []byte(legacyJSON), 0o644); err != nil {
-		t.Fatalf("failed to write legacy store file: %v", err)
-	}
-
-	if _, err := NewTunnelStore(path); err == nil {
-		t.Fatal("old format/invalid state file should cause NewTunnelStore to fail")
+	err := store.AddTunnel(StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "legacy-tunnel"},
+		ClientID:        "client-1",
+		Hostname:        "legacy-host",
+		Binding:         "legacy_hostname",
+		DesiredState:    protocol.ProxyDesiredStateStopped,
+		RuntimeState:    protocol.ProxyRuntimeStateIdle,
+	})
+	if err == nil {
+		t.Fatal("non-client_id binding should be rejected")
 	}
 }
 
-func TestTunnelStore_LoadLegacyPausedDesiredStateCanonicalizesToStopped(t *testing.T) {
+func TestTunnelStore_PausedDesiredStateCanonicalizesToStopped(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "tunnels.json")
+	path := filepath.Join(dir, serverDBFileName)
+	store := newTestTunnelStoreAt(t, path)
 
-	legacyJSON := `[
-	  {
-	    "name": "legacy-paused",
-	    "type": "tcp",
-	    "local_ip": "127.0.0.1",
-	    "local_port": 8080,
-	    "remote_port": 18080,
-	    "binding": "client_id",
-	    "client_id": "client-1",
-	    "hostname": "legacy-host",
-	    "desired_state": "paused",
-	    "runtime_state": "idle"
-	  }
-	]`
-	if err := os.WriteFile(path, []byte(legacyJSON), 0o644); err != nil {
-		t.Fatalf("failed to write legacy store file: %v", err)
-	}
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "paused", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 8080, RemotePort: 18080},
+		ClientID:        "client-1",
+		Hostname:        "host-1",
+		DesiredState:    "paused",
+		RuntimeState:    protocol.ProxyRuntimeStateIdle,
+	})
 
-	store, err := NewTunnelStore(path)
-	if err != nil {
-		t.Fatalf("legacy paused tunnel should still load: %v", err)
-	}
-
-	stored, ok := store.GetTunnel("client-1", "legacy-paused")
+	reloaded := newTestTunnelStoreAt(t, path)
+	stored, ok := reloaded.GetTunnel("client-1", "paused")
 	if !ok {
-		t.Fatal("should load legacy paused tunnel")
+		t.Fatal("should load paused tunnel")
 	}
 	if stored.DesiredState != protocol.ProxyDesiredStateStopped || stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
-		t.Fatalf("legacy paused tunnel should canonicalize to stopped/idle, got %s/%s", stored.DesiredState, stored.RuntimeState)
+		t.Fatalf("paused tunnel should canonicalize to stopped/idle, got %s/%s", stored.DesiredState, stored.RuntimeState)
 	}
 }
 
 func TestTunnelStore_CorruptedFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "tunnels.json")
+	path := filepath.Join(dir, serverDBFileName)
 
 	if err := os.WriteFile(path, []byte(`{{{invalid json`), 0o644); err != nil {
 		t.Fatalf("failed to write corrupted file: %v", err)
 	}
 
-	if _, err := NewTunnelStore(path); err == nil {
+	if store, err := NewTunnelStore(path); err == nil {
+		t.Cleanup(func() { _ = store.Close() })
 		t.Fatal("corrupted file should cause NewTunnelStore to return an error")
+	}
+}
+
+func TestTunnelStore_CloseIsIdempotent(t *testing.T) {
+	store := newTestTunnelStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatalf("first Close failed: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("second Close failed: %v", err)
 	}
 }
 

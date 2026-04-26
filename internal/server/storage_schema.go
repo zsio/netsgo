@@ -129,7 +129,7 @@ CREATE TABLE admin_sessions (
 CREATE INDEX idx_admin_sessions_user ON admin_sessions(user_id);
 CREATE INDEX idx_admin_sessions_expires ON admin_sessions(expires_at);
 CREATE TABLE tunnels (
-	client_id TEXT NOT NULL REFERENCES registered_clients(id) ON DELETE CASCADE,
+	client_id TEXT NOT NULL,
 	name TEXT NOT NULL,
 	type TEXT NOT NULL DEFAULT '',
 	local_ip TEXT NOT NULL DEFAULT '',

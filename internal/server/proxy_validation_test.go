@@ -27,11 +27,7 @@ func newProxyValidationTestServer(t *testing.T, port int, serverAddr string, all
 	}
 	s.auth.adminStore = adminStore
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
-	s.store = store
+	s.store = newTestTunnelStore(t)
 
 	return s
 }

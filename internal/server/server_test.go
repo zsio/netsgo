@@ -359,11 +359,7 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 	s, conn, ts, cleanup := setupWSTest(t)
 	defer cleanup()
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
-	s.store = store
+	s.store = newTestTunnelStore(t)
 
 	offlineInfo := protocol.ClientInfo{
 		Hostname: "offline-summary-host",
@@ -2116,7 +2112,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 
 	s := New(0)
 	s.auth.adminStore = store
-	s.store, _ = NewTunnelStore(filepath.Join(tmpDir, "tunnels.json"))
+	s.store = newTestTunnelStoreAt(t, filepath.Join(tmpDir, serverDBFileName))
 
 	ts := httptest.NewServer(s.newHTTPMux())
 	defer ts.Close()
@@ -2347,10 +2343,7 @@ func TestServer_CreateTunnelTimeoutReturns504(t *testing.T) {
 	s, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
 	var err error
-	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	s.store = newTestTunnelStore(t)
 
 	wsConn, authResp := connectAndAuth(t, ts, "timeout-client")
 	defer mustClose(t, wsConn)
@@ -2458,10 +2451,7 @@ func TestServer_CreateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	defer cleanup()
 
 	var err error
-	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	s.store = newTestTunnelStore(t)
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-conflict-create")
 	defer mustClose(t, wsConn)
@@ -2516,10 +2506,7 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	defer cleanup()
 
 	var err error
-	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	s.store = newTestTunnelStore(t)
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-conflict-update")
 	defer mustClose(t, wsConn)
@@ -2602,10 +2589,7 @@ func TestServer_UpdateStoppedHTTPTunnel_ResponseIncludesCapabilities(t *testing.
 	defer cleanup()
 
 	var err error
-	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	s.store = newTestTunnelStore(t)
 
 	wsConn, authResp := connectAndAuth(t, ts, "http-update-capabilities")
 	defer mustClose(t, wsConn)
@@ -2774,10 +2758,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	defer cleanup()
 
 	var err error
-	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	s.store = newTestTunnelStore(t)
 
 	wsConn, authResp := connectAndAuth(t, ts, "resume-post-ack-fail")
 	defer mustClose(t, wsConn)
@@ -2957,10 +2938,7 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	defer cleanup()
 
 	var err error
-	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	s.store = newTestTunnelStore(t)
 
 	record, err := s.auth.adminStore.GetOrCreateClient(
 		"install-restore-post-ack-fail",
@@ -3081,10 +3059,7 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 	defer cleanup()
 
 	var err error
-	s.store, err = NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	s.store = newTestTunnelStore(t)
 
 	record, err := s.auth.adminStore.GetOrCreateClient(
 		"install-restore-http",
@@ -3170,8 +3145,8 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
-	tunnelStorePath := filepath.Join(tmpDir, "tunnels.json")
-	tStore, _ := NewTunnelStore(tunnelStorePath)
+	tunnelStorePath := filepath.Join(tmpDir, serverDBFileName)
+	tStore := newTestTunnelStoreAt(t, tunnelStorePath)
 
 	// prewrite two tunnels into Store (representing persisted data read on server restart)
 	if err := tStore.AddTunnel(StoredTunnel{
@@ -3264,10 +3239,7 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 func TestRestoreTunnels_StoppedTunnelDoesNotWaitForDataSession(t *testing.T) {
 	s := New(0)
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	store := newTestTunnelStore(t)
 	s.store = store
 
 	mustAddStableTunnel(t, store, StoredTunnel{
@@ -3308,10 +3280,7 @@ func TestRestoreTunnels_StoppedTunnelDoesNotWaitForDataSession(t *testing.T) {
 func TestRestoreTunnels_StoppedHTTPPlaceholderPreservesDomain(t *testing.T) {
 	s := New(0)
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	store := newTestTunnelStore(t)
 	s.store = store
 
 	const domain = "app.example.com"
@@ -3365,10 +3334,7 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 	}
 	s.auth.adminStore = adminStore
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
+	store := newTestTunnelStore(t)
 	s.store = store
 
 	const domain = "blocked.example.com"
@@ -3503,33 +3469,26 @@ func TestRestoreTunnels_PortNotAllowedPreservesBandwidthFields(t *testing.T) {
 	}
 	s.auth.adminStore = adminStore
 
-	storePath := filepath.Join(t.TempDir(), "tunnels.json")
-	rawStore := `[
-  {
-    "name": "http-port-blocked-bandwidth",
-    "type": "http",
-    "local_ip": "127.0.0.1",
-    "local_port": 8080,
-    "remote_port": 19090,
-    "domain": "blocked.example.com",
-    "desired_state": "running",
-    "runtime_state": "exposed",
-    "client_id": "client-port-blocked-bandwidth",
-    "hostname": "restore-host",
-    "binding": "client_id",
-    "ingress_bps": 1234,
-    "egress_bps": 5678
-  }
-]`
-	if err := os.WriteFile(storePath, []byte(rawStore), 0o600); err != nil {
-		t.Fatalf("failed to seed raw tunnel store: %v", err)
-	}
-
-	store, err := NewTunnelStore(storePath)
-	if err != nil {
-		t.Fatalf("failed to load TunnelStore: %v", err)
-	}
+	store := newTestTunnelStore(t)
 	s.store = store
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			Name:       "http-port-blocked-bandwidth",
+			Type:       protocol.ProxyTypeHTTP,
+			LocalIP:    "127.0.0.1",
+			LocalPort:  8080,
+			RemotePort: 19090,
+			Domain:     "blocked.example.com",
+			BandwidthSettings: protocol.BandwidthSettings{
+				IngressBPS: 1234,
+				EgressBPS:  5678,
+			},
+		},
+		DesiredState: protocol.ProxyDesiredStateRunning,
+		RuntimeState: protocol.ProxyRuntimeStateExposed,
+		ClientID:     "client-port-blocked-bandwidth",
+		Hostname:     "restore-host",
+	})
 
 	client := &ClientConn{
 		ID:         "client-port-blocked-bandwidth",

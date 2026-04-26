@@ -82,11 +82,7 @@ func setupTestServerWithStores(t *testing.T, initialized bool) (*Server, http.Ha
 
 	s, cleanup := setupTestServerWithDB(t, initialized)
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
-	s.store = store
+	s.store = newTestTunnelStore(t)
 
 	handler := s.StartHTTPOnly()
 	token := ""

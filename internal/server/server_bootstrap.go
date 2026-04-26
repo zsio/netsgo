@@ -27,6 +27,7 @@ func (s *Server) initStore() error {
 	adminPath := filepath.Join(s.serverDataDir(), serverDBFileName)
 	adminStore, err := NewAdminStore(adminPath)
 	if err != nil {
+		_ = store.Close()
 		return err
 	}
 	s.auth.adminStore = adminStore
@@ -36,6 +37,7 @@ func (s *Server) initStore() error {
 	trafficStore, err := NewTrafficStore(trafficPath)
 	if err != nil {
 		_ = adminStore.Close()
+		_ = store.Close()
 		return err
 	}
 	s.trafficStore = trafficStore
@@ -177,6 +179,11 @@ func (s *Server) cleanupFailedStartup() {
 			log.Printf("⚠️ Failed to close admin store after startup failure: %v", err)
 		}
 	}
+	if s.store != nil {
+		if err := s.store.Close(); err != nil {
+			log.Printf("⚠️ Failed to close tunnel store after startup failure: %v", err)
+		}
+	}
 }
 
 func (s *Server) closeDone() {
@@ -194,6 +201,14 @@ func (s *Server) Shutdown(ctx context.Context) (err error) {
 		if s.auth != nil && s.auth.adminStore != nil {
 			if closeErr := s.auth.adminStore.Close(); closeErr != nil {
 				log.Printf("⚠️ Failed to close admin store: %v", closeErr)
+				if err == nil {
+					err = closeErr
+				}
+			}
+		}
+		if s.store != nil {
+			if closeErr := s.store.Close(); closeErr != nil {
+				log.Printf("⚠️ Failed to close tunnel store: %v", closeErr)
 				if err == nil {
 					err = closeErr
 				}

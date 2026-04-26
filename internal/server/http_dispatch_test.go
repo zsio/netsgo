@@ -39,14 +39,9 @@ func newDispatchTestServer(t *testing.T, initialized bool, serverAddr string) (*
 		}
 	}
 
-	tunnelStore, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("Failed to create TunnelStore: %v", err)
-	}
-
 	s := New(0)
 	s.auth.adminStore = adminStore
-	s.store = tunnelStore
+	s.store = newTestTunnelStore(t)
 
 	return s, func() {}
 }
@@ -637,13 +632,9 @@ func TestDispatch_LoopbackEquivalence(t *testing.T) {
 			if err := adminStore.Initialize("admin", "password123", "", nil); err != nil {
 				t.Fatalf("Initialization failed: %v", err)
 			}
-			tunnelStore, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-			if err != nil {
-				t.Fatalf("Failed to create TunnelStore: %v", err)
-			}
 			s := New(8080)
 			s.auth.adminStore = adminStore
-			s.store = tunnelStore
+			s.store = newTestTunnelStore(t)
 
 			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", tc.reqHost, nil)
 			w := httptest.NewRecorder()

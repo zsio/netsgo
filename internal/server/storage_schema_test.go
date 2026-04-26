@@ -40,6 +40,14 @@ func TestOpenServerDBCreatesExpectedTables(t *testing.T) {
 			t.Fatalf("expected server_config.%s to exist", column)
 		}
 	}
+
+	var tunnelClientFKCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_foreign_key_list('tunnels') WHERE "table" = 'registered_clients'`).Scan(&tunnelClientFKCount); err != nil {
+		t.Fatalf("query tunnels foreign keys failed: %v", err)
+	}
+	if tunnelClientFKCount != 0 {
+		t.Fatalf("tunnels.client_id should not reference registered_clients, got %d FK(s)", tunnelClientFKCount)
+	}
 }
 
 func TestOpenServerDBDoesNotCreateJsonFiles(t *testing.T) {
