@@ -1170,7 +1170,7 @@ git commit -m "feat: use unified server sqlite database"
 - Modify: `internal/client/client_tls_test.go`
 - Modify: `internal/manage/client.go`
 
-- [ ] **Step 1: Add failing client state store tests**
+- [x] **Step 1: Add failing client state store tests**
 
 Create `internal/client/state_store_test.go`:
 
@@ -1222,7 +1222,7 @@ func TestClientStateStoreDoesNotCreateJsonFile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run client state store tests and verify they fail**
+- [x] **Step 2: Run client state store tests and verify they fail**
 
 Run:
 
@@ -1232,7 +1232,7 @@ go test ./internal/client -run TestClientStateStore -count=1
 
 Expected: FAIL because `newClientStateStore` does not exist.
 
-- [ ] **Step 3: Implement the client state store**
+- [x] **Step 3: Implement the client state store**
 
 Create `internal/client/state_store.go`:
 
@@ -1303,7 +1303,7 @@ func (s *clientStateStore) Save(state persistedState) error {
 }
 ```
 
-- [ ] **Step 4: Update client state methods**
+- [x] **Step 4: Update client state methods**
 
 In `internal/client/state.go`, change `statePath()` to:
 
@@ -1329,7 +1329,7 @@ state := persistedState{
 
 When saving token, preserve `TLSFingerprint`; when saving fingerprint, preserve `Token`.
 
-- [ ] **Step 5: Update client tests**
+- [x] **Step 5: Update client tests**
 
 In `internal/client/state_path_test.go`, replace path expectations from `client.json` to `netsgo.db`.
 
@@ -1367,7 +1367,9 @@ if !ok {
 }
 ```
 
-- [ ] **Step 6: Run client tests**
+- Updated `internal/manage` client identity summary to read the same SQLite client identity database without creating a missing database as a side effect.
+
+- [x] **Step 6: Run client tests**
 
 Run:
 
@@ -1377,7 +1379,7 @@ go test ./internal/client -count=1
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/client/state.go internal/client/state_store.go internal/client/state_store_test.go internal/client/state_path_test.go internal/client/client_tls_test.go
