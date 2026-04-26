@@ -1,9 +1,12 @@
 package svcmgr
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestInstallStateString(t *testing.T) {
@@ -38,9 +41,20 @@ func TestInspectWithLayout(t *testing.T) {
 		if err := os.MkdirAll(layout.RuntimeDir, 0o755); err != nil {
 			t.Fatalf("failed to create runtime dir: %v", err)
 		}
-		writeStateTestFile(t, recoverableServerDataPath(layout.RuntimeDir), 0o600)
+		writeInitializedServerDB(t, recoverableServerDataPath(layout.RuntimeDir))
 		if got := DetectWithLayout(layout); got != StateHistoricalDataOnly {
 			t.Fatalf("DetectWithLayout() = %v, want %v", got, StateHistoricalDataOnly)
+		}
+	})
+
+	t.Run("server uninitialized sqlite data is broken", func(t *testing.T) {
+		layout := testLayout(t, RoleServer)
+		if err := os.MkdirAll(layout.RuntimeDir, 0o755); err != nil {
+			t.Fatalf("failed to create runtime dir: %v", err)
+		}
+		writeStateTestFile(t, recoverableServerDataPath(layout.RuntimeDir), 0o600)
+		if got := DetectWithLayout(layout); got != StateBroken {
+			t.Fatalf("DetectWithLayout() = %v, want %v", got, StateBroken)
 		}
 	})
 
@@ -117,7 +131,7 @@ func writeInstalledState(t *testing.T, role Role) ServiceLayout {
 	}
 
 	if role == RoleServer {
-		writeStateTestFile(t, recoverableServerDataPath(layout.RuntimeDir), 0o600)
+		writeInitializedServerDB(t, recoverableServerDataPath(layout.RuntimeDir))
 		if err := WriteServerEnv(layout, ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: "https://panel.example.com"}); err != nil {
 			t.Fatalf("WriteServerEnv() failed: %v", err)
 		}
@@ -143,5 +157,34 @@ func writeStateTestFile(t *testing.T, path string, mode os.FileMode) {
 	}
 	if err := os.WriteFile(path, []byte("x"), mode); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
+	}
+}
+
+func writeInitializedServerDB(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("failed to create test directory: %v", err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("failed to open test sqlite db: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("failed to close test sqlite db: %v", err)
+		}
+	}()
+	if _, err := db.Exec(`CREATE TABLE server_config (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		initialized INTEGER NOT NULL DEFAULT 0 CHECK (initialized IN (0, 1)),
+		jwt_secret TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatalf("failed to create test server_config: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO server_config (id, initialized, jwt_secret) VALUES (1, 1, 'test-secret')`); err != nil {
+		t.Fatalf("failed to write initialized server config: %v", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("failed to chmod test sqlite db: %v", err)
 	}
 }

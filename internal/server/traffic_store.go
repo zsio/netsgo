@@ -68,6 +68,7 @@ type TrafficQueryResult struct {
 type TrafficStore struct {
 	path      string
 	db        *sql.DB
+	closeDB   bool
 	mu        sync.RWMutex
 	closeOnce sync.Once
 	closeErr  error
@@ -83,16 +84,23 @@ func NewTrafficStore(path string) (*TrafficStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newTrafficStoreWithDB(path, db, true), nil
+}
 
+func newTrafficStoreWithDB(path string, db *sql.DB, closeDB bool) *TrafficStore {
 	return &TrafficStore{
 		path:          path,
 		db:            db,
+		closeDB:       closeDB,
 		pendingMinute: make(map[string]TrafficBucket),
-	}, nil
+	}
 }
 
 func (s *TrafficStore) Close() error {
 	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.closeDB {
 		return nil
 	}
 	s.closeOnce.Do(func() {
@@ -168,25 +176,26 @@ func (s *TrafficStore) Compact(now time.Time) error {
 	return nil
 }
 
-func (s *TrafficStore) Query(clientID, tunnelName string, from, to time.Time) TrafficQueryResult {
+func (s *TrafficStore) Query(clientID, tunnelName string, from, to time.Time) (TrafficQueryResult, error) {
 	return s.QueryWithResolution(clientID, tunnelName, from, to, autoTrafficResolution(from, to))
 }
 
-func (s *TrafficStore) QueryWithResolution(clientID, tunnelName string, from, to time.Time, resolution TrafficResolution) TrafficQueryResult {
+func (s *TrafficStore) QueryWithResolution(clientID, tunnelName string, from, to time.Time, resolution TrafficResolution) (TrafficQueryResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.queryLocked(clientID, tunnelName, from, to, resolution)
 }
 
-func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Time, resolution TrafficResolution) TrafficQueryResult {
+func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Time, resolution TrafficResolution) (TrafficQueryResult, error) {
 	buckets := []TrafficBucket{}
 	if resolution == TrafficResolutionMinute {
 		combined := make(map[string]TrafficBucket)
 		persisted, err := s.queryBucketsLocked(clientID, tunnelName, TrafficResolutionMinute, minuteFloorUTC(from).Unix(), minuteFloorUTC(to).Unix())
-		if err == nil {
-			for _, bucket := range persisted {
-				addTrafficBucket(combined, bucket)
-			}
+		if err != nil {
+			return TrafficQueryResult{}, err
+		}
+		for _, bucket := range persisted {
+			addTrafficBucket(combined, bucket)
 		}
 		for _, bucket := range s.pendingMinute {
 			if bucketMatchesRange(bucket, clientID, tunnelName, minuteFloorUTC(from).Unix(), minuteFloorUTC(to).Unix()) {
@@ -200,17 +209,19 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 		combined := make(map[string]TrafficBucket)
 		currentHourStart := hourFloorUTC(time.Now()).Unix()
 		persistedHours, err := s.queryBucketsLocked(clientID, tunnelName, TrafficResolutionHour, hourFloorUTC(from).Unix(), hourFloorUTC(to).Unix())
-		if err == nil {
-			for _, bucket := range persistedHours {
-				combined[trafficBucketKey(bucket)] = bucket
-			}
+		if err != nil {
+			return TrafficQueryResult{}, err
+		}
+		for _, bucket := range persistedHours {
+			combined[trafficBucketKey(bucket)] = bucket
 		}
 
 		minuteBuckets, err := s.queryBucketsLocked(clientID, tunnelName, TrafficResolutionMinute, minuteFloorUTC(from).Unix(), minuteFloorUTC(to).Unix())
-		if err == nil {
-			for _, bucket := range minuteBuckets {
-				foldMinuteBucketIntoHour(combined, bucket, currentHourStart, true)
-			}
+		if err != nil {
+			return TrafficQueryResult{}, err
+		}
+		for _, bucket := range minuteBuckets {
+			foldMinuteBucketIntoHour(combined, bucket, currentHourStart, true)
 		}
 
 		for _, bucket := range s.pendingMinute {
@@ -271,7 +282,7 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 	return TrafficQueryResult{
 		Resolution: resolution,
 		Items:      items,
-	}
+	}, nil
 }
 
 func (s *TrafficStore) Flush() error {
@@ -363,8 +374,14 @@ func scanTrafficBucket(row dbScanner) (TrafficBucket, error) {
 	if err != nil {
 		return TrafficBucket{}, err
 	}
-	bucket.IngressBytes = scanUint64(ingressBytes)
-	bucket.EgressBytes = scanUint64(egressBytes)
+	bucket.IngressBytes, err = sqliteUint64("traffic_buckets.ingress_bytes", ingressBytes)
+	if err != nil {
+		return TrafficBucket{}, err
+	}
+	bucket.EgressBytes, err = sqliteUint64("traffic_buckets.egress_bytes", egressBytes)
+	if err != nil {
+		return TrafficBucket{}, err
+	}
 	return bucket, nil
 }
 
@@ -387,8 +404,16 @@ GROUP BY client_id, tunnel_name, tunnel_type, hour_start`, string(TrafficResolut
 			return err
 		}
 		bucket.Resolution = TrafficResolutionHour
-		bucket.IngressBytes = scanUint64(ingressBytes)
-		bucket.EgressBytes = scanUint64(egressBytes)
+		bucket.IngressBytes, err = sqliteUint64("traffic_buckets.ingress_bytes", ingressBytes)
+		if err != nil {
+			_ = rows.Close()
+			return err
+		}
+		bucket.EgressBytes, err = sqliteUint64("traffic_buckets.egress_bytes", egressBytes)
+		if err != nil {
+			_ = rows.Close()
+			return err
+		}
 		rolled = append(rolled, bucket)
 	}
 	if err := rows.Err(); err != nil {
@@ -462,7 +487,15 @@ func addTrafficBucket(combined map[string]TrafficBucket, bucket TrafficBucket) {
 }
 
 func upsertTrafficBucketAdd(tx *sql.Tx, bucket TrafficBucket) error {
-	_, err := tx.Exec(`INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
+	ingressBytes, err := sqliteInt64("traffic_buckets.ingress_bytes", bucket.IngressBytes)
+	if err != nil {
+		return err
+	}
+	egressBytes, err := sqliteInt64("traffic_buckets.egress_bytes", bucket.EgressBytes)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(client_id, tunnel_name, tunnel_type, resolution, bucket_start)
 DO UPDATE SET
@@ -473,14 +506,22 @@ DO UPDATE SET
 		bucket.TunnelType,
 		string(bucket.Resolution),
 		bucket.BucketStart,
-		int64(bucket.IngressBytes),
-		int64(bucket.EgressBytes),
+		ingressBytes,
+		egressBytes,
 	)
 	return err
 }
 
 func upsertTrafficBucketReplace(tx *sql.Tx, bucket TrafficBucket) error {
-	_, err := tx.Exec(`INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
+	ingressBytes, err := sqliteInt64("traffic_buckets.ingress_bytes", bucket.IngressBytes)
+	if err != nil {
+		return err
+	}
+	egressBytes, err := sqliteInt64("traffic_buckets.egress_bytes", bucket.EgressBytes)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(client_id, tunnel_name, tunnel_type, resolution, bucket_start)
 DO UPDATE SET
@@ -491,8 +532,8 @@ DO UPDATE SET
 		bucket.TunnelType,
 		string(bucket.Resolution),
 		bucket.BucketStart,
-		int64(bucket.IngressBytes),
-		int64(bucket.EgressBytes),
+		ingressBytes,
+		egressBytes,
 	)
 	return err
 }
@@ -503,11 +544,20 @@ func addTrafficToExistingHourBucket(tx *sql.Tx, bucket TrafficBucket, currentHou
 		return nil
 	}
 
-	_, err := tx.Exec(`UPDATE traffic_buckets
+	ingressBytes, err := sqliteInt64("traffic_buckets.ingress_bytes", bucket.IngressBytes)
+	if err != nil {
+		return err
+	}
+	egressBytes, err := sqliteInt64("traffic_buckets.egress_bytes", bucket.EgressBytes)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(`UPDATE traffic_buckets
 SET ingress_bytes = ingress_bytes + ?, egress_bytes = egress_bytes + ?
 WHERE client_id = ? AND tunnel_name = ? AND tunnel_type = ? AND resolution = ? AND bucket_start = ?`,
-		int64(bucket.IngressBytes),
-		int64(bucket.EgressBytes),
+		ingressBytes,
+		egressBytes,
 		bucket.ClientID,
 		bucket.TunnelName,
 		bucket.TunnelType,

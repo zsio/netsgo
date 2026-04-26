@@ -1,7 +1,10 @@
 package server
 
 import (
+	"database/sql"
 	"fmt"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,6 +22,67 @@ func (p InitParams) IsComplete() bool {
 		p.AdminPassword != "" &&
 		p.ServerAddr != "" &&
 		p.AllowedPorts != ""
+}
+
+func IsInitialized(dataDir string) (bool, error) {
+	return IsInitializedDB(filepath.Join(dataDir, "server", serverDBFileName))
+}
+
+func IsInitializedDB(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("server sqlite path is a directory: %s", path)
+	}
+
+	db, err := sql.Open("sqlite", readOnlySQLiteDSN(path))
+	if err != nil {
+		return false, fmt.Errorf("open server sqlite init state: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	hasConfig, err := serverSQLiteTableExists(db, "server_config")
+	if err != nil {
+		return false, fmt.Errorf("read server init schema: %w", err)
+	}
+	if !hasConfig {
+		return false, nil
+	}
+
+	var initialized int
+	err = db.QueryRow(`SELECT initialized FROM server_config WHERE id = 1`).Scan(&initialized)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read server init state: %w", err)
+	}
+	return intToBool(initialized), nil
+}
+
+func serverSQLiteTableExists(db *sql.DB, tableName string) (bool, error) {
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, tableName).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func readOnlySQLiteDSN(path string) string {
+	u := url.URL{Scheme: "file", Path: path}
+	q := u.Query()
+	q.Set("mode", "ro")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func ApplyInit(dataDir string, params InitParams) error {

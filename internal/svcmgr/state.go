@@ -1,9 +1,13 @@
 package svcmgr
 
 import (
+	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+
+	_ "modernc.org/sqlite"
 )
 
 const serverDBFileName = "netsgo.db"
@@ -135,11 +139,69 @@ func InspectWithLayout(layout ServiceLayout) InstallInspection {
 }
 
 func recoverableServerDataExists(dataDir string) bool {
-	return pathExists(recoverableServerDataPath(dataDir))
+	initialized, err := readServerDBInitialized(recoverableServerDataPath(dataDir))
+	return err == nil && initialized
 }
 
 func recoverableServerDataPath(dataDir string) string {
 	return filepath.Join(dataDir, serverDBFileName)
+}
+
+func readServerDBInitialized(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("server sqlite path is a directory: %s", path)
+	}
+
+	db, err := sql.Open("sqlite", readOnlySQLiteDSN(path))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = db.Close() }()
+
+	hasConfig, err := sqliteFileTableExists(db, "server_config")
+	if err != nil {
+		return false, err
+	}
+	if !hasConfig {
+		return false, nil
+	}
+
+	var initialized int
+	err = db.QueryRow(`SELECT initialized FROM server_config WHERE id = 1`).Scan(&initialized)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return initialized != 0, nil
+}
+
+func sqliteFileTableExists(db *sql.DB, tableName string) (bool, error) {
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, tableName).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func readOnlySQLiteDSN(path string) string {
+	u := url.URL{Scheme: "file", Path: path}
+	q := u.Query()
+	q.Set("mode", "ro")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func pathExists(path string) bool {

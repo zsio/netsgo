@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -397,6 +398,56 @@ func TestAdminStore_UpdateClientStatsPreservesZeroUpdatedAt(t *testing.T) {
 	}
 	if !record.Stats.UpdatedAt.IsZero() {
 		t.Fatalf("zero UpdatedAt should be preserved, got %s", record.Stats.UpdatedAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestAdminStore_UpdateClientStatsRejectsUint64SQLiteOverflow(t *testing.T) {
+	store := newTestAdminStore(t)
+	client, err := store.GetOrCreateClient("install-overflow-stats", protocol.ClientInfo{
+		Hostname: "overflow-stats",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("GetOrCreateClient failed: %v", err)
+	}
+
+	err = store.UpdateClientStats(client.ID, client.Info, protocol.SystemStats{
+		MemTotal: uint64(1) << 63,
+	}, "127.0.0.1:10002")
+	if err == nil {
+		t.Fatal("UpdateClientStats should reject uint64 values that cannot fit in SQLite INTEGER")
+	}
+	if !strings.Contains(err.Error(), "mem_total") {
+		t.Fatalf("overflow error should name the rejected field, got %v", err)
+	}
+}
+
+func TestLoadClientStatsRejectsNegativePersistedCounter(t *testing.T) {
+	store := newTestAdminStore(t)
+	client, err := store.GetOrCreateClient("install-negative-stats", protocol.ClientInfo{
+		Hostname: "negative-stats",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("GetOrCreateClient failed: %v", err)
+	}
+	if err := store.UpdateClientStats(client.ID, client.Info, protocol.SystemStats{
+		MemTotal: 1024,
+	}, "127.0.0.1:10002"); err != nil {
+		t.Fatalf("UpdateClientStats failed: %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE client_stats SET mem_total = -1 WHERE client_id = ?`, client.ID); err != nil {
+		t.Fatalf("failed to inject negative persisted counter: %v", err)
+	}
+
+	if _, err := loadClientStats(store.db, client.ID); err == nil {
+		t.Fatal("loadClientStats should reject negative persisted counters")
+	} else if !strings.Contains(err.Error(), "mem_total") {
+		t.Fatalf("negative counter error should name the rejected field, got %v", err)
 	}
 }
 

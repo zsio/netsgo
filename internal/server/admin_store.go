@@ -23,6 +23,7 @@ import (
 type AdminStore struct {
 	path      string
 	db        *sql.DB
+	closeDB   bool
 	mu        sync.RWMutex
 	closeOnce sync.Once
 	closeErr  error
@@ -81,20 +82,28 @@ func NewAdminStore(path string) (*AdminStore, error) {
 		return nil, err
 	}
 
+	store, err := newAdminStoreWithDB(path, db, true)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func newAdminStoreWithDB(path string, db *sql.DB, closeDB bool) (*AdminStore, error) {
 	store := &AdminStore{
 		path:       path,
 		db:         db,
+		closeDB:    closeDB,
 		bcryptCost: bcrypt.DefaultCost,
 	}
 
 	if err := store.validateLoadedState(); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 
 	// clean up expired sessions on startup
 	if err := store.CleanExpiredSessions(); err != nil {
-		_ = db.Close()
 		return nil, fmt.Errorf("failed to clean expired sessions: %w", err)
 	}
 
@@ -107,6 +116,9 @@ func NewAdminStore(path string) (*AdminStore, error) {
 
 func (s *AdminStore) Close() error {
 	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.closeDB {
 		return nil
 	}
 	s.closeOnce.Do(func() {
@@ -186,11 +198,20 @@ func intToBool(value int) bool {
 	return value != 0
 }
 
-func scanUint64(value int64) uint64 {
+const maxSQLiteInt64 = uint64(1<<63 - 1)
+
+func sqliteUint64(field string, value int64) (uint64, error) {
 	if value < 0 {
-		return 0
+		return 0, fmt.Errorf("%s contains negative persisted value %d", field, value)
 	}
-	return uint64(value)
+	return uint64(value), nil
+}
+
+func sqliteInt64(field string, value uint64) (int64, error) {
+	if value > maxSQLiteInt64 {
+		return 0, fmt.Errorf("%s value %d exceeds SQLite INTEGER max %d", field, value, maxSQLiteInt64)
+	}
+	return int64(value), nil
 }
 
 func (s *AdminStore) validateLoadedState() error {
@@ -736,17 +757,39 @@ func loadClientStats(q dbQuerier, clientID string) (*protocol.SystemStats, error
 	if err != nil {
 		return nil, err
 	}
-	stats.MemTotal = scanUint64(memTotal)
-	stats.MemUsed = scanUint64(memUsed)
-	stats.DiskTotal = scanUint64(diskTotal)
-	stats.DiskUsed = scanUint64(diskUsed)
-	stats.NetSent = scanUint64(netSent)
-	stats.NetRecv = scanUint64(netRecv)
-	stats.Uptime = scanUint64(uptime)
-	stats.ProcessUptime = scanUint64(processUptime)
-	stats.OSInstallTime = scanUint64(osInstallTime)
-	stats.AppMemUsed = scanUint64(appMemUsed)
-	stats.AppMemSys = scanUint64(appMemSys)
+	if stats.MemTotal, err = sqliteUint64("client_stats.mem_total", memTotal); err != nil {
+		return nil, err
+	}
+	if stats.MemUsed, err = sqliteUint64("client_stats.mem_used", memUsed); err != nil {
+		return nil, err
+	}
+	if stats.DiskTotal, err = sqliteUint64("client_stats.disk_total", diskTotal); err != nil {
+		return nil, err
+	}
+	if stats.DiskUsed, err = sqliteUint64("client_stats.disk_used", diskUsed); err != nil {
+		return nil, err
+	}
+	if stats.NetSent, err = sqliteUint64("client_stats.net_sent", netSent); err != nil {
+		return nil, err
+	}
+	if stats.NetRecv, err = sqliteUint64("client_stats.net_recv", netRecv); err != nil {
+		return nil, err
+	}
+	if stats.Uptime, err = sqliteUint64("client_stats.uptime", uptime); err != nil {
+		return nil, err
+	}
+	if stats.ProcessUptime, err = sqliteUint64("client_stats.process_uptime", processUptime); err != nil {
+		return nil, err
+	}
+	if stats.OSInstallTime, err = sqliteUint64("client_stats.os_install_time", osInstallTime); err != nil {
+		return nil, err
+	}
+	if stats.AppMemUsed, err = sqliteUint64("client_stats.app_mem_used", appMemUsed); err != nil {
+		return nil, err
+	}
+	if stats.AppMemSys, err = sqliteUint64("client_stats.app_mem_sys", appMemSys); err != nil {
+		return nil, err
+	}
 	stats.UpdatedAt = updatedAt
 	stats.FreshUntil = freshUntil
 
@@ -772,14 +815,65 @@ func loadClientDiskPartitions(q dbQuerier, clientID string) ([]protocol.DiskPart
 		if err := rows.Scan(&partition.Path, &used, &total); err != nil {
 			return nil, err
 		}
-		partition.Used = scanUint64(used)
-		partition.Total = scanUint64(total)
+		partition.Used, err = sqliteUint64("client_disk_partitions.used", used)
+		if err != nil {
+			return nil, err
+		}
+		partition.Total, err = sqliteUint64("client_disk_partitions.total", total)
+		if err != nil {
+			return nil, err
+		}
 		partitions = append(partitions, partition)
 	}
 	return partitions, rows.Err()
 }
 
 func replaceClientStats(exec dbExecer, clientID string, stats protocol.SystemStats) error {
+	memTotal, err := sqliteInt64("client_stats.mem_total", stats.MemTotal)
+	if err != nil {
+		return err
+	}
+	memUsed, err := sqliteInt64("client_stats.mem_used", stats.MemUsed)
+	if err != nil {
+		return err
+	}
+	diskTotal, err := sqliteInt64("client_stats.disk_total", stats.DiskTotal)
+	if err != nil {
+		return err
+	}
+	diskUsed, err := sqliteInt64("client_stats.disk_used", stats.DiskUsed)
+	if err != nil {
+		return err
+	}
+	netSent, err := sqliteInt64("client_stats.net_sent", stats.NetSent)
+	if err != nil {
+		return err
+	}
+	netRecv, err := sqliteInt64("client_stats.net_recv", stats.NetRecv)
+	if err != nil {
+		return err
+	}
+	uptime, err := sqliteInt64("client_stats.uptime", stats.Uptime)
+	if err != nil {
+		return err
+	}
+	processUptime, err := sqliteInt64("client_stats.process_uptime", stats.ProcessUptime)
+	if err != nil {
+		return err
+	}
+	osInstallTime, err := sqliteInt64("client_stats.os_install_time", stats.OSInstallTime)
+	if err != nil {
+		return err
+	}
+	appMemUsed, err := sqliteInt64("client_stats.app_mem_used", stats.AppMemUsed)
+	if err != nil {
+		return err
+	}
+	appMemSys, err := sqliteInt64("client_stats.app_mem_sys", stats.AppMemSys)
+	if err != nil {
+		return err
+	}
+
 	if _, err := exec.Exec(`INSERT INTO client_stats
 		(client_id, cpu_usage, mem_total, mem_used, mem_usage, disk_total, disk_used, disk_usage, net_sent, net_recv,
 		 net_sent_speed, net_recv_speed, uptime, process_uptime, os_install_time, num_cpu, app_mem_used, app_mem_sys,
@@ -807,9 +901,9 @@ func replaceClientStats(exec dbExecer, clientID string, stats protocol.SystemSta
 		 public_ipv6 = excluded.public_ipv6,
 		 updated_at = excluded.updated_at,
 		 fresh_until = excluded.fresh_until`,
-		clientID, stats.CPUUsage, int64(stats.MemTotal), int64(stats.MemUsed), stats.MemUsage, int64(stats.DiskTotal), int64(stats.DiskUsed),
-		stats.DiskUsage, int64(stats.NetSent), int64(stats.NetRecv), stats.NetSentSpeed, stats.NetRecvSpeed, int64(stats.Uptime),
-		int64(stats.ProcessUptime), int64(stats.OSInstallTime), stats.NumCPU, int64(stats.AppMemUsed), int64(stats.AppMemSys),
+		clientID, stats.CPUUsage, memTotal, memUsed, stats.MemUsage, diskTotal, diskUsed,
+		stats.DiskUsage, netSent, netRecv, stats.NetSentSpeed, stats.NetRecvSpeed, uptime,
+		processUptime, osInstallTime, stats.NumCPU, appMemUsed, appMemSys,
 		stats.PublicIPv4, stats.PublicIPv6, nullableTimeValue(stats.UpdatedAt), nullableTimeValue(stats.FreshUntil)); err != nil {
 		return err
 	}
@@ -817,8 +911,16 @@ func replaceClientStats(exec dbExecer, clientID string, stats protocol.SystemSta
 		return err
 	}
 	for _, partition := range stats.DiskPartitions {
+		partitionUsed, err := sqliteInt64("client_disk_partitions.used", partition.Used)
+		if err != nil {
+			return err
+		}
+		partitionTotal, err := sqliteInt64("client_disk_partitions.total", partition.Total)
+		if err != nil {
+			return err
+		}
 		if _, err := exec.Exec(`INSERT INTO client_disk_partitions (client_id, path, used, total) VALUES (?, ?, ?, ?)`,
-			clientID, partition.Path, int64(partition.Used), int64(partition.Total)); err != nil {
+			clientID, partition.Path, partitionUsed, partitionTotal); err != nil {
 			return err
 		}
 	}

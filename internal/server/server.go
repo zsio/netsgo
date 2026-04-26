@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"io/fs"
 	"net"
 	"net/http"
@@ -20,10 +21,13 @@ type Server struct {
 	AllowLoopbackManagementHost bool
 	TLS                         *TLSConfig
 	TLSFingerprint              string
-	clients                     sync.Map          // stable clientID -> *ClientConn
-	events                      *EventBus         // SSE event bus
-	store                       *TunnelStore      // tunnel persistent store
-	trafficStore                *TrafficStore     // traffic history store
+	clients                     sync.Map      // stable clientID -> *ClientConn
+	events                      *EventBus     // SSE event bus
+	store                       *TunnelStore  // tunnel persistent store
+	trafficStore                *TrafficStore // traffic history store
+	serverDB                    *sql.DB       // shared SQLite handle for server stores
+	serverDBCloseOnce           sync.Once
+	serverDBCloseErr            error
 	startTime                   time.Time         // server start time
 	auth                        *AuthService      // auth and access control (adminStore, rate limiting)
 	webFS                       fs.FS             // embedded frontend static assets (nil in dev mode)

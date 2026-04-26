@@ -17,26 +17,32 @@ import (
 
 func (s *Server) initStore() error {
 	path := s.serverDBPath()
-	store, err := NewTunnelStore(path)
+	s.serverDB = nil
+	s.serverDBCloseOnce = sync.Once{}
+	s.serverDBCloseErr = nil
+
+	db, err := openServerDB(path)
 	if err != nil {
+		return err
+	}
+	s.serverDB = db
+
+	store, err := newTunnelStoreWithDB(path, db, false)
+	if err != nil {
+		_ = s.closeServerDB()
 		return err
 	}
 	s.store = store
 	log.Printf("📦 SQLite server store: %s", path)
 
-	adminStore, err := NewAdminStore(path)
+	adminStore, err := newAdminStoreWithDB(path, db, false)
 	if err != nil {
-		_ = store.Close()
+		_ = s.closeServerDB()
 		return err
 	}
 	s.auth.adminStore = adminStore
 
-	trafficStore, err := NewTrafficStore(path)
-	if err != nil {
-		_ = adminStore.Close()
-		_ = store.Close()
-		return err
-	}
+	trafficStore := newTrafficStoreWithDB(path, db, false)
 	s.trafficStore = trafficStore
 
 	return nil
@@ -189,6 +195,9 @@ func (s *Server) cleanupFailedStartup() {
 			log.Printf("⚠️ Failed to close traffic store after startup failure: %v", err)
 		}
 	}
+	if err := s.closeServerDB(); err != nil {
+		log.Printf("⚠️ Failed to close server DB after startup failure: %v", err)
+	}
 }
 
 func (s *Server) closeDone() {
@@ -225,6 +234,12 @@ func (s *Server) Shutdown(ctx context.Context) (err error) {
 				if err == nil {
 					err = closeErr
 				}
+			}
+		}
+		if closeErr := s.closeServerDB(); closeErr != nil {
+			log.Printf("⚠️ Failed to close server DB: %v", closeErr)
+			if err == nil {
+				err = closeErr
 			}
 		}
 	}()
@@ -270,6 +285,16 @@ func (s *Server) Shutdown(ctx context.Context) (err error) {
 
 	log.Printf("✅ Graceful shutdown complete")
 	return nil
+}
+
+func (s *Server) closeServerDB() error {
+	if s == nil || s.serverDB == nil {
+		return nil
+	}
+	s.serverDBCloseOnce.Do(func() {
+		s.serverDBCloseErr = s.serverDB.Close()
+	})
+	return s.serverDBCloseErr
 }
 
 func (s *Server) tokenCleanupLoop() {

@@ -50,6 +50,7 @@ func (t StoredTunnel) matchesIdentifier(identifier, name string) bool {
 type TunnelStore struct {
 	path      string
 	db        *sql.DB
+	closeDB   bool
 	mu        sync.RWMutex
 	closeOnce sync.Once
 	closeErr  error
@@ -65,9 +66,17 @@ func NewTunnelStore(path string) (*TunnelStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &TunnelStore{path: path, db: db}
-	if err := store.validateLoadedState(); err != nil {
+	store, err := newTunnelStoreWithDB(path, db, true)
+	if err != nil {
 		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func newTunnelStoreWithDB(path string, db *sql.DB, closeDB bool) (*TunnelStore, error) {
+	store := &TunnelStore{path: path, db: db, closeDB: closeDB}
+	if err := store.validateLoadedState(); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -75,6 +84,9 @@ func NewTunnelStore(path string) (*TunnelStore, error) {
 
 func (s *TunnelStore) Close() error {
 	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.closeDB {
 		return nil
 	}
 	s.closeOnce.Do(func() {
