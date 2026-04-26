@@ -1062,7 +1062,7 @@ git commit -m "feat: store traffic history in sqlite"
 - Modify: `internal/server/data_paths_test.go`
 - Modify: tests that assert `admin.json`, `tunnels.json`, or `traffic.json`
 
-- [ ] **Step 1: Update data path tests first**
+- [x] **Step 1: Update data path tests first**
 
 Replace `TestServerInitStore_UsesDataDirLayout` assertions in `internal/server/data_paths_test.go` with:
 
@@ -1078,7 +1078,7 @@ if got, want := s.trafficStore.path, filepath.Join(dataDir, "server", "netsgo.db
 }
 ```
 
-- [ ] **Step 2: Run data path tests and verify they fail**
+- [x] **Step 2: Run data path tests and verify they fail**
 
 Run:
 
@@ -1088,7 +1088,7 @@ go test ./internal/server -run TestServerInitStore_UsesDataDirLayout -count=1
 
 Expected: FAIL because bootstrap still points at JSON files.
 
-- [ ] **Step 3: Change server DB path and store initialization**
+- [x] **Step 3: Change server DB path and store initialization**
 
 In `internal/server/server_bootstrap.go`, add:
 
@@ -1129,7 +1129,7 @@ func (s *Server) initStore() error {
 
 Change `getStorePath` to return `s.serverDBPath()` when no store is present.
 
-- [ ] **Step 4: Update init and command startup**
+- [x] **Step 4: Update init and command startup**
 
 In `internal/server/init.go`, replace `filepath.Join(dataDir, "server", "admin.json")` with `filepath.Join(dataDir, "server", serverDBFileName)`.
 
@@ -1139,7 +1139,9 @@ In `cmd/netsgo/cmd_server.go`, replace the preflight `NewAdminStore` path with:
 adminStore, err := server.NewAdminStore(filepath.Join(s.DataDir, "server", "netsgo.db"))
 ```
 
-- [ ] **Step 5: Run server package tests**
+- Updated `internal/svcmgr` server recoverable-data detection to use the managed server `netsgo.db` marker instead of the old `admin.json` marker.
+
+- [x] **Step 5: Run server package tests**
 
 Run:
 
@@ -1149,7 +1151,7 @@ go test ./internal/server -count=1
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/server/server_bootstrap.go internal/server/init.go cmd/netsgo/cmd_server.go internal/server/*_test.go
