@@ -9,6 +9,7 @@ import (
 
 	"netsgo/internal/install"
 	"netsgo/internal/svcmgr"
+	"netsgo/pkg/version"
 )
 
 type serverDeps struct {
@@ -47,6 +48,9 @@ func ManageServerWith(deps serverDeps) error {
 			Logs:  deps.Logs,
 			Start: deps.EnableAndStart,
 			Stop:  deps.DisableAndStop,
+			Update: func() error {
+				return runUpdate(deps.UI, version.Current, nil)
+			},
 			Uninstall: func() (bool, error) {
 				return uninstallServer(deps)
 			},

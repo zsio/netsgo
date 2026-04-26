@@ -1,6 +1,6 @@
 # 编译产物
 bin/
-netsgo
+/netsgo
 *.exe
 tmp/
 dist
@@ -68,3 +68,4 @@ lerna-debug.log*
 .omx
 .omc
 .alma-snapshots
+.worktrees/

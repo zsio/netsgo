@@ -11,6 +11,7 @@ import (
 
 	"netsgo/internal/install"
 	"netsgo/internal/svcmgr"
+	"netsgo/pkg/version"
 )
 
 type clientDeps struct {
@@ -49,6 +50,9 @@ func ManageClientWith(deps clientDeps) error {
 			Logs:  deps.Logs,
 			Start: deps.EnableAndStart,
 			Stop:  deps.DisableAndStop,
+			Update: func() error {
+				return runUpdate(deps.UI, version.Current, nil)
+			},
 			Uninstall: func() (bool, error) {
 				return uninstallClient(deps)
 			},
