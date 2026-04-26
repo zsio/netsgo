@@ -34,6 +34,7 @@ type Server struct {
 	httpServer                  *http.Server
 	listener                    net.Listener
 	done                        chan struct{}
+	doneCloseOnce               sync.Once
 	tlsEnabled                  bool
 	publicIPv4                  string          // cached public IPv4
 	publicIPv6                  string          // cached public IPv6

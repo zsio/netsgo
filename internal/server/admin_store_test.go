@@ -194,6 +194,7 @@ func TestAdminStore_UsesSQLiteFileAndNoJsonFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	store.bcryptCost = bcrypt.MinCost
 	if err := store.Initialize("admin", "Admin1234", "https://example.com", []PortRange{{Start: 10000, End: 10010}}); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
@@ -210,6 +211,7 @@ func TestAdminStore_UsesSQLiteFileAndNoJsonFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload failed: %v", err)
 	}
+	t.Cleanup(func() { _ = reloaded.Close() })
 	if _, err := reloaded.ValidateAdminPassword("admin", "Admin1234"); err != nil {
 		t.Fatalf("admin password should survive reload: %v", err)
 	}
@@ -287,6 +289,7 @@ func TestAdminStore_NewInitializedWithoutJWTSecret_Fails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Initialize("admin", "Admin1234", "https://example.com", nil); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
@@ -299,11 +302,14 @@ func TestAdminStore_NewInitializedWithoutJWTSecret_Fails(t *testing.T) {
 	if _, err := store.db.Exec(`PRAGMA ignore_check_constraints = OFF`); err != nil {
 		t.Fatalf("disable ignore_check_constraints: %v", err)
 	}
-	if err := store.db.Close(); err != nil {
+	if err := store.Close(); err != nil {
 		t.Fatalf("close store db: %v", err)
 	}
 
-	_, err = NewAdminStore(path)
+	invalidStore, err := NewAdminStore(path)
+	if invalidStore != nil {
+		t.Cleanup(func() { _ = invalidStore.Close() })
+	}
 	if !errors.Is(err, errJWTSecretMissing) {
 		t.Fatalf("initialized instance missing jwt_secret should return errJWTSecretMissing, got %v", err)
 	}
@@ -316,7 +322,8 @@ func TestAdminStore_NewCorruptedFileFails(t *testing.T) {
 		t.Fatalf("failed to write corrupted SQLite file: %v", err)
 	}
 
-	if _, err := NewAdminStore(path); err == nil {
+	if store, err := NewAdminStore(path); err == nil {
+		t.Cleanup(func() { _ = store.Close() })
 		t.Fatal("corrupted SQLite file should cause NewAdminStore to return error")
 	}
 }
@@ -328,6 +335,7 @@ func TestAdminStore_ClientBandwidthSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 
 	client, err := store.GetOrCreateClient("install-bandwidth-roundtrip", protocol.ClientInfo{
 		Hostname: "bandwidth-roundtrip",
@@ -349,6 +357,7 @@ func TestAdminStore_ClientBandwidthSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reloading AdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = reloaded.Close() })
 	record, ok := reloaded.GetRegisteredClient(client.ID)
 	if !ok {
 		t.Fatalf("client %s missing after reload", client.ID)
@@ -579,6 +588,7 @@ func TestAdminStore_PersistedSecretsSurviveReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Initialize("admin", "Admin1234", "https://example.com", nil); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
@@ -590,6 +600,7 @@ func TestAdminStore_PersistedSecretsSurviveReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reloading AdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = reloaded.Close() })
 
 	if _, err := reloaded.ValidateAdminPassword("admin", "Admin1234"); err != nil {
 		t.Fatalf("admin password should still be verifiable after reload: %v", err)

@@ -39,6 +39,7 @@ func setupTestServerWithDB(t *testing.T, initialized bool) (*Server, func()) {
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 
 	if initialized {
@@ -52,6 +53,7 @@ func setupTestServerWithDB(t *testing.T, initialized bool) (*Server, func()) {
 	s.auth.adminStore = store
 
 	cleanup := func() {
+		_ = store.Close()
 		_ = os.RemoveAll(tmpDir)
 	}
 

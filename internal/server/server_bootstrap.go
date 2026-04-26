@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"netsgo/pkg/datadir"
@@ -34,6 +35,7 @@ func (s *Server) initStore() error {
 	trafficPath := filepath.Join(s.serverDataDir(), "traffic.json")
 	trafficStore, err := NewTrafficStore(trafficPath)
 	if err != nil {
+		_ = adminStore.Close()
 		return err
 	}
 	s.trafficStore = trafficStore
@@ -63,7 +65,14 @@ func (s *Server) getStorePath() string {
 func (s *Server) Start() error {
 	s.startTime = time.Now()
 	s.done = make(chan struct{})
+	s.doneCloseOnce = sync.Once{}
 	s.sessions = newSessionManager()
+	serving := false
+	defer func() {
+		if !serving {
+			s.cleanupFailedStartup()
+		}
+	}()
 
 	webFS, err := web.DistFS()
 	if err != nil {
@@ -88,7 +97,6 @@ func (s *Server) Start() error {
 		if err := s.auth.adminStore.CleanExpiredTokens(); err != nil {
 			return fmt.Errorf("failed to clean expired tokens: %w", err)
 		}
-		go s.tokenCleanupLoop()
 	}
 
 	if s.auth.adminStore != nil && !s.auth.adminStore.IsInitialized() {
@@ -113,7 +121,6 @@ func (s *Server) Start() error {
 		dataDir := s.getDataDir()
 		tlsConfig, fingerprint, err := s.TLS.loadOrBuildTLSConfig(dataDir)
 		if err != nil {
-			_ = ln.Close()
 			return fmt.Errorf("TLS initialization failed: %w", err)
 		}
 		s.TLSFingerprint = fingerprint
@@ -148,12 +155,39 @@ func (s *Server) Start() error {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	if s.auth.adminStore != nil {
+		go s.tokenCleanupLoop()
+	}
 	go s.serverStatusLoop()
 	go s.trafficRollupLoop()
 	go s.trafficPersistLoop()
 
+	serving = true
 	return s.httpServer.Serve(serveLn)
 }
+
+func (s *Server) cleanupFailedStartup() {
+	s.closeDone()
+	if s.listener != nil {
+		_ = s.listener.Close()
+		s.listener = nil
+	}
+	if s.auth != nil && s.auth.adminStore != nil {
+		if err := s.auth.adminStore.Close(); err != nil {
+			log.Printf("⚠️ Failed to close admin store after startup failure: %v", err)
+		}
+	}
+}
+
+func (s *Server) closeDone() {
+	if s.done == nil {
+		return
+	}
+	s.doneCloseOnce.Do(func() {
+		close(s.done)
+	})
+}
+
 func (s *Server) Shutdown(ctx context.Context) (err error) {
 	log.Printf("🛑 Starting graceful shutdown...")
 	defer func() {
@@ -167,7 +201,7 @@ func (s *Server) Shutdown(ctx context.Context) (err error) {
 		}
 	}()
 
-	close(s.done)
+	s.closeDone()
 
 	if s.events != nil {
 		s.events.Close()

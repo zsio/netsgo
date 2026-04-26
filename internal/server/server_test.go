@@ -2100,7 +2100,12 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
-	store, _ := NewAdminStore(dbPath)
+	store, storeErr := NewAdminStore(dbPath)
+	if storeErr != nil {
+		t.Fatalf("failed to create AdminStore: %v", storeErr)
+	}
+	defer func() { _ = store.Close() }()
+	t.Cleanup(func() { _ = store.Close() })
 	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := store.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
@@ -3154,7 +3159,12 @@ func TestServer_RestoreTunnelsAPI(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "admin.db")
-	store, _ := NewAdminStore(dbPath)
+	store, err := NewAdminStore(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create AdminStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	t.Cleanup(func() { _ = store.Close() })
 	store.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := store.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
@@ -3348,6 +3358,7 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = adminStore.Close() })
 	adminStore.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := adminStore.Initialize("admin", "password123", "localhost", []PortRange{{Start: 20000, End: 20010}}); err != nil {
 		t.Fatalf("failed to initialize AdminStore: %v", err)
@@ -3485,6 +3496,7 @@ func TestRestoreTunnels_PortNotAllowedPreservesBandwidthFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = adminStore.Close() })
 	adminStore.bcryptCost = bcrypt.MinCost
 	if err := adminStore.Initialize("admin", "password123", "localhost", []PortRange{{Start: 20000, End: 20010}}); err != nil {
 		t.Fatalf("failed to initialize AdminStore: %v", err)
@@ -3802,6 +3814,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = adminStore.Close() })
 	adminStore.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("failed to initialize AdminStore: %v", err)
@@ -3912,6 +3925,7 @@ func TestServer_GracefulShutdown_ClosesPendingControlHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = adminStore.Close() })
 	adminStore.bcryptCost = bcrypt.MinCost
 	if err := adminStore.Initialize("admin", "password123", "localhost", nil); err != nil {
 		t.Fatalf("failed to initialize AdminStore: %v", err)

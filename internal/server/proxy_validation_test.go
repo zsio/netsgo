@@ -20,6 +20,7 @@ func newProxyValidationTestServer(t *testing.T, port int, serverAddr string, all
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = adminStore.Close() })
 	adminStore.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := adminStore.Initialize("admin", "password123", serverAddr, allowedPorts); err != nil {
 		t.Fatalf("failed to initialize AdminStore: %v", err)

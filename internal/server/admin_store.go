@@ -21,9 +21,11 @@ import (
 
 // AdminStore manages persistence of admin accounts, API Keys, and sessions.
 type AdminStore struct {
-	path string
-	db   *sql.DB
-	mu   sync.RWMutex
+	path      string
+	db        *sql.DB
+	mu        sync.RWMutex
+	closeOnce sync.Once
+	closeErr  error
 
 	bcryptCost int // 0 means use bcrypt.DefaultCost
 
@@ -107,7 +109,10 @@ func (s *AdminStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	return s.db.Close()
+	s.closeOnce.Do(func() {
+		s.closeErr = s.db.Close()
+	})
+	return s.closeErr
 }
 
 func (s *AdminStore) maybeFailSave() error {

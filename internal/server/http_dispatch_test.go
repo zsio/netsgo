@@ -28,6 +28,7 @@ func newDispatchTestServer(t *testing.T, initialized bool, serverAddr string) (*
 	if err != nil {
 		t.Fatalf("Failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = adminStore.Close() })
 	adminStore.bcryptCost = bcrypt.MinCost // 测试用最低强度，避免 bcrypt 拖慢测试套件
 	if initialized {
 		if serverAddr == "" {
@@ -632,6 +633,7 @@ func TestDispatch_LoopbackEquivalence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to create AdminStore: %v", err)
 			}
+			t.Cleanup(func() { _ = adminStore.Close() })
 			if err := adminStore.Initialize("admin", "password123", "", nil); err != nil {
 				t.Fatalf("Initialization failed: %v", err)
 			}
