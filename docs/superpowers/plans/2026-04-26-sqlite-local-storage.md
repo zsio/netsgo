@@ -950,7 +950,7 @@ git commit -m "feat: store tunnels in sqlite"
 - Modify: `internal/server/udp_proxy_test.go`
 - Modify: `internal/server/data_paths_test.go`
 
-- [ ] **Step 1: Add failing SQLite traffic persistence test**
+- [x] **Step 1: Add failing SQLite traffic persistence test**
 
 In `internal/server/traffic_store_test.go`, add:
 
@@ -986,7 +986,7 @@ func TestTrafficStore_UsesSQLiteAndNoJsonFile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the new traffic test and verify it fails**
+- [x] **Step 2: Run the new traffic test and verify it fails**
 
 Run:
 
@@ -996,7 +996,7 @@ go test ./internal/server -run TestTrafficStore_UsesSQLiteAndNoJsonFile -count=1
 
 Expected: FAIL because `TrafficStore` still persists JSON snapshots.
 
-- [ ] **Step 3: Convert TrafficStore to SQL-backed buckets with pending in-memory deltas**
+- [x] **Step 3: Convert TrafficStore to SQL-backed buckets with pending in-memory deltas**
 
 Change `TrafficStore` fields to:
 
@@ -1032,7 +1032,9 @@ DO UPDATE SET
 2. Include flushed data only; pending buckets are still visible through query and flushed within the existing persist loop.
 3. Prune minute/hour rows by existing retention constants.
 
-- [ ] **Step 4: Run traffic tests**
+- Implementation detail: `Compact` now flushes pending deltas before rollup/prune and returns errors, so pruning is skipped if pending flush or hour rollup fails.
+
+- [x] **Step 4: Run traffic tests**
 
 Run:
 
@@ -1042,7 +1044,7 @@ go test ./internal/server -run 'TestTrafficStore|TestTrafficAPI|TestUDP|TestProx
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/server/traffic_store.go internal/server/traffic_store_test.go internal/server/udp_proxy_test.go internal/server/data_paths_test.go
