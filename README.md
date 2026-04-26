@@ -4,8 +4,8 @@
 
 <h1 align="center">NetsGo</h1>
 <p align="center">
-  <strong>单文件内网穿透工具</strong><br/>
-  单文件交付 · 单端口接入 · Web 控制台统一管理
+  <strong>内网穿透与节点管理平台</strong><br/>
+  内置 Web 控制台 · 单端口接入 · 单文件部署
 </p>
 
 <p align="center">
@@ -15,20 +15,24 @@
 
 ---
 
+**NetsGo** 是一个开箱即用的内网穿透与节点管理平台。它将 Web 控制台、REST API、客户端接入和底层网络隧道整合进一个单文件二进制中，让部署更简单、接入更统一、运维更省心。你可以用它远程访问内网服务，也可以统一管理分散在各处的远程节点。
+
+---
+
 ## 为什么用 NetsGo
 
-如果你只是想尽快把服务端跑起来、把内网机器连上来、然后开始建隧道，NetsGo 的设计重点就是这三件事：
+如果你只是想尽快把服务端跑起来、把内网机器连上来、然后开始建隧道，NetsGo 的设计重点就是这四件事：
 
-- **一个二进制就能跑**：`netsgo server` 启服务端，`netsgo client` 连边缘节点。
-- **一个端口就够**：对外只需要一个入口，部署和过反代都更省事。
+- **一个二进制就能跑**：`./netsgo server` 启服务端，`./netsgo client` 连远程节点。
+- **一个端口就够**：Web 控制台、控制通道和数据通道共用同一个入口，防火墙和反向代理只配一处就够。（TCP/UDP 隧道按需使用额外端口。）
 - **部署路径清晰**：容器或直接运行都可以；Linux 长驻场景可用 `netsgo install` + `netsgo manage`。
-- **默认就带控制台**：连上 client 后，直接在 Web 面板里管 client、看状态、配 tunnel。
+- **默认就带控制台**：连上客户端后，直接在 Web 面板里管理节点、查看状态、配置隧道。
 
 ---
 
 ## 快速开始
 
-> 下文示例默认 `netsgo` 已在 `PATH` 中；如果你只是临时解压在当前目录，也可以把命令里的 `netsgo` 替换成 `./netsgo`。
+> 下文示例默认在下载目录中直接执行 `./netsgo`。已通过 `netsgo install` 安装或已加入系统 PATH 的，可以省略 `./`。
 
 ### 1. 启动服务端
 
@@ -37,12 +41,13 @@
 长期运行最省事的方案。下载 `netsgo` 二进制后执行：
 
 ```bash
-sudo netsgo install
+sudo ./netsgo install
 ```
 
 按交互提示选择 **Server**，并填入管理员账号、访问地址、允许端口范围等信息。安装完成后：
 
 ```bash
+# 已经安装到系统中, 可以直接使用 netsgo 命令了
 sudo netsgo manage
 ```
 
@@ -52,7 +57,8 @@ sudo netsgo manage
 
 #### 方式二：Docker Compose 示例
 
-下面是一份 `docker-compose.yml` 示例配置，可按你的域名和目录自行调整：
+<details>
+<summary>点击展开 docker-compose.yml 示例</summary>
 
 ```yaml
 services:
@@ -80,6 +86,8 @@ volumes:
 ```
 
 如果你不走反向代理、准备直接对外暴露 NetsGo，请把 `--tls-mode off` 改成 `--tls-mode auto` 或 `--tls-mode custom`。
+
+</details>
 
 #### 方式三：直接运行（仅试用/调试）
 
@@ -116,7 +124,8 @@ volumes:
 #### 推荐方式：Linux Service（systemd）
 
 ```bash
-sudo netsgo install
+# 客户端也是这样进入交互菜单进行安装
+sudo ./netsgo install
 ```
 
 按交互提示选择 **Client**，并填入服务端地址与 Client Key。
