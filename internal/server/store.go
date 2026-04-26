@@ -244,9 +244,6 @@ func (s *TunnelStore) RemoveTunnel(clientID, name string) error {
 
 // UpdateStates directly updates both state fields and persists the change.
 func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, errMsg string) error {
-	normalized := StoredTunnel{ClientID: clientID, Binding: TunnelBindingClientID}
-	setStoredTunnelStates(&normalized, desiredState, runtimeState, errMsg)
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -257,6 +254,8 @@ func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, e
 	if !exists {
 		return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
 	}
+	normalized := StoredTunnel{ClientID: clientID, Binding: TunnelBindingClientID}
+	setStoredTunnelStates(&normalized, desiredState, runtimeState, errMsg)
 	if err := s.maybeFailSave(); err != nil {
 		return err
 	}

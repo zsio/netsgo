@@ -252,17 +252,17 @@ func TestTunnelStore_PausedDesiredStateCanonicalizesToStopped(t *testing.T) {
 	}
 }
 
-func TestTunnelStore_CorruptedFile(t *testing.T) {
+func TestTunnelStore_CorruptedSQLiteDatabase(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, serverDBFileName)
 
-	if err := os.WriteFile(path, []byte(`{{{invalid json`), 0o644); err != nil {
-		t.Fatalf("failed to write corrupted file: %v", err)
+	if err := os.WriteFile(path, []byte("not a sqlite database"), 0o600); err != nil {
+		t.Fatalf("failed to write corrupted SQLite database: %v", err)
 	}
 
 	if store, err := NewTunnelStore(path); err == nil {
 		t.Cleanup(func() { _ = store.Close() })
-		t.Fatal("corrupted file should cause NewTunnelStore to return an error")
+		t.Fatal("corrupted SQLite database should cause NewTunnelStore to return an error")
 	}
 }
 
@@ -394,6 +394,19 @@ func TestTunnelStore_UpdateStates_NotFound(t *testing.T) {
 	store := newTestTunnelStore(t)
 	if err := store.UpdateStates("ghost", "no-tunnel", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, ""); err == nil {
 		t.Error("updating non-existent tunnel should return an error")
+	}
+}
+
+func TestTunnelStore_UpdateStates_NotFoundBeforeInvalidState(t *testing.T) {
+	store := newTestTunnelStore(t)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("UpdateStates should return not-found before validating invalid state, panicked: %v", r)
+		}
+	}()
+
+	if err := store.UpdateStates("ghost", "no-tunnel", "bad-desired", "bad-runtime", ""); err == nil {
+		t.Fatal("updating non-existent tunnel should return an error")
 	}
 }
 

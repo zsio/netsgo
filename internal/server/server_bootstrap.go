@@ -61,7 +61,7 @@ func (s *Server) getStorePath() string {
 	if s.store != nil {
 		return s.store.path
 	}
-	return filepath.Join(s.serverDataDir(), "tunnels.json")
+	return filepath.Join(s.serverDataDir(), serverDBFileName)
 }
 
 func (s *Server) Start() error {
