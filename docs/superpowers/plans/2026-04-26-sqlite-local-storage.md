@@ -1718,7 +1718,7 @@ Review:
 **Files:**
 - Verify all changed files.
 
-- [ ] **Step 1: Build frontend**
+- [x] **Step 1: Build frontend**
 
 Run:
 
@@ -1728,7 +1728,7 @@ cd web && bun run build
 
 Expected: PASS and `web/dist` generated.
 
-- [ ] **Step 2: Run Go tests**
+- [x] **Step 2: Run Go tests**
 
 Run:
 
@@ -1738,7 +1738,7 @@ go test ./...
 
 Expected: PASS.
 
-- [ ] **Step 3: Run web lint**
+- [x] **Step 3: Run web lint**
 
 Run:
 
@@ -1748,7 +1748,7 @@ cd web && bun run lint
 
 Expected: PASS.
 
-- [ ] **Step 4: Run full build**
+- [x] **Step 4: Run full build**
 
 Run:
 
@@ -1758,7 +1758,7 @@ make build
 
 Expected: PASS and `bin/netsgo` generated.
 
-- [ ] **Step 5: Manual smoke checks**
+- [x] **Step 5: Manual smoke checks**
 
 Run:
 
@@ -1783,7 +1783,7 @@ find "$tmpdir" -name '*.json' -print
 
 Expected: no output.
 
-- [ ] **Step 6: Confirm clean worktree**
+- [x] **Step 6: Confirm clean worktree**
 
 Check the worktree after verification:
 
@@ -1792,6 +1792,14 @@ git status --short
 ```
 
 Expected: no output.
+
+Completed verification:
+- `cd web && bun run build`
+- `go test ./...`
+- `cd web && bun run lint`
+- `make build`
+- Dev server smoke with a temporary data dir; confirmed `server/netsgo.db`, `SQLite server store` log, and no `*.json` files under the temp dir.
+- `git status --short` returned no output before this plan update.
 
 ---
 
