@@ -1407,7 +1407,7 @@ git commit -m "feat: store client identity in sqlite"
 - Modify: `internal/manage/uninstall_all.go`
 - Modify: `internal/manage/*_test.go`
 
-- [ ] **Step 1: Add failing layout tests**
+- [x] **Step 1: Add failing layout tests**
 
 Create `internal/svcmgr/layout_test.go`:
 
@@ -1444,7 +1444,7 @@ func TestNewLayout(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run layout tests and verify they fail**
+- [x] **Step 2: Run layout tests and verify they fail**
 
 Run:
 
@@ -1454,7 +1454,7 @@ go test ./internal/svcmgr -run TestNewLayout -count=1
 
 Expected: FAIL because `NewLayout` does not exist.
 
-- [ ] **Step 3: Add ServiceLayout**
+- [x] **Step 3: Add ServiceLayout**
 
 Create `internal/svcmgr/layout.go`:
 
@@ -1512,7 +1512,7 @@ func UnitName(role Role) string {
 
 Remove role/constants and JSON read/write functions from `internal/svcmgr/spec.go`. Delete `spec.go` after all references are gone.
 
-- [ ] **Step 4: Update unit/env APIs**
+- [x] **Step 4: Update unit/env APIs**
 
 Change unit/env signatures:
 
@@ -1540,7 +1540,7 @@ func ReadUnitInfo(unitPath string) (UnitInfo, error)
 
 `ReadUnitInfo` should parse `User=`, `Group=`, `EnvironmentFile=`, and `ExecStart=` lines from the unit file.
 
-- [ ] **Step 5: Rewrite install detection without spec files**
+- [x] **Step 5: Rewrite install detection without spec files**
 
 Change `Inspect` to call:
 
@@ -1570,7 +1570,7 @@ func recoverableServerDataExists(dataDir string) bool {
 }
 ```
 
-- [ ] **Step 6: Update install flow**
+- [x] **Step 6: Update install flow**
 
 In `internal/install/service_flow.go`, replace `ServiceSpec` with `ServiceLayout`:
 
@@ -1602,7 +1602,7 @@ func completeManagedInstall(role svcmgr.Role, deps managedInstallDeps, writeArti
 
 In `internal/install/server.go` and `internal/install/client.go`, remove `WriteServerSpec` and `WriteClientSpec` dependencies and calls. Keep writing env and unit files.
 
-- [ ] **Step 7: Update manage flow**
+- [x] **Step 7: Update manage flow**
 
 In `internal/manage/server.go` and `internal/manage/client.go`:
 
@@ -1614,7 +1614,7 @@ In `internal/manage/server.go` and `internal/manage/client.go`:
 
 In `internal/manage/uninstall_all.go`, remove spec loading and use layouts directly.
 
-- [ ] **Step 8: Run svcmgr/install/manage tests**
+- [x] **Step 8: Run svcmgr/install/manage tests**
 
 Run:
 
@@ -1624,12 +1624,23 @@ go test ./internal/svcmgr ./internal/install ./internal/manage -count=1
 
 Expected: PASS after updating tests to assert no spec file writes/removals.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add internal/svcmgr internal/install internal/manage
 git commit -m "refactor: remove managed service json manifests"
 ```
+
+Completed in commit `0e75212`.
+
+Validation:
+- `go test ./internal/svcmgr ./internal/install ./internal/manage -count=1`
+- `go test ./cmd/netsgo ./internal/client ./internal/server -count=1`
+- `git diff --check`
+
+Review:
+- Spec review found no managed service JSON manifest remnants in `internal`, `cmd`, `install`, `manage`, or `svcmgr`.
+- Code quality review found no blocking regression risk.
 
 ---
 
