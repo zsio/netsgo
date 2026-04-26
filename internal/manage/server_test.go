@@ -1,22 +1,16 @@
 package manage
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"netsgo/internal/svcmgr"
 )
 
-func newInstalledServerDeps(t *testing.T, ui *fakeUI) (serverDeps, svcmgr.ServiceSpec) {
+func newInstalledServerDeps(t *testing.T, ui *fakeUI) (serverDeps, svcmgr.ServiceLayout) {
 	t.Helper()
 
-	spec := svcmgr.NewSpec(svcmgr.RoleServer)
-	spec.DataDir = t.TempDir()
-	spec.UnitPath = filepath.Join(spec.DataDir, "netsgo-server.service")
-	spec.EnvPath = filepath.Join(spec.DataDir, "server.env")
-	spec.SpecPath = filepath.Join(spec.DataDir, "server.json")
-	spec.ServerURL = "https://panel.example.com"
+	layout := svcmgr.NewLayout(svcmgr.RoleServer)
 
 	return serverDeps{
 		UI: ui,
@@ -29,9 +23,8 @@ func newInstalledServerDeps(t *testing.T, ui *fakeUI) (serverDeps, svcmgr.Servic
 		RunInstall: func() error {
 			return nil
 		},
-		ReadServerSpec: func() (svcmgr.ServiceSpec, error) { return spec, nil },
 		ReadServerEnv: func() (svcmgr.ServerEnv, error) {
-			return svcmgr.ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: spec.ServerURL}, nil
+			return svcmgr.ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: "https://panel.example.com"}, nil
 		},
 		DisableAndStop: func() error { return nil },
 		EnableAndStart: func() error { return nil },
@@ -41,7 +34,7 @@ func newInstalledServerDeps(t *testing.T, ui *fakeUI) (serverDeps, svcmgr.Servic
 		DetectClient: func() svcmgr.InstallState {
 			return svcmgr.StateInstalled
 		},
-	}, spec
+	}, layout
 }
 
 func TestManageServerInspectRedactsSensitiveData(t *testing.T) {

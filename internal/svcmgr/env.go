@@ -28,7 +28,7 @@ type ClientEnv struct {
 	TLSFingerprint string
 }
 
-func WriteServerEnv(spec ServiceSpec, env ServerEnv) error {
+func WriteServerEnv(layout ServiceLayout, env ServerEnv) error {
 	values := map[string]string{}
 	if env.Port != 0 {
 		values["NETSGO_PORT"] = strconv.Itoa(env.Port)
@@ -51,10 +51,10 @@ func WriteServerEnv(spec ServiceSpec, env ServerEnv) error {
 	if env.AllowLoopbackManagementHost {
 		values["NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST"] = "true"
 	}
-	return writeEnvFile(spec.EnvPath, values)
+	return writeEnvFile(layout.EnvPath, values)
 }
 
-func WriteClientEnv(spec ServiceSpec, env ClientEnv) error {
+func WriteClientEnv(layout ServiceLayout, env ClientEnv) error {
 	values := map[string]string{}
 	if env.Server != "" {
 		values["NETSGO_SERVER"] = env.Server
@@ -68,11 +68,11 @@ func WriteClientEnv(spec ServiceSpec, env ClientEnv) error {
 	if env.TLSFingerprint != "" {
 		values["NETSGO_TLS_FINGERPRINT"] = env.TLSFingerprint
 	}
-	return writeEnvFile(spec.EnvPath, values)
+	return writeEnvFile(layout.EnvPath, values)
 }
 
-func ReadServerEnv(spec ServiceSpec) (ServerEnv, error) {
-	values, err := readEnvFile(spec.EnvPath)
+func ReadServerEnv(layout ServiceLayout) (ServerEnv, error) {
+	values, err := readEnvFile(layout.EnvPath)
 	if err != nil {
 		return ServerEnv{}, err
 	}
@@ -94,8 +94,8 @@ func ReadServerEnv(spec ServiceSpec) (ServerEnv, error) {
 	return env, nil
 }
 
-func ReadClientEnv(spec ServiceSpec) (ClientEnv, error) {
-	values, err := readEnvFile(spec.EnvPath)
+func ReadClientEnv(layout ServiceLayout) (ClientEnv, error) {
+	values, err := readEnvFile(layout.EnvPath)
 	if err != nil {
 		return ClientEnv{}, err
 	}

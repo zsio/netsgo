@@ -25,137 +25,115 @@ func TestInstallStateString(t *testing.T) {
 	}
 }
 
-func TestDetectWithPaths(t *testing.T) {
+func TestInspectWithLayout(t *testing.T) {
 	t.Run("not installed", func(t *testing.T) {
-		root := t.TempDir()
-		unitPath := filepath.Join(root, "netsgo.service")
-		specPath := filepath.Join(root, "service.json")
-		envPath := filepath.Join(root, "service.env")
-		dataDir := filepath.Join(root, "data")
-		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateNotInstalled {
-			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateNotInstalled)
+		layout := testLayout(t, RoleServer)
+		if got := DetectWithLayout(layout); got != StateNotInstalled {
+			t.Fatalf("DetectWithLayout() = %v, want %v", got, StateNotInstalled)
 		}
 	})
 
 	t.Run("server historical data only", func(t *testing.T) {
-		root := t.TempDir()
-		unitPath := filepath.Join(root, "netsgo.service")
-		specPath := filepath.Join(root, "service.json")
-		envPath := filepath.Join(root, "service.env")
-		dataDir := filepath.Join(root, "server")
-		if err := os.MkdirAll(dataDir, 0o755); err != nil {
-			t.Fatalf("failed to create data dir: %v", err)
+		layout := testLayout(t, RoleServer)
+		if err := os.MkdirAll(layout.RuntimeDir, 0o755); err != nil {
+			t.Fatalf("failed to create runtime dir: %v", err)
 		}
-		writeStateTestFile(t, recoverableServerDataPath(dataDir), 0o600)
-		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateHistoricalDataOnly {
-			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateHistoricalDataOnly)
+		writeStateTestFile(t, recoverableServerDataPath(layout.RuntimeDir), 0o600)
+		if got := DetectWithLayout(layout); got != StateHistoricalDataOnly {
+			t.Fatalf("DetectWithLayout() = %v, want %v", got, StateHistoricalDataOnly)
 		}
 	})
 
 	t.Run("server installed", func(t *testing.T) {
-		unitPath, specPath, envPath, dataDir := writeInstalledState(t, RoleServer)
-		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateInstalled {
-			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateInstalled)
+		layout := writeInstalledState(t, RoleServer)
+		if got := DetectWithLayout(layout); got != StateInstalled {
+			t.Fatalf("DetectWithLayout() = %v, want %v", got, StateInstalled)
 		}
 	})
 
 	t.Run("server installed missing sqlite store is broken", func(t *testing.T) {
-		unitPath, specPath, envPath, dataDir := writeInstalledState(t, RoleServer)
-		if err := os.Remove(recoverableServerDataPath(dataDir)); err != nil {
+		layout := writeInstalledState(t, RoleServer)
+		if err := os.Remove(recoverableServerDataPath(layout.RuntimeDir)); err != nil {
 			t.Fatalf("failed to remove server sqlite store: %v", err)
 		}
-		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateBroken {
-			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateBroken)
+		if got := DetectWithLayout(layout); got != StateBroken {
+			t.Fatalf("DetectWithLayout() = %v, want %v", got, StateBroken)
 		}
 	})
 
-	t.Run("broken partial trio", func(t *testing.T) {
-		unitPath, specPath, envPath, dataDir := writeInstalledState(t, RoleServer)
-		if err := os.Remove(envPath); err != nil {
+	t.Run("broken partial pair", func(t *testing.T) {
+		layout := writeInstalledState(t, RoleServer)
+		if err := os.Remove(layout.EnvPath); err != nil {
 			t.Fatalf("failed to remove env file: %v", err)
 		}
-		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, true); got != StateBroken {
-			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateBroken)
+		if got := DetectWithLayout(layout); got != StateBroken {
+			t.Fatalf("DetectWithLayout() = %v, want %v", got, StateBroken)
 		}
 	})
 
 	t.Run("broken client data only", func(t *testing.T) {
-		root := t.TempDir()
-		unitPath := filepath.Join(root, "netsgo.service")
-		specPath := filepath.Join(root, "service.json")
-		envPath := filepath.Join(root, "service.env")
-		dataDir := filepath.Join(root, "client")
-		if err := os.MkdirAll(dataDir, 0o755); err != nil {
-			t.Fatalf("failed to create data dir: %v", err)
+		layout := testLayout(t, RoleClient)
+		if err := os.MkdirAll(layout.RuntimeDir, 0o755); err != nil {
+			t.Fatalf("failed to create runtime dir: %v", err)
 		}
-		if got := DetectWithPaths(unitPath, specPath, envPath, dataDir, false); got != StateBroken {
-			t.Fatalf("DetectWithPaths() = %v, want %v", got, StateBroken)
+		if got := DetectWithLayout(layout); got != StateBroken {
+			t.Fatalf("DetectWithLayout() = %v, want %v", got, StateBroken)
 		}
 	})
 }
 
-func TestInspectWithPathsReportsBrokenExecStart(t *testing.T) {
-	unitPath, specPath, envPath, dataDir := writeInstalledState(t, RoleServer)
-	writeStateTestFile(t, unitPath, 0o644)
+func TestInspectWithLayoutReportsBrokenExecStart(t *testing.T) {
+	layout := writeInstalledState(t, RoleServer)
+	writeStateTestFile(t, layout.UnitPath, 0o644)
 
-	inspection := InspectWithPaths(RoleServer, unitPath, specPath, envPath, dataDir)
+	inspection := InspectWithLayout(layout)
 	if inspection.State != StateBroken {
-		t.Fatalf("InspectWithPaths().State = %v, want %v", inspection.State, StateBroken)
+		t.Fatalf("InspectWithLayout().State = %v, want %v", inspection.State, StateBroken)
 	}
 	if len(inspection.Problems) == 0 {
 		t.Fatal("broken inspection should return a problem list")
 	}
 }
 
-func writeInstalledState(t *testing.T, role Role) (string, string, string, string) {
+func testLayout(t *testing.T, role Role) ServiceLayout {
 	t.Helper()
 	root := t.TempDir()
 	dataRoot := filepath.Join(root, "data")
-	dataDir := filepath.Join(dataRoot, string(role))
-	binaryPath := filepath.Join(root, "bin", "netsgo")
-	writeStateTestFile(t, binaryPath, 0o755)
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		t.Fatalf("failed to create role data dir: %v", err)
+	layout := NewLayout(role)
+	layout.BinaryPath = filepath.Join(root, "bin", "netsgo")
+	layout.DataDir = dataRoot
+	layout.RuntimeDir = filepath.Join(dataRoot, string(role))
+	layout.UnitPath = filepath.Join(root, UnitName(role))
+	layout.EnvPath = filepath.Join(root, string(role)+".env")
+	return layout
+}
+
+func writeInstalledState(t *testing.T, role Role) ServiceLayout {
+	t.Helper()
+	layout := testLayout(t, role)
+	writeStateTestFile(t, layout.BinaryPath, 0o755)
+	if err := os.MkdirAll(layout.RuntimeDir, 0o755); err != nil {
+		t.Fatalf("failed to create runtime dir: %v", err)
 	}
 
-	spec := ServiceSpec{
-		Role:        role,
-		ServiceName: "netsgo-" + string(role),
-		BinaryPath:  binaryPath,
-		DataDir:     dataRoot,
-		UnitPath:    filepath.Join(root, UnitName(role)),
-		EnvPath:     filepath.Join(root, string(role)+".env"),
-		SpecPath:    filepath.Join(root, string(role)+".json"),
-		RunAsUser:   SystemUser,
-	}
 	if role == RoleServer {
-		spec.ListenPort = 9527
-		spec.TLSMode = "off"
-		spec.ServerURL = "https://panel.example.com"
-		writeStateTestFile(t, recoverableServerDataPath(dataDir), 0o600)
-		if err := WriteServerSpec(spec); err != nil {
-			t.Fatalf("WriteServerSpec() failed: %v", err)
-		}
-		if err := WriteServerEnv(spec, ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: "https://panel.example.com"}); err != nil {
+		writeStateTestFile(t, recoverableServerDataPath(layout.RuntimeDir), 0o600)
+		if err := WriteServerEnv(layout, ServerEnv{Port: 9527, TLSMode: "off", ServerAddr: "https://panel.example.com"}); err != nil {
 			t.Fatalf("WriteServerEnv() failed: %v", err)
 		}
-		if err := WriteServerUnit(spec); err != nil {
+		if err := WriteServerUnit(layout); err != nil {
 			t.Fatalf("WriteServerUnit() failed: %v", err)
 		}
 	} else {
-		spec.ServerURL = "wss://panel.example.com"
-		if err := WriteClientSpec(spec); err != nil {
-			t.Fatalf("WriteClientSpec() failed: %v", err)
-		}
-		if err := WriteClientEnv(spec, ClientEnv{Server: "wss://panel.example.com", Key: "sk-test-key"}); err != nil {
+		if err := WriteClientEnv(layout, ClientEnv{Server: "wss://panel.example.com", Key: "sk-test-key"}); err != nil {
 			t.Fatalf("WriteClientEnv() failed: %v", err)
 		}
-		if err := WriteClientUnit(spec); err != nil {
+		if err := WriteClientUnit(layout); err != nil {
 			t.Fatalf("WriteClientUnit() failed: %v", err)
 		}
 	}
 
-	return spec.UnitPath, spec.SpecPath, spec.EnvPath, dataDir
+	return layout
 }
 
 func writeStateTestFile(t *testing.T, path string, mode os.FileMode) {

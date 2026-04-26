@@ -28,9 +28,8 @@ type serverDeps struct {
 	ApplyInit         func(string, server.InitParams) error
 	CurrentBinaryPath func() (string, error)
 	InstallBinary     func(string) error
-	WriteServerSpec   func(svcmgr.ServiceSpec) error
-	WriteServerEnv    func(svcmgr.ServiceSpec, svcmgr.ServerEnv) error
-	WriteServerUnit   func(svcmgr.ServiceSpec) error
+	WriteServerEnv    func(svcmgr.ServiceLayout, svcmgr.ServerEnv) error
+	WriteServerUnit   func(svcmgr.ServiceLayout) error
 	ValidateCustomTLS func(certPath, keyPath string) error
 	DaemonReload      func() error
 	EnableAndStart    func(string) error
@@ -238,17 +237,11 @@ func InstallServerWith(deps serverDeps) error {
 		InstallBinary:     deps.InstallBinary,
 		DaemonReload:      deps.DaemonReload,
 		EnableAndStart:    deps.EnableAndStart,
-	}, func(spec svcmgr.ServiceSpec) error {
-		spec.ListenPort = port
-		spec.TLSMode = tlsMode
-		spec.ServerURL = serverAddr
-		if err := deps.WriteServerSpec(spec); err != nil {
+	}, func(layout svcmgr.ServiceLayout) error {
+		if err := deps.WriteServerEnv(layout, svcmgr.ServerEnv{Port: port, TLSMode: tlsMode, TLSCert: tlsCert, TLSKey: tlsKey, TrustedProxies: trustedProxies, ServerAddr: serverAddr}); err != nil {
 			return err
 		}
-		if err := deps.WriteServerEnv(spec, svcmgr.ServerEnv{Port: port, TLSMode: tlsMode, TLSCert: tlsCert, TLSKey: tlsKey, TrustedProxies: trustedProxies, ServerAddr: serverAddr}); err != nil {
-			return err
-		}
-		return deps.WriteServerUnit(spec)
+		return deps.WriteServerUnit(layout)
 	}); err != nil {
 		return err
 	}
@@ -280,7 +273,6 @@ func defaultServerDeps() serverDeps {
 		ApplyInit:         server.ApplyInit,
 		CurrentBinaryPath: svcmgr.CurrentBinaryPath,
 		InstallBinary:     svcmgr.InstallBinary,
-		WriteServerSpec:   svcmgr.WriteServerSpec,
 		WriteServerEnv:    svcmgr.WriteServerEnv,
 		WriteServerUnit:   svcmgr.WriteServerUnit,
 		ValidateCustomTLS: func(certPath, keyPath string) error {

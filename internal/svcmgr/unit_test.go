@@ -8,14 +8,14 @@ import (
 )
 
 func TestWriteServerUnit(t *testing.T) {
-	spec := NewSpec(RoleServer)
-	spec.UnitPath = filepath.Join(t.TempDir(), "netsgo-server.service")
+	layout := NewLayout(RoleServer)
+	layout.UnitPath = filepath.Join(t.TempDir(), "netsgo-server.service")
 
-	if err := WriteServerUnit(spec); err != nil {
+	if err := WriteServerUnit(layout); err != nil {
 		t.Fatalf("WriteServerUnit() failed: %v", err)
 	}
 
-	content, err := os.ReadFile(spec.UnitPath)
+	content, err := os.ReadFile(layout.UnitPath)
 	if err != nil {
 		t.Fatalf("failed to read server unit: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestWriteServerUnit(t *testing.T) {
 		}
 	}
 
-	info, err := os.Stat(spec.UnitPath)
+	info, err := os.Stat(layout.UnitPath)
 	if err != nil {
 		t.Fatalf("failed to stat server unit: %v", err)
 	}
@@ -48,14 +48,14 @@ func TestWriteServerUnit(t *testing.T) {
 }
 
 func TestWriteClientUnit(t *testing.T) {
-	spec := NewSpec(RoleClient)
-	spec.UnitPath = filepath.Join(t.TempDir(), "netsgo-client.service")
+	layout := NewLayout(RoleClient)
+	layout.UnitPath = filepath.Join(t.TempDir(), "netsgo-client.service")
 
-	if err := WriteClientUnit(spec); err != nil {
+	if err := WriteClientUnit(layout); err != nil {
 		t.Fatalf("WriteClientUnit() failed: %v", err)
 	}
 
-	content, err := os.ReadFile(spec.UnitPath)
+	content, err := os.ReadFile(layout.UnitPath)
 	if err != nil {
 		t.Fatalf("failed to read client unit: %v", err)
 	}

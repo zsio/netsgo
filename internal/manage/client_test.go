@@ -1,22 +1,16 @@
 package manage
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"netsgo/internal/svcmgr"
 )
 
-func newInstalledClientDeps(t *testing.T, ui *fakeUI) (clientDeps, svcmgr.ServiceSpec) {
+func newInstalledClientDeps(t *testing.T, ui *fakeUI) (clientDeps, svcmgr.ServiceLayout) {
 	t.Helper()
 
-	spec := svcmgr.NewSpec(svcmgr.RoleClient)
-	spec.DataDir = t.TempDir()
-	spec.UnitPath = filepath.Join(spec.DataDir, "netsgo-client.service")
-	spec.EnvPath = filepath.Join(spec.DataDir, "client.env")
-	spec.SpecPath = filepath.Join(spec.DataDir, "client.json")
-	spec.ServerURL = "wss://panel.example.com"
+	layout := svcmgr.NewLayout(svcmgr.RoleClient)
 
 	return clientDeps{
 		UI: ui,
@@ -29,10 +23,9 @@ func newInstalledClientDeps(t *testing.T, ui *fakeUI) (clientDeps, svcmgr.Servic
 		RunInstall: func() error {
 			return nil
 		},
-		ReadClientSpec: func() (svcmgr.ServiceSpec, error) { return spec, nil },
 		ReadClientEnv: func() (svcmgr.ClientEnv, error) {
 			return svcmgr.ClientEnv{
-				Server:         spec.ServerURL,
+				Server:         "wss://panel.example.com",
 				Key:            "sk-secret",
 				TLSSkipVerify:  true,
 				TLSFingerprint: "sha256:example",
@@ -46,7 +39,7 @@ func newInstalledClientDeps(t *testing.T, ui *fakeUI) (clientDeps, svcmgr.Servic
 		DetectServer: func() svcmgr.InstallState {
 			return svcmgr.StateInstalled
 		},
-	}, spec
+	}, layout
 }
 
 func TestManageClientInspectRedactsKey(t *testing.T) {

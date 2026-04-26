@@ -21,7 +21,6 @@ type clientDeps struct {
 	IsEnabled      func() (bool, error)
 	Logs           func() error
 	RunInstall     func() error
-	ReadClientSpec func() (svcmgr.ServiceSpec, error)
 	ReadClientEnv  func() (svcmgr.ClientEnv, error)
 	DisableAndStop func() error
 	EnableAndStart func() error
@@ -84,11 +83,8 @@ func defaultClientDeps() clientDeps {
 		RunInstall: func() error {
 			return install.Run()
 		},
-		ReadClientSpec: func() (svcmgr.ServiceSpec, error) {
-			return svcmgr.ReadClientSpec(svcmgr.SpecPath(svcmgr.RoleClient))
-		},
 		ReadClientEnv: func() (svcmgr.ClientEnv, error) {
-			return svcmgr.ReadClientEnv(svcmgr.NewSpec(svcmgr.RoleClient))
+			return svcmgr.ReadClientEnv(svcmgr.NewLayout(svcmgr.RoleClient))
 		},
 		DisableAndStop: func() error { return svcmgr.DisableAndStop(svcmgr.UnitName(svcmgr.RoleClient)) },
 		EnableAndStart: func() error { return svcmgr.EnableAndStart(svcmgr.UnitName(svcmgr.RoleClient)) },
@@ -103,33 +99,29 @@ func defaultClientDeps() clientDeps {
 
 func showClientDetails(deps clientDeps) error {
 	inspection := deps.Inspect()
-	spec, specErr := loadClientSpec(deps)
+	layout := svcmgr.NewLayout(svcmgr.RoleClient)
 	env, envErr := loadClientEnv(deps)
-	identitySummary, identityErr := clientIdentitySummary(spec)
+	identitySummary, identityErr := clientIdentitySummary(layout)
 
 	rows := [][2]string{
-		{"Service name", spec.ServiceName},
+		{"Service name", layout.ServiceName},
 		{"Role", string(svcmgr.RoleClient)},
 		{"State", inspection.State.String()},
 		{"Installed", boolLabel(inspection.State == svcmgr.StateInstalled)},
 		{"Running", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsActive)},
 		{"Enabled", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsEnabled)},
-		{"Binary path", spec.BinaryPath},
-		{"Data dir", spec.DataDir},
-		{"Data path", clientDataPath(spec)},
-		{"Lock path", lockPath(spec.DataDir)},
+		{"Binary path", layout.BinaryPath},
+		{"Data dir", layout.DataDir},
+		{"Data path", clientDataPath(layout)},
+		{"Lock path", lockPath(layout.DataDir)},
 		{"Log target", "journald"},
-		{"Unit path", spec.UnitPath},
-		{"Env path", spec.EnvPath},
-		{"Spec path", spec.SpecPath},
-		{"Run as user", spec.RunAsUser},
-		{"Server URL", stringOrUnavailable(firstNonEmpty(env.Server, spec.ServerURL), envErr)},
+		{"Unit path", layout.UnitPath},
+		{"Env path", layout.EnvPath},
+		{"Run as user", layout.RunAsUser},
+		{"Server URL", stringOrUnavailable(env.Server, envErr)},
 		{"Skip TLS verification", boolOrUnavailable(env.TLSSkipVerify, envErr)},
 		{"TLS fingerprint", stringOrUnavailable(env.TLSFingerprint, envErr)},
 		{"Client identity state", stringOrUnavailable(identitySummary, identityErr)},
-	}
-	if specErr != nil {
-		rows = append(rows, [2]string{"Spec status", fmt.Sprintf("Unavailable (%v)", specErr)})
 	}
 	if envErr != nil {
 		rows = append(rows, [2]string{"Env status", fmt.Sprintf("Unavailable (%v)", envErr)})
@@ -140,17 +132,14 @@ func showClientDetails(deps clientDeps) error {
 }
 
 func uninstallClient(deps clientDeps) (bool, error) {
-	spec, err := loadClientSpec(deps)
-	if err != nil {
-		return false, err
-	}
+	layout := svcmgr.NewLayout(svcmgr.RoleClient)
 
 	rows := [][2]string{
 		{"Impact", "Remove the managed client service and local client identity/state"},
 		{"Effect", "Reinstalling the client creates a new local identity"},
 		{"Effect", "Server-side history is not cleaned automatically"},
 	}
-	rows = appendRemovalRows(rows, "Remove", spec.UnitPath, spec.EnvPath, spec.SpecPath, clientDataPath(spec))
+	rows = appendRemovalRows(rows, "Remove", layout.UnitPath, layout.EnvPath, clientDataPath(layout))
 	rows = append(rows, sharedBinaryPlanRow(deps.DetectServer))
 	deps.UI.PrintSummary("Client uninstall plan", rows)
 
@@ -165,7 +154,7 @@ func uninstallClient(deps clientDeps) (bool, error) {
 	if err := deps.DisableAndStop(); err != nil {
 		return false, err
 	}
-	if err := deps.RemovePaths(spec.UnitPath, spec.EnvPath, spec.SpecPath, clientDataPath(spec)); err != nil {
+	if err := deps.RemovePaths(layout.UnitPath, layout.EnvPath, clientDataPath(layout)); err != nil {
 		return false, err
 	}
 	if err := deps.DaemonReload(); err != nil {
@@ -211,13 +200,13 @@ func runBrokenClientMenu(deps clientDeps) error {
 }
 
 func cleanupBrokenClient(deps clientDeps) (bool, error) {
-	spec := svcmgr.NewSpec(svcmgr.RoleClient)
+	layout := svcmgr.NewLayout(svcmgr.RoleClient)
 
 	rows := [][2]string{
 		{"Impact", "Remove broken client service files and local client identity/state"},
 		{"Effect", "Reinstalling the client creates a new local identity"},
 	}
-	rows = appendRemovalRows(rows, "Remove", spec.UnitPath, spec.EnvPath, spec.SpecPath, clientDataPath(spec))
+	rows = appendRemovalRows(rows, "Remove", layout.UnitPath, layout.EnvPath, clientDataPath(layout))
 	rows = append(rows, sharedBinaryPlanRow(deps.DetectServer))
 	deps.UI.PrintSummary("Broken client cleanup plan", rows)
 
@@ -229,7 +218,7 @@ func cleanupBrokenClient(deps clientDeps) (bool, error) {
 		printManageCancelled(deps.UI)
 		return false, nil
 	}
-	if err := deps.RemovePaths(spec.UnitPath, spec.EnvPath, spec.SpecPath, clientDataPath(spec)); err != nil {
+	if err := deps.RemovePaths(layout.UnitPath, layout.EnvPath, clientDataPath(layout)); err != nil {
 		return false, err
 	}
 	if err := deps.DaemonReload(); err != nil {
@@ -242,18 +231,6 @@ func cleanupBrokenClient(deps clientDeps) (bool, error) {
 	return true, nil
 }
 
-func loadClientSpec(deps clientDeps) (svcmgr.ServiceSpec, error) {
-	spec := svcmgr.NewSpec(svcmgr.RoleClient)
-	if deps.ReadClientSpec == nil {
-		return spec, nil
-	}
-	readSpec, err := deps.ReadClientSpec()
-	if err != nil {
-		return spec, err
-	}
-	return readSpec, nil
-}
-
 func loadClientEnv(deps clientDeps) (svcmgr.ClientEnv, error) {
 	if deps.ReadClientEnv == nil {
 		return svcmgr.ClientEnv{}, nil
@@ -261,12 +238,12 @@ func loadClientEnv(deps clientDeps) (svcmgr.ClientEnv, error) {
 	return deps.ReadClientEnv()
 }
 
-func clientDataPath(spec svcmgr.ServiceSpec) string {
-	return filepath.Join(spec.DataDir, "client")
+func clientDataPath(layout svcmgr.ServiceLayout) string {
+	return layout.RuntimeDir
 }
 
-func clientIdentitySummary(spec svcmgr.ServiceSpec) (string, error) {
-	path := filepath.Join(clientDataPath(spec), clientstate.ClientDBFileName)
+func clientIdentitySummary(layout svcmgr.ServiceLayout) (string, error) {
+	path := filepath.Join(clientDataPath(layout), clientstate.ClientDBFileName)
 	state, ok, err := clientstate.LoadClientIdentity(path)
 	if err != nil {
 		return "", err

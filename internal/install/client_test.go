@@ -84,7 +84,7 @@ func TestInstallClientWithFreshInstall(t *testing.T) {
 		passwords: []string{"sk-test-key"},
 		confirms:  []bool{true, true},
 	}
-	writeSpecCalled := false
+	writeEnvCalled := false
 	err := InstallClientWith(clientDeps{
 		UI:                ui,
 		Detect:            func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateNotInstalled },
@@ -92,20 +92,16 @@ func TestInstallClientWithFreshInstall(t *testing.T) {
 		EnsureDirs:        func() error { return nil },
 		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
 		InstallBinary:     func(src string) error { return nil },
-		WriteClientSpec: func(spec svcmgr.ServiceSpec) error {
-			writeSpecCalled = true
-			return nil
-		},
-		WriteClientEnv:  func(spec svcmgr.ServiceSpec, env svcmgr.ClientEnv) error { return nil },
-		WriteClientUnit: func(spec svcmgr.ServiceSpec) error { return nil },
-		DaemonReload:    func() error { return nil },
-		EnableAndStart:  func(unit string) error { return nil },
+		WriteClientEnv:    func(layout svcmgr.ServiceLayout, env svcmgr.ClientEnv) error { writeEnvCalled = true; return nil },
+		WriteClientUnit:   func(layout svcmgr.ServiceLayout) error { return nil },
+		DaemonReload:      func() error { return nil },
+		EnableAndStart:    func(unit string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("fresh client install should not error: %v", err)
 	}
-	if !writeSpecCalled {
-		t.Fatal("fresh client install should write spec")
+	if !writeEnvCalled {
+		t.Fatal("fresh client install should write env/unit")
 	}
 	if len(ui.summaries) != 2 {
 		t.Fatalf("should show confirmation and completion summaries, got %d", len(ui.summaries))
@@ -129,9 +125,8 @@ func TestInstallClientWithEnsureDirs(t *testing.T) {
 		EnsureDirs:        func() error { ensureDirsCalled = true; return nil },
 		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
 		InstallBinary:     func(src string) error { return nil },
-		WriteClientSpec:   func(spec svcmgr.ServiceSpec) error { return nil },
-		WriteClientEnv:    func(spec svcmgr.ServiceSpec, env svcmgr.ClientEnv) error { return nil },
-		WriteClientUnit:   func(spec svcmgr.ServiceSpec) error { return nil },
+		WriteClientEnv:    func(layout svcmgr.ServiceLayout, env svcmgr.ClientEnv) error { return nil },
+		WriteClientUnit:   func(layout svcmgr.ServiceLayout) error { return nil },
 		DaemonReload:      func() error { return nil },
 		EnableAndStart:    func(unit string) error { return nil },
 	})
@@ -156,9 +151,8 @@ func TestInstallClientWithConfirmNoShowsCancelledSummary(t *testing.T) {
 		EnsureDirs:        func() error { return nil },
 		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
 		InstallBinary:     func(src string) error { return nil },
-		WriteClientSpec:   func(spec svcmgr.ServiceSpec) error { return nil },
-		WriteClientEnv:    func(spec svcmgr.ServiceSpec, env svcmgr.ClientEnv) error { return nil },
-		WriteClientUnit:   func(spec svcmgr.ServiceSpec) error { return nil },
+		WriteClientEnv:    func(layout svcmgr.ServiceLayout, env svcmgr.ClientEnv) error { return nil },
+		WriteClientUnit:   func(layout svcmgr.ServiceLayout) error { return nil },
 		DaemonReload:      func() error { return nil },
 		EnableAndStart:    func(unit string) error { return nil },
 	})
