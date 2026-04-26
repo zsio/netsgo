@@ -1,6 +1,6 @@
 # 编译产物
 bin/
-netsgo
+/netsgo
 *.exe
 tmp/
 dist

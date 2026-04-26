@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	manageActionOptions  = []string{"Status", "Inspect", "Logs", "Start", "Stop", "Restart", "Uninstall", "Back"}
+	manageActionOptions  = []string{"Status", "Inspect", "Logs", "Start", "Stop", "Restart", "Update", "Uninstall", "Back"}
 	errReturnToSelection = errors.New("manage: return to selection")
 )
 
@@ -22,6 +22,7 @@ type serviceMenuDeps struct {
 	Logs      func() error
 	Start     func() error
 	Stop      func() error
+	Update    func() error
 	Uninstall func() (bool, error)
 }
 
@@ -56,6 +57,10 @@ func runServiceMenu(deps serviceMenuDeps) error {
 				return err
 			}
 		case 6:
+			if err := deps.Update(); err != nil {
+				return err
+			}
+		case 7:
 			exitMenu, err := deps.Uninstall()
 			if err != nil {
 				return err
@@ -63,7 +68,7 @@ func runServiceMenu(deps serviceMenuDeps) error {
 			if exitMenu {
 				return errReturnToSelection
 			}
-		case 7:
+		case 8:
 			return errReturnToSelection
 		default:
 			return errReturnToSelection

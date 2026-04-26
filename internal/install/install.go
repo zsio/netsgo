@@ -2,6 +2,7 @@ package install
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
@@ -41,6 +42,7 @@ type Deps struct {
 	UI            uiProvider
 	InstallServer func() error
 	InstallClient func() error
+	LookPath      func(file string) (string, error)
 	Exec          func(argv0 string, argv []string, envv []string) error
 }
 
@@ -57,7 +59,8 @@ func Run() error {
 		InstallClient: func() error {
 			return InstallClient()
 		},
-		Exec: syscall.Exec,
+		LookPath: exec.LookPath,
+		Exec:     syscall.Exec,
 	})
 }
 
@@ -72,7 +75,14 @@ func RunWith(deps Deps) error {
 		return errors.New("install must be run in an interactive TTY")
 	}
 	if deps.UID != 0 {
-		return deps.Exec("/usr/bin/sudo", append([]string{"sudo"}, os.Args...), os.Environ())
+		if deps.LookPath == nil {
+			deps.LookPath = exec.LookPath
+		}
+		sudoPath, err := deps.LookPath("sudo")
+		if err != nil {
+			return fmt.Errorf("sudo is required to rerun this command as root, but it was not found in PATH: %w", err)
+		}
+		return deps.Exec(sudoPath, append([]string{"sudo"}, os.Args...), os.Environ())
 	}
 	if deps.UI == nil {
 		deps.UI = defaultUI{}
