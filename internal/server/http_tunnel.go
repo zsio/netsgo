@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -354,7 +355,12 @@ func findHTTPDomainConflictNames(domain, excludeName, excludeClientID string, se
 	})
 
 	if server.store != nil {
-		for _, tunnel := range server.store.GetAllTunnels() {
+		allTunnels, err := server.store.GetAllTunnels()
+		if err != nil {
+			log.Printf("⚠️ failed to load tunnels for HTTP tunnel conflict detection: %v", err)
+			return conflicts
+		}
+		for _, tunnel := range allTunnels {
 			matchAndAppend(tunnel.ClientID, tunnel.Name, tunnel.Type, tunnel.Domain)
 		}
 	}

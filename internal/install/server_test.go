@@ -36,7 +36,7 @@ func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 		confirms: []bool{true, true},
 	}
 	applyInitCalled := false
-	writeSpecCalled := false
+	writeEnvCalled := false
 	err := InstallServerWith(serverDeps{
 		UI:            ui,
 		Detect:        func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateHistoricalDataOnly },
@@ -52,12 +52,8 @@ func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 		},
 		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
 		InstallBinary:     func(src string) error { return nil },
-		WriteServerSpec: func(spec svcmgr.ServiceSpec) error {
-			writeSpecCalled = true
-			return nil
-		},
-		WriteServerEnv:  func(spec svcmgr.ServiceSpec, env svcmgr.ServerEnv) error { return nil },
-		WriteServerUnit: func(spec svcmgr.ServiceSpec) error { return nil },
+		WriteServerEnv:    func(layout svcmgr.ServiceLayout, env svcmgr.ServerEnv) error { writeEnvCalled = true; return nil },
+		WriteServerUnit:   func(layout svcmgr.ServiceLayout) error { return nil },
 		ValidateCustomTLS: func(certPath, keyPath string) error {
 			return nil
 		},
@@ -70,8 +66,8 @@ func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 	if applyInitCalled {
 		t.Fatal("historical data recovery install should not call ApplyInit again")
 	}
-	if !writeSpecCalled {
-		t.Fatal("historical data recovery install should still write spec/env/unit")
+	if !writeEnvCalled {
+		t.Fatal("historical data recovery install should still write env/unit")
 	}
 	if len(ui.summaries) != 3 {
 		t.Fatalf("expected 3 summaries (historical data, install confirm, complete), got %d", len(ui.summaries))
@@ -89,7 +85,7 @@ func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 		inputs:   []string{"9527", "127.0.0.1/32"},
 		confirms: []bool{false},
 	}
-	writeSpecCalled := false
+	writeEnvCalled := false
 	err := InstallServerWith(serverDeps{
 		UI:            ui,
 		Detect:        func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateHistoricalDataOnly },
@@ -102,19 +98,15 @@ func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 		ApplyInit:         func(dataDir string, params server.InitParams) error { return nil },
 		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
 		InstallBinary:     func(src string) error { return nil },
-		WriteServerSpec: func(spec svcmgr.ServiceSpec) error {
-			writeSpecCalled = true
-			return nil
-		},
-		WriteServerEnv:  func(spec svcmgr.ServiceSpec, env svcmgr.ServerEnv) error { return nil },
-		WriteServerUnit: func(spec svcmgr.ServiceSpec) error { return nil },
-		DaemonReload:    func() error { return nil },
-		EnableAndStart:  func(unit string) error { return nil },
+		WriteServerEnv:    func(layout svcmgr.ServiceLayout, env svcmgr.ServerEnv) error { writeEnvCalled = true; return nil },
+		WriteServerUnit:   func(layout svcmgr.ServiceLayout) error { return nil },
+		DaemonReload:      func() error { return nil },
+		EnableAndStart:    func(unit string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("declining historical data reuse should not error: %v", err)
 	}
-	if writeSpecCalled {
+	if writeEnvCalled {
 		t.Fatal("should not continue install after declining historical data")
 	}
 	if len(ui.summaries) != 2 || ui.summaries[1].title != "Installation cancelled" {
@@ -138,12 +130,11 @@ func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 		ApplyInit:         func(dataDir string, params server.InitParams) error { return nil },
 		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
 		InstallBinary:     func(src string) error { return nil },
-		WriteServerSpec:   func(spec svcmgr.ServiceSpec) error { return nil },
-		WriteServerEnv: func(spec svcmgr.ServiceSpec, env svcmgr.ServerEnv) error {
+		WriteServerEnv: func(layout svcmgr.ServiceLayout, env svcmgr.ServerEnv) error {
 			writtenEnv = env
 			return nil
 		},
-		WriteServerUnit: func(spec svcmgr.ServiceSpec) error { return nil },
+		WriteServerUnit: func(layout svcmgr.ServiceLayout) error { return nil },
 		ValidateCustomTLS: func(certPath, keyPath string) error {
 			return nil
 		},
@@ -195,9 +186,8 @@ func TestInstallServerWithConfirmNoPrintsCancelledSummary(t *testing.T) {
 		ApplyInit:         func(dataDir string, params server.InitParams) error { return nil },
 		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
 		InstallBinary:     func(src string) error { return nil },
-		WriteServerSpec:   func(spec svcmgr.ServiceSpec) error { return nil },
-		WriteServerEnv:    func(spec svcmgr.ServiceSpec, env svcmgr.ServerEnv) error { return nil },
-		WriteServerUnit:   func(spec svcmgr.ServiceSpec) error { return nil },
+		WriteServerEnv:    func(layout svcmgr.ServiceLayout, env svcmgr.ServerEnv) error { return nil },
+		WriteServerUnit:   func(layout svcmgr.ServiceLayout) error { return nil },
 		DaemonReload:      func() error { return nil },
 		EnableAndStart:    func(unit string) error { return nil },
 	})

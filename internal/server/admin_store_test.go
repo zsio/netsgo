@@ -1,9 +1,11 @@
 package server
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,10 +22,11 @@ import (
 func newTestAdminStore(t *testing.T) *AdminStore {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := NewAdminStore(filepath.Join(dir, "admin.json"))
+	store, err := NewAdminStore(filepath.Join(dir, serverDBFileName))
 	if err != nil {
 		t.Fatalf("NewAdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	store.bcryptCost = bcrypt.MinCost // use minimum cost for testing to avoid bcrypt slowing down test suite
 	return store
 }
@@ -36,6 +39,74 @@ func newInitializedAdminStore(t *testing.T) *AdminStore {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 	return store
+}
+
+func countAdminSessions(t *testing.T, store *AdminStore) int {
+	t.Helper()
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM admin_sessions`).Scan(&count); err != nil {
+		t.Fatalf("count admin sessions: %v", err)
+	}
+	return count
+}
+
+func expireAdminSession(t *testing.T, store *AdminStore, sessionID string) {
+	t.Helper()
+	if _, err := store.db.Exec(`UPDATE admin_sessions SET expires_at = ? WHERE id = ?`, formatTime(time.Now().Add(-time.Hour)), sessionID); err != nil {
+		t.Fatalf("expire admin session: %v", err)
+	}
+}
+
+func expireAllAdminSessions(t *testing.T, store *AdminStore) {
+	t.Helper()
+	if _, err := store.db.Exec(`UPDATE admin_sessions SET expires_at = ?`, formatTime(time.Now().Add(-time.Hour))); err != nil {
+		t.Fatalf("expire admin sessions: %v", err)
+	}
+}
+
+func adminUserLastLogin(t *testing.T, store *AdminStore, userID string) *time.Time {
+	t.Helper()
+	var raw sql.NullString
+	if err := store.db.QueryRow(`SELECT last_login FROM admin_users WHERE id = ?`, userID).Scan(&raw); err != nil {
+		t.Fatalf("load admin user last_login: %v", err)
+	}
+	lastLogin, err := parseOptionalTime(raw)
+	if err != nil {
+		t.Fatalf("parse last_login: %v", err)
+	}
+	return lastLogin
+}
+
+func countClientTokens(t *testing.T, store *AdminStore) int {
+	t.Helper()
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM client_tokens`).Scan(&count); err != nil {
+		t.Fatalf("count client tokens: %v", err)
+	}
+	return count
+}
+
+func firstClientToken(t *testing.T, store *AdminStore) ClientToken {
+	t.Helper()
+	token, err := scanClientToken(store.db.QueryRow(`SELECT ` + clientTokenSelectColumns() + ` FROM client_tokens ORDER BY created_at, id LIMIT 1`))
+	if err != nil {
+		t.Fatalf("load first client token: %v", err)
+	}
+	return token
+}
+
+func expireClientTokenByInstallID(t *testing.T, store *AdminStore, installID string) {
+	t.Helper()
+	if _, err := store.db.Exec(`UPDATE client_tokens SET last_active_at = ? WHERE install_id = ?`, formatTime(time.Now().Add(-8*24*time.Hour)), installID); err != nil {
+		t.Fatalf("expire client token by install_id: %v", err)
+	}
+}
+
+func expireAllClientTokens(t *testing.T, store *AdminStore) {
+	t.Helper()
+	if _, err := store.db.Exec(`UPDATE client_tokens SET last_active_at = ?`, formatTime(time.Now().Add(-8*24*time.Hour))); err != nil {
+		t.Fatalf("expire client tokens: %v", err)
+	}
 }
 
 // --- 初始化 ---
@@ -117,6 +188,36 @@ func TestAdminStore_Initialize_WeakPassword(t *testing.T) {
 	}
 }
 
+func TestAdminStore_UsesSQLiteFileAndNoJsonFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "netsgo.db")
+	store, err := NewAdminStore(path)
+	if err != nil {
+		t.Fatalf("NewAdminStore failed: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	store.bcryptCost = bcrypt.MinCost
+	if err := store.Initialize("admin", "Admin1234", "https://example.com", []PortRange{{Start: 10000, End: 10010}}); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("SQLite DB should exist at %s: %v", path, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "admin.json")); !os.IsNotExist(err) {
+		t.Fatalf("admin.json should not exist, stat error = %v", err)
+	}
+
+	reloaded, err := NewAdminStore(path)
+	if err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	t.Cleanup(func() { _ = reloaded.Close() })
+	if _, err := reloaded.ValidateAdminPassword("admin", "Admin1234"); err != nil {
+		t.Fatalf("admin password should survive reload: %v", err)
+	}
+}
+
 // --- 管理员认证 ---
 
 func TestAdminStore_ValidateAdminPassword_Success(t *testing.T) {
@@ -184,22 +285,32 @@ func TestAdminStore_GetJWTSecret_AfterInit(t *testing.T) {
 
 func TestAdminStore_NewInitializedWithoutJWTSecret_Fails(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "admin.json")
-	data := []byte(`{
-  "initialized": true,
-  "jwt_secret": "",
-  "api_keys": [],
-  "admin_users": [],
-  "clients": [],
-  "client_tokens": [],
-  "events": [],
-  "sessions": []
-}`)
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatalf("failed to write test admin.json: %v", err)
+	path := filepath.Join(dir, serverDBFileName)
+	store, err := NewAdminStore(path)
+	if err != nil {
+		t.Fatalf("NewAdminStore failed: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Initialize("admin", "Admin1234", "https://example.com", nil); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+	if _, err := store.db.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("enable ignore_check_constraints: %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE server_config SET initialized = 1, jwt_secret = '' WHERE id = 1`); err != nil {
+		t.Fatalf("clear jwt_secret: %v", err)
+	}
+	if _, err := store.db.Exec(`PRAGMA ignore_check_constraints = OFF`); err != nil {
+		t.Fatalf("disable ignore_check_constraints: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store db: %v", err)
 	}
 
-	_, err := NewAdminStore(path)
+	invalidStore, err := NewAdminStore(path)
+	if invalidStore != nil {
+		t.Cleanup(func() { _ = invalidStore.Close() })
+	}
 	if !errors.Is(err, errJWTSecretMissing) {
 		t.Fatalf("initialized instance missing jwt_secret should return errJWTSecretMissing, got %v", err)
 	}
@@ -207,23 +318,25 @@ func TestAdminStore_NewInitializedWithoutJWTSecret_Fails(t *testing.T) {
 
 func TestAdminStore_NewCorruptedFileFails(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "admin.json")
+	path := filepath.Join(dir, serverDBFileName)
 	if err := os.WriteFile(path, []byte(`{{{invalid json`), 0o600); err != nil {
-		t.Fatalf("failed to write corrupted admin.json: %v", err)
+		t.Fatalf("failed to write corrupted SQLite file: %v", err)
 	}
 
-	if _, err := NewAdminStore(path); err == nil {
-		t.Fatal("corrupted admin.json should cause NewAdminStore to return error")
+	if store, err := NewAdminStore(path); err == nil {
+		t.Cleanup(func() { _ = store.Close() })
+		t.Fatal("corrupted SQLite file should cause NewAdminStore to return error")
 	}
 }
 
 func TestAdminStore_ClientBandwidthSettingsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "admin.json")
+	path := filepath.Join(dir, serverDBFileName)
 	store, err := NewAdminStore(path)
 	if err != nil {
 		t.Fatalf("NewAdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 
 	client, err := store.GetOrCreateClient("install-bandwidth-roundtrip", protocol.ClientInfo{
 		Hostname: "bandwidth-roundtrip",
@@ -245,12 +358,96 @@ func TestAdminStore_ClientBandwidthSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reloading AdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = reloaded.Close() })
 	record, ok := reloaded.GetRegisteredClient(client.ID)
 	if !ok {
 		t.Fatalf("client %s missing after reload", client.ID)
 	}
 	if record.IngressBPS != 123 || record.EgressBPS != 456 {
 		t.Fatalf("bandwidth settings did not round-trip: %+v", record)
+	}
+}
+
+func TestAdminStore_UpdateClientStatsPreservesZeroUpdatedAt(t *testing.T) {
+	store := newTestAdminStore(t)
+	client, err := store.GetOrCreateClient("install-zero-updated-at", protocol.ClientInfo{
+		Hostname: "zero-updated-at",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("GetOrCreateClient failed: %v", err)
+	}
+
+	stats := protocol.SystemStats{
+		CPUUsage: 12.5,
+		MemTotal: 1024,
+		MemUsed:  512,
+	}
+	if err := store.UpdateClientStats(client.ID, client.Info, stats, "127.0.0.1:10002"); err != nil {
+		t.Fatalf("UpdateClientStats failed: %v", err)
+	}
+
+	record, ok := store.GetRegisteredClient(client.ID)
+	if !ok {
+		t.Fatalf("client %s missing after stats update", client.ID)
+	}
+	if record.Stats == nil {
+		t.Fatal("client stats should be persisted")
+	}
+	if !record.Stats.UpdatedAt.IsZero() {
+		t.Fatalf("zero UpdatedAt should be preserved, got %s", record.Stats.UpdatedAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestAdminStore_UpdateClientStatsRejectsUint64SQLiteOverflow(t *testing.T) {
+	store := newTestAdminStore(t)
+	client, err := store.GetOrCreateClient("install-overflow-stats", protocol.ClientInfo{
+		Hostname: "overflow-stats",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("GetOrCreateClient failed: %v", err)
+	}
+
+	err = store.UpdateClientStats(client.ID, client.Info, protocol.SystemStats{
+		MemTotal: uint64(1) << 63,
+	}, "127.0.0.1:10002")
+	if err == nil {
+		t.Fatal("UpdateClientStats should reject uint64 values that cannot fit in SQLite INTEGER")
+	}
+	if !strings.Contains(err.Error(), "mem_total") {
+		t.Fatalf("overflow error should name the rejected field, got %v", err)
+	}
+}
+
+func TestLoadClientStatsRejectsNegativePersistedCounter(t *testing.T) {
+	store := newTestAdminStore(t)
+	client, err := store.GetOrCreateClient("install-negative-stats", protocol.ClientInfo{
+		Hostname: "negative-stats",
+		OS:       "linux",
+		Arch:     "amd64",
+		Version:  "0.1.0",
+	}, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("GetOrCreateClient failed: %v", err)
+	}
+	if err := store.UpdateClientStats(client.ID, client.Info, protocol.SystemStats{
+		MemTotal: 1024,
+	}, "127.0.0.1:10002"); err != nil {
+		t.Fatalf("UpdateClientStats failed: %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE client_stats SET mem_total = -1 WHERE client_id = ?`, client.ID); err != nil {
+		t.Fatalf("failed to inject negative persisted counter: %v", err)
+	}
+
+	if _, err := loadClientStats(store.db, client.ID); err == nil {
+		t.Fatal("loadClientStats should reject negative persisted counters")
+	} else if !strings.Contains(err.Error(), "mem_total") {
+		t.Fatalf("negative counter error should name the rejected field, got %v", err)
 	}
 }
 
@@ -436,12 +633,13 @@ func TestAdminStore_APIKey_DisableEnableDeleteLifecycle(t *testing.T) {
 
 func TestAdminStore_PersistedSecretsSurviveReload(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "admin.json")
+	path := filepath.Join(dir, serverDBFileName)
 
 	store, err := NewAdminStore(path)
 	if err != nil {
 		t.Fatalf("NewAdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Initialize("admin", "Admin1234", "https://example.com", nil); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
@@ -453,6 +651,7 @@ func TestAdminStore_PersistedSecretsSurviveReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reloading AdminStore failed: %v", err)
 	}
+	t.Cleanup(func() { _ = reloaded.Close() })
 
 	if _, err := reloaded.ValidateAdminPassword("admin", "Admin1234"); err != nil {
 		t.Fatalf("admin password should still be verifiable after reload: %v", err)
@@ -490,13 +689,7 @@ func TestAdminStore_Session_GetExpired(t *testing.T) {
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "ua")
 
 	// 手动设置为过期
-	store.mu.Lock()
-	for i := range store.data.Sessions {
-		if store.data.Sessions[i].ID == session.ID {
-			store.data.Sessions[i].ExpiresAt = time.Now().Add(-1 * time.Hour)
-		}
-	}
-	store.mu.Unlock()
+	expireAdminSession(t, store, session.ID)
 
 	got := store.GetSession(session.ID)
 	if got != nil {
@@ -562,19 +755,13 @@ func TestAdminStore_Session_CleanExpired(t *testing.T) {
 	mustCreateSession(t, store, "user-1", "admin", "admin", "1.1.1.1", "ua")
 
 	// 手动将所有 session 设为过期
-	store.mu.Lock()
-	for i := range store.data.Sessions {
-		store.data.Sessions[i].ExpiresAt = time.Now().Add(-1 * time.Hour)
-	}
-	store.mu.Unlock()
+	expireAllAdminSessions(t, store)
 
 	if err := store.CleanExpiredSessions(); err != nil {
 		t.Fatalf("CleanExpiredSessions failed: %v", err)
 	}
 
-	store.mu.RLock()
-	count := len(store.data.Sessions)
-	store.mu.RUnlock()
+	count := countAdminSessions(t, store)
 
 	if count != 0 {
 		t.Errorf("should have no sessions after cleanup, got %d", count)
@@ -583,8 +770,12 @@ func TestAdminStore_Session_CleanExpired(t *testing.T) {
 
 func TestAdminStore_CreateSession_SaveFailureRollsBack(t *testing.T) {
 	store := newInitializedAdminStore(t)
-	originalSessions := len(store.data.Sessions)
-	originalLastLogin := store.data.AdminUsers[0].LastLogin
+	user, err := store.ValidateAdminPassword("admin", "Admin1234")
+	if err != nil {
+		t.Fatalf("ValidateAdminPassword failed: %v", err)
+	}
+	originalSessions := countAdminSessions(t, store)
+	originalLastLogin := adminUserLastLogin(t, store, user.ID)
 	saveErr := errors.New("save failed")
 	store.failSaveErr = saveErr
 	store.failSaveCount = 1
@@ -596,10 +787,14 @@ func TestAdminStore_CreateSession_SaveFailureRollsBack(t *testing.T) {
 	if session != nil {
 		t.Fatal("should not return session when save fails")
 	}
-	if got := len(store.data.Sessions); got != originalSessions {
+	if got := countAdminSessions(t, store); got != originalSessions {
 		t.Fatalf("session count should rollback to %d after save failure, got %d", originalSessions, got)
 	}
-	if store.data.AdminUsers[0].LastLogin != originalLastLogin {
+	gotLastLogin := adminUserLastLogin(t, store, user.ID)
+	if (gotLastLogin == nil) != (originalLastLogin == nil) {
+		t.Fatal("LastLogin should rollback after save failure")
+	}
+	if gotLastLogin != nil && !gotLastLogin.Equal(*originalLastLogin) {
 		t.Fatal("LastLogin should rollback after save failure")
 	}
 }
@@ -615,17 +810,9 @@ func TestAdminStore_UpdateAdminLoginTime(t *testing.T) {
 	}
 
 	// 再次获取用户信息
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	for _, u := range store.data.AdminUsers {
-		if u.ID == user.ID {
-			if u.LastLogin == nil {
-				t.Error("LastLogin should be set")
-			}
-			return
-		}
+	if lastLogin := adminUserLastLogin(t, store, user.ID); lastLogin == nil {
+		t.Error("LastLogin should be set")
 	}
-	t.Error("user not found")
 }
 
 func TestAdminStore_AddAPIKey_SaveFailureRollsBack(t *testing.T) {
@@ -713,7 +900,7 @@ func TestAdminStore_Token_ExchangeSaveFailureRollsBack(t *testing.T) {
 	if tokenStr != "" || clientToken != nil {
 		t.Fatal("should not return valid token when save fails")
 	}
-	if got := len(store.data.ClientTokens); got != 0 {
+	if got := countClientTokens(t, store); got != 0 {
 		t.Fatalf("should not have residual ClientToken after save failure, got %d", got)
 	}
 	keys := store.GetAPIKeys()
@@ -768,13 +955,7 @@ func TestAdminStore_Token_ValidateExpired(t *testing.T) {
 	}
 
 	// 手动设置 Token 为过期（超过 7 天不活跃）
-	store.mu.Lock()
-	for i := range store.data.ClientTokens {
-		if store.data.ClientTokens[i].InstallID == "install-1" {
-			store.data.ClientTokens[i].LastActiveAt = time.Now().Add(-8 * 24 * time.Hour)
-		}
-	}
-	store.mu.Unlock()
+	expireClientTokenByInstallID(t, store, "install-1")
 
 	_, err = store.ValidateClientToken(tokenStr, "install-1")
 	if err == nil {
@@ -797,9 +978,7 @@ func TestAdminStore_Token_ValidateSaveFailureReturnsError(t *testing.T) {
 		t.Fatalf("ExchangeToken failed: %v", err)
 	}
 
-	store.mu.RLock()
-	originalLastActiveAt := store.data.ClientTokens[0].LastActiveAt
-	store.mu.RUnlock()
+	originalLastActiveAt := firstClientToken(t, store).LastActiveAt
 
 	saveErr := errors.New("save failed")
 	store.failSaveErr = saveErr
@@ -812,15 +991,14 @@ func TestAdminStore_Token_ValidateSaveFailureReturnsError(t *testing.T) {
 	if result != nil {
 		t.Fatal("should not return valid token when save fails")
 	}
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	if len(store.data.ClientTokens) != 1 {
-		t.Fatalf("token record count should remain 1 after save failure, got %d", len(store.data.ClientTokens))
+	gotToken := firstClientToken(t, store)
+	if count := countClientTokens(t, store); count != 1 {
+		t.Fatalf("token record count should remain 1 after save failure, got %d", count)
 	}
-	if store.data.ClientTokens[0].ID != clientToken.ID {
-		t.Fatalf("token ID should not change, expected %s, got %s", clientToken.ID, store.data.ClientTokens[0].ID)
+	if gotToken.ID != clientToken.ID {
+		t.Fatalf("token ID should not change, expected %s, got %s", clientToken.ID, gotToken.ID)
 	}
-	if !store.data.ClientTokens[0].LastActiveAt.Equal(originalLastActiveAt) {
+	if !gotToken.LastActiveAt.Equal(originalLastActiveAt) {
 		t.Fatal("LastActiveAt should rollback after save failure")
 	}
 }
@@ -901,19 +1079,13 @@ func TestAdminStore_Token_CleanExpired(t *testing.T) {
 	}
 
 	// 手动设置为过期
-	store.mu.Lock()
-	for i := range store.data.ClientTokens {
-		store.data.ClientTokens[i].LastActiveAt = time.Now().Add(-8 * 24 * time.Hour)
-	}
-	store.mu.Unlock()
+	expireAllClientTokens(t, store)
 
 	if err := store.CleanExpiredTokens(); err != nil {
 		t.Fatalf("CleanExpiredTokens failed: %v", err)
 	}
 
-	store.mu.RLock()
-	count := len(store.data.ClientTokens)
-	store.mu.RUnlock()
+	count := countClientTokens(t, store)
 
 	if count != 0 {
 		t.Errorf("should have no tokens after cleanup, got %d", count)

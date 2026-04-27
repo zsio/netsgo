@@ -19,9 +19,8 @@ type clientDeps struct {
 	EnsureDirs        func() error
 	CurrentBinaryPath func() (string, error)
 	InstallBinary     func(string) error
-	WriteClientSpec   func(svcmgr.ServiceSpec) error
-	WriteClientEnv    func(svcmgr.ServiceSpec, svcmgr.ClientEnv) error
-	WriteClientUnit   func(svcmgr.ServiceSpec) error
+	WriteClientEnv    func(svcmgr.ServiceLayout, svcmgr.ClientEnv) error
+	WriteClientUnit   func(svcmgr.ServiceLayout) error
 	DaemonReload      func() error
 	EnableAndStart    func(string) error
 }
@@ -114,15 +113,11 @@ func InstallClientWith(deps clientDeps) error {
 		InstallBinary:     deps.InstallBinary,
 		DaemonReload:      deps.DaemonReload,
 		EnableAndStart:    deps.EnableAndStart,
-	}, func(spec svcmgr.ServiceSpec) error {
-		spec.ServerURL = serverURL
-		if err := deps.WriteClientSpec(spec); err != nil {
+	}, func(layout svcmgr.ServiceLayout) error {
+		if err := deps.WriteClientEnv(layout, svcmgr.ClientEnv{Server: serverURL, Key: clientKey, TLSSkipVerify: tlsSkipVerify, TLSFingerprint: tlsFingerprint}); err != nil {
 			return err
 		}
-		if err := deps.WriteClientEnv(spec, svcmgr.ClientEnv{Server: serverURL, Key: clientKey, TLSSkipVerify: tlsSkipVerify, TLSFingerprint: tlsFingerprint}); err != nil {
-			return err
-		}
-		return deps.WriteClientUnit(spec)
+		return deps.WriteClientUnit(layout)
 	}); err != nil {
 		return err
 	}
@@ -139,7 +134,6 @@ func defaultClientDeps() clientDeps {
 		EnsureDirs:        ensureManagedClientDirs,
 		CurrentBinaryPath: svcmgr.CurrentBinaryPath,
 		InstallBinary:     svcmgr.InstallBinary,
-		WriteClientSpec:   svcmgr.WriteClientSpec,
 		WriteClientEnv:    svcmgr.WriteClientEnv,
 		WriteClientUnit:   svcmgr.WriteClientUnit,
 		DaemonReload:      svcmgr.DaemonReload,

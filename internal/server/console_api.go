@@ -134,7 +134,10 @@ func (s *Server) collectClientViews() []clientView {
 				LastIP:      registered.LastIP,
 			}
 			if s.store != nil {
-				stored := s.store.GetTunnelsByClientID(registered.ID)
+				stored, err := s.store.GetTunnelsByClientID(registered.ID)
+				if err != nil {
+					log.Printf("⚠️ failed to load tunnels for client %s: %v", registered.ID, err)
+				}
 				view.Proxies = make([]protocol.ProxyConfig, 0, len(stored))
 				for _, tunnel := range stored {
 					view.Proxies = append(view.Proxies, proxyConfigForClientView(storedTunnelToProxyConfig(tunnel), false))

@@ -15,7 +15,11 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 		return
 	}
 
-	tunnels := s.store.GetTunnelsByClientID(client.ID)
+	tunnels, err := s.store.GetTunnelsByClientID(client.ID)
+	if err != nil {
+		log.Printf("⚠️ failed to load tunnels for client %s: %v", client.ID, err)
+		return
+	}
 	if len(tunnels) == 0 {
 		return
 	}

@@ -1,26 +1,24 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
 
 func newTestTrafficStore(t *testing.T) (*TrafficStore, func()) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "traffic_test_*")
+
+	ts, err := NewTrafficStore(filepath.Join(t.TempDir(), serverDBFileName))
 	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	ts, err := NewTrafficStore(filepath.Join(dir, "traffic.json"))
-	if err != nil {
-		_ = os.RemoveAll(dir)
 		t.Fatalf("Failed to create TrafficStore: %v", err)
 	}
-	return ts, func() { _ = os.RemoveAll(dir) }
+	return ts, func() { _ = ts.Close() }
 }
 
 func mustSingleSeries(t *testing.T, result TrafficQueryResult, tunnelName string) TunnelTrafficSeries {
@@ -32,6 +30,24 @@ func mustSingleSeries(t *testing.T, result TrafficQueryResult, tunnelName string
 		t.Fatalf("Expected tunnel=%s, got %s", tunnelName, result.Items[0].TunnelName)
 	}
 	return result.Items[0]
+}
+
+func mustQueryWithResolution(t *testing.T, store *TrafficStore, clientID, tunnelName string, from, to time.Time, resolution TrafficResolution) TrafficQueryResult {
+	t.Helper()
+	result, err := store.QueryWithResolution(clientID, tunnelName, from, to, resolution)
+	if err != nil {
+		t.Fatalf("QueryWithResolution failed: %v", err)
+	}
+	return result
+}
+
+func mustQueryTraffic(t *testing.T, store *TrafficStore, clientID, tunnelName string, from, to time.Time) TrafficQueryResult {
+	t.Helper()
+	result, err := store.Query(clientID, tunnelName, from, to)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	return result
 }
 
 func findSeries(t *testing.T, result TrafficQueryResult, tunnelName string) TunnelTrafficSeries {
@@ -56,6 +72,67 @@ func findSeriesWithType(t *testing.T, result TrafficQueryResult, tunnelName, tun
 	return TunnelTrafficSeries{}
 }
 
+func mustInsertTrafficBucket(t *testing.T, store *TrafficStore, bucket TrafficBucket) {
+	t.Helper()
+
+	if _, err := store.db.Exec(`INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
+VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		bucket.ClientID,
+		bucket.TunnelName,
+		bucket.TunnelType,
+		string(bucket.Resolution),
+		bucket.BucketStart,
+		int64(bucket.IngressBytes),
+		int64(bucket.EgressBytes),
+	); err != nil {
+		t.Fatalf("failed to insert traffic bucket: %v", err)
+	}
+}
+
+func TestTrafficStore_UsesSQLiteAndNoJsonFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, serverDBFileName)
+	ts, err := NewTrafficStore(path)
+	if err != nil {
+		t.Fatalf("NewTrafficStore failed: %v", err)
+	}
+	t.Cleanup(func() { _ = ts.Close() })
+
+	now := time.Now().UTC()
+	ts.ApplyDeltas([]TrafficDelta{{
+		ClientID: "c1", TunnelName: "web", TunnelType: "http", MinuteStart: minuteFloorUTC(now).Unix(), IngressBytes: 100, EgressBytes: 50,
+	}})
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "traffic.json")); !os.IsNotExist(err) {
+		t.Fatalf("traffic.json should not exist, stat error = %v", err)
+	}
+
+	reloaded, err := NewTrafficStore(path)
+	if err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	t.Cleanup(func() { _ = reloaded.Close() })
+	got := mustQueryWithResolution(t, reloaded, "c1", "web", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	series := mustSingleSeries(t, got, "web")
+	if series.Points[0].IngressBytes != 100 || series.Points[0].EgressBytes != 50 {
+		t.Fatalf("traffic did not round-trip through SQLite: %+v", series.Points[0])
+	}
+}
+
+func TestTrafficStore_CloseIsIdempotent(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	if err := ts.Close(); err != nil {
+		t.Fatalf("first Close failed: %v", err)
+	}
+	if err := ts.Close(); err != nil {
+		t.Fatalf("second Close failed: %v", err)
+	}
+}
+
 func TestTrafficStore_RecordAndQuery(t *testing.T) {
 	ts, cleanup := newTestTrafficStore(t)
 	defer cleanup()
@@ -72,7 +149,7 @@ func TestTrafficStore_RecordAndQuery(t *testing.T) {
 	from := now.Add(-time.Minute)
 	to := now.Add(time.Minute)
 
-	got := ts.QueryWithResolution("c1", "", from, to, TrafficResolutionMinute)
+	got := mustQueryWithResolution(t, ts, "c1", "", from, to, TrafficResolutionMinute)
 	if got.Resolution != TrafficResolutionMinute {
 		t.Fatalf("Expected minute resolution, got %s", got.Resolution)
 	}
@@ -99,10 +176,59 @@ func TestTrafficStore_RecordAndQuery(t *testing.T) {
 		t.Errorf("tun2 ingress expected 10, got %+v", tun2.Points)
 	}
 
-	gotC2 := ts.QueryWithResolution("c2", "", from, to, TrafficResolutionMinute)
+	gotC2 := mustQueryWithResolution(t, ts, "c2", "", from, to, TrafficResolutionMinute)
 	c2Tun1 := mustSingleSeries(t, gotC2, "tun1")
 	if c2Tun1.Points[0].IngressBytes != 999 {
 		t.Errorf("c2 tun1 ingress expected 999, got %d", c2Tun1.Points[0].IngressBytes)
+	}
+}
+
+func TestTrafficStore_QueryWithResolutionReturnsPersistedErrors(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := minuteFloorUTC(time.Now().UTC())
+	mustInsertTrafficBucket(t, ts, TrafficBucket{
+		ClientID:     "c1",
+		TunnelName:   "web",
+		TunnelType:   "http",
+		Resolution:   TrafficResolutionMinute,
+		BucketStart:  now.Unix(),
+		IngressBytes: 100,
+		EgressBytes:  50,
+	})
+	if _, err := ts.db.Exec(`UPDATE traffic_buckets SET ingress_bytes = -1 WHERE client_id = ?`, "c1"); err != nil {
+		t.Fatalf("failed to inject invalid persisted traffic: %v", err)
+	}
+
+	_, err := ts.QueryWithResolution("c1", "", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	if err == nil {
+		t.Fatal("QueryWithResolution should return persisted query errors")
+	}
+	if !strings.Contains(err.Error(), "ingress_bytes") {
+		t.Fatalf("query error should name the rejected field, got %v", err)
+	}
+}
+
+func TestTrafficStore_FlushRejectsUint64SQLiteOverflow(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := minuteFloorUTC(time.Now().UTC())
+	ts.ApplyDeltas([]TrafficDelta{{
+		ClientID:     "c1",
+		TunnelName:   "web",
+		TunnelType:   "http",
+		MinuteStart:  now.Unix(),
+		IngressBytes: uint64(1) << 63,
+	}})
+
+	err := ts.Flush()
+	if err == nil {
+		t.Fatal("Flush should reject traffic counters that cannot fit in SQLite INTEGER")
+	}
+	if !strings.Contains(err.Error(), "ingress_bytes") {
+		t.Fatalf("overflow error should name the rejected field, got %v", err)
 	}
 }
 
@@ -117,7 +243,7 @@ func TestTrafficStore_TunnelFilter(t *testing.T) {
 		{ClientID: "c1", TunnelName: "tun2", TunnelType: "udp", MinuteStart: minuteStart.Unix(), IngressBytes: 200},
 	})
 
-	got := ts.QueryWithResolution("c1", "tun1", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	got := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
 	series := mustSingleSeries(t, got, "tun1")
 	if series.Points[0].IngressBytes != 100 {
 		t.Errorf("tun1 ingress expected 100, got %d", series.Points[0].IngressBytes)
@@ -135,7 +261,7 @@ func TestTrafficStore_QuerySeparatesSameNameDifferentTypes(t *testing.T) {
 		{ClientID: "c1", TunnelName: "shared", TunnelType: "http", MinuteStart: minuteStart.Unix(), IngressBytes: 200, EgressBytes: 20},
 	})
 
-	got := ts.QueryWithResolution("c1", "shared", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	got := mustQueryWithResolution(t, ts, "c1", "shared", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
 	if len(got.Items) != 2 {
 		t.Fatalf("Expected 2 series with same name different types, got %d", len(got.Items))
 	}
@@ -162,10 +288,15 @@ func TestTrafficStore_RollupAndHourQuery(t *testing.T) {
 		{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: baseHour.Add(3 * time.Minute).Unix(), IngressBytes: 20, EgressBytes: 10},
 		{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: baseHour.Add(4 * time.Minute).Unix(), IngressBytes: 30, EgressBytes: 15},
 	})
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
 
-	ts.Compact(now)
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
 
-	got := ts.QueryWithResolution("c1", "tun1", baseHour, now, TrafficResolutionHour)
+	got := mustQueryWithResolution(t, ts, "c1", "tun1", baseHour, now, TrafficResolutionHour)
 	series := mustSingleSeries(t, got, "tun1")
 	if len(series.Points) != 1 {
 		t.Fatalf("hour query expected 1 point, got %d", len(series.Points))
@@ -196,14 +327,14 @@ func TestTrafficStore_Eviction(t *testing.T) {
 		{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: recentMinute.Unix(), IngressBytes: 2, EgressBytes: 2},
 	})
 
-	ts.mu.Lock()
-	ts.hourBuckets[trafficBucketKey(TrafficBucket{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", Resolution: TrafficResolutionHour, BucketStart: oldHour.Unix()})] = TrafficBucket{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", Resolution: TrafficResolutionHour, BucketStart: oldHour.Unix(), IngressBytes: 3, EgressBytes: 3}
-	ts.hourBuckets[trafficBucketKey(TrafficBucket{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", Resolution: TrafficResolutionHour, BucketStart: recentHour.Unix()})] = TrafficBucket{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", Resolution: TrafficResolutionHour, BucketStart: recentHour.Unix(), IngressBytes: 4, EgressBytes: 4}
-	ts.mu.Unlock()
+	mustInsertTrafficBucket(t, ts, TrafficBucket{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", Resolution: TrafficResolutionHour, BucketStart: oldHour.Unix(), IngressBytes: 3, EgressBytes: 3})
+	mustInsertTrafficBucket(t, ts, TrafficBucket{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", Resolution: TrafficResolutionHour, BucketStart: recentHour.Unix(), IngressBytes: 4, EgressBytes: 4})
 
-	ts.Compact(now)
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
 
-	minuteResult := ts.QueryWithResolution("c1", "tun1", now.Add(-26*time.Hour), now, TrafficResolutionMinute)
+	minuteResult := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-26*time.Hour), now, TrafficResolutionMinute)
 	series := mustSingleSeries(t, minuteResult, "tun1")
 	if len(series.Points) != 1 {
 		t.Fatalf("Expected 1 point after minute bucket eviction, got %d", len(series.Points))
@@ -212,7 +343,7 @@ func TestTrafficStore_Eviction(t *testing.T) {
 		t.Errorf("Retained minute bucket ingress expected 2, got %d", series.Points[0].IngressBytes)
 	}
 
-	hourResult := ts.QueryWithResolution("c1", "tun1", now.Add(-(trafficHourRetention + 2*time.Hour)), now, TrafficResolutionHour)
+	hourResult := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-(trafficHourRetention + 2*time.Hour)), now, TrafficResolutionHour)
 	hourSeries := mustSingleSeries(t, hourResult, "tun1")
 	if len(hourSeries.Points) == 0 {
 		t.Fatal("hour bucket query should retain recent data")
@@ -225,17 +356,12 @@ func TestTrafficStore_Eviction(t *testing.T) {
 }
 
 func TestTrafficStore_FlushAndReload(t *testing.T) {
-	dir, err := os.MkdirTemp("", "traffic_reload_*")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
-
-	path := filepath.Join(dir, "traffic.json")
+	path := filepath.Join(t.TempDir(), serverDBFileName)
 	ts, err := NewTrafficStore(path)
 	if err != nil {
 		t.Fatalf("Failed to create TrafficStore: %v", err)
 	}
+	t.Cleanup(func() { _ = ts.Close() })
 
 	now := time.Now().UTC()
 	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: minuteFloorUTC(now).Unix(), IngressBytes: 500, EgressBytes: 300}})
@@ -244,22 +370,176 @@ func TestTrafficStore_FlushAndReload(t *testing.T) {
 		t.Fatalf("Flush failed: %v", err)
 	}
 
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("File does not exist after Flush: %v", err)
+	var count int
+	if err := ts.db.QueryRow(`SELECT COUNT(*) FROM traffic_buckets`).Scan(&count); err != nil {
+		t.Fatalf("failed to query traffic buckets: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("traffic_buckets count = %d, want 1", count)
 	}
 
 	ts2, err := NewTrafficStore(path)
 	if err != nil {
 		t.Fatalf("Failed to reload TrafficStore: %v", err)
 	}
+	t.Cleanup(func() { _ = ts2.Close() })
 
-	got := ts2.QueryWithResolution("c1", "tun1", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	got := mustQueryWithResolution(t, ts2, "c1", "tun1", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
 	series := mustSingleSeries(t, got, "tun1")
 	if series.Points[0].IngressBytes != 500 {
 		t.Errorf("ingress expected 500 after reload, got %d", series.Points[0].IngressBytes)
 	}
 	if series.Points[0].EgressBytes != 300 {
 		t.Errorf("egress expected 300 after reload, got %d", series.Points[0].EgressBytes)
+	}
+}
+
+func TestTrafficStore_FlushAccumulatesPersistedBuckets(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	minuteStart := minuteFloorUTC(now)
+	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: minuteStart.Unix(), IngressBytes: 10, EgressBytes: 20}})
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("first Flush failed: %v", err)
+	}
+	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: minuteStart.Unix(), IngressBytes: 30, EgressBytes: 40}})
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("second Flush failed: %v", err)
+	}
+
+	got := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	series := mustSingleSeries(t, got, "tun1")
+	if series.Points[0].IngressBytes != 40 || series.Points[0].EgressBytes != 60 {
+		t.Fatalf("flushed buckets should accumulate, got %+v", series.Points[0])
+	}
+}
+
+func TestTrafficStore_QueryMergesPersistedAndPendingMinuteBuckets(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	minuteStart := minuteFloorUTC(now)
+	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: minuteStart.Unix(), IngressBytes: 10, EgressBytes: 20}})
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: minuteStart.Unix(), IngressBytes: 30, EgressBytes: 40}})
+
+	got := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	series := mustSingleSeries(t, got, "tun1")
+	if len(series.Points) != 1 {
+		t.Fatalf("expected merged minute point, got %d points", len(series.Points))
+	}
+	if series.Points[0].IngressBytes != 40 || series.Points[0].EgressBytes != 60 {
+		t.Fatalf("minute query should merge persisted and pending buckets, got %+v", series.Points[0])
+	}
+}
+
+func TestTrafficStore_HourQueryIncludesLateDeltasAfterRollup(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	completedHour := hourFloorUTC(now.Add(-2 * time.Hour))
+	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: completedHour.Add(5 * time.Minute).Unix(), IngressBytes: 10, EgressBytes: 20}})
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("initial Flush failed: %v", err)
+	}
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: completedHour.Add(6 * time.Minute).Unix(), IngressBytes: 30, EgressBytes: 40}})
+	pendingResult := mustQueryWithResolution(t, ts, "c1", "tun1", completedHour, now, TrafficResolutionHour)
+	pendingSeries := mustSingleSeries(t, pendingResult, "tun1")
+	if pendingSeries.Points[0].IngressBytes != 40 || pendingSeries.Points[0].EgressBytes != 60 {
+		t.Fatalf("hour query should include pending late delta, got %+v", pendingSeries.Points[0])
+	}
+
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("late Flush failed: %v", err)
+	}
+	flushedResult := mustQueryWithResolution(t, ts, "c1", "tun1", completedHour, now, TrafficResolutionHour)
+	flushedSeries := mustSingleSeries(t, flushedResult, "tun1")
+	if flushedSeries.Points[0].IngressBytes != 40 || flushedSeries.Points[0].EgressBytes != 60 {
+		t.Fatalf("hour query should include flushed late delta before next compact, got %+v", flushedSeries.Points[0])
+	}
+}
+
+func TestTrafficStore_CompactKeepsPendingOnFlushFailure(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	oldMinute := minuteFloorUTC(now.Add(-25 * time.Hour))
+	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: oldMinute.Unix(), IngressBytes: 10, EgressBytes: 20}})
+	ts.failSaveErr = errors.New("flush failed")
+	ts.failSaveCount = 1
+
+	if err := ts.Compact(now); err == nil {
+		t.Fatal("Compact should return the flush failure")
+	}
+	pendingResult := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-26*time.Hour), now, TrafficResolutionMinute)
+	pendingSeries := mustSingleSeries(t, pendingResult, "tun1")
+	if pendingSeries.Points[0].IngressBytes != 10 || pendingSeries.Points[0].EgressBytes != 20 {
+		t.Fatalf("pending traffic should survive failed compact, got %+v", pendingSeries.Points[0])
+	}
+
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("retry Compact failed: %v", err)
+	}
+	minuteResult := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-26*time.Hour), now, TrafficResolutionMinute)
+	if len(minuteResult.Items) != 0 {
+		t.Fatalf("old minute bucket should be pruned after successful rollup, got %+v", minuteResult.Items)
+	}
+	hourResult := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-26*time.Hour), now, TrafficResolutionHour)
+	hourSeries := mustSingleSeries(t, hourResult, "tun1")
+	if hourSeries.Points[0].IngressBytes != 10 || hourSeries.Points[0].EgressBytes != 20 {
+		t.Fatalf("old pending traffic should roll up after retry, got %+v", hourSeries.Points[0])
+	}
+}
+
+func TestTrafficStore_CompactSkipsPruneWhenRollupFails(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	oldMinute := minuteFloorUTC(now.Add(-25 * time.Hour))
+	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: oldMinute.Unix(), IngressBytes: 10, EgressBytes: 20}})
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+	if _, err := ts.db.Exec(`CREATE TRIGGER fail_hour_rollup
+BEFORE INSERT ON traffic_buckets
+WHEN NEW.resolution = 'hour'
+BEGIN
+	SELECT RAISE(FAIL, 'rollup blocked');
+END;`); err != nil {
+		t.Fatalf("create trigger failed: %v", err)
+	}
+
+	if err := ts.Compact(now); err == nil {
+		t.Fatal("Compact should return the rollup failure")
+	}
+	if _, err := ts.db.Exec(`DROP TRIGGER fail_hour_rollup`); err != nil {
+		t.Fatalf("drop trigger failed: %v", err)
+	}
+	minuteResult := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-26*time.Hour), now, TrafficResolutionMinute)
+	minuteSeries := mustSingleSeries(t, minuteResult, "tun1")
+	if minuteSeries.Points[0].IngressBytes != 10 || minuteSeries.Points[0].EgressBytes != 20 {
+		t.Fatalf("minute bucket should survive failed rollup, got %+v", minuteSeries.Points[0])
+	}
+
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("retry Compact failed: %v", err)
+	}
+	hourResult := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-26*time.Hour), now, TrafficResolutionHour)
+	hourSeries := mustSingleSeries(t, hourResult, "tun1")
+	if hourSeries.Points[0].IngressBytes != 10 || hourSeries.Points[0].EgressBytes != 20 {
+		t.Fatalf("minute bucket should roll up after retry, got %+v", hourSeries.Points[0])
 	}
 }
 
@@ -275,20 +555,24 @@ func TestTrafficStore_EvictTunnelAndClient(t *testing.T) {
 		{ClientID: "c2", TunnelName: "tun1", TunnelType: "http", MinuteStart: minuteStart, IngressBytes: 300},
 	})
 
-	ts.EvictTunnel("c1", "tun1")
+	if err := ts.EvictTunnel("c1", "tun1"); err != nil {
+		t.Fatalf("EvictTunnel failed: %v", err)
+	}
 
-	got := ts.QueryWithResolution("c1", "", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	got := mustQueryWithResolution(t, ts, "c1", "", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
 	if len(got.Items) != 1 || got.Items[0].TunnelName != "tun2" {
 		t.Fatalf("c1 should only have tun2 after EvictTunnel, got %+v", got.Items)
 	}
 
-	ts.EvictClient("c1")
-	got2 := ts.QueryWithResolution("c1", "", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	if err := ts.EvictClient("c1"); err != nil {
+		t.Fatalf("EvictClient failed: %v", err)
+	}
+	got2 := mustQueryWithResolution(t, ts, "c1", "", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
 	if len(got2.Items) != 0 {
 		t.Errorf("c1 data should be empty after EvictClient, got %d series", len(got2.Items))
 	}
 
-	got3 := ts.QueryWithResolution("c2", "", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	got3 := mustQueryWithResolution(t, ts, "c2", "", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
 	mustSingleSeries(t, got3, "tun1")
 }
 
@@ -300,12 +584,12 @@ func TestTrafficStore_AutoResolutionBoundary(t *testing.T) {
 	minuteStart := minuteFloorUTC(now).Unix()
 	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: minuteStart, IngressBytes: 1}})
 
-	minuteRange := ts.Query("c1", "tun1", now.Add(-24*time.Hour), now)
+	minuteRange := mustQueryTraffic(t, ts, "c1", "tun1", now.Add(-24*time.Hour), now)
 	if minuteRange.Resolution != TrafficResolutionMinute {
 		t.Fatalf("24h range should use minute, got %s", minuteRange.Resolution)
 	}
 
-	hourRange := ts.Query("c1", "tun1", now.Add(-(24*time.Hour + time.Second)), now)
+	hourRange := mustQueryTraffic(t, ts, "c1", "tun1", now.Add(-(24*time.Hour + time.Second)), now)
 	if hourRange.Resolution != TrafficResolutionHour {
 		t.Fatalf("Range exceeding 24h should use hour, got %s", hourRange.Resolution)
 	}
@@ -317,15 +601,21 @@ func TestTrafficStore_HourQueryIncludesCurrentHourFromMinuteBuckets(t *testing.T
 
 	now := time.Now().UTC()
 	currentHour := hourFloorUTC(now)
+	currentMinute := minuteFloorUTC(now)
 	completedHour := currentHour.Add(-time.Hour)
 
 	ts.ApplyDeltas([]TrafficDelta{
 		{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: completedHour.Add(5 * time.Minute).Unix(), IngressBytes: 10, EgressBytes: 5},
-		{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: currentHour.Add(2 * time.Minute).Unix(), IngressBytes: 20, EgressBytes: 7},
+		{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: currentMinute.Unix(), IngressBytes: 20, EgressBytes: 7},
 	})
-	ts.Compact(now)
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
 
-	result := ts.QueryWithResolution("c1", "tun1", completedHour, now.Add(time.Minute), TrafficResolutionHour)
+	result := mustQueryWithResolution(t, ts, "c1", "tun1", completedHour, now.Add(time.Minute), TrafficResolutionHour)
 	series := mustSingleSeries(t, result, "tun1")
 	if len(series.Points) != 2 {
 		t.Fatalf("Should return both completed hour and current hour folded data, got %d points", len(series.Points))
@@ -349,9 +639,14 @@ func TestTrafficStore_HourQueryDoesNotDoubleCountRolledUpHours(t *testing.T) {
 		{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: completedHour.Add(1 * time.Minute).Unix(), IngressBytes: 11, EgressBytes: 3},
 		{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: completedHour.Add(2 * time.Minute).Unix(), IngressBytes: 13, EgressBytes: 4},
 	})
-	ts.Compact(now)
+	if err := ts.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
 
-	result := ts.QueryWithResolution("c1", "tun1", completedHour, now, TrafficResolutionHour)
+	result := mustQueryWithResolution(t, ts, "c1", "tun1", completedHour, now, TrafficResolutionHour)
 	series := mustSingleSeries(t, result, "tun1")
 	if len(series.Points) != 1 {
 		t.Fatalf("Rolled-up hours should not duplicate due to minute/hour coexistence, got %d points", len(series.Points))
@@ -365,16 +660,8 @@ func TestTrafficAPI_Query(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
-	trafficDir, err := os.MkdirTemp("", "traffic_api_*")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(trafficDir) }()
-
-	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
-	if err != nil {
-		t.Fatalf("Failed to create TrafficStore: %v", err)
-	}
+	ts, trafficCleanup := newTestTrafficStore(t)
+	defer trafficCleanup()
 	s.trafficStore = ts
 
 	clientID := "test-client-001"
@@ -412,6 +699,36 @@ func TestTrafficAPI_Query(t *testing.T) {
 	}
 }
 
+func TestTrafficAPI_QueryStoreError(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	ts, trafficCleanup := newTestTrafficStore(t)
+	defer trafficCleanup()
+	s.trafficStore = ts
+
+	clientID := "test-client-store-error"
+	now := minuteFloorUTC(time.Now().UTC())
+	mustInsertTrafficBucket(t, ts, TrafficBucket{
+		ClientID:     clientID,
+		TunnelName:   "web",
+		TunnelType:   "http",
+		Resolution:   TrafficResolutionMinute,
+		BucketStart:  now.Unix(),
+		IngressBytes: 100,
+		EgressBytes:  50,
+	})
+	if _, err := ts.db.Exec(`UPDATE traffic_buckets SET ingress_bytes = -1 WHERE client_id = ?`, clientID); err != nil {
+		t.Fatalf("failed to inject invalid persisted traffic: %v", err)
+	}
+
+	path := "/api/clients/" + clientID + "/traffic?from=" + itoa(now.Add(-time.Minute).Unix()) + "&to=" + itoa(now.Add(time.Minute).Unix())
+	w := doMuxRequest(t, handler, http.MethodGet, path, token, nil)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("store query failure should return 500, got %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestTrafficAPI_Unauthorized(t *testing.T) {
 	_, handler, _, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
@@ -426,16 +743,8 @@ func TestTrafficAPI_DefaultTimeRange(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
-	trafficDir, err := os.MkdirTemp("", "traffic_default_*")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(trafficDir) }()
-
-	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
-	if err != nil {
-		t.Fatalf("Failed to create TrafficStore: %v", err)
-	}
+	ts, trafficCleanup := newTestTrafficStore(t)
+	defer trafficCleanup()
 	s.trafficStore = ts
 
 	w := doMuxRequest(t, handler, http.MethodGet, "/api/clients/c1/traffic", token, nil)
@@ -456,16 +765,8 @@ func TestTrafficAPI_InvalidResolution(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
-	trafficDir, err := os.MkdirTemp("", "traffic_res_*")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(trafficDir) }()
-
-	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
-	if err != nil {
-		t.Fatalf("Failed to create TrafficStore: %v", err)
-	}
+	ts, trafficCleanup := newTestTrafficStore(t)
+	defer trafficCleanup()
 	s.trafficStore = ts
 
 	w := doMuxRequest(t, handler, http.MethodGet, "/api/clients/c1/traffic?resolution=bad", token, nil)
@@ -478,16 +779,8 @@ func TestTrafficAPI_InvalidTimeRange(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
-	trafficDir, err := os.MkdirTemp("", "traffic_range_*")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(trafficDir) }()
-
-	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
-	if err != nil {
-		t.Fatalf("Failed to create TrafficStore: %v", err)
-	}
+	ts, trafficCleanup := newTestTrafficStore(t)
+	defer trafficCleanup()
 	s.trafficStore = ts
 
 	now := time.Now().UTC()
@@ -503,16 +796,8 @@ func TestTrafficAPI_TimeRangeTooLarge(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
-	trafficDir, err := os.MkdirTemp("", "traffic_range_large_*")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(trafficDir) }()
-
-	ts, err := NewTrafficStore(filepath.Join(trafficDir, "traffic.json"))
-	if err != nil {
-		t.Fatalf("Failed to create TrafficStore: %v", err)
-	}
+	ts, trafficCleanup := newTestTrafficStore(t)
+	defer trafficCleanup()
 	s.trafficStore = ts
 
 	now := time.Now().UTC()

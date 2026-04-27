@@ -742,38 +742,42 @@ func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affecte
 
 	// 2) Scan persisted tunnels, including tunnels for offline clients.
 	if s.store != nil {
-		allStored := s.store.GetAllTunnels()
-		for _, st := range allStored {
-			if st.RemotePort == 0 {
-				continue
-			}
-			if st.RuntimeState == protocol.ProxyRuntimeStateError {
-				continue
-			}
-			key := st.ClientID + ":" + st.Name
-			if seen[key] {
-				continue // Already counted from runtime state.
-			}
-			if !isPortInRanges(st.RemotePort, newPorts) {
-				hostname := st.Hostname
-				displayName := ""
-				// Try to get a more detailed hostname and display name from adminStore.
-				if s.auth.adminStore != nil && st.ClientID != "" {
-					if reg, ok := s.auth.adminStore.GetRegisteredClient(st.ClientID); ok {
-						hostname = reg.Info.Hostname
-						displayName = reg.DisplayName
-					}
+		allStored, err := s.store.GetAllTunnels()
+		if err != nil {
+			log.Printf("⚠️ failed to load persisted tunnels for port allocation: %v", err)
+		} else {
+			for _, st := range allStored {
+				if st.RemotePort == 0 {
+					continue
 				}
-				affected = append(affected, affectedTunnel{
-					ClientID:     st.ClientID,
-					Hostname:     hostname,
-					DisplayName:  displayName,
-					TunnelName:   st.Name,
-					RemotePort:   st.RemotePort,
-					DesiredState: st.DesiredState,
-					RuntimeState: st.RuntimeState,
-					Error:        st.Error,
-				})
+				if st.RuntimeState == protocol.ProxyRuntimeStateError {
+					continue
+				}
+				key := st.ClientID + ":" + st.Name
+				if seen[key] {
+					continue // Already counted from runtime state.
+				}
+				if !isPortInRanges(st.RemotePort, newPorts) {
+					hostname := st.Hostname
+					displayName := ""
+					// Try to get a more detailed hostname and display name from adminStore.
+					if s.auth.adminStore != nil && st.ClientID != "" {
+						if reg, ok := s.auth.adminStore.GetRegisteredClient(st.ClientID); ok {
+							hostname = reg.Info.Hostname
+							displayName = reg.DisplayName
+						}
+					}
+					affected = append(affected, affectedTunnel{
+						ClientID:     st.ClientID,
+						Hostname:     hostname,
+						DisplayName:  displayName,
+						TunnelName:   st.Name,
+						RemotePort:   st.RemotePort,
+						DesiredState: st.DesiredState,
+						RuntimeState: st.RuntimeState,
+						Error:        st.Error,
+					})
+				}
 			}
 		}
 	}
