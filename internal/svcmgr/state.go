@@ -64,9 +64,18 @@ func InspectWithLayout(layout ServiceLayout) InstallInspection {
 		switch {
 		case !hasRuntimeDir:
 			inspection.State = StateNotInstalled
-		case layout.Role == RoleServer && recoverableServerDataExists(layout.RuntimeDir):
-			inspection.State = StateHistoricalDataOnly
-			inspection.Problems = []string{"Recoverable server historical data was detected, but the managed service definition is missing"}
+		case layout.Role == RoleServer:
+			initialized, err := recoverableServerDataExists(layout.RuntimeDir)
+			if err != nil {
+				inspection.State = StateBroken
+				inspection.Problems = []string{fmt.Sprintf("failed to inspect server data: %v", err)}
+			} else if initialized {
+				inspection.State = StateHistoricalDataOnly
+				inspection.Problems = []string{"Recoverable server historical data was detected, but the managed service definition is missing"}
+			} else {
+				inspection.State = StateBroken
+				inspection.Problems = []string{fmt.Sprintf("leftover runtime data directory still exists: %s", layout.RuntimeDir)}
+			}
 		default:
 			inspection.State = StateBroken
 			inspection.Problems = []string{fmt.Sprintf("leftover runtime data directory still exists: %s", layout.RuntimeDir)}
@@ -95,8 +104,13 @@ func InspectWithLayout(layout ServiceLayout) InstallInspection {
 	} else if !isBinaryInstalledAt(layout.BinaryPath) {
 		problems = append(problems, fmt.Sprintf("binary is missing or not executable: %s", layout.BinaryPath))
 	}
-	if layout.Role == RoleServer && !recoverableServerDataExists(layout.RuntimeDir) {
-		problems = append(problems, fmt.Sprintf("missing server initialization data: %s", recoverableServerDataPath(layout.RuntimeDir)))
+	if layout.Role == RoleServer {
+		initialized, err := recoverableServerDataExists(layout.RuntimeDir)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("failed to inspect server data: %v", err))
+		} else if !initialized {
+			problems = append(problems, fmt.Sprintf("missing server initialization data: %s", recoverableServerDataPath(layout.RuntimeDir)))
+		}
 	}
 
 	if layout.Role == RoleServer {
@@ -138,9 +152,12 @@ func InspectWithLayout(layout ServiceLayout) InstallInspection {
 	return inspection
 }
 
-func recoverableServerDataExists(dataDir string) bool {
+func recoverableServerDataExists(dataDir string) (bool, error) {
 	initialized, err := readServerDBInitialized(recoverableServerDataPath(dataDir))
-	return err == nil && initialized
+	if err != nil {
+		return false, err
+	}
+	return initialized, nil
 }
 
 func recoverableServerDataPath(dataDir string) string {

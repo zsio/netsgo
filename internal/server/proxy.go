@@ -162,7 +162,12 @@ func findTCPUDPPortConflictNames(port int, excludeName, excludeClientID string, 
 	})
 
 	if server.store != nil {
-		for _, tunnel := range server.store.GetAllTunnels() {
+		allTunnels, err := server.store.GetAllTunnels()
+		if err != nil {
+			log.Printf("⚠️ failed to load tunnels for proxy conflict detection: %v", err)
+			return conflicts
+		}
+		for _, tunnel := range allTunnels {
 			matchAndAppend(tunnel.ClientID, tunnel.Name, tunnel.Type, tunnel.RemotePort)
 		}
 	}

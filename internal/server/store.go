@@ -38,14 +38,6 @@ func (t *StoredTunnel) normalize() error {
 	return nil
 }
 
-func (t StoredTunnel) matchesClient(clientID, name string) bool {
-	return t.Binding == TunnelBindingClientID && t.ClientID == clientID && t.Name == name
-}
-
-func (t StoredTunnel) matchesIdentifier(identifier, name string) bool {
-	return t.Name == name && t.Binding == TunnelBindingClientID && t.ClientID == identifier
-}
-
 // TunnelStore is a SQLite-backed persistent store for tunnel configurations.
 type TunnelStore struct {
 	path      string
@@ -342,35 +334,35 @@ func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 }
 
 // GetTunnelsByClientID returns all tunnel configurations for the given stable client_id.
-func (s *TunnelStore) GetTunnelsByClientID(clientID string) []StoredTunnel {
+func (s *TunnelStore) GetTunnelsByClientID(clientID string) ([]StoredTunnel, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE client_id = ? ORDER BY name`, clientID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	tunnels, err := scanStoredTunnelRows(rows)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return tunnels
+	return tunnels, nil
 }
 
 // GetTunnelsByHostname returns all tunnels matching the given hostname (for display/query purposes).
-func (s *TunnelStore) GetTunnelsByHostname(hostname string) []StoredTunnel {
+func (s *TunnelStore) GetTunnelsByHostname(hostname string) ([]StoredTunnel, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE hostname = ? ORDER BY client_id, name`, hostname)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	tunnels, err := scanStoredTunnelRows(rows)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return tunnels
+	return tunnels, nil
 }
 
 // GetTunnel looks up a single tunnel by stable client_id and name.
@@ -389,17 +381,17 @@ func (s *TunnelStore) GetTunnel(clientID, name string) (StoredTunnel, bool) {
 }
 
 // GetAllTunnels returns all tunnel configurations.
-func (s *TunnelStore) GetAllTunnels() []StoredTunnel {
+func (s *TunnelStore) GetAllTunnels() ([]StoredTunnel, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`SELECT ` + tunnelSelectColumns + ` FROM tunnels ORDER BY client_id, name`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	tunnels, err := scanStoredTunnelRows(rows)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return tunnels
+	return tunnels, nil
 }

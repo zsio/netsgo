@@ -646,7 +646,7 @@ func (s *TrafficStore) RecordBytes(clientID, tunnelName, tunnelType string, ingr
 	}})
 }
 
-func (s *TrafficStore) EvictTunnel(clientID, tunnelName string) {
+func (s *TrafficStore) EvictTunnel(clientID, tunnelName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -655,10 +655,11 @@ func (s *TrafficStore) EvictTunnel(clientID, tunnelName string) {
 			delete(s.pendingMinute, key)
 		}
 	}
-	_, _ = s.db.Exec(`DELETE FROM traffic_buckets WHERE client_id = ? AND tunnel_name = ?`, clientID, tunnelName)
+	_, err := s.db.Exec(`DELETE FROM traffic_buckets WHERE client_id = ? AND tunnel_name = ?`, clientID, tunnelName)
+	return err
 }
 
-func (s *TrafficStore) EvictClient(clientID string) {
+func (s *TrafficStore) EvictClient(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -667,5 +668,6 @@ func (s *TrafficStore) EvictClient(clientID string) {
 			delete(s.pendingMinute, key)
 		}
 	}
-	_, _ = s.db.Exec(`DELETE FROM traffic_buckets WHERE client_id = ?`, clientID)
+	_, err := s.db.Exec(`DELETE FROM traffic_buckets WHERE client_id = ?`, clientID)
+	return err
 }

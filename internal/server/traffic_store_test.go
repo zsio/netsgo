@@ -292,7 +292,9 @@ func TestTrafficStore_RollupAndHourQuery(t *testing.T) {
 		t.Fatalf("Flush failed: %v", err)
 	}
 
-	ts.Compact(now)
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
 
 	got := mustQueryWithResolution(t, ts, "c1", "tun1", baseHour, now, TrafficResolutionHour)
 	series := mustSingleSeries(t, got, "tun1")
@@ -328,7 +330,9 @@ func TestTrafficStore_Eviction(t *testing.T) {
 	mustInsertTrafficBucket(t, ts, TrafficBucket{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", Resolution: TrafficResolutionHour, BucketStart: oldHour.Unix(), IngressBytes: 3, EgressBytes: 3})
 	mustInsertTrafficBucket(t, ts, TrafficBucket{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", Resolution: TrafficResolutionHour, BucketStart: recentHour.Unix(), IngressBytes: 4, EgressBytes: 4})
 
-	ts.Compact(now)
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
 
 	minuteResult := mustQueryWithResolution(t, ts, "c1", "tun1", now.Add(-26*time.Hour), now, TrafficResolutionMinute)
 	series := mustSingleSeries(t, minuteResult, "tun1")
@@ -444,7 +448,9 @@ func TestTrafficStore_HourQueryIncludesLateDeltasAfterRollup(t *testing.T) {
 	if err := ts.Flush(); err != nil {
 		t.Fatalf("initial Flush failed: %v", err)
 	}
-	ts.Compact(now)
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
 
 	ts.ApplyDeltas([]TrafficDelta{{ClientID: "c1", TunnelName: "tun1", TunnelType: "tcp", MinuteStart: completedHour.Add(6 * time.Minute).Unix(), IngressBytes: 30, EgressBytes: 40}})
 	pendingResult := mustQueryWithResolution(t, ts, "c1", "tun1", completedHour, now, TrafficResolutionHour)
@@ -549,14 +555,18 @@ func TestTrafficStore_EvictTunnelAndClient(t *testing.T) {
 		{ClientID: "c2", TunnelName: "tun1", TunnelType: "http", MinuteStart: minuteStart, IngressBytes: 300},
 	})
 
-	ts.EvictTunnel("c1", "tun1")
+	if err := ts.EvictTunnel("c1", "tun1"); err != nil {
+		t.Fatalf("EvictTunnel failed: %v", err)
+	}
 
 	got := mustQueryWithResolution(t, ts, "c1", "", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
 	if len(got.Items) != 1 || got.Items[0].TunnelName != "tun2" {
 		t.Fatalf("c1 should only have tun2 after EvictTunnel, got %+v", got.Items)
 	}
 
-	ts.EvictClient("c1")
+	if err := ts.EvictClient("c1"); err != nil {
+		t.Fatalf("EvictClient failed: %v", err)
+	}
 	got2 := mustQueryWithResolution(t, ts, "c1", "", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
 	if len(got2.Items) != 0 {
 		t.Errorf("c1 data should be empty after EvictClient, got %d series", len(got2.Items))
@@ -601,7 +611,9 @@ func TestTrafficStore_HourQueryIncludesCurrentHourFromMinuteBuckets(t *testing.T
 	if err := ts.Flush(); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
-	ts.Compact(now)
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
 
 	result := mustQueryWithResolution(t, ts, "c1", "tun1", completedHour, now.Add(time.Minute), TrafficResolutionHour)
 	series := mustSingleSeries(t, result, "tun1")
@@ -630,7 +642,9 @@ func TestTrafficStore_HourQueryDoesNotDoubleCountRolledUpHours(t *testing.T) {
 	if err := ts.Flush(); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
-	ts.Compact(now)
+	if err := ts.Compact(now); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
 
 	result := mustQueryWithResolution(t, ts, "c1", "tun1", completedHour, now, TrafficResolutionHour)
 	series := mustSingleSeries(t, result, "tun1")

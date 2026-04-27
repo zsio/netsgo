@@ -415,22 +415,28 @@ func (s *AdminStore) UpdateServerConfig(config ServerConfig) error {
 
 // ========== Port Whitelist ==========
 
-func loadAllowedPorts(q dbQuerier) ([]PortRange, error) {
-	rows, err := q.Query(`SELECT start_port, end_port FROM allowed_ports ORDER BY id`)
-	if err != nil {
-		return nil, err
+func loadAllowedPorts(q dbQuerier) (ports []PortRange, err error) {
+	rows, qerr := q.Query(`SELECT start_port, end_port FROM allowed_ports ORDER BY id`)
+	if qerr != nil {
+		return nil, qerr
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
-	var ports []PortRange
 	for rows.Next() {
 		var port PortRange
-		if err := rows.Scan(&port.Start, &port.End); err != nil {
+		if err = rows.Scan(&port.Start, &port.End); err != nil {
 			return nil, err
 		}
 		ports = append(ports, port)
 	}
-	return ports, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return ports, nil
 }
 
 func replaceAllowedPorts(exec dbExecer, ports []PortRange) error {
@@ -801,18 +807,21 @@ func loadClientStats(q dbQuerier, clientID string) (*protocol.SystemStats, error
 	return &stats, nil
 }
 
-func loadClientDiskPartitions(q dbQuerier, clientID string) ([]protocol.DiskPartition, error) {
-	rows, err := q.Query(`SELECT path, used, total FROM client_disk_partitions WHERE client_id = ? ORDER BY path`, clientID)
-	if err != nil {
-		return nil, err
+func loadClientDiskPartitions(q dbQuerier, clientID string) (partitions []protocol.DiskPartition, err error) {
+	rows, qerr := q.Query(`SELECT path, used, total FROM client_disk_partitions WHERE client_id = ? ORDER BY path`, clientID)
+	if qerr != nil {
+		return nil, qerr
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
-	var partitions []protocol.DiskPartition
 	for rows.Next() {
 		var partition protocol.DiskPartition
 		var used, total int64
-		if err := rows.Scan(&partition.Path, &used, &total); err != nil {
+		if err = rows.Scan(&partition.Path, &used, &total); err != nil {
 			return nil, err
 		}
 		partition.Used, err = sqliteUint64("client_disk_partitions.used", used)
@@ -825,7 +834,10 @@ func loadClientDiskPartitions(q dbQuerier, clientID string) ([]protocol.DiskPart
 		}
 		partitions = append(partitions, partition)
 	}
-	return partitions, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return partitions, nil
 }
 
 func replaceClientStats(exec dbExecer, clientID string, stats protocol.SystemStats) error {
@@ -1284,22 +1296,28 @@ func apiKeySelectColumns() string {
 	return `id, name, key_hash, created_at, expires_at, is_active, max_uses, use_count`
 }
 
-func loadAPIKeyPermissions(q dbQuerier, keyID string) ([]string, error) {
-	rows, err := q.Query(`SELECT permission FROM api_key_permissions WHERE api_key_id = ? ORDER BY permission`, keyID)
-	if err != nil {
-		return nil, err
+func loadAPIKeyPermissions(q dbQuerier, keyID string) (permissions []string, err error) {
+	rows, qerr := q.Query(`SELECT permission FROM api_key_permissions WHERE api_key_id = ? ORDER BY permission`, keyID)
+	if qerr != nil {
+		return nil, qerr
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
-	var permissions []string
 	for rows.Next() {
 		var permission string
-		if err := rows.Scan(&permission); err != nil {
+		if err = rows.Scan(&permission); err != nil {
 			return nil, err
 		}
 		permissions = append(permissions, permission)
 	}
-	return permissions, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return permissions, nil
 }
 
 func loadAPIKeys(q dbQuerier) ([]APIKey, error) {

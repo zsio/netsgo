@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -189,7 +190,12 @@ func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool) {
 		return httpTunnelRoute{}, false
 	}
 
-	for _, stored := range s.store.GetAllTunnels() {
+	allTunnels, err := s.store.GetAllTunnels()
+	if err != nil {
+		log.Printf("⚠️ failed to load tunnels for HTTP route matching: %v", err)
+		return httpTunnelRoute{}, false
+	}
+	for _, stored := range allTunnels {
 		if stored.Type != protocol.ProxyTypeHTTP {
 			continue
 		}

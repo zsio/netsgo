@@ -48,8 +48,12 @@ func mustAddStableTunnel(t *testing.T, store *TunnelStore, tunnel StoredTunnel) 
 
 func TestTunnelStore_NewEmpty(t *testing.T) {
 	store := newTestTunnelStore(t)
-	if len(store.GetAllTunnels()) != 0 {
-		t.Errorf("new store should be empty, got %d records", len(store.GetAllTunnels()))
+	allTunnels, err := store.GetAllTunnels()
+	if err != nil {
+		t.Fatalf("GetAllTunnels failed: %v", err)
+	}
+	if len(allTunnels) != 0 {
+		t.Errorf("new store should be empty, got %d records", len(allTunnels))
 	}
 }
 
@@ -105,7 +109,10 @@ func TestTunnelStore_LoadExisting(t *testing.T) {
 	})
 
 	store2 := newTestTunnelStoreAt(t, path)
-	tunnels := store2.GetAllTunnels()
+	tunnels, err := store2.GetAllTunnels()
+	if err != nil {
+		t.Fatalf("GetAllTunnels failed: %v", err)
+	}
 	if len(tunnels) != 1 {
 		t.Fatalf("expected to load 1 record, got %d", len(tunnels))
 	}
@@ -287,7 +294,10 @@ func TestTunnelStore_AddTunnel_Success(t *testing.T) {
 		RuntimeState:    protocol.ProxyRuntimeStateExposed,
 	})
 
-	tunnels := store.GetAllTunnels()
+	tunnels, err := store.GetAllTunnels()
+	if err != nil {
+		t.Fatalf("GetAllTunnels failed: %v", err)
+	}
 	if len(tunnels) != 1 {
 		t.Fatalf("expected 1, got %d", len(tunnels))
 	}
@@ -333,7 +343,11 @@ func TestTunnelStore_AddTunnel_DiffClientSameNameAllowed(t *testing.T) {
 	}); err != nil {
 		t.Errorf("same name with different client_id should be allowed: %v", err)
 	}
-	if len(store.GetAllTunnels()) != 2 {
+	allTunnels, err := store.GetAllTunnels()
+	if err != nil {
+		t.Fatalf("GetAllTunnels failed: %v", err)
+	}
+	if len(allTunnels) != 2 {
 		t.Error("should have 2 records")
 	}
 }
@@ -350,7 +364,11 @@ func TestTunnelStore_RemoveTunnel_Success(t *testing.T) {
 	if err := store.RemoveTunnel("client-1", "rm-me"); err != nil {
 		t.Fatalf("RemoveTunnel failed: %v", err)
 	}
-	if len(store.GetAllTunnels()) != 0 {
+	allTunnels, err := store.GetAllTunnels()
+	if err != nil {
+		t.Fatalf("GetAllTunnels failed: %v", err)
+	}
+	if len(allTunnels) != 0 {
 		t.Error("should be empty after deletion")
 	}
 }
@@ -522,12 +540,18 @@ func TestTunnelStore_GetTunnelsByHostname(t *testing.T) {
 		Hostname:        "host-B",
 	})
 
-	result := store.GetTunnelsByHostname("host-A")
+	result, err := store.GetTunnelsByHostname("host-A")
+	if err != nil {
+		t.Fatalf("GetTunnelsByHostname failed: %v", err)
+	}
 	if len(result) != 2 {
 		t.Errorf("expected 2, got %d", len(result))
 	}
 
-	empty := store.GetTunnelsByHostname("no-host")
+	empty, err := store.GetTunnelsByHostname("no-host")
+	if err != nil {
+		t.Fatalf("GetTunnelsByHostname failed: %v", err)
+	}
 	if len(empty) != 0 {
 		t.Errorf("non-existent host should return empty, got %d", len(empty))
 	}
@@ -542,10 +566,16 @@ func TestTunnelStore_GetAllTunnels_ReturnsCopy(t *testing.T) {
 		Hostname:        "host",
 	})
 
-	result := store.GetAllTunnels()
+	result, err := store.GetAllTunnels()
+	if err != nil {
+		t.Fatalf("GetAllTunnels failed: %v", err)
+	}
 	result[0].Name = "mutated"
 
-	original := store.GetAllTunnels()
+	original, err := store.GetAllTunnels()
+	if err != nil {
+		t.Fatalf("GetAllTunnels failed: %v", err)
+	}
 	if original[0].Name != "original" {
 		t.Error("GetAllTunnels should return a copy, modifications should not affect original data")
 	}
@@ -570,9 +600,9 @@ func TestTunnelStore_ConcurrentAccess(t *testing.T) {
 				DesiredState:    protocol.ProxyDesiredStateRunning,
 				RuntimeState:    protocol.ProxyRuntimeStateExposed,
 			})
-			store.GetAllTunnels()
-			store.GetTunnelsByHostname(hostname)
-			store.GetTunnelsByClientID(clientID)
+			_, _ = store.GetAllTunnels()
+			_, _ = store.GetTunnelsByHostname(hostname)
+			_, _ = store.GetTunnelsByClientID(clientID)
 		}(i)
 	}
 	wg.Wait()

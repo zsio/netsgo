@@ -17,7 +17,7 @@ func TestOpenCreatesParentDirectoryAndAppliesPragmas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	assertPragmaValue(t, db, "journal_mode", "wal")
 	assertPragmaValue(t, db, "foreign_keys", "1")
@@ -46,7 +46,7 @@ func TestOpenRunsMigrationsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Open() error = %v", err)
 	}
-	defer db2.Close()
+	defer func() { _ = db2.Close() }()
 
 	var value int
 	if err := db2.QueryRow(`SELECT value FROM counter WHERE id = 1`).Scan(&value); err != nil {
@@ -67,7 +67,7 @@ func TestOpenCreatesPrivateDatabaseFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	assertPrivateFileMode(t, path)
 }
@@ -104,7 +104,7 @@ func TestOpenCreatesPrivateSQLiteSidecarFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if _, err := db.Exec(`INSERT INTO widgets (id, name) VALUES ('w1', 'Widget')`); err != nil {
 		t.Fatalf("insert into migrated table failed: %v", err)
