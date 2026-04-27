@@ -74,7 +74,7 @@ func TestTunnelStore_UsesSQLiteAndNoJsonFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite database failed: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM tunnels WHERE client_id = ? AND name = ?`, "client-1", "web").Scan(&count); err != nil {
 		t.Fatalf("query sqlite tunnel failed: %v", err)

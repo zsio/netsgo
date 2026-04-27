@@ -141,7 +141,7 @@ func TestOpenServerDBRejectsInitializedConfigWithoutJWTSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openServerDB() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if _, err := db.Exec(`INSERT INTO server_config (id, initialized, jwt_secret, server_addr) VALUES (1, 1, '', 'https://example.com')`); err == nil {
 		t.Fatal("initialized server_config without jwt_secret should be rejected")
