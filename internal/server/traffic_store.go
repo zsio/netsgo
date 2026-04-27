@@ -343,7 +343,7 @@ WHERE client_id = ? AND resolution = ? AND bucket_start >= ? AND bucket_start <=
 }
 
 func scanTrafficBucketRows(rows *sql.Rows) ([]TrafficBucket, error) {
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	buckets := []TrafficBucket{}
 	for rows.Next() {

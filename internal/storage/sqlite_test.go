@@ -86,7 +86,7 @@ func TestOpenTightensExistingDatabaseFileMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	assertPrivateFileMode(t, path)
 }

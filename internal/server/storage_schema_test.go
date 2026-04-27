@@ -16,7 +16,7 @@ func TestOpenServerDBCreatesExpectedTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openServerDB() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	wantTables := []string{
 		"server_config",
@@ -127,7 +127,7 @@ func TestOpenServerDBDoesNotCreateJsonFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openServerDB() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	for _, name := range []string{"admin.json", "tunnels.json", "traffic.json"} {
 		if pathExists(filepath.Join(root, "server", name)) {

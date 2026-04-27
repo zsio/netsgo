@@ -129,7 +129,7 @@ func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 }
 
 func scanStoredTunnelRows(rows *sql.Rows) ([]StoredTunnel, error) {
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tunnels := []StoredTunnel{}
 	for rows.Next() {

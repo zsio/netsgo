@@ -1478,14 +1478,17 @@ func clientTokenSelectColumns() string {
 	return `id, token_hash, install_id, key_id, client_id, created_at, last_active_at, last_ip, is_revoked`
 }
 
-func loadClientTokens(q dbQuerier, where string, args ...any) ([]ClientToken, error) {
-	rows, err := q.Query(`SELECT `+clientTokenSelectColumns()+` FROM client_tokens `+where, args...)
-	if err != nil {
-		return nil, err
+func loadClientTokens(q dbQuerier, where string, args ...any) (tokens []ClientToken, err error) {
+	rows, qerr := q.Query(`SELECT `+clientTokenSelectColumns()+` FROM client_tokens `+where, args...)
+	if qerr != nil {
+		return nil, qerr
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
-	var tokens []ClientToken
 	for rows.Next() {
 		token, err := scanClientToken(rows)
 		if err != nil {
@@ -1493,7 +1496,10 @@ func loadClientTokens(q dbQuerier, where string, args ...any) ([]ClientToken, er
 		}
 		tokens = append(tokens, token)
 	}
-	return tokens, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return tokens, nil
 }
 
 // ExchangeToken exchanges a Key for a client token.
