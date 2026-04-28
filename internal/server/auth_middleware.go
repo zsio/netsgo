@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -157,7 +158,7 @@ func (s *Server) RequireAuthIfInitialized(next http.HandlerFunc) http.HandlerFun
 		}
 		initialized, err := s.auth.adminStore.IsInitializedE()
 		if err != nil {
-			slog.Warn("failed to read initialization state for auth middleware", "error", err)
+			log.Printf("⚠️ failed to read initialization state for auth middleware: %v", err)
 			http.Error(w, `{"error":"temporary storage failure"}`, http.StatusServiceUnavailable)
 			return
 		}

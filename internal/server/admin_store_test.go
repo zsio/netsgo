@@ -131,6 +131,27 @@ func TestAdminStore_Initialize_Success(t *testing.T) {
 	if !store.IsInitialized() {
 		t.Error("should return true after initialization")
 	}
+	initialized, err := store.IsInitializedE()
+	if err != nil {
+		t.Fatalf("IsInitializedE returned error: %v", err)
+	}
+	if !initialized {
+		t.Error("IsInitializedE should return true after initialization")
+	}
+}
+
+func TestAdminStore_IsInitializedE_ReturnsStorageError(t *testing.T) {
+	store := newTestAdminStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	if _, err := store.IsInitializedE(); err == nil {
+		t.Fatal("IsInitializedE should return storage errors")
+	}
+	if store.IsInitialized() {
+		t.Fatal("best-effort IsInitialized wrapper should fail closed to false")
+	}
 }
 
 func TestAdminStore_Initialize_Duplicate(t *testing.T) {
@@ -838,12 +859,29 @@ func TestAdminStore_AddAPIKey_SaveFailureRollsBack(t *testing.T) {
 func TestAdminStore_GetServerConfig(t *testing.T) {
 	store := newInitializedAdminStore(t)
 
-	cfg := store.GetServerConfig()
+	cfg, err := store.GetServerConfigE()
+	if err != nil {
+		t.Fatalf("GetServerConfigE returned error: %v", err)
+	}
 	if cfg.ServerAddr != "https://example.com" {
 		t.Errorf("expected ServerAddr https://example.com, got %s", cfg.ServerAddr)
 	}
 	if len(cfg.AllowedPorts) != 1 {
 		t.Errorf("expected 1 AllowedPorts range, got %d", len(cfg.AllowedPorts))
+	}
+}
+
+func TestAdminStore_GetServerConfigE_ReturnsStorageError(t *testing.T) {
+	store := newInitializedAdminStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	if _, err := store.GetServerConfigE(); err == nil {
+		t.Fatal("GetServerConfigE should return storage errors")
+	}
+	if cfg := store.GetServerConfig(); cfg.ServerAddr != "" || len(cfg.AllowedPorts) != 0 {
+		t.Fatalf("best-effort GetServerConfig wrapper should return zero config on storage error, got %+v", cfg)
 	}
 }
 

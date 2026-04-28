@@ -273,6 +273,8 @@ func (s *Server) collectServerStatus() serverStatusView {
 	serverAddr := ""
 	var allowedPorts []PortRange
 	if s.auth.adminStore != nil {
+		// Non-authoritative status display: degrade this optional metadata
+		// instead of failing the whole server status response.
 		config := s.auth.adminStore.GetServerConfig()
 		serverAddr = config.ServerAddr
 		allowedPorts = config.AllowedPorts

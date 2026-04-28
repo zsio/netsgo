@@ -380,7 +380,7 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 
 		conflicts, err := findHTTPDomainConflictNames("dup.example.com", "", "", s)
 		if err != nil {
-			t.Fatalf("findHTTPDomainConflictNames() error = %v", err)
+			t.Fatalf("findHTTPDomainConflictNames returned error: %v", err)
 		}
 		if len(conflicts) != 2 {
 			t.Fatalf("tunnels with the same name from different clients should not be deduplicated, got %v", conflicts)

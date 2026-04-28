@@ -201,6 +201,8 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 		// get server_addr
 		serverAddr := ""
 		if s.auth.adminStore != nil {
+			// Best-effort response enrichment only: API key creation already
+			// succeeded, so config read failure should not roll it back.
 			serverAddr = s.auth.adminStore.GetServerConfig().ServerAddr
 		}
 

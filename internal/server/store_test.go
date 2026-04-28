@@ -521,6 +521,38 @@ func TestTunnelStore_GetTunnel(t *testing.T) {
 	}
 }
 
+func TestTunnelStore_GetTunnelE_DistinguishesNotFoundAndStorageError(t *testing.T) {
+	store := newTestTunnelStore(t)
+
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{Name: "find-me", RemotePort: 9090},
+		ClientID:        "client-1",
+		Hostname:        "host",
+	})
+
+	st, err := store.GetTunnelE("client-1", "find-me")
+	if err != nil {
+		t.Fatalf("GetTunnelE returned error: %v", err)
+	}
+	if st.RemotePort != 9090 {
+		t.Fatalf("RemotePort = %d, want 9090", st.RemotePort)
+	}
+
+	if _, err := store.GetTunnelE("client-1", "not-exist"); !errors.Is(err, ErrTunnelNotFound) {
+		t.Fatalf("missing tunnel error = %v, want ErrTunnelNotFound", err)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if _, err := store.GetTunnelE("client-1", "find-me"); err == nil || errors.Is(err, ErrTunnelNotFound) {
+		t.Fatalf("closed store error = %v, want storage error distinct from ErrTunnelNotFound", err)
+	}
+	if _, found := store.GetTunnel("client-1", "find-me"); found {
+		t.Fatal("best-effort GetTunnel wrapper should report not found on storage error")
+	}
+}
+
 func TestTunnelStore_GetTunnelsByHostname(t *testing.T) {
 	store := newTestTunnelStore(t)
 

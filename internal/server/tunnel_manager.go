@@ -517,7 +517,7 @@ func (s *Server) loadOfflineManagedTunnel(clientID, name string) (StoredTunnel, 
 		return StoredTunnel{}, errManagedTunnelNotFound
 	}
 	if err != nil {
-		return StoredTunnel{}, fmt.Errorf("load managed tunnel %q for client %q: %w", name, clientID, err)
+		return StoredTunnel{}, err
 	}
 
 	return stored, nil
@@ -566,7 +566,7 @@ func (s *Server) updateOfflineManagedTunnel(clientID, name, localIP string, loca
 		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", name)
 	}
 	if err != nil {
-		return protocol.ProxyConfig{}, fmt.Errorf("reload updated tunnel %q for client %q: %w", name, clientID, err)
+		return protocol.ProxyConfig{}, fmt.Errorf("failed to reload tunnel %q: %w", name, err)
 	}
 
 	config := storedTunnelToProxyConfig(updated)
@@ -591,7 +591,7 @@ func (s *Server) resumeOfflineManagedTunnel(clientID, name string) (protocol.Pro
 		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", name)
 	}
 	if err != nil {
-		return protocol.ProxyConfig{}, fmt.Errorf("reload resumed tunnel %q for client %q: %w", name, clientID, err)
+		return protocol.ProxyConfig{}, fmt.Errorf("failed to reload tunnel %q: %w", name, err)
 	}
 
 	config := storedTunnelToProxyConfig(updated)
@@ -613,7 +613,7 @@ func (s *Server) stopOfflineManagedTunnel(clientID, name string) (protocol.Proxy
 		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", name)
 	}
 	if err != nil {
-		return protocol.ProxyConfig{}, fmt.Errorf("reload stopped tunnel %q for client %q: %w", name, clientID, err)
+		return protocol.ProxyConfig{}, fmt.Errorf("failed to reload tunnel %q: %w", name, err)
 	}
 
 	config := storedTunnelToProxyConfig(updated)
@@ -836,8 +836,7 @@ func (s *Server) markTunnelsPortNotAllowed(affected []affectedTunnel) {
 				setProxyConfigStates(&eventConfig, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 				hasEventConfig = true
 			} else if !errors.Is(err, ErrTunnelNotFound) {
-				log.Printf("⚠️ Failed to reload tunnel %s (client %s) for port_not_allowed event: %v",
-					a.TunnelName, a.ClientID, err)
+				log.Printf("⚠️ failed to load persisted tunnel %s/%s for event fallback: %v", a.ClientID, a.TunnelName, err)
 			}
 		}
 
