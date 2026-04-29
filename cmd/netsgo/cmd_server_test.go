@@ -1,8 +1,13 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"netsgo/internal/server"
+	"netsgo/pkg/flock"
 
 	"github.com/spf13/viper"
 )
@@ -104,4 +109,25 @@ func TestShouldWarnInitFlagsIgnored(t *testing.T) {
 	if shouldWarnInitFlagsIgnored(true, initFlagValues{}) {
 		t.Fatal("should not warn when no init flags provided")
 	}
+}
+
+func TestPrepareServerStartupRequiresInitWithoutCreatingDB(t *testing.T) {
+	dataDir := t.TempDir()
+
+	prepared, err := prepareServerStartup(dataDir, server.InitParams{})
+	if err == nil {
+		prepared.Unlock()
+		t.Fatal("prepareServerStartup should reject an uninitialized server without init params")
+	}
+
+	dbPath := filepath.Join(dataDir, "server", server.ServerDBFileName)
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("prepareServerStartup created %s before validation failed; stat error = %v", dbPath, statErr)
+	}
+
+	unlock, lockErr := flock.TryLock(filepath.Join(dataDir, "locks", "server.lock"))
+	if lockErr != nil {
+		t.Fatalf("server lock should be released after validation failure: %v", lockErr)
+	}
+	unlock()
 }

@@ -135,7 +135,22 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 	var bandwidthSettings protocol.BandwidthSettings
 
 	if s.auth.adminStore != nil {
-		if !s.auth.adminStore.IsInitialized() {
+		initialized, err := s.auth.adminStore.IsInitializedE()
+		if err != nil {
+			log.Printf("⚠️ Server initialization state unavailable, rejecting client connection [%s]: %v", remoteAddr, err)
+			slog.Warn("Rejected client connection because initialization state could not be read", "ip", ip, "module", "security")
+			if s.auth.clientLimiter != nil {
+				s.auth.clientLimiter.RecordFailure(ip)
+			}
+			_ = writeAuthResult(conn, protocol.AuthResponse{
+				Success:   false,
+				Message:   "authentication temporarily unavailable",
+				Code:      protocol.AuthCodeServerUninitialized,
+				Retryable: true,
+			})
+			return nil, fmt.Errorf("authentication failed: initialization state unavailable: %w", err)
+		}
+		if !initialized {
 			log.Printf("⚠️ Server not initialized, rejecting client connection [%s]", remoteAddr)
 			slog.Warn("Rejected client connection because server is not initialized", "ip", ip, "module", "security")
 			if s.auth.clientLimiter != nil {

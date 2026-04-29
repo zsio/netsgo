@@ -3,27 +3,18 @@ package client
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"netsgo/pkg/datadir"
-	"netsgo/pkg/fileutil"
 )
-
-type persistedState struct {
-	InstallID      string `json:"install_id"`
-	Token          string `json:"token,omitempty"` // Connection token exchanged from the key
-	TLSFingerprint string `json:"tls_fingerprint,omitempty"`
-}
 
 func (c *Client) statePath() string {
 	root := c.DataDir
 	if root == "" {
 		root = datadir.DefaultDataDir()
 	}
-	return filepath.Join(root, "client", "client.json")
+	return filepath.Join(root, "client", clientDBFileName)
 }
 
 func (c *Client) ensureInstallID() error {
@@ -31,61 +22,74 @@ func (c *Client) ensureInstallID() error {
 		return nil
 	}
 
-	path := c.statePath()
+	store, err := newClientStateStore(c.statePath())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
 
-	if data, err := os.ReadFile(path); err == nil {
-		var state persistedState
-		if err := json.Unmarshal(data, &state); err == nil && state.InstallID != "" {
-			c.InstallID = state.InstallID
-			// Also load the token if present.
-			if state.Token != "" && c.Token == "" {
-				c.Token = state.Token
-			}
-
-			if state.TLSFingerprint != "" && c.TLSFingerprint == "" {
-				c.TLSFingerprint = state.TLSFingerprint
-			}
-			return nil
+	if state, ok, err := store.Load(); err != nil {
+		return err
+	} else if ok && state.InstallID != "" {
+		c.InstallID = state.InstallID
+		if state.Token != "" && c.Token == "" {
+			c.Token = state.Token
 		}
+		if state.TLSFingerprint != "" && c.TLSFingerprint == "" {
+			c.TLSFingerprint = state.TLSFingerprint
+		}
+		return nil
 	}
 
 	installID, err := generateInstallID()
 	if err != nil {
 		return err
 	}
-	state := persistedState{InstallID: installID}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("failed to create client state directory: %w", err)
+	state := persistedState{
+		InstallID:      installID,
+		Token:          c.Token,
+		TLSFingerprint: c.TLSFingerprint,
 	}
-
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal client state: %w", err)
-	}
-	if err := fileutil.AtomicWriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("failed to write client state: %w", err)
+	if err := store.Save(state); err != nil {
+		return err
 	}
 
 	c.InstallID = installID
 	return nil
 }
 
-// saveToken persists the token to the client state file.
-func (c *Client) saveToken(token string) error {
-	path := c.statePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("failed to create client state directory: %w", err)
-	}
-
-	// Read the existing state.
-	state := persistedState{InstallID: c.InstallID, Token: token}
-
-	data, err := json.MarshalIndent(state, "", "  ")
+func (c *Client) saveState(update func(*persistedState)) error {
+	store, err := newClientStateStore(c.statePath())
 	if err != nil {
-		return fmt.Errorf("failed to marshal client state: %w", err)
+		return err
 	}
-	return fileutil.AtomicWriteFile(path, data, 0o600)
+	defer func() { _ = store.Close() }()
+
+	state, ok, err := store.Load()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		state = persistedState{}
+	}
+	if state.InstallID == "" {
+		state.InstallID = c.InstallID
+	}
+	if state.Token == "" {
+		state.Token = c.Token
+	}
+	if state.TLSFingerprint == "" {
+		state.TLSFingerprint = c.TLSFingerprint
+	}
+	update(&state)
+	return store.Save(state)
+}
+
+// saveToken persists the token to the client state database.
+func (c *Client) saveToken(token string) error {
+	return c.saveState(func(state *persistedState) {
+		state.Token = token
+	})
 }
 
 // clearToken clears the locally saved token.
@@ -102,22 +106,9 @@ func generateInstallID() (string, error) {
 	return "client-" + hex.EncodeToString(buf[:]), nil
 }
 
-// saveTLSFingerprint persists the TLS fingerprint to the client state file. (P1 TOFU)
+// saveTLSFingerprint persists the TLS fingerprint to the client state database. (P1 TOFU)
 func (c *Client) saveTLSFingerprint(fingerprint string) error {
-	path := c.statePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("failed to create client state directory: %w", err)
-	}
-
-	state := persistedState{
-		InstallID:      c.InstallID,
-		Token:          c.Token,
-		TLSFingerprint: fingerprint,
-	}
-
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal client state: %w", err)
-	}
-	return fileutil.AtomicWriteFile(path, data, 0o600)
+	return c.saveState(func(state *persistedState) {
+		state.TLSFingerprint = fingerprint
+	})
 }

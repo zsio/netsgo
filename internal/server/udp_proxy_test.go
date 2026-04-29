@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -271,10 +270,8 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 	client := &ClientConn{ID: clientID, proxies: make(map[string]*ProxyTunnel)}
 	s.clients.Store(clientID, client)
 
-	trafficStore, err := NewTrafficStore(filepath.Join(t.TempDir(), "traffic.json"))
-	if err != nil {
-		t.Fatalf("failed to create TrafficStore: %v", err)
-	}
+	trafficStore, trafficCleanup := newTestTrafficStore(t)
+	defer trafficCleanup()
 	s.trafficStore = trafficStore
 
 	echoConn, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -367,7 +364,7 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 		t.Fatalf("unexpected UDP echo reply: want %q, got %q", payload, reply[:n])
 	}
 
-	result := trafficStore.Query(clientID, tunnelName, time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
+	result := mustQueryTraffic(t, trafficStore, clientID, tunnelName, time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
 	if len(result.Items) != 1 {
 		t.Fatalf("traffic items: want 1, got %d", len(result.Items))
 	}

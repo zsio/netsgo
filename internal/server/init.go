@@ -1,10 +1,14 @@
 package server
 
 import (
+	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"netsgo/internal/storage"
 )
 
 type InitParams struct {
@@ -21,12 +25,50 @@ func (p InitParams) IsComplete() bool {
 		p.AllowedPorts != ""
 }
 
+func IsInitialized(dataDir string) (bool, error) {
+	return IsInitializedDB(filepath.Join(dataDir, "server", serverDBFileName))
+}
+
+func IsInitializedDB(path string) (bool, error) {
+	db, err := storage.OpenReadOnly(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("open server sqlite init state: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	hasConfig, err := storage.TableExists(db, "server_config")
+	if err != nil {
+		return false, fmt.Errorf("read server init schema: %w", err)
+	}
+	if !hasConfig {
+		return false, nil
+	}
+
+	var initialized int
+	err = db.QueryRow(`SELECT initialized FROM server_config WHERE id = 1`).Scan(&initialized)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read server init state: %w", err)
+	}
+	return intToBool(initialized), nil
+}
+
 func ApplyInit(dataDir string, params InitParams) error {
-	adminStore, err := NewAdminStore(filepath.Join(dataDir, "server", "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(dataDir, "server", serverDBFileName))
 	if err != nil {
 		return err
 	}
-	if adminStore.IsInitialized() {
+	defer func() { _ = adminStore.Close() }()
+	initialized, err := adminStore.IsInitializedE()
+	if err != nil {
+		return err
+	}
+	if initialized {
 		return nil
 	}
 
@@ -44,15 +86,23 @@ func ApplyInit(dataDir string, params InitParams) error {
 }
 
 func LoadRecoverableInitParams(dataDir string) (InitParams, error) {
-	adminStore, err := NewAdminStore(filepath.Join(dataDir, "server", "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(dataDir, "server", serverDBFileName))
 	if err != nil {
 		return InitParams{}, err
 	}
-	if !adminStore.IsInitialized() {
+	defer func() { _ = adminStore.Close() }()
+	initialized, err := adminStore.IsInitializedE()
+	if err != nil {
+		return InitParams{}, err
+	}
+	if !initialized {
 		return InitParams{}, fmt.Errorf("server historical data has not been initialized")
 	}
 
-	config := adminStore.GetServerConfig()
+	config, err := adminStore.GetServerConfigE()
+	if err != nil {
+		return InitParams{}, err
+	}
 	allowedPorts := formatAllowedPorts(config.AllowedPorts)
 	if strings.TrimSpace(config.ServerAddr) == "" || allowedPorts == "" {
 		return InitParams{}, fmt.Errorf("server historical data is incomplete")

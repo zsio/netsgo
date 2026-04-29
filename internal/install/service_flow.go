@@ -2,7 +2,6 @@ package install
 
 import (
 	"fmt"
-	"time"
 
 	"netsgo/internal/svcmgr"
 )
@@ -93,7 +92,7 @@ func degradedRows(inspection svcmgr.InstallInspection, advice string) [][2]strin
 	return rows
 }
 
-func completeManagedInstall(role svcmgr.Role, deps managedInstallDeps, writeArtifacts func(spec svcmgr.ServiceSpec) error) error {
+func completeManagedInstall(role svcmgr.Role, deps managedInstallDeps, writeArtifacts func(layout svcmgr.ServiceLayout) error) error {
 	if err := deps.EnsureUser(svcmgr.SystemUser); err != nil {
 		return err
 	}
@@ -107,9 +106,8 @@ func completeManagedInstall(role svcmgr.Role, deps managedInstallDeps, writeArti
 	if err := deps.InstallBinary(binaryPath); err != nil {
 		return err
 	}
-	spec := svcmgr.NewSpec(role)
-	spec.InstalledAt = time.Now().UTC().Format(time.RFC3339)
-	if err := writeArtifacts(spec); err != nil {
+	layout := svcmgr.NewLayout(role)
+	if err := writeArtifacts(layout); err != nil {
 		return err
 	}
 	if err := deps.DaemonReload(); err != nil {

@@ -1,6 +1,25 @@
 package server
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestIsInitializedDBTreatsSchemaMissingAsUninitialized(t *testing.T) {
+	path := filepath.Join(t.TempDir(), serverDBFileName)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("failed to create empty sqlite placeholder: %v", err)
+	}
+
+	initialized, err := IsInitializedDB(path)
+	if err != nil {
+		t.Fatalf("IsInitializedDB() should not fail when server_config is missing: %v", err)
+	}
+	if initialized {
+		t.Fatal("empty sqlite placeholder should not be initialized")
+	}
+}
 
 func TestLoadRecoverableInitParams(t *testing.T) {
 	dataDir := t.TempDir()

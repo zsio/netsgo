@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"syscall"
 
 	"netsgo/internal/install"
@@ -19,7 +18,6 @@ type serverDeps struct {
 	IsEnabled      func() (bool, error)
 	Logs           func() error
 	RunInstall     func() error
-	ReadServerSpec func() (svcmgr.ServiceSpec, error)
 	ReadServerEnv  func() (svcmgr.ServerEnv, error)
 	DisableAndStop func() error
 	EnableAndStart func() error
@@ -84,11 +82,8 @@ func defaultServerDeps() serverDeps {
 		RunInstall: func() error {
 			return install.Run()
 		},
-		ReadServerSpec: func() (svcmgr.ServiceSpec, error) {
-			return svcmgr.ReadServerSpec(svcmgr.SpecPath(svcmgr.RoleServer))
-		},
 		ReadServerEnv: func() (svcmgr.ServerEnv, error) {
-			return svcmgr.ReadServerEnv(svcmgr.NewSpec(svcmgr.RoleServer))
+			return svcmgr.ReadServerEnv(svcmgr.NewLayout(svcmgr.RoleServer))
 		},
 		DisableAndStop: func() error { return svcmgr.DisableAndStop(svcmgr.UnitName(svcmgr.RoleServer)) },
 		EnableAndStart: func() error { return svcmgr.EnableAndStart(svcmgr.UnitName(svcmgr.RoleServer)) },
@@ -103,31 +98,27 @@ func defaultServerDeps() serverDeps {
 
 func showServerDetails(deps serverDeps) error {
 	inspection := deps.Inspect()
-	spec, specErr := loadServerSpec(deps)
+	layout := svcmgr.NewLayout(svcmgr.RoleServer)
 	env, envErr := loadServerEnv(deps)
 
 	rows := [][2]string{
-		{"Service name", spec.ServiceName},
+		{"Service name", layout.ServiceName},
 		{"Role", string(svcmgr.RoleServer)},
 		{"State", inspection.State.String()},
 		{"Installed", boolLabel(inspection.State == svcmgr.StateInstalled)},
 		{"Running", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsActive)},
 		{"Enabled", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsEnabled)},
-		{"Binary path", spec.BinaryPath},
-		{"Data dir", spec.DataDir},
-		{"Data path", serverDataPath(spec)},
-		{"Lock path", lockPath(spec.DataDir)},
+		{"Binary path", layout.BinaryPath},
+		{"Data dir", layout.DataDir},
+		{"Data path", serverDataPath(layout)},
+		{"Lock path", lockPath(layout.DataDir)},
 		{"Log target", "journald"},
-		{"Unit path", spec.UnitPath},
-		{"Env path", spec.EnvPath},
-		{"Spec path", spec.SpecPath},
-		{"Run as user", spec.RunAsUser},
+		{"Unit path", layout.UnitPath},
+		{"Env path", layout.EnvPath},
+		{"Run as user", layout.RunAsUser},
 		{"Listen port", intOrUnavailable(env.Port, envErr)},
 		{"TLS mode", stringOrUnavailable(env.TLSMode, envErr)},
-		{"Server address", stringOrUnavailable(firstNonEmpty(env.ServerAddr, spec.ServerURL), envErr)},
-	}
-	if specErr != nil {
-		rows = append(rows, [2]string{"Spec status", fmt.Sprintf("Unavailable (%v)", specErr)})
+		{"Server address", stringOrUnavailable(env.ServerAddr, envErr)},
 	}
 	if envErr != nil {
 		rows = append(rows, [2]string{"Env status", fmt.Sprintf("Unavailable (%v)", envErr)})
@@ -142,17 +133,14 @@ func uninstallServer(deps serverDeps) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	spec, err := loadServerSpec(deps)
-	if err != nil {
-		return false, err
-	}
+	layout := svcmgr.NewLayout(svcmgr.RoleServer)
 	deleteData := mode == 1
 	rows := [][2]string{{"Mode", uninstallModeLabel(deleteData)}}
-	rows = appendRemovalRows(rows, "Remove", spec.UnitPath, spec.EnvPath, spec.SpecPath)
+	rows = appendRemovalRows(rows, "Remove", layout.UnitPath, layout.EnvPath)
 	if deleteData {
-		rows = appendRemovalRows(rows, "Remove", serverDataPath(spec))
+		rows = appendRemovalRows(rows, "Remove", serverDataPath(layout))
 	} else {
-		rows = append(rows, [2]string{"Keep", serverDataPath(spec)})
+		rows = append(rows, [2]string{"Keep", serverDataPath(layout)})
 	}
 	rows = append(rows, sharedBinaryPlanRow(deps.DetectClient))
 	deps.UI.PrintSummary("Server uninstall plan", rows)
@@ -168,9 +156,9 @@ func uninstallServer(deps serverDeps) (bool, error) {
 	if err := deps.DisableAndStop(); err != nil {
 		return false, err
 	}
-	paths := []string{spec.UnitPath, spec.EnvPath, spec.SpecPath}
+	paths := []string{layout.UnitPath, layout.EnvPath}
 	if deleteData {
-		paths = append(paths, serverDataPath(spec))
+		paths = append(paths, serverDataPath(layout))
 	}
 	if err := deps.RemovePaths(paths...); err != nil {
 		return false, err
@@ -241,15 +229,15 @@ func cleanupBrokenServer(deps serverDeps) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	spec := svcmgr.NewSpec(svcmgr.RoleServer)
+	layout := svcmgr.NewLayout(svcmgr.RoleServer)
 	deleteData := mode == 1
 
 	rows := [][2]string{{"Mode", uninstallModeLabel(deleteData)}}
-	rows = appendRemovalRows(rows, "Remove", spec.UnitPath, spec.EnvPath, spec.SpecPath)
+	rows = appendRemovalRows(rows, "Remove", layout.UnitPath, layout.EnvPath)
 	if deleteData {
-		rows = appendRemovalRows(rows, "Remove", serverDataPath(spec))
+		rows = appendRemovalRows(rows, "Remove", serverDataPath(layout))
 	} else {
-		rows = append(rows, [2]string{"Keep", serverDataPath(spec)})
+		rows = append(rows, [2]string{"Keep", serverDataPath(layout)})
 	}
 	rows = append(rows, sharedBinaryPlanRow(deps.DetectClient))
 	deps.UI.PrintSummary("Broken server cleanup plan", rows)
@@ -262,9 +250,9 @@ func cleanupBrokenServer(deps serverDeps) (bool, error) {
 		printManageCancelled(deps.UI)
 		return false, nil
 	}
-	paths := []string{spec.UnitPath, spec.EnvPath, spec.SpecPath}
+	paths := []string{layout.UnitPath, layout.EnvPath}
 	if deleteData {
-		paths = append(paths, serverDataPath(spec))
+		paths = append(paths, serverDataPath(layout))
 	}
 	if err := deps.RemovePaths(paths...); err != nil {
 		return false, err
@@ -279,18 +267,6 @@ func cleanupBrokenServer(deps serverDeps) (bool, error) {
 	return true, nil
 }
 
-func loadServerSpec(deps serverDeps) (svcmgr.ServiceSpec, error) {
-	spec := svcmgr.NewSpec(svcmgr.RoleServer)
-	if deps.ReadServerSpec == nil {
-		return spec, nil
-	}
-	readSpec, err := deps.ReadServerSpec()
-	if err != nil {
-		return spec, err
-	}
-	return readSpec, nil
-}
-
 func loadServerEnv(deps serverDeps) (svcmgr.ServerEnv, error) {
 	if deps.ReadServerEnv == nil {
 		return svcmgr.ServerEnv{}, nil
@@ -298,8 +274,8 @@ func loadServerEnv(deps serverDeps) (svcmgr.ServerEnv, error) {
 	return deps.ReadServerEnv()
 }
 
-func serverDataPath(spec svcmgr.ServiceSpec) string {
-	return filepath.Join(spec.DataDir, "server")
+func serverDataPath(layout svcmgr.ServiceLayout) string {
+	return layout.RuntimeDir
 }
 
 func uninstallModeLabel(deleteData bool) string {
@@ -334,13 +310,4 @@ func intOrUnavailable(value int, err error) string {
 		return "(none)"
 	}
 	return itoa(value)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

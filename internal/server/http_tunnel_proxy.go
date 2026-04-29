@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -86,12 +87,22 @@ func (s *Server) hostDispatchHandler(management http.Handler) http.Handler {
 			return
 		}
 
-		if route, ok := s.findHTTPRouteByHost(r.Host); ok {
+		route, ok, err := s.findHTTPRouteByHost(r.Host)
+		if err != nil {
+			http.Error(w, `{"error":"temporary storage failure"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if ok {
 			s.serveHTTPRoute(w, r, route)
 			return
 		}
 
-		if s.isManagementHost(r.Host) {
+		isManagement, err := s.isManagementHost(r.Host)
+		if err != nil {
+			http.Error(w, `{"error":"temporary storage failure"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if isManagement {
 			management.ServeHTTP(w, r)
 			return
 		}
@@ -100,20 +111,23 @@ func (s *Server) hostDispatchHandler(management http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) isManagementHost(host string) bool {
+func (s *Server) isManagementHost(host string) (bool, error) {
 	var cfg *ServerConfig
 	if s.auth.adminStore != nil {
-		current := s.auth.adminStore.GetServerConfig()
+		current, err := s.auth.adminStore.GetServerConfigE()
+		if err != nil {
+			return false, fmt.Errorf("load server config for management host detection: %w", err)
+		}
 		cfg = &current
 	}
 	managementHost := effectiveManagementHost(cfg, serverListenAddr(s))
 	if managementHost == "" {
-		return false
+		return false, nil
 	}
 
 	reqCanonical := canonicalHost(host)
 	if reqCanonical == managementHost {
-		return true
+		return true, nil
 	}
 
 	// localhost / 127.0.0.1 / [::1] are treated as equivalent on the same port.
@@ -123,7 +137,7 @@ func (s *Server) isManagementHost(host string) bool {
 		_, mPort := splitCanonicalHostPort(managementHost)
 		_, rPort := splitCanonicalHostPort(reqCanonical)
 		if mPort != "" && mPort == rPort {
-			return true
+			return true, nil
 		}
 
 		// When explicitly configured as a portless loopback (e.g. http://localhost),
@@ -132,22 +146,22 @@ func (s *Server) isManagementHost(host string) bool {
 			_, listenPort := splitCanonicalHostPort(serverListenAddr(s))
 			switch {
 			case rPort == "":
-				return true
+				return true, nil
 			case listenPort != "" && rPort == listenPort:
-				return true
+				return true, nil
 			}
 		}
 
 		if mPort == "" && rPort == "" {
-			return true
+			return true, nil
 		}
 	}
 
 	if !s.AllowLoopbackManagementHost {
-		return false
+		return false, nil
 	}
 
-	return isLoopbackHost(reqCanonical)
+	return isLoopbackHost(reqCanonical), nil
 }
 
 func splitCanonicalHostPort(host string) (string, string) {
@@ -175,21 +189,25 @@ func isLoopbackHost(host string) bool {
 	}
 }
 
-func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool) {
+func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool, error) {
 	canonical := canonicalHost(host)
 	if canonical == "" {
-		return httpTunnelRoute{}, false
+		return httpTunnelRoute{}, false, nil
 	}
 
 	serverRoute, ok := s.findRuntimeHTTPRoute(canonical)
 	if ok {
-		return serverRoute, true
+		return serverRoute, true, nil
 	}
 	if s.store == nil {
-		return httpTunnelRoute{}, false
+		return httpTunnelRoute{}, false, nil
 	}
 
-	for _, stored := range s.store.GetAllTunnels() {
+	allTunnels, err := s.store.GetAllTunnels()
+	if err != nil {
+		return httpTunnelRoute{}, false, fmt.Errorf("load persisted tunnels for HTTP route matching: %w", err)
+	}
+	for _, stored := range allTunnels {
 		if stored.Type != protocol.ProxyTypeHTTP {
 			continue
 		}
@@ -198,10 +216,10 @@ func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool) {
 		}
 		return httpTunnelRoute{
 			config: storedTunnelToProxyConfig(stored),
-		}, true
+		}, true, nil
 	}
 
-	return httpTunnelRoute{}, false
+	return httpTunnelRoute{}, false, nil
 }
 
 func (s *Server) findRuntimeHTTPRoute(host string) (httpTunnelRoute, bool) {

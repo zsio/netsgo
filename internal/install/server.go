@@ -3,10 +3,6 @@ package install
 import (
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"os/user"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -28,9 +24,8 @@ type serverDeps struct {
 	ApplyInit         func(string, server.InitParams) error
 	CurrentBinaryPath func() (string, error)
 	InstallBinary     func(string) error
-	WriteServerSpec   func(svcmgr.ServiceSpec) error
-	WriteServerEnv    func(svcmgr.ServiceSpec, svcmgr.ServerEnv) error
-	WriteServerUnit   func(svcmgr.ServiceSpec) error
+	WriteServerEnv    func(svcmgr.ServiceLayout, svcmgr.ServerEnv) error
+	WriteServerUnit   func(svcmgr.ServiceLayout) error
 	ValidateCustomTLS func(certPath, keyPath string) error
 	DaemonReload      func() error
 	EnableAndStart    func(string) error
@@ -227,6 +222,12 @@ func InstallServerWith(deps serverDeps) error {
 		}
 	}
 	if state != svcmgr.StateHistoricalDataOnly {
+		if err := deps.EnsureUser(svcmgr.SystemUser); err != nil {
+			return err
+		}
+		if err := deps.EnsureDirs(); err != nil {
+			return err
+		}
 		if err := deps.ApplyInit(svcmgr.ManagedDataDir, initParams); err != nil {
 			return err
 		}
@@ -238,17 +239,11 @@ func InstallServerWith(deps serverDeps) error {
 		InstallBinary:     deps.InstallBinary,
 		DaemonReload:      deps.DaemonReload,
 		EnableAndStart:    deps.EnableAndStart,
-	}, func(spec svcmgr.ServiceSpec) error {
-		spec.ListenPort = port
-		spec.TLSMode = tlsMode
-		spec.ServerURL = serverAddr
-		if err := deps.WriteServerSpec(spec); err != nil {
+	}, func(layout svcmgr.ServiceLayout) error {
+		if err := deps.WriteServerEnv(layout, svcmgr.ServerEnv{Port: port, TLSMode: tlsMode, TLSCert: tlsCert, TLSKey: tlsKey, TrustedProxies: trustedProxies, ServerAddr: serverAddr}); err != nil {
 			return err
 		}
-		if err := deps.WriteServerEnv(spec, svcmgr.ServerEnv{Port: port, TLSMode: tlsMode, TLSCert: tlsCert, TLSKey: tlsKey, TrustedProxies: trustedProxies, ServerAddr: serverAddr}); err != nil {
-			return err
-		}
-		return deps.WriteServerUnit(spec)
+		return deps.WriteServerUnit(layout)
 	}); err != nil {
 		return err
 	}
@@ -280,7 +275,6 @@ func defaultServerDeps() serverDeps {
 		ApplyInit:         server.ApplyInit,
 		CurrentBinaryPath: svcmgr.CurrentBinaryPath,
 		InstallBinary:     svcmgr.InstallBinary,
-		WriteServerSpec:   svcmgr.WriteServerSpec,
 		WriteServerEnv:    svcmgr.WriteServerEnv,
 		WriteServerUnit:   svcmgr.WriteServerUnit,
 		ValidateCustomTLS: func(certPath, keyPath string) error {
@@ -289,35 +283,4 @@ func defaultServerDeps() serverDeps {
 		DaemonReload:   svcmgr.DaemonReload,
 		EnableAndStart: svcmgr.EnableAndStart,
 	}
-}
-
-func ensureManagedServerDirs() error {
-	if err := os.MkdirAll(svcmgr.ManagedDataDir+"/server", 0o750); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(svcmgr.ManagedDataDir+"/locks", 0o750); err != nil {
-		return err
-	}
-	account, err := user.Lookup(svcmgr.SystemUser)
-	if err != nil {
-		return nil
-	}
-	uid, err := strconv.Atoi(account.Uid)
-	if err != nil {
-		return err
-	}
-	gid, err := strconv.Atoi(account.Gid)
-	if err != nil {
-		return err
-	}
-	serverDir := svcmgr.ManagedDataDir + "/server"
-	if err := filepath.WalkDir(serverDir, func(path string, _ fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		return os.Chown(path, uid, gid)
-	}); err != nil {
-		return err
-	}
-	return os.Chown(svcmgr.ManagedDataDir+"/locks", uid, gid)
 }

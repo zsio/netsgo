@@ -15,7 +15,11 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 		return
 	}
 
-	tunnels := s.store.GetTunnelsByClientID(client.ID)
+	tunnels, err := s.store.GetTunnelsByClientID(client.ID)
+	if err != nil {
+		log.Printf("⚠️ failed to load tunnels for client %s: %v", client.ID, err)
+		return
+	}
 	if len(tunnels) == 0 {
 		return
 	}
@@ -25,26 +29,50 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 		if !s.isCurrentLive(client.ID, client.generation) {
 			return
 		}
-		if st.RemotePort != 0 && s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(st.RemotePort) {
-			log.Printf("⚠️ tunnel %s port %d is outside the currently allowed range, marking as error", st.Name, st.RemotePort)
-			errMsg := fmt.Sprintf("port %d is not within the allowed range", st.RemotePort)
-			client.proxyMu.Lock()
-			config := storedTunnelToProxyConfig(st)
-			setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
-			client.proxies[st.Name] = &ProxyTunnel{
-				Config: config,
-				limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
-				done:   make(chan struct{}),
+		if st.RemotePort != 0 && s.auth.adminStore != nil {
+			initialized, err := s.auth.adminStore.IsInitializedE()
+			if err != nil {
+				log.Printf("⚠️ failed to read initialization state while restoring tunnel %s, marking as error: %v", st.Name, err)
+				errMsg := fmt.Sprintf("storage unavailable while checking allowed ports: %v", err)
+				client.proxyMu.Lock()
+				config := storedTunnelToProxyConfig(st)
+				setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
+				client.proxies[st.Name] = &ProxyTunnel{
+					Config: config,
+					limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
+					done:   make(chan struct{}),
+				}
+				client.proxyMu.Unlock()
+				_ = s.persistTunnelStates(client.ID, st.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
+				eventConfig := storedTunnelToProxyConfig(st)
+				eventConfig.LocalIP = ""
+				eventConfig.LocalPort = 0
+				setProxyConfigStates(&eventConfig, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
+				s.emitTunnelChanged(client.ID, eventConfig, "storage_unavailable")
+				restoredCount++
+				continue
 			}
-			client.proxyMu.Unlock()
-			_ = s.persistTunnelStates(client.ID, st.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
-			eventConfig := storedTunnelToProxyConfig(st)
-			eventConfig.LocalIP = ""
-			eventConfig.LocalPort = 0
-			setProxyConfigStates(&eventConfig, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
-			s.emitTunnelChanged(client.ID, eventConfig, "port_not_allowed")
-			restoredCount++
-			continue
+			if initialized && !s.auth.adminStore.IsPortAllowed(st.RemotePort) {
+				log.Printf("⚠️ tunnel %s port %d is outside the currently allowed range, marking as error", st.Name, st.RemotePort)
+				errMsg := fmt.Sprintf("port %d is not within the allowed range", st.RemotePort)
+				client.proxyMu.Lock()
+				config := storedTunnelToProxyConfig(st)
+				setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
+				client.proxies[st.Name] = &ProxyTunnel{
+					Config: config,
+					limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
+					done:   make(chan struct{}),
+				}
+				client.proxyMu.Unlock()
+				_ = s.persistTunnelStates(client.ID, st.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
+				eventConfig := storedTunnelToProxyConfig(st)
+				eventConfig.LocalIP = ""
+				eventConfig.LocalPort = 0
+				setProxyConfigStates(&eventConfig, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
+				s.emitTunnelChanged(client.ID, eventConfig, "port_not_allowed")
+				restoredCount++
+				continue
+			}
 		}
 
 		switch {

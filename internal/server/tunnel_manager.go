@@ -512,9 +512,12 @@ func (s *Server) loadOfflineManagedTunnel(clientID, name string) (StoredTunnel, 
 		return StoredTunnel{}, errManagedTunnelNotFound
 	}
 
-	stored, exists := s.store.GetTunnel(clientID, name)
-	if !exists {
+	stored, err := s.store.GetTunnelE(clientID, name)
+	if errors.Is(err, ErrTunnelNotFound) {
 		return StoredTunnel{}, errManagedTunnelNotFound
+	}
+	if err != nil {
+		return StoredTunnel{}, err
 	}
 
 	return stored, nil
@@ -558,9 +561,12 @@ func (s *Server) updateOfflineManagedTunnel(clientID, name, localIP string, loca
 		return protocol.ProxyConfig{}, err
 	}
 
-	updated, exists := s.store.GetTunnel(clientID, name)
-	if !exists {
+	updated, err := s.store.GetTunnelE(clientID, name)
+	if errors.Is(err, ErrTunnelNotFound) {
 		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", name)
+	}
+	if err != nil {
+		return protocol.ProxyConfig{}, fmt.Errorf("failed to reload tunnel %q: %w", name, err)
 	}
 
 	config := storedTunnelToProxyConfig(updated)
@@ -580,9 +586,12 @@ func (s *Server) resumeOfflineManagedTunnel(clientID, name string) (protocol.Pro
 		return protocol.ProxyConfig{}, err
 	}
 
-	updated, exists := s.store.GetTunnel(clientID, name)
-	if !exists {
+	updated, err := s.store.GetTunnelE(clientID, name)
+	if errors.Is(err, ErrTunnelNotFound) {
 		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", name)
+	}
+	if err != nil {
+		return protocol.ProxyConfig{}, fmt.Errorf("failed to reload tunnel %q: %w", name, err)
 	}
 
 	config := storedTunnelToProxyConfig(updated)
@@ -599,9 +608,12 @@ func (s *Server) stopOfflineManagedTunnel(clientID, name string) (protocol.Proxy
 		return protocol.ProxyConfig{}, err
 	}
 
-	updated, exists := s.store.GetTunnel(clientID, name)
-	if !exists {
+	updated, err := s.store.GetTunnelE(clientID, name)
+	if errors.Is(err, ErrTunnelNotFound) {
 		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", name)
+	}
+	if err != nil {
+		return protocol.ProxyConfig{}, fmt.Errorf("failed to reload tunnel %q: %w", name, err)
 	}
 
 	config := storedTunnelToProxyConfig(updated)
@@ -697,10 +709,10 @@ func isPortInRanges(port int, ranges []PortRange) bool {
 
 // findTunnelsAffectedByPortChange finds all tunnels affected by the new port allowlist rules.
 // It scans both runtime tunnels and persisted tunnels for offline clients.
-func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affectedTunnel {
+func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) ([]affectedTunnel, error) {
 	// An empty allowlist means no port restriction, so nothing is affected.
 	if len(newPorts) == 0 {
-		return []affectedTunnel{}
+		return []affectedTunnel{}, nil
 	}
 
 	affected := []affectedTunnel{}
@@ -742,43 +754,47 @@ func (s *Server) findTunnelsAffectedByPortChange(newPorts []PortRange) []affecte
 
 	// 2) Scan persisted tunnels, including tunnels for offline clients.
 	if s.store != nil {
-		allStored := s.store.GetAllTunnels()
-		for _, st := range allStored {
-			if st.RemotePort == 0 {
-				continue
-			}
-			if st.RuntimeState == protocol.ProxyRuntimeStateError {
-				continue
-			}
-			key := st.ClientID + ":" + st.Name
-			if seen[key] {
-				continue // Already counted from runtime state.
-			}
-			if !isPortInRanges(st.RemotePort, newPorts) {
-				hostname := st.Hostname
-				displayName := ""
-				// Try to get a more detailed hostname and display name from adminStore.
-				if s.auth.adminStore != nil && st.ClientID != "" {
-					if reg, ok := s.auth.adminStore.GetRegisteredClient(st.ClientID); ok {
-						hostname = reg.Info.Hostname
-						displayName = reg.DisplayName
-					}
+		allStored, err := s.store.GetAllTunnels()
+		if err != nil {
+			return nil, fmt.Errorf("load persisted tunnels for port allocation: %w", err)
+		} else {
+			for _, st := range allStored {
+				if st.RemotePort == 0 {
+					continue
 				}
-				affected = append(affected, affectedTunnel{
-					ClientID:     st.ClientID,
-					Hostname:     hostname,
-					DisplayName:  displayName,
-					TunnelName:   st.Name,
-					RemotePort:   st.RemotePort,
-					DesiredState: st.DesiredState,
-					RuntimeState: st.RuntimeState,
-					Error:        st.Error,
-				})
+				if st.RuntimeState == protocol.ProxyRuntimeStateError {
+					continue
+				}
+				key := st.ClientID + ":" + st.Name
+				if seen[key] {
+					continue // Already counted from runtime state.
+				}
+				if !isPortInRanges(st.RemotePort, newPorts) {
+					hostname := st.Hostname
+					displayName := ""
+					// Try to get a more detailed hostname and display name from adminStore.
+					if s.auth.adminStore != nil && st.ClientID != "" {
+						if reg, ok := s.auth.adminStore.GetRegisteredClient(st.ClientID); ok {
+							hostname = reg.Info.Hostname
+							displayName = reg.DisplayName
+						}
+					}
+					affected = append(affected, affectedTunnel{
+						ClientID:     st.ClientID,
+						Hostname:     hostname,
+						DisplayName:  displayName,
+						TunnelName:   st.Name,
+						RemotePort:   st.RemotePort,
+						DesiredState: st.DesiredState,
+						RuntimeState: st.RuntimeState,
+						Error:        st.Error,
+					})
+				}
 			}
 		}
 	}
 
-	return affected
+	return affected, nil
 }
 
 // markTunnelsPortNotAllowed marks tunnels affected by a port allowlist change as error.
@@ -814,10 +830,13 @@ func (s *Server) markTunnelsPortNotAllowed(affected []affectedTunnel) {
 		}
 
 		if !hasEventConfig && s.store != nil {
-			if stored, exists := s.store.GetTunnel(a.ClientID, a.TunnelName); exists {
+			stored, err := s.store.GetTunnelE(a.ClientID, a.TunnelName)
+			if err == nil {
 				eventConfig = storedTunnelToProxyConfig(stored)
 				setProxyConfigStates(&eventConfig, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 				hasEventConfig = true
+			} else if !errors.Is(err, ErrTunnelNotFound) {
+				log.Printf("⚠️ failed to load persisted tunnel %s/%s for event fallback: %v", a.ClientID, a.TunnelName, err)
 			}
 		}
 

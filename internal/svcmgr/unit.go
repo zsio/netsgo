@@ -9,25 +9,51 @@ import (
 	"netsgo/pkg/fileutil"
 )
 
-func WriteServerUnit(spec ServiceSpec) error {
-	return writeUnitFile(spec.UnitPath, renderUnit(spec, RoleServer))
+func WriteServerUnit(layout ServiceLayout) error {
+	return writeUnitFile(layout.UnitPath, renderUnit(layout))
 }
 
-func WriteClientUnit(spec ServiceSpec) error {
-	return writeUnitFile(spec.UnitPath, renderUnit(spec, RoleClient))
+func WriteClientUnit(layout ServiceLayout) error {
+	return writeUnitFile(layout.UnitPath, renderUnit(layout))
+}
+
+type UnitInfo struct {
+	User            string
+	Group           string
+	EnvironmentFile string
+	ExecStart       string
+}
+
+func ReadUnitInfo(unitPath string) (UnitInfo, error) {
+	data, err := os.ReadFile(unitPath)
+	if err != nil {
+		return UnitInfo{}, err
+	}
+	var info UnitInfo
+	for _, line := range strings.Split(string(data), "\n") {
+		switch {
+		case strings.HasPrefix(line, "User="):
+			info.User = strings.TrimPrefix(line, "User=")
+		case strings.HasPrefix(line, "Group="):
+			info.Group = strings.TrimPrefix(line, "Group=")
+		case strings.HasPrefix(line, "EnvironmentFile="):
+			info.EnvironmentFile = strings.TrimPrefix(line, "EnvironmentFile=")
+		case strings.HasPrefix(line, "ExecStart="):
+			info.ExecStart = strings.TrimPrefix(line, "ExecStart=")
+		}
+	}
+	if info.ExecStart == "" {
+		return UnitInfo{}, fmt.Errorf("ExecStart not found in %s", unitPath)
+	}
+	return info, nil
 }
 
 func ReadUnitExecStart(unitPath string) (string, error) {
-	data, err := os.ReadFile(unitPath)
+	info, err := ReadUnitInfo(unitPath)
 	if err != nil {
 		return "", err
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if value, ok := strings.CutPrefix(line, "ExecStart="); ok {
-			return value, nil
-		}
-	}
-	return "", fmt.Errorf("ExecStart not found in %s", unitPath)
+	return info.ExecStart, nil
 }
 
 func writeUnitFile(path, content string) error {
@@ -37,13 +63,13 @@ func writeUnitFile(path, content string) error {
 	return fileutil.AtomicWriteFile(path, []byte(content), 0o644)
 }
 
-func expectedExecStart(role Role, binaryPath, dataDir string) string {
-	return fmt.Sprintf("%s %s --data-dir %s", binaryPath, string(role), dataDir)
+func expectedExecStart(layout ServiceLayout) string {
+	return fmt.Sprintf("%s %s --data-dir %s", layout.BinaryPath, string(layout.Role), layout.DataDir)
 }
 
-func renderUnit(spec ServiceSpec, role Role) string {
+func renderUnit(layout ServiceLayout) string {
 	description := "NetsGo Server"
-	if role == RoleClient {
+	if layout.Role == RoleClient {
 		description = "NetsGo Client"
 	}
 
@@ -64,5 +90,5 @@ NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
-`, description, SystemUser, SystemGroup, spec.EnvPath, expectedExecStart(role, spec.BinaryPath, spec.DataDir))
+`, description, layout.RunAsUser, layout.RunAsGroup, layout.EnvPath, expectedExecStart(layout))
 }

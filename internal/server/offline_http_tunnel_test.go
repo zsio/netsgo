@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -226,11 +225,7 @@ func TestLifecycle_ClientDisconnect_DoesNotRewriteStoreState(t *testing.T) {
 	s, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
-	s.store = store
+	s.store = newTestTunnelStore(t)
 
 	wsConn, authResp := connectAndAuth(t, ts, "disconnect-http-store")
 	defer mustClose(t, wsConn)

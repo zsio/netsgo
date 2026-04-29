@@ -134,7 +134,10 @@ func (s *Server) collectClientViews() []clientView {
 				LastIP:      registered.LastIP,
 			}
 			if s.store != nil {
-				stored := s.store.GetTunnelsByClientID(registered.ID)
+				stored, err := s.store.GetTunnelsByClientID(registered.ID)
+				if err != nil {
+					log.Printf("⚠️ failed to load tunnels for client %s: %v", registered.ID, err)
+				}
 				view.Proxies = make([]protocol.ProxyConfig, 0, len(stored))
 				for _, tunnel := range stored {
 					view.Proxies = append(view.Proxies, proxyConfigForClientView(storedTunnelToProxyConfig(tunnel), false))
@@ -270,6 +273,8 @@ func (s *Server) collectServerStatus() serverStatusView {
 	serverAddr := ""
 	var allowedPorts []PortRange
 	if s.auth.adminStore != nil {
+		// Non-authoritative status display: degrade this optional metadata
+		// instead of failing the whole server status response.
 		config := s.auth.adminStore.GetServerConfig()
 		serverAddr = config.ServerAddr
 		allowedPorts = config.AllowedPorts

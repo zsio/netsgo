@@ -60,6 +60,52 @@ func shouldWarnInitFlagsIgnored(initialized bool, values initFlagValues) bool {
 	return initialized && values.anyProvided()
 }
 
+type serverStartupPreparation struct {
+	AdminInitialized bool
+	Unlock           func()
+}
+
+func prepareServerStartup(dataDir string, initParams server.InitParams) (serverStartupPreparation, error) {
+	unlock, err := flock.TryLock(filepath.Join(dataDir, "locks", "server.lock"))
+	if err != nil {
+		return serverStartupPreparation{}, fmt.Errorf("failed to acquire server singleton lock: %w", err)
+	}
+
+	release := func() {
+		if unlock != nil {
+			unlock()
+		}
+	}
+
+	adminInitialized, err := server.IsInitialized(dataDir)
+	if err != nil {
+		release()
+		return serverStartupPreparation{}, fmt.Errorf("failed to read server init state: %w", err)
+	}
+
+	if err := validateInitFlagsForStartup(adminInitialized, initFlagValues{
+		AdminUsername: initParams.AdminUsername,
+		AdminPassword: initParams.AdminPassword,
+		ServerAddr:    initParams.ServerAddr,
+		AllowedPorts:  initParams.AllowedPorts,
+	}); err != nil {
+		release()
+		return serverStartupPreparation{}, err
+	}
+
+	if !adminInitialized {
+		if err := server.ApplyInit(dataDir, initParams); err != nil {
+			release()
+			return serverStartupPreparation{}, fmt.Errorf("server initialization failed: %w", err)
+		}
+	}
+
+	return serverStartupPreparation{
+		AdminInitialized: adminInitialized,
+		Unlock:           unlock,
+	}, nil
+}
+
 var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start NetsGo server",
@@ -106,21 +152,13 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 		s.DataDir = viper.GetString("data-dir")
 		s.AllowLoopbackManagementHost = viper.GetBool("allow-loopback-management-host")
 
-		adminStore, err := server.NewAdminStore(filepath.Join(s.DataDir, "server", "admin.json"))
-		if err != nil {
-			log.Fatalf("❌ Failed to read server init state: %v", err)
-		}
-
 		initParams := buildInitParamsFromViper()
-		if err := validateInitFlagsForStartup(adminStore.IsInitialized(), initFlagValues{
-			AdminUsername: initParams.AdminUsername,
-			AdminPassword: initParams.AdminPassword,
-			ServerAddr:    initParams.ServerAddr,
-			AllowedPorts:  initParams.AllowedPorts,
-		}); err != nil {
+		prepared, err := prepareServerStartup(s.DataDir, initParams)
+		if err != nil {
 			log.Fatalf("❌ %v", err)
 		}
-		if shouldWarnInitFlagsIgnored(adminStore.IsInitialized(), initFlagValues{
+		defer prepared.Unlock()
+		if shouldWarnInitFlagsIgnored(prepared.AdminInitialized, initFlagValues{
 			AdminUsername: initParams.AdminUsername,
 			AdminPassword: initParams.AdminPassword,
 			ServerAddr:    initParams.ServerAddr,
@@ -128,18 +166,6 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 		}) {
 			log.Printf("ℹ️  Server already initialized, --init-* flags will be ignored")
 		}
-
-		if !adminStore.IsInitialized() {
-			if err := server.ApplyInit(s.DataDir, initParams); err != nil {
-				log.Fatalf("❌ Server initialization failed: %v", err)
-			}
-		}
-
-		unlock, err := flock.TryLock(filepath.Join(s.DataDir, "locks", "server.lock"))
-		if err != nil {
-			log.Fatalf("❌ Failed to acquire server singleton lock: %v", err)
-		}
-		defer unlock()
 
 		// Sync server-addr back to env so internal/server's isServerAddrLocked() can read it
 		if addr := viper.GetString("server-addr"); addr != "" {

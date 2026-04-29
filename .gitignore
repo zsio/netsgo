@@ -69,3 +69,10 @@ lerna-debug.log*
 .omc
 .alma-snapshots
 .worktrees/
+.claude-plugin/plugin.json
+sessions/
+labels/
+statuses/
+views.json
+events.jsonl
+config.json

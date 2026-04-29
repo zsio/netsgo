@@ -16,21 +16,18 @@ func newProxyValidationTestServer(t *testing.T, port int, serverAddr string, all
 
 	s := New(port)
 
-	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), "admin.json"))
+	adminStore, err := NewAdminStore(filepath.Join(t.TempDir(), serverDBFileName))
 	if err != nil {
 		t.Fatalf("failed to create AdminStore: %v", err)
 	}
+	t.Cleanup(func() { _ = adminStore.Close() })
 	adminStore.bcryptCost = bcrypt.MinCost // Use the minimum cost in tests to avoid slowing down the suite
 	if err := adminStore.Initialize("admin", "password123", serverAddr, allowedPorts); err != nil {
 		t.Fatalf("failed to initialize AdminStore: %v", err)
 	}
 	s.auth.adminStore = adminStore
 
-	store, err := NewTunnelStore(filepath.Join(t.TempDir(), "tunnels.json"))
-	if err != nil {
-		t.Fatalf("failed to create TunnelStore: %v", err)
-	}
-	s.store = store
+	s.store = newTestTunnelStore(t)
 
 	return s
 }

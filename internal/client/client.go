@@ -844,7 +844,7 @@ func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
 		return fmt.Errorf(
 			"TLS certificate fingerprint mismatch! A man-in-the-middle attack may be in progress"+
 				" (expected: %s, actual: %s); "+
-				"if the server really changed its certificate, delete the client state file and try again",
+				"if the server really changed its certificate, delete the client state database and try again",
 			currentFingerprint, serverFP,
 		)
 	}
@@ -1114,4 +1114,3 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 		}
 	}
 }
-

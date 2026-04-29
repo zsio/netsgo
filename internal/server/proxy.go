@@ -93,12 +93,20 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 	}
 
 	if s.auth.adminStore != nil {
-		if s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(req.RemotePort) {
+		initialized, err := s.auth.adminStore.IsInitializedE()
+		if err != nil {
+			return newProxyRequestValidationError(fmt.Errorf("failed to read initialization state: %w", err), protocol.TunnelMutationFieldRemotePort, "", http.StatusServiceUnavailable)
+		}
+		if initialized && !s.auth.adminStore.IsPortAllowed(req.RemotePort) {
 			return newProxyRequestValidationError(fmt.Errorf("port %d is not in the allowed range", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 		}
 	}
 
-	if conflicts := findTCPUDPPortConflictNames(req.RemotePort, excludeName, excludeClientID, s); len(conflicts) > 0 {
+	conflicts, err := findTCPUDPPortConflictNames(req.RemotePort, excludeName, excludeClientID, s)
+	if err != nil {
+		return newProxyRequestValidationError(fmt.Errorf("failed to check port conflicts: %w", err), protocol.TunnelMutationFieldRemotePort, "", http.StatusServiceUnavailable)
+	}
+	if len(conflicts) > 0 {
 		return newProxyRequestValidationError(fmt.Errorf("port %d is already in use by another tunnel", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
 
@@ -127,9 +135,9 @@ func serverListenPort(s *Server) int {
 	return 0
 }
 
-func findTCPUDPPortConflictNames(port int, excludeName, excludeClientID string, server *Server) []string {
+func findTCPUDPPortConflictNames(port int, excludeName, excludeClientID string, server *Server) ([]string, error) {
 	if port <= 0 || server == nil {
-		return []string{}
+		return []string{}, nil
 	}
 
 	conflicts := []string{}
@@ -162,12 +170,16 @@ func findTCPUDPPortConflictNames(port int, excludeName, excludeClientID string, 
 	})
 
 	if server.store != nil {
-		for _, tunnel := range server.store.GetAllTunnels() {
+		allTunnels, err := server.store.GetAllTunnels()
+		if err != nil {
+			return nil, fmt.Errorf("load persisted tunnels for proxy conflict detection: %w", err)
+		}
+		for _, tunnel := range allTunnels {
 			matchAndAppend(tunnel.ClientID, tunnel.Name, tunnel.Type, tunnel.RemotePort)
 		}
 	}
 
-	return conflicts
+	return conflicts, nil
 }
 
 func (s *Server) ensureClientDataReady(client *ClientConn) error {
@@ -493,8 +505,14 @@ func (s *Server) ReopenProxyRuntime(client *ClientConn, name string) error {
 	}
 	client.proxyMu.RUnlock()
 
-	if tunnel.Config.RemotePort != 0 && s.auth.adminStore != nil && s.auth.adminStore.IsInitialized() && !s.auth.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
-		return fmt.Errorf("port %d is no longer in the allowed range, cannot resume", tunnel.Config.RemotePort)
+	if tunnel.Config.RemotePort != 0 && s.auth.adminStore != nil {
+		initialized, err := s.auth.adminStore.IsInitializedE()
+		if err != nil {
+			return fmt.Errorf("failed to read initialization state: %w", err)
+		}
+		if initialized && !s.auth.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
+			return fmt.Errorf("port %d is no longer in the allowed range, cannot resume", tunnel.Config.RemotePort)
+		}
 	}
 
 	if err := s.activatePreparedTunnel(client, tunnel); err != nil {

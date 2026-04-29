@@ -17,14 +17,8 @@ func UninstallAll() error {
 }
 
 func uninstallAllWith(deps uninstallAllDeps) error {
-	serverSpec, err := loadServerSpec(deps.Server)
-	if err != nil {
-		return err
-	}
-	clientSpec, err := loadClientSpec(deps.Client)
-	if err != nil {
-		return err
-	}
+	serverLayout := svcmgr.NewLayout(svcmgr.RoleServer)
+	clientLayout := svcmgr.NewLayout(svcmgr.RoleClient)
 
 	serverMode, err := deps.UI.Select("Server uninstall mode", []string{"Remove service only, keep data", "Remove service and delete data"})
 	if err != nil {
@@ -33,11 +27,11 @@ func uninstallAllWith(deps uninstallAllDeps) error {
 	deleteServerData := serverMode == 1
 
 	serverRows := [][2]string{{"Mode", uninstallModeLabel(deleteServerData)}}
-	serverRows = appendRemovalRows(serverRows, "Remove", serverSpec.UnitPath, serverSpec.EnvPath, serverSpec.SpecPath)
+	serverRows = appendRemovalRows(serverRows, "Remove", serverLayout.UnitPath, serverLayout.EnvPath)
 	if deleteServerData {
-		serverRows = appendRemovalRows(serverRows, "Remove", serverDataPath(serverSpec))
+		serverRows = appendRemovalRows(serverRows, "Remove", serverDataPath(serverLayout))
 	} else {
-		serverRows = append(serverRows, [2]string{"Keep", serverDataPath(serverSpec)})
+		serverRows = append(serverRows, [2]string{"Keep", serverDataPath(serverLayout)})
 	}
 	serverRows = append(serverRows, [2]string{"Keep", svcmgr.BinaryPath})
 	deps.UI.PrintSummary("Server uninstall plan", serverRows)
@@ -55,7 +49,7 @@ func uninstallAllWith(deps uninstallAllDeps) error {
 		{"Effect", "Reinstalling the client creates a new local identity"},
 		{"Effect", "Server-side history is not cleaned automatically"},
 	}
-	clientRows = appendRemovalRows(clientRows, "Remove", clientSpec.UnitPath, clientSpec.EnvPath, clientSpec.SpecPath, clientDataPath(clientSpec))
+	clientRows = appendRemovalRows(clientRows, "Remove", clientLayout.UnitPath, clientLayout.EnvPath, clientDataPath(clientLayout))
 	clientRows = append(clientRows, [2]string{"Optional", "After removing both roles, you can choose whether to remove the shared binary " + svcmgr.BinaryPath})
 	deps.UI.PrintSummary("Client uninstall plan", clientRows)
 	ok, err = deps.UI.Confirm("Include client uninstall in the bulk removal?")
@@ -70,9 +64,9 @@ func uninstallAllWith(deps uninstallAllDeps) error {
 	if err := deps.Server.DisableAndStop(); err != nil {
 		return err
 	}
-	serverPaths := []string{serverSpec.UnitPath, serverSpec.EnvPath, serverSpec.SpecPath}
+	serverPaths := []string{serverLayout.UnitPath, serverLayout.EnvPath}
 	if deleteServerData {
-		serverPaths = append(serverPaths, serverDataPath(serverSpec))
+		serverPaths = append(serverPaths, serverDataPath(serverLayout))
 	}
 	if err := deps.Server.RemovePaths(serverPaths...); err != nil {
 		return err
@@ -81,7 +75,7 @@ func uninstallAllWith(deps uninstallAllDeps) error {
 	if err := deps.Client.DisableAndStop(); err != nil {
 		return err
 	}
-	if err := deps.Client.RemovePaths(clientSpec.UnitPath, clientSpec.EnvPath, clientSpec.SpecPath, clientDataPath(clientSpec)); err != nil {
+	if err := deps.Client.RemovePaths(clientLayout.UnitPath, clientLayout.EnvPath, clientDataPath(clientLayout)); err != nil {
 		return err
 	}
 

@@ -41,7 +41,11 @@ func (s *Server) handleGetClientTraffic(w http.ResponseWriter, r *http.Request) 
 		resolution = TrafficResolution(resolutionStr)
 	}
 
-	result := s.trafficStore.QueryWithResolution(clientID, tunnelName, from, to, resolution)
+	result, err := s.trafficStore.QueryWithResolution(clientID, tunnelName, from, to, resolution)
+	if err != nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to query traffic"})
+		return
+	}
 
 	encodeJSON(w, http.StatusOK, result)
 }

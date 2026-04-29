@@ -56,6 +56,13 @@ docs:
 
 DEV_PORT ?= 9527
 DEV_KEY  ?= sk-8ccf857d-db62-4806-9719-776900e0785d
+
+# 服务端首次初始化参数（已初始化后自动忽略，均可通过环境变量覆盖）
+# DEV_INIT_ADMIN_PASSWORD 必须由本地环境显式提供，避免把可预测的开发管理员密码写入源码。
+DEV_INIT_ADMIN_USERNAME ?= admin
+DEV_INIT_ADMIN_PASSWORD ?=
+DEV_INIT_SERVER_ADDR    ?= http://localhost:$(DEV_PORT)
+DEV_INIT_ALLOWED_PORTS  ?= 10000-11000
 STACK_PROXY ?= nginx
 STACK_PROJECT ?= netsgo-stack-$(STACK_PROXY)
 STACK_PROXY_PORT ?= 19080
@@ -66,7 +73,18 @@ STACK_PROXY_COMPOSE := $(CURDIR)/test/e2e/docker-compose.stack.$(STACK_PROXY).ym
 
 # 启动服务端（-tags dev 跳过 go:embed，使用 Vite 独立前端）
 dev-server:
-	go run -tags dev ./cmd/netsgo/ server --port $(DEV_PORT) --allow-loopback-management-host
+	@if [ -z "$(strip $(DEV_INIT_ADMIN_PASSWORD))" ]; then \
+		echo "DEV_INIT_ADMIN_PASSWORD is required. Example:"; \
+		echo "  DEV_INIT_ADMIN_PASSWORD=$$(openssl rand -base64 18 2>/dev/null || uuidgen) make dev-server"; \
+		exit 1; \
+	fi
+	go run -tags dev ./cmd/netsgo/ server \
+		--port $(DEV_PORT) \
+		--allow-loopback-management-host \
+		--init-admin-username $(DEV_INIT_ADMIN_USERNAME) \
+		--init-admin-password $(DEV_INIT_ADMIN_PASSWORD) \
+		--init-server-addr $(DEV_INIT_SERVER_ADDR) \
+		--init-allowed-ports $(DEV_INIT_ALLOWED_PORTS)
 
 # 启动客户端，连接本地服务端
 dev-client:

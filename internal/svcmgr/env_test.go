@@ -7,8 +7,8 @@ import (
 )
 
 func TestWriteReadServerEnvRoundTrip(t *testing.T) {
-	spec := NewSpec(RoleServer)
-	spec.EnvPath = filepath.Join(t.TempDir(), "server.env")
+	layout := NewLayout(RoleServer)
+	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
 
 	want := ServerEnv{
 		Port:                        9527,
@@ -20,11 +20,11 @@ func TestWriteReadServerEnvRoundTrip(t *testing.T) {
 		AllowLoopbackManagementHost: true,
 	}
 
-	if err := WriteServerEnv(spec, want); err != nil {
+	if err := WriteServerEnv(layout, want); err != nil {
 		t.Fatalf("WriteServerEnv() failed: %v", err)
 	}
 
-	got, err := ReadServerEnv(spec)
+	got, err := ReadServerEnv(layout)
 	if err != nil {
 		t.Fatalf("ReadServerEnv() failed: %v", err)
 	}
@@ -34,8 +34,8 @@ func TestWriteReadServerEnvRoundTrip(t *testing.T) {
 }
 
 func TestWriteReadClientEnvRoundTrip(t *testing.T) {
-	spec := NewSpec(RoleClient)
-	spec.EnvPath = filepath.Join(t.TempDir(), "client.env")
+	layout := NewLayout(RoleClient)
+	layout.EnvPath = filepath.Join(t.TempDir(), "client.env")
 
 	want := ClientEnv{
 		Server:         "wss://panel.example.com",
@@ -44,11 +44,11 @@ func TestWriteReadClientEnvRoundTrip(t *testing.T) {
 		TLSFingerprint: "AA:BB:CC",
 	}
 
-	if err := WriteClientEnv(spec, want); err != nil {
+	if err := WriteClientEnv(layout, want); err != nil {
 		t.Fatalf("WriteClientEnv() failed: %v", err)
 	}
 
-	got, err := ReadClientEnv(spec)
+	got, err := ReadClientEnv(layout)
 	if err != nil {
 		t.Fatalf("ReadClientEnv() failed: %v", err)
 	}
@@ -58,14 +58,14 @@ func TestWriteReadClientEnvRoundTrip(t *testing.T) {
 }
 
 func TestWriteServerEnvSparseAndPermissions(t *testing.T) {
-	spec := NewSpec(RoleServer)
-	spec.EnvPath = filepath.Join(t.TempDir(), "server.env")
+	layout := NewLayout(RoleServer)
+	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
 
-	if err := WriteServerEnv(spec, ServerEnv{}); err != nil {
+	if err := WriteServerEnv(layout, ServerEnv{}); err != nil {
 		t.Fatalf("WriteServerEnv() failed: %v", err)
 	}
 
-	content, err := os.ReadFile(spec.EnvPath)
+	content, err := os.ReadFile(layout.EnvPath)
 	if err != nil {
 		t.Fatalf("failed to read env file: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestWriteServerEnvSparseAndPermissions(t *testing.T) {
 		t.Fatalf("zero-value env should not write any content, got %q", string(content))
 	}
 
-	info, err := os.Stat(spec.EnvPath)
+	info, err := os.Stat(layout.EnvPath)
 	if err != nil {
 		t.Fatalf("failed to stat env file: %v", err)
 	}

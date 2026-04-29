@@ -296,7 +296,10 @@ func checkDomainConflict(domain, excludeName, excludeClientID string, server *Se
 
 	var cfg *ServerConfig
 	if server.auth.adminStore != nil {
-		current := server.auth.adminStore.GetServerConfig()
+		current, err := server.auth.adminStore.GetServerConfigE()
+		if err != nil {
+			return newProxyRequestValidationError(fmt.Errorf("failed to read server config: %w", err), protocol.TunnelMutationFieldDomain, "", http.StatusServiceUnavailable)
+		}
 		cfg = &current
 	}
 
@@ -307,7 +310,10 @@ func checkDomainConflict(domain, excludeName, excludeClientID string, server *Se
 		}
 	}
 
-	conflicts := findHTTPDomainConflictNames(canonicalDomain, excludeName, excludeClientID, server)
+	conflicts, err := findHTTPDomainConflictNames(canonicalDomain, excludeName, excludeClientID, server)
+	if err != nil {
+		return newProxyRequestValidationError(fmt.Errorf("failed to check HTTP domain conflicts: %w", err), protocol.TunnelMutationFieldDomain, "", http.StatusServiceUnavailable)
+	}
 	if len(conflicts) == 0 {
 		return nil
 	}
@@ -319,10 +325,10 @@ func checkDomainConflict(domain, excludeName, excludeClientID string, server *Se
 	}
 }
 
-func findHTTPDomainConflictNames(domain, excludeName, excludeClientID string, server *Server) []string {
+func findHTTPDomainConflictNames(domain, excludeName, excludeClientID string, server *Server) ([]string, error) {
 	canonicalDomain := canonicalHost(domain)
 	if canonicalDomain == "" || server == nil {
-		return []string{}
+		return []string{}, nil
 	}
 
 	conflicts := []string{}
@@ -354,13 +360,17 @@ func findHTTPDomainConflictNames(domain, excludeName, excludeClientID string, se
 	})
 
 	if server.store != nil {
-		for _, tunnel := range server.store.GetAllTunnels() {
+		allTunnels, err := server.store.GetAllTunnels()
+		if err != nil {
+			return nil, fmt.Errorf("load persisted tunnels for HTTP tunnel conflict detection: %w", err)
+		}
+		for _, tunnel := range allTunnels {
 			matchAndAppend(tunnel.ClientID, tunnel.Name, tunnel.Type, tunnel.Domain)
 		}
 	}
 
 	sort.Strings(conflicts)
-	return conflicts
+	return conflicts, nil
 }
 
 func computeForwardedHeaders(s *Server, r *http.Request, originalDomain string) (string, http.Header) {
@@ -394,7 +404,7 @@ func computeForwardedHeaders(s *Server, r *http.Request, originalDomain string) 
 	return host, headers
 }
 
-func conflictingHTTPDomainsForServerAddr(serverAddr string, server *Server) []string {
+func conflictingHTTPDomainsForServerAddr(serverAddr string, server *Server) ([]string, error) {
 	return findHTTPDomainConflictNames(canonicalHost(serverAddr), "", "", server)
 }
 

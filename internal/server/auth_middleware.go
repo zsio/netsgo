@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -151,7 +152,17 @@ func GetAdminFromContext(ctx context.Context) *SessionInfo {
 
 func (s *Server) RequireAuthIfInitialized(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.auth.adminStore == nil || !s.auth.adminStore.IsInitialized() {
+		if s.auth.adminStore == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		initialized, err := s.auth.adminStore.IsInitializedE()
+		if err != nil {
+			log.Printf("⚠️ failed to read initialization state for auth middleware: %v", err)
+			http.Error(w, `{"error":"temporary storage failure"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if !initialized {
 			next.ServeHTTP(w, r)
 			return
 		}
