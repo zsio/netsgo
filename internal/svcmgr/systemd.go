@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
+	"time"
 )
 
 func DaemonReload() error {
@@ -57,6 +58,10 @@ func Status(unitName string) (string, error) {
 
 func JournalArgs(unitName string, tail int) []string {
 	return []string{"journalctl", "-u", unitName, "-n", strconv.Itoa(tail), "-f"}
+}
+
+func JournalSinceArgs(unitName string, since time.Time) []string {
+	return []string{"journalctl", "-u", unitName, "--since", since.Format("2006-01-02 15:04:05"), "--no-pager"}
 }
 
 func runSystemctl(args ...string) error {

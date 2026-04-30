@@ -118,6 +118,14 @@ func (s *Server) Start() error {
 			return fmt.Errorf("server is not initialized; use install or init flags to complete setup")
 		}
 	}
+	var serverConfig *ServerConfig
+	if s.auth.adminStore != nil {
+		cfg, err := s.auth.adminStore.GetServerConfigE()
+		if err != nil {
+			return fmt.Errorf("failed to read server config: %w", err)
+		}
+		serverConfig = &cfg
+	}
 
 	s.auth.initRateLimiters()
 
@@ -145,19 +153,7 @@ func (s *Server) Start() error {
 	}
 
 	log.Printf("🚀 NetsGo Server started, listening on :%d", s.Port)
-	if s.tlsEnabled {
-		if s.webFS != nil {
-			log.Printf("📊 Web UI: https://localhost:%d", s.Port)
-		}
-		log.Printf("🔌 Control channel: wss://localhost:%d/ws/control", s.Port)
-		log.Printf("🔗 Data channel: wss://localhost:%d/ws/data", s.Port)
-	} else {
-		if s.webFS != nil {
-			log.Printf("📊 Web UI: http://localhost:%d", s.Port)
-		}
-		log.Printf("🔌 Control channel: ws://localhost:%d/ws/control", s.Port)
-		log.Printf("🔗 Data channel: ws://localhost:%d/ws/data", s.Port)
-	}
+	logServerEndpoints(s.Port, s.tlsEnabled, s.webFS != nil, serverConfig)
 
 	if s.TLS != nil && s.TLS.Mode == TLSModeOff && len(s.TLS.TrustedProxies) == 0 {
 		log.Printf("⚠️ TLS mode is off (reverse proxy mode), but --trusted-proxies is not configured")
@@ -180,6 +176,30 @@ func (s *Server) Start() error {
 
 	serving = true
 	return s.httpServer.Serve(serveLn)
+}
+
+func logServerEndpoints(port int, tlsEnabled bool, hasWebUI bool, cfg *ServerConfig) {
+	local := localEndpointURLs(port, tlsEnabled)
+	if hasWebUI {
+		log.Printf("📊 Local Web UI: %s", local.Web)
+	}
+	log.Printf("🔌 Local control channel: %s", local.Control)
+	log.Printf("🔗 Local data channel: %s", local.Data)
+
+	publicAddr, ok := configuredPublicServerAddr(cfg)
+	if !ok {
+		return
+	}
+	public, err := publicEndpointURLs(publicAddr)
+	if err != nil {
+		log.Printf("⚠️ Configured public server address is invalid and was not logged: %v", err)
+		return
+	}
+	if hasWebUI {
+		log.Printf("📊 Configured public Web UI: %s", public.Web)
+	}
+	log.Printf("🔌 Configured public control channel: %s", public.Control)
+	log.Printf("🔗 Configured public data channel: %s", public.Data)
 }
 
 func (s *Server) cleanupFailedStartup() {

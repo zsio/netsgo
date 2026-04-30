@@ -85,9 +85,19 @@ func Password(prompt string, opts ...InputOptions) (string, error) {
 	return result, err
 }
 
+// ConfirmOptions holds optional configuration for Confirm prompts.
+type ConfirmOptions struct {
+	Default bool
+}
+
 // Confirm asks a yes/no question and returns the boolean answer.
 func Confirm(prompt string) (bool, error) {
-	var result bool
+	return ConfirmWithOptions(prompt, ConfirmOptions{Default: false})
+}
+
+// ConfirmWithOptions asks a yes/no question with explicit prompt options.
+func ConfirmWithOptions(prompt string, opts ConfirmOptions) (bool, error) {
+	result := opts.Default
 	err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().

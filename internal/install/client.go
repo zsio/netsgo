@@ -2,11 +2,37 @@ package install
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
+	"time"
 
+	"netsgo/internal/clientaddr"
 	"netsgo/internal/svcmgr"
 	"netsgo/internal/tui"
 )
+
+const clientLinkEvidenceTimeout = 8 * time.Second
+
+var clientLinkJournalOutput = func(unit string, since time.Time) (string, error) {
+	args := svcmgr.JournalSinceArgs(unit, since)
+	output, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	return string(output), err
+}
+
+var clientLinkSleep = time.Sleep
+
+type ClientLinkState string
+
+const (
+	ClientLinkEstablished    ClientLinkState = "Established"
+	ClientLinkNotEstablished ClientLinkState = "Not established within 8s"
+	ClientLinkNotVerified    ClientLinkState = "Not verified"
+)
+
+type ClientLinkEvidence struct {
+	State  ClientLinkState
+	Detail string
+}
 
 type clientDeps struct {
 	UI                uiProvider
@@ -20,6 +46,7 @@ type clientDeps struct {
 	WriteClientUnit   func(svcmgr.ServiceLayout) error
 	DaemonReload      func() error
 	EnableAndStart    func(string) error
+	VerifyClientLink  func(unit string, since time.Time, timeout time.Duration) ClientLinkEvidence
 }
 
 func InstallClient() error {
@@ -45,17 +72,19 @@ func InstallClientWith(deps clientDeps) error {
 		return errInstallBrokenState
 	}
 
-	serverURL, err := deps.UI.Input("Server address", tui.InputOptions{
-		Placeholder: "e.g. wss://netsgo.example.com",
-		Description: "WebSocket URL of the NetsGo server (ws:// or wss://)",
+	serverInput, err := deps.UI.Input("Server address", tui.InputOptions{
+		Placeholder: "e.g. http://netsgo.example.com:9527",
+		Description: "Paste the server address from the Web panel or CLI command. http(s):// and ws(s):// are accepted; NetsGo will derive the control/data WebSocket endpoints.",
 		Validate:    validateInstallClientServerURL,
 	})
 	if err != nil {
 		return err
 	}
-	if err := validateInstallClientServerURL(serverURL); err != nil {
+	serverAddr, err := clientaddr.Normalize(serverInput, clientaddr.ModeManagedInstall)
+	if err != nil {
 		return err
 	}
+	serverURL := serverAddr.BaseURL
 	clientKey, err := deps.UI.Password("Client key", tui.InputOptions{
 		Placeholder: "sk-...",
 		Description: "Obtain from the Web panel → Clients page",
@@ -69,7 +98,7 @@ func InstallClientWith(deps clientDeps) error {
 	if err != nil {
 		return err
 	}
-	usesTLS := strings.HasPrefix(serverURL, "wss://")
+	usesTLS := serverAddr.UseTLS
 	tlsSkipVerify := false
 	tlsFingerprint := ""
 	if usesTLS {
@@ -90,11 +119,13 @@ func InstallClientWith(deps clientDeps) error {
 
 	deps.UI.PrintSummary("Installation summary", confirmSummaryRows(svcmgr.RoleClient,
 		[2]string{"Server", serverURL},
-		[2]string{"TLS", ternary(usesTLS, "wss", "ws")},
+		[2]string{"Control endpoint", serverAddr.ControlURL},
+		[2]string{"Data endpoint", serverAddr.DataURL},
+		[2]string{"TLS", ternary(usesTLS, "Enabled", "Disabled")},
 		[2]string{"Skip TLS verify", ternary(usesTLS, boolText(tlsSkipVerify), "N/A")},
 		[2]string{"TLS fingerprint", ternary(tlsFingerprint != "", tlsFingerprint, "Not set")},
 	))
-	ok, err := deps.UI.Confirm("Proceed with installation?")
+	ok, err := deps.UI.ConfirmWithOptions("Proceed with installation?", tui.ConfirmOptions{Default: true})
 	if err != nil {
 		return err
 	}
@@ -103,6 +134,7 @@ func InstallClientWith(deps clientDeps) error {
 		return nil
 	}
 
+	evidenceSince := time.Now().Add(-1 * time.Second)
 	if err := completeManagedInstall(svcmgr.RoleClient, managedInstallDeps{
 		EnsureUser:        deps.EnsureUser,
 		EnsureDirs:        deps.EnsureDirs,
@@ -118,7 +150,12 @@ func InstallClientWith(deps clientDeps) error {
 	}); err != nil {
 		return err
 	}
-	deps.UI.PrintSummary("Client installation complete", completionSummaryRows(svcmgr.RoleClient, "Connected to", serverURL))
+	verifyClientLink := deps.VerifyClientLink
+	if verifyClientLink == nil {
+		verifyClientLink = defaultVerifyClientLink
+	}
+	link := verifyClientLink(svcmgr.UnitName(svcmgr.RoleClient), evidenceSince, clientLinkEvidenceTimeout)
+	deps.UI.PrintSummary("Client installation complete", clientCompletionSummaryRows(serverURL, serverAddr.ControlURL, serverAddr.DataURL, link))
 	return nil
 }
 
@@ -135,7 +172,58 @@ func defaultClientDeps() clientDeps {
 		WriteClientUnit:   svcmgr.WriteClientUnit,
 		DaemonReload:      svcmgr.DaemonReload,
 		EnableAndStart:    svcmgr.EnableAndStart,
+		VerifyClientLink:  defaultVerifyClientLink,
 	}
+}
+
+func clientCompletionSummaryRows(serverURL, controlURL, dataURL string, link ClientLinkEvidence) [][2]string {
+	rows := [][2]string{
+		{"Status", "Running"},
+		{"Service", svcmgr.UnitName(svcmgr.RoleClient)},
+		{"Run as", svcmgr.SystemUser},
+		[2]string{"Server", serverURL},
+		[2]string{"Control endpoint", controlURL},
+		[2]string{"Data endpoint", dataURL},
+		[2]string{"NetsGo link", string(link.State)},
+	}
+	if link.Detail != "" {
+		rows = append(rows, [2]string{"Link detail", link.Detail})
+	}
+	rows = append(rows, [2]string{"Logs", journalctlCommand(svcmgr.RoleClient)})
+	if link.State != ClientLinkEstablished {
+		rows = append(rows,
+			[2]string{"Advice", "Check DNS/server address, client key, TLS settings, server service, and client logs"},
+		)
+	}
+	rows = append(rows, [2]string{"Next step", "Run netsgo manage to manage the service"})
+	return rows
+}
+
+func defaultVerifyClientLink(unit string, since time.Time, timeout time.Duration) ClientLinkEvidence {
+	deadline := time.Now().Add(timeout)
+	for {
+		output, err := clientLinkJournalOutput(unit, since)
+		if err != nil {
+			return ClientLinkEvidence{
+				State:  ClientLinkNotVerified,
+				Detail: "Could not read systemd journal; inspect client logs manually.",
+			}
+		}
+		if clientLinkEstablishedFromLogs(string(output)) {
+			return ClientLinkEvidence{State: ClientLinkEstablished}
+		}
+		if time.Now().After(deadline) {
+			return ClientLinkEvidence{
+				State:  ClientLinkNotEstablished,
+				Detail: "Service started, but NetsGo control/data channels were not both observed in the verification window.",
+			}
+		}
+		clientLinkSleep(500 * time.Millisecond)
+	}
+}
+
+func clientLinkEstablishedFromLogs(logs string) bool {
+	return strings.Contains(logs, "Authentication succeeded") && strings.Contains(logs, "Data channel established")
 }
 
 func boolText(v bool) string {

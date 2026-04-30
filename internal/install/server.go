@@ -99,7 +99,7 @@ func InstallServerWith(deps serverDeps) error {
 	}
 	trustedProxies, err := deps.UI.Input("Trusted proxy CIDRs", tui.InputOptions{
 		Placeholder: "e.g. 127.0.0.1/8,192.168.0.0/16",
-		Description: "Comma-separated list of trusted proxy CIDRs; default fits common local/reverse-proxy setups, clear it if not behind a proxy",
+		Description: "Comma-separated trusted proxy CIDRs. If NetsGo is behind Nginx/Caddy on this host, keep the default. If unsure, keep it; you can change it later.",
 		Default:     "127.0.0.1/8",
 	})
 	if err != nil {
@@ -201,7 +201,7 @@ func InstallServerWith(deps serverDeps) error {
 		[2]string{"Server address", serverAddr},
 		[2]string{"Trusted proxies", trustedProxies},
 	))
-	ok, err := deps.UI.Confirm("Proceed with installation?")
+	ok, err := deps.UI.ConfirmWithOptions("Proceed with installation?", tui.ConfirmOptions{Default: true})
 	if err != nil {
 		return err
 	}

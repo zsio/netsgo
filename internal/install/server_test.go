@@ -78,6 +78,8 @@ func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 	if ui.summaries[2].title != "Server installation complete" {
 		t.Fatalf("expected last summary to be 'Server installation complete', got %#v", ui.summaries)
 	}
+	assertConfirmDefault(t, ui.confirmCalls, "Continue installation using existing data?", false)
+	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
 }
 
 func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
@@ -112,6 +114,7 @@ func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 	if len(ui.summaries) != 2 || ui.summaries[1].title != "Installation cancelled" {
 		t.Fatalf("should show cancellation summary after declining, got %#v", ui.summaries)
 	}
+	assertConfirmDefault(t, ui.confirmCalls, "Continue installation using existing data?", false)
 }
 
 func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
@@ -150,6 +153,7 @@ func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 	if len(ui.summaries) != 2 || ui.summaries[1].title != "Server installation complete" {
 		t.Fatalf("should show completion summary after successful install, got %#v", ui.summaries)
 	}
+	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
 }
 
 func TestInstallServerFreshInstallPreparesDirsBeforeApplyInit(t *testing.T) {
@@ -258,4 +262,5 @@ func TestInstallServerWithConfirmNoPrintsCancelledSummary(t *testing.T) {
 	if len(ui.summaries) != 2 || ui.summaries[1].title != "Installation cancelled" {
 		t.Fatalf("should show cancellation summary after declining, got %#v", ui.summaries)
 	}
+	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
 }

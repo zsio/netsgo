@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestJournalArgs(t *testing.T) {
@@ -11,6 +12,15 @@ func TestJournalArgs(t *testing.T) {
 	want := []string{"journalctl", "-u", "netsgo-server.service", "-n", "100", "-f"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("JournalArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestJournalSinceArgs(t *testing.T) {
+	since := time.Date(2026, 4, 30, 8, 30, 0, 0, time.UTC)
+	got := JournalSinceArgs("netsgo-client.service", since)
+	want := []string{"journalctl", "-u", "netsgo-client.service", "--since", "2026-04-30 08:30:00", "--no-pager"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("JournalSinceArgs() = %#v, want %#v", got, want)
 	}
 }
 

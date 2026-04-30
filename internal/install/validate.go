@@ -2,31 +2,17 @@ package install
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"os/user"
 	"strconv"
 	"syscall"
+
+	"netsgo/internal/clientaddr"
 )
 
 func validateInstallClientServerURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("server address must be a valid ws:// or wss:// URL")
-	}
-	if u.Scheme != "ws" && u.Scheme != "wss" {
-		return fmt.Errorf("server address must start with ws:// or wss://")
-	}
-	if u.Host == "" {
-		return fmt.Errorf("server address must include a host")
-	}
-	if u.Path != "" && u.Path != "/" {
-		return fmt.Errorf("server address must not include a path")
-	}
-	if u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("server address must not include a query or fragment")
-	}
-	return nil
+	_, err := clientaddr.Normalize(raw, clientaddr.ModeManagedInstall)
+	return err
 }
 
 func validateReadableCustomTLSFiles(certPath, keyPath, runUser string) error {

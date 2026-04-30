@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 
+	"netsgo/internal/clientaddr"
 	"netsgo/pkg/mux"
 	"netsgo/pkg/netutil"
 	"netsgo/pkg/protocol"
@@ -228,25 +229,12 @@ func (c *Client) normalizeServerAddr() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	addr := strings.TrimRight(c.ServerAddr, "/")
-	useTLS := false
-
-	switch {
-	case strings.HasPrefix(addr, "wss://"):
-		addr = "https://" + strings.TrimPrefix(addr, "wss://")
-		useTLS = true
-	case strings.HasPrefix(addr, "ws://"):
-		addr = "http://" + strings.TrimPrefix(addr, "ws://")
-	case strings.HasPrefix(addr, "https://"):
-		useTLS = true
-	case strings.HasPrefix(addr, "http://"):
-	default:
-		// No scheme prefix; default to http.
-		addr = "http://" + addr
+	normalized, err := clientaddr.Normalize(c.ServerAddr, clientaddr.ModeRuntime)
+	if err != nil {
+		return
 	}
-
-	c.ServerAddr = addr
-	c.useTLS = useTLS
+	c.ServerAddr = normalized.BaseURL
+	c.useTLS = normalized.UseTLS
 }
 
 // deriveControlURL derives the control-channel WebSocket URL from the normalized ServerAddr.
@@ -260,6 +248,9 @@ func (c *Client) currentServerState() (string, bool) {
 
 func (c *Client) deriveControlURL() string {
 	addr, useTLS := c.currentServerState()
+	if normalized, err := clientaddr.Normalize(addr, clientaddr.ModeRuntime); err == nil {
+		return normalized.ControlURL
+	}
 	if useTLS {
 		addr = "wss://" + strings.TrimPrefix(addr, "https://")
 	} else {
@@ -270,6 +261,9 @@ func (c *Client) deriveControlURL() string {
 
 func (c *Client) deriveDataURL() string {
 	addr, useTLS := c.currentServerState()
+	if normalized, err := clientaddr.Normalize(addr, clientaddr.ModeRuntime); err == nil {
+		return normalized.DataURL
+	}
 	if useTLS {
 		addr = "wss://" + strings.TrimPrefix(addr, "https://")
 	} else {

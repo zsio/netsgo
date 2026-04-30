@@ -12,11 +12,17 @@ import (
 )
 
 type fakeUI struct {
-	selects   []int
-	inputs    []string
-	passwords []string
-	confirms  []bool
-	summaries []summaryCall
+	selects      []int
+	inputs       []string
+	passwords    []string
+	confirms     []bool
+	confirmCalls []confirmCall
+	summaries    []summaryCall
+}
+
+type confirmCall struct {
+	prompt       string
+	defaultValue bool
 }
 
 type summaryCall struct {
@@ -52,6 +58,11 @@ func (f *fakeUI) Password(prompt string, opts ...tui.InputOptions) (string, erro
 }
 
 func (f *fakeUI) Confirm(prompt string) (bool, error) {
+	return f.ConfirmWithOptions(prompt, tui.ConfirmOptions{Default: false})
+}
+
+func (f *fakeUI) ConfirmWithOptions(prompt string, opts tui.ConfirmOptions) (bool, error) {
+	f.confirmCalls = append(f.confirmCalls, confirmCall{prompt: prompt, defaultValue: opts.Default})
 	if len(f.confirms) == 0 {
 		return false, errors.New("no confirm value")
 	}

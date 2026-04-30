@@ -17,6 +17,7 @@ type uiProvider interface {
 	Input(prompt string, opts ...tui.InputOptions) (string, error)
 	Password(prompt string, opts ...tui.InputOptions) (string, error)
 	Confirm(prompt string) (bool, error)
+	ConfirmWithOptions(prompt string, opts tui.ConfirmOptions) (bool, error)
 	PrintSummary(title string, rows [][2]string)
 }
 
@@ -31,7 +32,10 @@ func (defaultUI) Input(prompt string, opts ...tui.InputOptions) (string, error) 
 func (defaultUI) Password(prompt string, opts ...tui.InputOptions) (string, error) {
 	return tui.Password(prompt, opts...)
 }
-func (defaultUI) Confirm(prompt string) (bool, error)         { return tui.Confirm(prompt) }
+func (defaultUI) Confirm(prompt string) (bool, error) { return tui.Confirm(prompt) }
+func (defaultUI) ConfirmWithOptions(prompt string, opts tui.ConfirmOptions) (bool, error) {
+	return tui.ConfirmWithOptions(prompt, opts)
+}
 func (defaultUI) PrintSummary(title string, rows [][2]string) { tui.PrintSummary(title, rows) }
 
 type Deps struct {
