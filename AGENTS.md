@@ -1,3 +1,33 @@
+<!-- TRELLIS:START -->
+# Trellis Instructions
+
+These instructions are for AI assistants working in this project.
+
+This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
+
+- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
+- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
+- `.trellis/workspace/` — per-developer journals and session traces
+- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
+
+If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
+
+If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
+- `.agents/skills/` — reusable Trellis skills
+- `.codex/agents/` — optional custom subagents
+
+## Subagents
+
+- ALWAYS wait for all subagents to complete before yielding.
+- Spawn subagents automatically when:
+  - Parallelizable work (e.g., install + verify, npm test + typecheck, multiple tasks from plan)
+  - Long-running or blocking tasks where a worker can run independently.
+  - Isolation for risky changes or checks
+
+Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
+
+<!-- TRELLIS:END -->
+
 # NetsGo Agent Guide
 
 本产品尚未发布和上线，目前仍在开发和设计阶段。所以无需考虑旧代码、数据状态的兼容和迁移问题。一切以“正确”为原则，禁止“最小改动“、”不破坏现有功能“等原则；只要改动能让系统更正确、更合理、更易理解，就大胆改，不要怕破坏，但是也不要过度设计，不要引入不必要的复杂性。
