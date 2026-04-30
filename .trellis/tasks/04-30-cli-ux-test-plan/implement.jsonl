@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend CLI/install/manage conventions for NetsGo command changes"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality rules for backend and CLI implementation"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Error wording and handling guidance for CLI flows"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Task spans CLI, Web, and README user-facing flows"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Address normalization and user-facing command generation should reuse existing helpers"}
