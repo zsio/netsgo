@@ -82,7 +82,7 @@ func TestInstallClientWithHistoricalDataOnlyFailsWithReauthMessage(t *testing.T)
 
 func TestInstallClientWithFreshInstall(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"wss://panel.example.com", "AA:BB:CC"},
+		inputs:    []string{"https://panel.example.com", "AA:BB:CC"},
 		passwords: []string{"sk-test-key"},
 		confirms:  []bool{true, true},
 	}
@@ -122,12 +122,17 @@ func TestInstallClientWithFreshInstall(t *testing.T) {
 	}
 	assertConfirmDefault(t, ui.confirmCalls, "Skip TLS certificate verification?", false)
 	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
+	assertClientServerInputUsesServiceAddressWording(t, ui.inputCalls)
 	assertSummaryRow(t, ui.summaries[1], "NetsGo link", string(ClientLinkEstablished))
+	assertNoSummaryRow(t, ui.summaries[0], "Control endpoint")
+	assertNoSummaryRow(t, ui.summaries[0], "Data endpoint")
+	assertNoSummaryRow(t, ui.summaries[1], "Control endpoint")
+	assertNoSummaryRow(t, ui.summaries[1], "Data endpoint")
 }
 
 func TestInstallClientWithEnsureDirs(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"wss://panel.example.com", ""},
+		inputs:    []string{"https://panel.example.com", ""},
 		passwords: []string{"sk-test-key"},
 		confirms:  []bool{false, true},
 	}
@@ -155,7 +160,7 @@ func TestInstallClientWithEnsureDirs(t *testing.T) {
 
 func TestInstallClientWithConfirmNoShowsCancelledSummary(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"wss://panel.example.com", ""},
+		inputs:    []string{"https://panel.example.com", ""},
 		passwords: []string{"sk-test-key"},
 		confirms:  []bool{false, false},
 	}
@@ -182,7 +187,7 @@ func TestInstallClientWithConfirmNoShowsCancelledSummary(t *testing.T) {
 	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
 }
 
-func TestInstallClientAcceptsHTTPAndWritesDerivedEndpoints(t *testing.T) {
+func TestInstallClientAcceptsHTTPAndWritesServiceAddress(t *testing.T) {
 	ui := &fakeUI{
 		inputs:    []string{"http://netsgo.zsio.dev:9527"},
 		passwords: []string{"sk-test-key"},
@@ -212,9 +217,46 @@ func TestInstallClientAcceptsHTTPAndWritesDerivedEndpoints(t *testing.T) {
 		t.Fatalf("NETSGO_SERVER should be normalized HTTP base URL, got %#v", writtenEnv)
 	}
 	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
-	assertSummaryRow(t, ui.summaries[0], "Control endpoint", "ws://netsgo.zsio.dev:9527/ws/control")
-	assertSummaryRow(t, ui.summaries[0], "Data endpoint", "ws://netsgo.zsio.dev:9527/ws/data")
+	assertSummaryRow(t, ui.summaries[0], "Service address", "http://netsgo.zsio.dev:9527")
+	assertNoSummaryRow(t, ui.summaries[0], "Control endpoint")
+	assertNoSummaryRow(t, ui.summaries[0], "Data endpoint")
 	assertSummaryRow(t, ui.summaries[1], "NetsGo link", string(ClientLinkNotEstablished))
+	assertNoSummaryRow(t, ui.summaries[1], "Control endpoint")
+	assertNoSummaryRow(t, ui.summaries[1], "Data endpoint")
+}
+
+func TestInstallClientAcceptsLegacyWSSAndWritesHTTPSServiceAddress(t *testing.T) {
+	ui := &fakeUI{
+		inputs:    []string{"wss://netsgo.zsio.dev"},
+		passwords: []string{"sk-test-key"},
+		confirms:  []bool{true, true},
+	}
+	var writtenEnv svcmgr.ClientEnv
+	err := InstallClientWith(clientDeps{
+		UI:                ui,
+		Detect:            func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateNotInstalled },
+		EnsureUser:        func(name string) error { return nil },
+		EnsureDirs:        func() error { return nil },
+		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
+		InstallBinary:     func(src string) error { return nil },
+		WriteClientEnv: func(layout svcmgr.ServiceLayout, env svcmgr.ClientEnv) error {
+			writtenEnv = env
+			return nil
+		},
+		WriteClientUnit:  func(layout svcmgr.ServiceLayout) error { return nil },
+		DaemonReload:     func() error { return nil },
+		EnableAndStart:   func(unit string) error { return nil },
+		VerifyClientLink: fakeClientLink(ClientLinkEstablished),
+	})
+	if err != nil {
+		t.Fatalf("legacy WSS client install should not error: %v", err)
+	}
+	if writtenEnv.Server != "https://netsgo.zsio.dev" {
+		t.Fatalf("NETSGO_SERVER should be normalized HTTPS service address, got %#v", writtenEnv)
+	}
+	assertSummaryRow(t, ui.summaries[0], "Service address", "https://netsgo.zsio.dev")
+	assertNoSummaryRow(t, ui.summaries[0], "Control endpoint")
+	assertNoSummaryRow(t, ui.summaries[0], "Data endpoint")
 }
 
 func TestClientLinkEvidenceStates(t *testing.T) {
@@ -224,7 +266,7 @@ func TestClientLinkEvidenceStates(t *testing.T) {
 	if clientLinkEstablishedFromLogs("✅ Authentication succeeded") {
 		t.Fatal("auth without data channel should not establish link")
 	}
-	rows := clientCompletionSummaryRows("http://server", "ws://server/ws/control", "ws://server/ws/data", ClientLinkEvidence{State: ClientLinkNotVerified, Detail: "journal unavailable"})
+	rows := clientCompletionSummaryRows("http://server", ClientLinkEvidence{State: ClientLinkNotVerified, Detail: "journal unavailable"})
 	for _, row := range rows {
 		if row[1] == "sk-test-key" {
 			t.Fatal("client completion summary must not leak client key")
@@ -308,4 +350,33 @@ func assertSummaryRow(t *testing.T, summary summaryCall, key, want string) {
 		}
 	}
 	t.Fatalf("summary row %q not found in %#v", key, summary.rows)
+}
+
+func assertNoSummaryRow(t *testing.T, summary summaryCall, key string) {
+	t.Helper()
+	for _, row := range summary.rows {
+		if row[0] == key {
+			t.Fatalf("summary row %q should not be shown in first-use output: %#v", key, summary.rows)
+		}
+	}
+}
+
+func assertClientServerInputUsesServiceAddressWording(t *testing.T, calls []inputCall) {
+	t.Helper()
+	for _, call := range calls {
+		if call.prompt != "Service address" {
+			continue
+		}
+		if call.opts.Placeholder != "e.g. http://netsgo.example.com:9527" {
+			t.Fatalf("service address placeholder = %q", call.opts.Placeholder)
+		}
+		if !strings.Contains(call.opts.Description, "service address") || !strings.Contains(call.opts.Description, "http(s)://") {
+			t.Fatalf("service address description should prefer service address/http(s), got %q", call.opts.Description)
+		}
+		if strings.Contains(call.opts.Description, "control/data") {
+			t.Fatalf("service address description should not expose control/data endpoints, got %q", call.opts.Description)
+		}
+		return
+	}
+	t.Fatalf("service address input prompt not called; calls=%#v", calls)
 }

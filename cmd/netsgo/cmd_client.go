@@ -33,11 +33,11 @@ On startup, the client automatically:
 
 Tunnel creation, management, and deletion are all controlled from the server Web panel.
 
-Server address formats:
-  ws://host:port       Plain WebSocket
-  wss://host:port      Encrypted WebSocket
-  http://host:port     Plain HTTP (auto-converted to ws://)
-  https://host:port    Encrypted HTTPS (auto-converted to wss://)
+Service address formats:
+  http://host:port     Plain HTTP service address
+  https://host:port    HTTPS service address
+  ws://host:port       Backward-compatible WebSocket form; normalized to http://
+  wss://host:port      Backward-compatible WebSocket form; normalized to https://
 
 All flags support environment variable configuration with NETSGO_ prefix, e.g.:
   NETSGO_SERVER=https://1.2.3.4:9527 NETSGO_KEY=mykey netsgo client`,
@@ -48,10 +48,7 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
   netsgo client --server https://1.2.3.4:9527 --key mykey
 
   # Skip TLS certificate verification (for testing only)
-  netsgo client --server wss://1.2.3.4:9527 --key mykey --tls-skip-verify
-
-  # Connect using ws:// format (backward compatible)
-  netsgo client --server ws://1.2.3.4:9527 --key mykey`,
+  netsgo client --server https://1.2.3.4:9527 --key mykey --tls-skip-verify`,
 	Run: func(cmd *cobra.Command, args []string) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
@@ -104,7 +101,7 @@ func maskKey(key string) string {
 }
 
 func init() {
-	clientCmd.Flags().StringP("server", "s", "ws://localhost:9527", "Server address (supports ws/wss/http/https)")
+	clientCmd.Flags().StringP("server", "s", "http://localhost:9527", "Service address (http/https recommended; ws/wss accepted)")
 	clientCmd.Flags().StringP("key", "k", "", "Authentication key")
 	clientCmd.Flags().String("data-dir", datadir.DefaultDataDir(), "Data root directory")
 

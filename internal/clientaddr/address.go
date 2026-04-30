@@ -19,7 +19,7 @@ const (
 	ModeManagedInstall
 )
 
-// Address is a normalized NetsGo server address and its derived endpoints.
+// Address is a normalized NetsGo service address and its derived endpoints.
 type Address struct {
 	BaseURL    string
 	UseTLS     bool
@@ -27,50 +27,50 @@ type Address struct {
 	DataURL    string
 }
 
-// Normalize converts http(s)/ws(s) NetsGo server addresses into a stable
+// Normalize converts http(s)/ws(s) NetsGo service addresses into a stable
 // base HTTP URL and derived control/data WebSocket endpoints.
 func Normalize(raw string, mode Mode) (Address, error) {
 	input := strings.TrimSpace(raw)
 	if input == "" {
-		return Address{}, fmt.Errorf("server address cannot be empty")
+		return Address{}, fmt.Errorf("service address cannot be empty")
 	}
 	if strings.ContainsAny(input, " \t\r\n") {
-		return Address{}, fmt.Errorf("server address cannot contain whitespace")
+		return Address{}, fmt.Errorf("service address cannot contain whitespace")
 	}
 	if !strings.Contains(input, "://") {
 		if mode == ModeManagedInstall {
-			return Address{}, fmt.Errorf("server address must include a scheme: http://, https://, ws://, or wss://")
+			return Address{}, fmt.Errorf("service address must include a scheme: http://, https://, ws://, or wss://")
 		}
 		input = "http://" + input
 	}
 
 	parsed, err := url.Parse(input)
 	if err != nil {
-		return Address{}, fmt.Errorf("server address must be a valid URL: %w", err)
+		return Address{}, fmt.Errorf("service address must be a valid URL: %w", err)
 	}
 	scheme := strings.ToLower(parsed.Scheme)
 	switch scheme {
 	case "http", "https", "ws", "wss":
 	default:
-		return Address{}, fmt.Errorf("server address scheme must be http, https, ws, or wss")
+		return Address{}, fmt.Errorf("service address scheme must be http, https, ws, or wss")
 	}
 	if parsed.Host == "" || parsed.Hostname() == "" {
-		return Address{}, fmt.Errorf("server address must include a host")
+		return Address{}, fmt.Errorf("service address must include a host")
 	}
 	if port := parsed.Port(); port != "" {
 		portNum, err := strconv.Atoi(port)
 		if err != nil || portNum < 1 || portNum > 65535 {
-			return Address{}, fmt.Errorf("server address port is invalid")
+			return Address{}, fmt.Errorf("service address port is invalid")
 		}
 	}
 	if parsed.User != nil {
-		return Address{}, fmt.Errorf("server address must not include user info")
+		return Address{}, fmt.Errorf("service address must not include user info")
 	}
 	if parsed.Path != "" && parsed.Path != "/" {
-		return Address{}, fmt.Errorf("server address must not include a path")
+		return Address{}, fmt.Errorf("service address must not include a path")
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return Address{}, fmt.Errorf("server address must not include a query or fragment")
+		return Address{}, fmt.Errorf("service address must not include a query or fragment")
 	}
 
 	baseScheme := scheme

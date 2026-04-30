@@ -198,7 +198,7 @@ func InstallServerWith(deps serverDeps) error {
 		[2]string{"Install mode", installMode},
 		[2]string{"Port", strconv.Itoa(port)},
 		[2]string{"TLS mode", tlsMode},
-		[2]string{"Server address", serverAddr},
+		[2]string{"Service address", serverAddr},
 		[2]string{"Trusted proxies", trustedProxies},
 	))
 	ok, err := deps.UI.ConfirmWithOptions("Proceed with installation?", tui.ConfirmOptions{Default: true})

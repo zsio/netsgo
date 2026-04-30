@@ -14,7 +14,8 @@ import {
 import { useAdminConfig } from '@/hooks/use-admin-config';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
 import { useServerStatus } from '@/hooks/use-server-status';
-import { normalizeServerAddr } from '@/lib/server-address';
+
+import { resolveAddClientServiceAddress } from './client-service-address';
 
 /** 过期时间选项 */
 const EXPIRY_OPTIONS = [
@@ -76,11 +77,13 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       {
         onSuccess: (data) => {
           setGeneratedKey(data.raw_key);
-          setServerAddr(
-            normalizeServerAddr(
-              adminConfig?.server_addr || data.server_addr || status?.server_addr || window.location.origin,
-            ) || window.location.origin.trim(),
-          );
+          setServerAddr(resolveAddClientServiceAddress({
+            effectiveServerAddr: adminConfig?.effective_server_addr,
+            adminServerAddr: adminConfig?.server_addr,
+            keyServerAddr: data.server_addr,
+            statusServerAddr: status?.server_addr,
+            browserOrigin: window.location.origin,
+          }));
           setStep('result');
         },
       },
@@ -110,7 +113,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
             添加 Client
           </DialogTitle>
           <DialogDescription>
-            生成临时连接密钥，并给出默认推荐的连接命令。Client 也可以改用任意能连到 NetsGo 的入口地址。
+            生成临时连接密钥，并给出默认推荐的连接命令。命令里的 --server 使用 http(s) 服务地址，Client 会自动派生内部通道。
           </DialogDescription>
         </DialogHeader>
 
@@ -217,13 +220,13 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
 
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                默认推荐连接地址
+                默认推荐服务地址
               </label>
               <code className="block px-3 py-2 text-xs font-mono bg-muted rounded-lg border border-border break-all select-all">
                 {serverAddr}
               </code>
               <p className="text-[11px] text-muted-foreground">
-                这是 `server_addr` 的默认推荐值；如果部署上更合适，也可以把命令里的 `--server` 换成其他可达入口。
+                这是默认推荐的服务地址；如果部署上更合适，也可以把命令里的 `--server` 换成其他可达入口。
               </p>
             </div>
 
@@ -231,7 +234,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
               <div className="rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-[11px] text-muted-foreground">
                 当前管理地址由环境变量 `NETSGO_SERVER_ADDR` 锁定。
                 <div className="mt-1 font-mono text-foreground break-all">
-                  effective_server_addr = {adminConfig.effective_server_addr}
+                  当前生效服务地址 = {adminConfig.effective_server_addr}
                 </div>
               </div>
             )}

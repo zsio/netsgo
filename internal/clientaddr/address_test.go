@@ -91,3 +91,13 @@ func TestNormalizeManagedInstallRejectsUnsafeForms(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeManagedInstallErrorsUseServiceAddressWording(t *testing.T) {
+	_, err := Normalize("netsgo.zsio.dev:9527", ModeManagedInstall)
+	if err == nil {
+		t.Fatal("Normalize() should reject managed install inputs without an explicit scheme")
+	}
+	if got := err.Error(); got != "service address must include a scheme: http://, https://, ws://, or wss://" {
+		t.Fatalf("Normalize() error = %q", got)
+	}
+}

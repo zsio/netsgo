@@ -113,7 +113,7 @@ volumes:
 
 ### 2. 登录 Web 面板并创建 Client Key
 
-1. 浏览器访问服务端地址（如 `https://your-netsgo-domain.com`）。
+1. 浏览器访问服务地址（如 `https://your-netsgo-domain.com`）。
 2. 用初始化时设置的管理员账号登录。
 3. 进入“客户端管理”，创建一个 client，复制生成的 `Client Key`（格式类似 `sk-...`）。
 
@@ -128,11 +128,9 @@ volumes:
 sudo ./netsgo install
 ```
 
-按交互提示选择 **Client**，并填入服务端地址与 Client Key。
+按交互提示选择 **Client**，并填入 Web 面板或 Server 安装完成提示中显示的服务地址（通常是 `http://` 或 `https://`）与 Client Key。
 
-> **注意**：交互安装时要求填写的服务端地址应使用 WebSocket 口径 `ws://` 或 `wss://`，不要写成 `https://`。例如：
-> - `wss://your-netsgo-domain.com`
-> - `ws://192.168.1.10:9527`
+> **注意**：Client 会自动从服务地址派生内部 WebSocket 控制/数据通道；通常不需要手动把地址改成 `ws://` 或 `wss://`。旧的 WebSocket 形式仍兼容。
 
 之后用 `sudo netsgo manage` 查看状态和日志。
 
@@ -142,12 +140,12 @@ sudo ./netsgo install
 ./netsgo client --server https://your-netsgo-domain.com --key <your-client-key>
 ```
 
-直接运行 `netsgo client` 时，服务端地址支持以下格式，客户端会自动处理：
+直接运行 `netsgo client` 时，推荐填写 `http(s)` 服务地址；旧的 `ws(s)` 输入仍兼容并会自动规范化：
 
-- `ws://host:port`
-- `wss://host:port`
 - `http://host:port`
 - `https://host:port`
+- `ws://host:port`
+- `wss://host:port`
 
 ---
 
@@ -249,15 +247,14 @@ netsgo server --tls-mode off --trusted-proxies 127.0.0.1/32,10.0.0.0/8
 ### `netsgo client`
 
 ```bash
-# 连接远端 HTTPS / WSS 服务端
+# 连接远端 HTTPS 服务端
 netsgo client --server https://1.2.3.4:9527 --key mykey
 
-# 也可以显式传入 WebSocket 地址
-netsgo client --server wss://1.2.3.4:9527 --key mykey
-
 # 仅用于测试：跳过 TLS 校验
-netsgo client --server wss://1.2.3.4:9527 --key mykey --tls-skip-verify
+netsgo client --server https://1.2.3.4:9527 --key mykey --tls-skip-verify
 ```
+
+旧的 WebSocket 形式仍兼容，会自动规范化为 `http(s)` 服务地址；首次使用建议优先复制 Web 面板展示的服务地址。
 
 ### `netsgo install` / `netsgo manage`
 
@@ -288,7 +285,7 @@ sudo netsgo manage    # 查看状态、启停、日志、卸载
 
 | 环境变量 | 对应参数 | 说明 |
 |---|---|---|
-| `NETSGO_SERVER` | `--server` | 服务端地址，例如 `wss://netsgo.example.com` |
+| `NETSGO_SERVER` | `--server` | 服务地址，例如 `https://netsgo.example.com` |
 | `NETSGO_KEY` | `--key` | client 鉴权 key |
 
 </details>

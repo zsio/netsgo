@@ -15,9 +15,15 @@ type fakeUI struct {
 	selects      []int
 	inputs       []string
 	passwords    []string
+	inputCalls   []inputCall
 	confirms     []bool
 	confirmCalls []confirmCall
 	summaries    []summaryCall
+}
+
+type inputCall struct {
+	prompt string
+	opts   tui.InputOptions
 }
 
 type confirmCall struct {
@@ -40,6 +46,11 @@ func (f *fakeUI) Select(prompt string, options []string) (int, error) {
 }
 
 func (f *fakeUI) Input(prompt string, opts ...tui.InputOptions) (string, error) {
+	call := inputCall{prompt: prompt}
+	if len(opts) > 0 {
+		call.opts = opts[0]
+	}
+	f.inputCalls = append(f.inputCalls, call)
 	if len(f.inputs) == 0 {
 		return "", errors.New("no input value")
 	}

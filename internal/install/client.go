@@ -72,9 +72,9 @@ func InstallClientWith(deps clientDeps) error {
 		return errInstallBrokenState
 	}
 
-	serverInput, err := deps.UI.Input("Server address", tui.InputOptions{
+	serverInput, err := deps.UI.Input("Service address", tui.InputOptions{
 		Placeholder: "e.g. http://netsgo.example.com:9527",
-		Description: "Paste the server address from the Web panel or CLI command. http(s):// and ws(s):// are accepted; NetsGo will derive the control/data WebSocket endpoints.",
+		Description: "Paste the service address shown by the Web panel or server install summary, usually http(s)://. Legacy ws(s):// inputs are accepted and normalized automatically.",
 		Validate:    validateInstallClientServerURL,
 	})
 	if err != nil {
@@ -118,9 +118,7 @@ func InstallClientWith(deps clientDeps) error {
 	}
 
 	deps.UI.PrintSummary("Installation summary", confirmSummaryRows(svcmgr.RoleClient,
-		[2]string{"Server", serverURL},
-		[2]string{"Control endpoint", serverAddr.ControlURL},
-		[2]string{"Data endpoint", serverAddr.DataURL},
+		[2]string{"Service address", serverURL},
 		[2]string{"TLS", ternary(usesTLS, "Enabled", "Disabled")},
 		[2]string{"Skip TLS verify", ternary(usesTLS, boolText(tlsSkipVerify), "N/A")},
 		[2]string{"TLS fingerprint", ternary(tlsFingerprint != "", tlsFingerprint, "Not set")},
@@ -155,7 +153,7 @@ func InstallClientWith(deps clientDeps) error {
 		verifyClientLink = defaultVerifyClientLink
 	}
 	link := verifyClientLink(svcmgr.UnitName(svcmgr.RoleClient), evidenceSince, clientLinkEvidenceTimeout)
-	deps.UI.PrintSummary("Client installation complete", clientCompletionSummaryRows(serverURL, serverAddr.ControlURL, serverAddr.DataURL, link))
+	deps.UI.PrintSummary("Client installation complete", clientCompletionSummaryRows(serverURL, link))
 	return nil
 }
 
@@ -176,14 +174,12 @@ func defaultClientDeps() clientDeps {
 	}
 }
 
-func clientCompletionSummaryRows(serverURL, controlURL, dataURL string, link ClientLinkEvidence) [][2]string {
+func clientCompletionSummaryRows(serverURL string, link ClientLinkEvidence) [][2]string {
 	rows := [][2]string{
 		{"Status", "Running"},
 		{"Service", svcmgr.UnitName(svcmgr.RoleClient)},
 		{"Run as", svcmgr.SystemUser},
-		[2]string{"Server", serverURL},
-		[2]string{"Control endpoint", controlURL},
-		[2]string{"Data endpoint", dataURL},
+		[2]string{"Service address", serverURL},
 		[2]string{"NetsGo link", string(link.State)},
 	}
 	if link.Detail != "" {
@@ -192,7 +188,7 @@ func clientCompletionSummaryRows(serverURL, controlURL, dataURL string, link Cli
 	rows = append(rows, [2]string{"Logs", journalctlCommand(svcmgr.RoleClient)})
 	if link.State != ClientLinkEstablished {
 		rows = append(rows,
-			[2]string{"Advice", "Check DNS/server address, client key, TLS settings, server service, and client logs"},
+			[2]string{"Advice", "Check DNS/service address, client key, TLS settings, server service, and client logs"},
 		)
 	}
 	rows = append(rows, [2]string{"Next step", "Run netsgo manage to manage the service"})
