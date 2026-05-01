@@ -75,14 +75,24 @@ func generateUUID() string {
 		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
 
+// AdminStoreOptions configures admin store startup behavior.
+type AdminStoreOptions struct {
+	SuppressUninitializedWarning bool
+}
+
 // NewAdminStore creates or opens a standalone admin store that owns its DB.
 func NewAdminStore(path string) (*AdminStore, error) {
+	return NewAdminStoreWithOptions(path, AdminStoreOptions{})
+}
+
+// NewAdminStoreWithOptions creates or opens a standalone admin store that owns its DB.
+func NewAdminStoreWithOptions(path string, opts AdminStoreOptions) (*AdminStore, error) {
 	db, err := openServerDB(path)
 	if err != nil {
 		return nil, err
 	}
 
-	store, err := newAdminStoreWithDB(path, db, true)
+	store, err := newAdminStoreWithDBOptions(path, db, true, opts)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -93,6 +103,10 @@ func NewAdminStore(path string) (*AdminStore, error) {
 // newAdminStoreWithDB creates an admin store over an existing DB handle.
 // When closeDB is false the caller retains DB ownership.
 func newAdminStoreWithDB(path string, db *sql.DB, closeDB bool) (*AdminStore, error) {
+	return newAdminStoreWithDBOptions(path, db, closeDB, AdminStoreOptions{})
+}
+
+func newAdminStoreWithDBOptions(path string, db *sql.DB, closeDB bool, opts AdminStoreOptions) (*AdminStore, error) {
 	store := &AdminStore{
 		path:       path,
 		db:         db,
@@ -113,7 +127,7 @@ func newAdminStoreWithDB(path string, db *sql.DB, closeDB bool) (*AdminStore, er
 	if err != nil {
 		return nil, err
 	}
-	if !initialized {
+	if !initialized && !opts.SuppressUninitializedWarning {
 		log.Printf("⚠️ Service not yet initialized; please use the install or init command to complete initialization")
 	}
 
@@ -343,7 +357,7 @@ func (s *AdminStore) Initialize(username, password, serverAddr string, allowedPo
 		return err
 	}
 
-	log.Printf("✅ Service initialization complete, admin user: %s", username)
+	log.Printf("服务初始化完成，管理员用户: %s", username)
 	return nil
 }
 

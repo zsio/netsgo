@@ -2,8 +2,10 @@ package manage
 
 import (
 	"fmt"
+	"strings"
 
 	"netsgo/internal/svcmgr"
+	"netsgo/internal/tui"
 	"netsgo/pkg/updater"
 	"netsgo/pkg/version"
 )
@@ -24,18 +26,24 @@ func runUpdateWithChecker(ui uiProvider, currentVersion string, hasInstalled fun
 	}
 
 	if !hasInstalled() {
-		return fmt.Errorf("no installed services found")
+		return fmt.Errorf("未发现已安装的托管服务")
 	}
 
 	if _, err := version.ParseSemver(currentVersion); err != nil {
-		ui.PrintSummary("Update", [][2]string{
-			{"Version", currentVersion},
-			{"Status", "Development build — automatic update not supported"},
+		ui.PrintSummary("更新", [][2]string{
+			{"版本", currentVersion},
+			{"状态", "开发构建不支持自动 release 更新"},
+			{"托管服务", "正式 release 可在 netsgo manage 中选择“更新”"},
+			{"已有新版 netsgo 文件", "执行新版文件的 netsgo upgrade"},
+			{"手动下载", "https://github.com/zsio/netsgo/releases"},
 		})
 		return nil
 	}
 
-	channelIdx, err := ui.Select("Select download channel", []string{"GitHub (default)", "ghproxy (mirror)"})
+	channelIdx, err := selectWithOptions(ui, "选择下载通道", []tui.SelectOption{
+		{Label: "GitHub (默认)", Description: "直接从 GitHub 下载官方 release。"},
+		{Label: "ghproxy (镜像)", Description: "直连 GitHub 不稳定时使用 ghproxy 镜像。"},
+	})
 	if err != nil {
 		return err
 	}
@@ -45,10 +53,10 @@ func runUpdateWithChecker(ui uiProvider, currentVersion string, hasInstalled fun
 		channel = updater.ChannelGhproxy
 	}
 
-	ui.PrintSummary("Update", [][2]string{
-		{"Current", currentVersion},
-		{"Channel", string(channel)},
-		{"Status", "Checking..."},
+	ui.PrintSummary("更新", [][2]string{
+		{"当前版本", currentVersion},
+		{"通道", string(channel)},
+		{"状态", "检查中..."},
 	})
 
 	if checkForUpdate == nil {
@@ -60,7 +68,7 @@ func runUpdateWithChecker(ui uiProvider, currentVersion string, hasInstalled fun
 
 	result, needsUpdate, err := checkForUpdate(channel, currentVersion)
 	if err != nil {
-		ui.PrintSummary("Update failed", [][2]string{{"Error", err.Error()}})
+		ui.PrintSummary("更新失败", [][2]string{{"错误", err.Error()}})
 		return nil
 	}
 
@@ -69,46 +77,53 @@ func runUpdateWithChecker(ui uiProvider, currentVersion string, hasInstalled fun
 		if normalizeErr != nil {
 			currentNormalized = currentVersion
 		}
-		ui.PrintSummary("No update", [][2]string{
-			{"Current", currentNormalized},
-			{"Status", "Already latest"},
+		ui.PrintSummary("无需更新", [][2]string{
+			{"当前版本", currentNormalized},
+			{"状态", "已是最新"},
 		})
 		return nil
 	}
 
 	confirmRows := [][2]string{
-		{"Current", result.OldVersion},
-		{"Latest", result.NewVersion},
-		{"Channel", string(channel)},
-		{"Action", "Download, replace binary, and restart managed services"},
+		{"当前版本", result.OldVersion},
+		{"最新版本", result.NewVersion},
+		{"通道", string(channel)},
+		{"结果", "托管服务将切换到最新 release"},
 	}
-	ui.PrintSummary("Update available", confirmRows)
+	ui.PrintSummary("发现可用更新", confirmRows)
 
-	confirmed, err := ui.Confirm("Download and apply this update?")
+	confirmed, err := ui.ConfirmWithOptions("应用此更新？", tui.ConfirmOptions{ConfirmText: "apply update"})
 	if err != nil {
 		return err
 	}
 	if !confirmed {
-		ui.PrintSummary("Update cancelled", [][2]string{{"Status", "No changes were made"}})
+		ui.PrintSummary("更新已取消", [][2]string{{"状态", "未进行任何修改"}})
 		return nil
 	}
 
 	result, err = applyConfirmedUpdate(channel, currentVersion, result.NewVersion)
 	if err != nil {
-		ui.PrintSummary("Update failed", [][2]string{{"Error", err.Error()}})
+		ui.PrintSummary("更新失败", [][2]string{{"错误", err.Error()}})
 		return nil
 	}
 
 	rows := [][2]string{
-		{"From", result.OldVersion},
-		{"To", result.NewVersion},
+		{"从", result.OldVersion},
+		{"到", result.NewVersion},
 	}
 	if len(result.Stopped) > 0 {
-		rows = append(rows, [2]string{"Stopped", fmt.Sprintf("%v", result.Stopped)})
+		rows = append(rows, [2]string{"已停止", formatServiceList(result.Stopped)})
 	}
 	if len(result.Started) > 0 {
-		rows = append(rows, [2]string{"Started", fmt.Sprintf("%v", result.Started)})
+		rows = append(rows, [2]string{"已启动", formatServiceList(result.Started)})
 	}
-	ui.PrintSummary("Update complete", rows)
+	ui.PrintSummary("更新完成", rows)
 	return nil
+}
+
+func formatServiceList(services []string) string {
+	if len(services) == 0 {
+		return "无"
+	}
+	return strings.Join(services, ", ")
 }

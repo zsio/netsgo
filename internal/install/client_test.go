@@ -26,7 +26,7 @@ func TestInstallClientWithAlreadyInstalled(t *testing.T) {
 	if called {
 		t.Fatal("should not continue install when already installed")
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Client already installed" {
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Client 已安装" {
 		t.Fatalf("should show next-step summary when already installed, got %#v", ui.summaries)
 	}
 }
@@ -45,7 +45,7 @@ func TestInstallClientWithBrokenStateFails(t *testing.T) {
 	if !errors.Is(err, errInstallBrokenState) {
 		t.Fatalf("broken state should return errInstallBrokenState, got %v", err)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Client installation state is broken" {
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Client 安装状态异常" {
 		t.Fatalf("broken state should show problem summary, got %#v", ui.summaries)
 	}
 }
@@ -64,20 +64,22 @@ func TestInstallClientWithHistoricalDataOnlyFailsWithReauthMessage(t *testing.T)
 	if !errors.Is(err, errInstallBrokenState) {
 		t.Fatalf("client historical data residual should return errInstallBrokenState, got %v", err)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Client installation state is broken" {
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Client 安装状态异常" {
 		t.Fatalf("client historical data should show broken state summary, got %#v", ui.summaries)
 	}
 	rows := ui.summaries[0].rows
-	foundAdvice := false
+	found建议 := false
 	for _, row := range rows {
-		if row[0] == "Advice" && row[1] == "Client does not support recovering existing data; clear residual data and reinstall" {
-			foundAdvice = true
+		if row[0] == "建议" && row[1] == "检测到残留 client 数据；请先清理残留状态后重新安装" {
+			found建议 = true
 			break
 		}
 	}
-	if !foundAdvice {
-		t.Fatalf("client historical data should advise re-authentication, got %#v", rows)
+	if !found建议 {
+		t.Fatalf("client historical data should give cleanup guidance, got %#v", rows)
 	}
+	assertSummaryDoesNotContain(t, ui.summaries[0], "恢复")
+	assertSummaryDoesNotContain(t, ui.summaries[0], "身份")
 }
 
 func TestInstallClientWithFreshInstall(t *testing.T) {
@@ -117,13 +119,14 @@ func TestInstallClientWithFreshInstall(t *testing.T) {
 	if len(ui.summaries) != 2 {
 		t.Fatalf("should show confirmation and completion summaries, got %d", len(ui.summaries))
 	}
-	if ui.summaries[1].title != "Client installation complete" {
-		t.Fatalf("expected 'Client installation complete' summary, got %#v", ui.summaries)
+	if ui.summaries[1].title != "Client 安装完成" {
+		t.Fatalf("expected 'Client 安装完成' summary, got %#v", ui.summaries)
 	}
-	assertConfirmDefault(t, ui.confirmCalls, "Skip TLS certificate verification?", false)
-	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
+	assertConfirmPrompt(t, ui.confirmCalls, "跳过 TLS 证书校验？")
+	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
 	assertClientServerInputUsesServiceAddressWording(t, ui.inputCalls)
-	assertSummaryRow(t, ui.summaries[1], "NetsGo link", string(ClientLinkEstablished))
+	assertClientKeyPromptUsesChineseTitle(t, ui.passwordCalls)
+	assertSummaryRow(t, ui.summaries[1], "NetsGo 链路", string(ClientLinkEstablished))
 	assertNoSummaryRow(t, ui.summaries[0], "Control endpoint")
 	assertNoSummaryRow(t, ui.summaries[0], "Data endpoint")
 	assertNoSummaryRow(t, ui.summaries[1], "Control endpoint")
@@ -180,11 +183,11 @@ func TestInstallClientWithConfirmNoShowsCancelledSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cancelling install should not error: %v", err)
 	}
-	if len(ui.summaries) != 2 || ui.summaries[1].title != "Installation cancelled" {
-		t.Fatalf("expected 'Installation cancelled' summary after declining, got %#v", ui.summaries)
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "安装已取消" {
+		t.Fatalf("expected '安装已取消' summary after declining, got %#v", ui.summaries)
 	}
-	assertConfirmDefault(t, ui.confirmCalls, "Skip TLS certificate verification?", false)
-	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
+	assertConfirmPrompt(t, ui.confirmCalls, "跳过 TLS 证书校验？")
+	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
 }
 
 func TestInstallClientAcceptsHTTPAndWritesServiceAddress(t *testing.T) {
@@ -208,7 +211,7 @@ func TestInstallClientAcceptsHTTPAndWritesServiceAddress(t *testing.T) {
 		WriteClientUnit:  func(layout svcmgr.ServiceLayout) error { return nil },
 		DaemonReload:     func() error { return nil },
 		EnableAndStart:   func(unit string) error { return nil },
-		VerifyClientLink: fakeClientLink(ClientLinkNotEstablished),
+		VerifyClientLink: fakeClientLinkWithDetail(ClientLinkNotEstablished, "服务已启动，但 8 秒内未确认连接成功。"),
 	})
 	if err != nil {
 		t.Fatalf("HTTP client install should not error: %v", err)
@@ -216,11 +219,12 @@ func TestInstallClientAcceptsHTTPAndWritesServiceAddress(t *testing.T) {
 	if writtenEnv.Server != "http://netsgo.zsio.dev:9527" {
 		t.Fatalf("NETSGO_SERVER should be normalized HTTP base URL, got %#v", writtenEnv)
 	}
-	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
-	assertSummaryRow(t, ui.summaries[0], "Service address", "http://netsgo.zsio.dev:9527")
+	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
+	assertSummaryRow(t, ui.summaries[0], "服务地址", "http://netsgo.zsio.dev:9527")
 	assertNoSummaryRow(t, ui.summaries[0], "Control endpoint")
 	assertNoSummaryRow(t, ui.summaries[0], "Data endpoint")
-	assertSummaryRow(t, ui.summaries[1], "NetsGo link", string(ClientLinkNotEstablished))
+	assertSummaryRow(t, ui.summaries[1], "NetsGo 链路", string(ClientLinkNotEstablished))
+	assertSummaryRow(t, ui.summaries[1], "链路详情", "服务已启动，但 8 秒内未确认连接成功。")
 	assertNoSummaryRow(t, ui.summaries[1], "Control endpoint")
 	assertNoSummaryRow(t, ui.summaries[1], "Data endpoint")
 }
@@ -254,9 +258,25 @@ func TestInstallClientAcceptsLegacyWSSAndWritesHTTPSServiceAddress(t *testing.T)
 	if writtenEnv.Server != "https://netsgo.zsio.dev" {
 		t.Fatalf("NETSGO_SERVER should be normalized HTTPS service address, got %#v", writtenEnv)
 	}
-	assertSummaryRow(t, ui.summaries[0], "Service address", "https://netsgo.zsio.dev")
+	assertSummaryRow(t, ui.summaries[0], "服务地址", "https://netsgo.zsio.dev")
 	assertNoSummaryRow(t, ui.summaries[0], "Control endpoint")
 	assertNoSummaryRow(t, ui.summaries[0], "Data endpoint")
+}
+
+func assertClientKeyPromptUsesChineseTitle(t *testing.T, calls []inputCall) {
+	t.Helper()
+	for _, call := range calls {
+		if call.prompt == "Client key" {
+			t.Fatalf("client key prompt should not use the raw English title: %#v", calls)
+		}
+		if call.prompt == "客户端接入密钥" {
+			if !strings.Contains(call.opts.Description, "client key") {
+				t.Fatalf("client key prompt should preserve the technical token in description, got %#v", call.opts)
+			}
+			return
+		}
+	}
+	t.Fatalf("client key prompt not found in %#v", calls)
 }
 
 func TestClientLinkEvidenceStates(t *testing.T) {
@@ -326,12 +346,18 @@ func fakeClientLink(state ClientLinkState) func(string, time.Time, time.Duration
 	}
 }
 
-func assertConfirmDefault(t *testing.T, calls []confirmCall, prompt string, want bool) {
+func fakeClientLinkWithDetail(state ClientLinkState, detail string) func(string, time.Time, time.Duration) ClientLinkEvidence {
+	return func(unit string, since time.Time, timeout time.Duration) ClientLinkEvidence {
+		return ClientLinkEvidence{State: state, Detail: detail}
+	}
+}
+
+func assertConfirmPrompt(t *testing.T, calls []confirmCall, prompt string) {
 	t.Helper()
 	for _, call := range calls {
 		if call.prompt == prompt {
-			if call.defaultValue != want {
-				t.Fatalf("confirm %q default = %v, want %v", prompt, call.defaultValue, want)
+			if call.confirmText != "" {
+				t.Fatalf("confirm %q should use yes/no typed confirmation, got required phrase %q", prompt, call.confirmText)
 			}
 			return
 		}
@@ -364,13 +390,13 @@ func assertNoSummaryRow(t *testing.T, summary summaryCall, key string) {
 func assertClientServerInputUsesServiceAddressWording(t *testing.T, calls []inputCall) {
 	t.Helper()
 	for _, call := range calls {
-		if call.prompt != "Service address" {
+		if call.prompt != "服务地址" {
 			continue
 		}
 		if call.opts.Placeholder != "e.g. http://netsgo.example.com:9527" {
 			t.Fatalf("service address placeholder = %q", call.opts.Placeholder)
 		}
-		if !strings.Contains(call.opts.Description, "service address") || !strings.Contains(call.opts.Description, "http(s)://") {
+		if !strings.Contains(call.opts.Description, "服务地址") || !strings.Contains(call.opts.Description, "http(s)://") {
 			t.Fatalf("service address description should prefer service address/http(s), got %q", call.opts.Description)
 		}
 		if strings.Contains(call.opts.Description, "control/data") {

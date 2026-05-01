@@ -9,17 +9,36 @@ import (
 	"testing"
 
 	"netsgo/internal/svcmgr"
+	"netsgo/internal/tui"
 )
 
 type fakeUI struct {
-	selects   []int
-	confirms  []bool
-	summaries []summaryCall
+	selects           []int
+	selectCalls       []selectCall
+	selectOptionCalls []selectOptionCall
+	confirms          []bool
+	confirmCalls      []confirmCall
+	summaries         []summaryCall
+}
+
+type selectCall struct {
+	prompt  string
+	options []string
+}
+
+type selectOptionCall struct {
+	prompt  string
+	options []tui.SelectOption
 }
 
 type summaryCall struct {
 	title string
 	rows  [][2]string
+}
+
+type confirmCall struct {
+	prompt      string
+	confirmText string
 }
 
 func assertSelectionExit(t *testing.T, err error) {
@@ -30,12 +49,23 @@ func assertSelectionExit(t *testing.T, err error) {
 }
 
 func (f *fakeUI) Select(prompt string, options []string) (int, error) {
+	f.selectCalls = append(f.selectCalls, selectCall{prompt: prompt, options: append([]string(nil), options...)})
 	if len(f.selects) == 0 {
 		return 0, errors.New("no select value")
 	}
 	v := f.selects[0]
 	f.selects = f.selects[1:]
 	return v, nil
+}
+
+func (f *fakeUI) SelectWithOptions(prompt string, options []tui.SelectOption) (int, error) {
+	copied := append([]tui.SelectOption(nil), options...)
+	f.selectOptionCalls = append(f.selectOptionCalls, selectOptionCall{prompt: prompt, options: copied})
+	labels := make([]string, len(options))
+	for i, option := range options {
+		labels[i] = option.Label
+	}
+	return f.Select(prompt, labels)
 }
 
 func (f *fakeUI) Confirm(prompt string) (bool, error) {
@@ -46,8 +76,44 @@ func (f *fakeUI) Confirm(prompt string) (bool, error) {
 	f.confirms = f.confirms[1:]
 	return v, nil
 }
+func (f *fakeUI) ConfirmWithOptions(prompt string, opts tui.ConfirmOptions) (bool, error) {
+	f.confirmCalls = append(f.confirmCalls, confirmCall{prompt: prompt, confirmText: opts.ConfirmText})
+	return f.Confirm(prompt)
+}
 func (f *fakeUI) PrintSummary(title string, rows [][2]string) {
 	f.summaries = append(f.summaries, summaryCall{title: title, rows: rows})
+}
+
+func assertConfirmPhrase(t *testing.T, calls []confirmCall, prompt, wantPhrase string) {
+	t.Helper()
+	for _, call := range calls {
+		if call.prompt == prompt {
+			if call.confirmText != wantPhrase {
+				t.Fatalf("confirm %q required phrase = %q, want %q", prompt, call.confirmText, wantPhrase)
+			}
+			return
+		}
+	}
+	t.Fatalf("confirm prompt %q not found in %#v", prompt, calls)
+}
+
+func assertSelectOptionsDescribed(t *testing.T, calls []selectOptionCall, prompt string) {
+	t.Helper()
+	for _, call := range calls {
+		if call.prompt != prompt {
+			continue
+		}
+		if len(call.options) == 0 {
+			t.Fatalf("select %q has no options", prompt)
+		}
+		for _, option := range call.options {
+			if strings.TrimSpace(option.Label) == "" || strings.TrimSpace(option.Description) == "" {
+				t.Fatalf("select %q has undescribed option %#v", prompt, option)
+			}
+		}
+		return
+	}
+	t.Fatalf("select prompt %q not found in %#v", prompt, calls)
 }
 
 func TestRunWithPlatformCheck(t *testing.T) {
@@ -79,6 +145,7 @@ func TestRunWithNoInstalledRole(t *testing.T) {
 	if len(ui.summaries) != 1 {
 		t.Fatalf("should emit one summary when not installed, got %d", len(ui.summaries))
 	}
+	assertSelectOptionsDescribed(t, ui.selectOptionCalls, "选择操作")
 }
 
 func TestRunWithNoInstalledRoleCanEnterInstall(t *testing.T) {
@@ -215,6 +282,7 @@ func TestRunWithServerHistoricalDataOnlyNoInstalledRole(t *testing.T) {
 	if called {
 		t.Fatal("this test chooses install directly, so the recovery manage flow should not be entered")
 	}
+	assertSelectOptionsDescribed(t, ui.selectOptionCalls, "选择恢复操作")
 }
 
 func TestRunWithClientInstalledAndServerBrokenWarnsThenManagesClient(t *testing.T) {
@@ -243,7 +311,7 @@ func TestRunWithClientInstalledAndServerBrokenWarnsThenManagesClient(t *testing.
 	if called != "client" {
 		t.Fatalf("should continue into client management, got %q", called)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Server installation is in an abnormal state" {
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "server 安装状态异常" {
 		t.Fatalf("should first show the server problem notice, got %#v", ui.summaries)
 	}
 }
@@ -280,6 +348,7 @@ func TestRunWithBothInstalledCanDispatchBulkUninstall(t *testing.T) {
 	if !called {
 		t.Fatal("expected uninstall-all to be callable from the dual-installed menu")
 	}
+	assertSelectOptionsDescribed(t, ui.selectOptionCalls, "选择要管理的角色")
 }
 
 func TestRunWithNonRootReexecsUsingLookedUpSudo(t *testing.T) {

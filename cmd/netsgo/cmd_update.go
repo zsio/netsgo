@@ -8,11 +8,11 @@ import (
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Update NetsGo binary (use 'manage' or 'upgrade' instead)",
+	Short: "显示 NetsGo 更新入口",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("For managed services: run 'netsgo manage' and select 'Update' to check, confirm, download, verify, and apply the latest release")
-		fmt.Println("To replace the installed binary with the current one: run 'netsgo upgrade'")
-		fmt.Println("Manual download: https://github.com/zsio/netsgo/releases")
+		fmt.Println("托管服务：运行 'netsgo manage'，选择“更新”")
+		fmt.Println("已有新版 netsgo 文件：执行新版文件的 'netsgo upgrade'")
+		fmt.Println("手动下载：https://github.com/zsio/netsgo/releases")
 	},
 }
 

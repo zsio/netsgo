@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"netsgo/internal/svcmgr"
+	"netsgo/internal/tui"
 	"netsgo/pkg/updater"
 	buildversion "netsgo/pkg/version"
 
@@ -20,35 +21,35 @@ var forceUpgrade bool
 var getInstalledVersionFunc = getInstalledVersion
 
 type upgradeCommandDeps struct {
-	installedUnits   func() []string
+	installedUnits    func() []string
 	currentBinaryPath func() (string, error)
-	installedVersion func() (string, error)
-	confirm          func() bool
-	applyUpgrade     func(currentPath, installedVersion, targetVersion string) (*updater.Result, error)
-	currentVersion   string
-	stdout           io.Writer
-	stderr           io.Writer
+	installedVersion  func() (string, error)
+	confirm           func(prompt, confirmText string) (bool, error)
+	applyUpgrade      func(currentPath, installedVersion, targetVersion string) (*updater.Result, error)
+	currentVersion    string
+	stdout            io.Writer
+	stderr            io.Writer
 }
 
 func defaultUpgradeCommandDeps() upgradeCommandDeps {
 	return upgradeCommandDeps{
-		installedUnits:   installedUnits,
+		installedUnits:    installedUnits,
 		currentBinaryPath: svcmgr.CurrentBinaryPath,
-		installedVersion: getInstalledVersionFunc,
-		confirm:          readConfirmation,
-		applyUpgrade:     updater.Upgrade,
-		currentVersion:   buildversion.Current,
-		stdout:           os.Stdout,
-		stderr:           os.Stderr,
+		installedVersion:  getInstalledVersionFunc,
+		confirm:           readUpgradeConfirmation,
+		applyUpgrade:      updater.Upgrade,
+		currentVersion:    buildversion.Current,
+		stdout:            os.Stdout,
+		stderr:            os.Stderr,
 	}
 }
 
 func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 	units := deps.installedUnits()
 	if len(units) == 0 {
-		_, _ = fmt.Fprintln(deps.stderr, "No installed services found.")
-		_, _ = fmt.Fprintln(deps.stderr, "Run 'netsgo install' first.")
-		_, _ = fmt.Fprintln(deps.stderr, "To download a release binary manually, visit: https://github.com/zsio/netsgo/releases")
+		_, _ = fmt.Fprintln(deps.stderr, "未发现已安装的托管服务。")
+		_, _ = fmt.Fprintln(deps.stderr, "请先运行 'netsgo install'。")
+		_, _ = fmt.Fprintln(deps.stderr, "手动下载 release：https://github.com/zsio/netsgo/releases")
 		os.Exit(1)
 	}
 
@@ -58,8 +59,8 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 	}
 
 	if currentPath == svcmgr.BinaryPath {
-		_, _ = fmt.Fprintln(deps.stdout, "Current binary is already the installed binary.")
-		_, _ = fmt.Fprintln(deps.stdout, "Nothing to upgrade.")
+		_, _ = fmt.Fprintln(deps.stdout, "当前二进制已经是已安装的二进制。")
+		_, _ = fmt.Fprintln(deps.stdout, "无需替换。")
 		return nil
 	}
 
@@ -68,41 +69,17 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 	normalizedCurrentVersion, currentErr := buildversion.NormalizeVersionString(currentVersion)
 
 	if installedVersionErr == nil && currentErr == nil && installedVersion == normalizedCurrentVersion {
-		_, _ = fmt.Fprintf(deps.stdout, "Current version %s is the same as installed.\n", normalizedCurrentVersion)
-		_, _ = fmt.Fprintln(deps.stdout, "Nothing to upgrade.")
+		_, _ = fmt.Fprintf(deps.stdout, "当前版本 %s 与已安装版本相同。\n", normalizedCurrentVersion)
+		_, _ = fmt.Fprintln(deps.stdout, "无需替换。")
 		return nil
 	}
 
-	if isDevVersion(currentVersion) && !force {
-		_, _ = fmt.Fprintf(deps.stdout, "Current version is '%s' (development build).\n", currentVersion)
-		_, _ = fmt.Fprint(deps.stdout, "Upgrading with a development build is not recommended. Continue? [y/N]: ")
-		if !deps.confirm() {
-			_, _ = fmt.Fprintln(deps.stdout, "Aborted.")
-			return nil
-		}
-	}
-
-	if installedVersionErr != nil && !force {
-		_, _ = fmt.Fprintf(deps.stdout, "Warning: could not determine installed version: %v\n", installedVersionErr)
-		_, _ = fmt.Fprint(deps.stdout, "Version safety checks cannot be completed. Continue anyway? [y/N]: ")
-		if !deps.confirm() {
-			_, _ = fmt.Fprintln(deps.stdout, "Aborted.")
-			return nil
-		}
-	}
-
+	risks := upgradeRiskRows(currentVersion, currentErr, installedVersionErr)
 	if installedVersionErr == nil {
 		cmp, err1 := buildversion.ParseSemver(normalizedCurrentVersion)
 		inst, err2 := buildversion.ParseSemver(installedVersion)
 		if err1 == nil && err2 == nil && cmp.Compare(inst) < 0 {
-			if !force {
-				_, _ = fmt.Fprintf(deps.stdout, "Current %s is older than installed %s.\n", normalizedCurrentVersion, installedVersion)
-				_, _ = fmt.Fprint(deps.stdout, "This would downgrade. Continue? [y/N]: ")
-				if !deps.confirm() {
-					_, _ = fmt.Fprintln(deps.stdout, "Aborted.")
-					return nil
-				}
-			}
+			risks = append(risks, fmt.Sprintf("目标版本 %s 低于已安装版本 %s", normalizedCurrentVersion, installedVersion))
 		}
 	}
 
@@ -112,35 +89,95 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 	}
 	fromVersion := installedVersion
 	if installedVersionErr != nil {
-		fromVersion = "unknown"
+		fromVersion = "未知"
 	}
-	_, _ = fmt.Fprintf(deps.stdout, "Upgrading %s -> %s\n", fromVersion, targetVersion)
-	_, _ = fmt.Fprintf(deps.stdout, "Services to restart: %v\n", units)
-	_, _ = fmt.Fprintln(deps.stdout)
+	printUpgradePlan(deps.stdout, upgradePlan{
+		SourceBinary:  currentPath,
+		TargetBinary:  svcmgr.BinaryPath,
+		FromVersion:   fromVersion,
+		ToVersion:     targetVersion,
+		RestartUnits:  units,
+		RiskSummaries: risks,
+	})
+
+	if !force {
+		confirmed, err := deps.confirm("用本次运行的 netsgo 文件替换已安装版本？", "upgrade binary")
+		if err != nil {
+			if tui.IsCancelled(err) {
+				_, _ = fmt.Fprintln(deps.stdout, "替换已取消，未进行任何修改。")
+				return nil
+			}
+			return err
+		}
+		if !confirmed {
+			_, _ = fmt.Fprintln(deps.stdout, "替换已取消，未进行任何修改。")
+			return nil
+		}
+	} else {
+		_, _ = fmt.Fprintln(deps.stdout, "已通过 --force 跳过输入确认。")
+	}
 
 	result, err := deps.applyUpgrade(currentPath, installedVersion, targetVersion)
 	if err != nil {
 		return fmt.Errorf("upgrade failed: %w", err)
 	}
 
-	_, _ = fmt.Fprintln(deps.stdout, "Upgraded successfully.")
-	_, _ = fmt.Fprintf(deps.stdout, "Stopped: %v\n", result.Stopped)
-	_, _ = fmt.Fprintf(deps.stdout, "Started: %v\n", result.Started)
+	_, _ = fmt.Fprintln(deps.stdout, "替换完成。")
+	_, _ = fmt.Fprintf(deps.stdout, "已停止: %s\n", formatRestartUnits(result.Stopped))
+	_, _ = fmt.Fprintf(deps.stdout, "已启动: %s\n", formatRestartUnits(result.Started))
 	return nil
+}
+
+type upgradePlan struct {
+	SourceBinary  string
+	TargetBinary  string
+	FromVersion   string
+	ToVersion     string
+	RestartUnits  []string
+	RiskSummaries []string
+}
+
+func printUpgradePlan(w io.Writer, plan upgradePlan) {
+	_, _ = fmt.Fprintln(w, "替换计划")
+	_, _ = fmt.Fprintf(w, "  源二进制:       %s\n", plan.SourceBinary)
+	_, _ = fmt.Fprintf(w, "  目标二进制:     %s\n", plan.TargetBinary)
+	_, _ = fmt.Fprintf(w, "  版本变化:       %s -> %s\n", plan.FromVersion, plan.ToVersion)
+	_, _ = fmt.Fprintf(w, "  将重启服务:     %s\n", formatRestartUnits(plan.RestartUnits))
+	for _, risk := range plan.RiskSummaries {
+		_, _ = fmt.Fprintf(w, "  风险:           %s\n", risk)
+	}
+	_, _ = fmt.Fprintln(w)
+}
+
+func formatRestartUnits(units []string) string {
+	if len(units) == 0 {
+		return "无"
+	}
+	return strings.Join(units, ", ")
+}
+
+func upgradeRiskRows(currentVersion string, currentErr error, installedVersionErr error) []string {
+	risks := []string{}
+	if currentErr != nil {
+		risks = append(risks, fmt.Sprintf("目标二进制是开发构建（%s）", currentVersion))
+	}
+	if installedVersionErr != nil {
+		risks = append(risks, "无法确定已安装版本；无法完成版本安全检查")
+	}
+	return risks
 }
 
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
-	Short: "Replace the installed NetsGo binary with the current one",
-	Long: `Upgrade replaces the system-installed NetsGo binary with the currently
-running binary, then restarts all managed services.
+	Short: "用本次运行的 netsgo 文件替换已安装版本",
+	Long: `upgrade 会用本次运行的 netsgo 文件替换系统已安装的托管服务二进制，
+然后重启托管服务。
 
-Requires root privileges (auto-elevates via sudo).
-Only works when services are installed via 'netsgo install'.
-If the current binary is already the installed one, does nothing.
+需要 root 权限（会在需要时通过 sudo 重新执行）。
+仅适用于通过 'netsgo install' 安装的托管服务。
+如果当前二进制已经是已安装版本，将不做修改。
 
-	Use --force to skip confirmation for development builds, unknown installed
-	versions, or downgrades.`,
+	使用 --force 可跳过输入确认。`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := rerunUpgradeWithSudoIfNeeded(os.Getuid(), exec.LookPath, syscall.Exec); err != nil {
 			return err
@@ -164,22 +201,21 @@ func rerunUpgradeWithSudoIfNeeded(uid int, lookPath func(file string) (string, e
 }
 
 func init() {
-	upgradeCmd.Flags().BoolVar(&forceUpgrade, "force", false, "Skip confirmation for development builds, unknown installed versions, or downgrades")
+	upgradeCmd.Flags().BoolVar(&forceUpgrade, "force", false, "跳过输入确认")
 	rootCmd.AddCommand(upgradeCmd)
 }
 
-func readConfirmation() bool {
-	reader := bufio.NewReader(os.Stdin)
-	return readConfirmationFrom(reader)
+func readUpgradeConfirmation(prompt, confirmText string) (bool, error) {
+	return tui.ConfirmWithOptions(prompt, tui.ConfirmOptions{ConfirmText: confirmText})
 }
 
-func readConfirmationFrom(reader *bufio.Reader) bool {
+func readConfirmationFrom(reader *bufio.Reader, confirmText string) bool {
 	input, err := reader.ReadString('\n')
 	if err != nil && len(input) == 0 {
 		return false
 	}
-	input = strings.TrimSpace(strings.ToLower(input))
-	return input == "y" || input == "yes"
+	input = strings.TrimSpace(input)
+	return strings.EqualFold(input, confirmText)
 }
 
 func installedUnits() []string {

@@ -8,6 +8,7 @@ import (
 
 	"netsgo/internal/install"
 	"netsgo/internal/svcmgr"
+	"netsgo/internal/tui"
 	"netsgo/pkg/version"
 )
 
@@ -36,7 +37,8 @@ func ManageServerWith(deps serverDeps) error {
 	switch inspection.State {
 	case svcmgr.StateInstalled:
 		return runServiceMenu(serviceMenuDeps{
-			UI: deps.UI,
+			UI:   deps.UI,
+			Role: svcmgr.RoleServer,
 			Status: func() error {
 				return showStatusSummary(deps.UI, svcmgr.RoleServer, deps.Inspect(), deps.IsActive, deps.IsEnabled)
 			},
@@ -58,7 +60,7 @@ func ManageServerWith(deps serverDeps) error {
 	case svcmgr.StateBroken:
 		return runBrokenServerMenu(deps)
 	default:
-		deps.UI.PrintSummary("Server is not installed", [][2]string{{"Next step", "Run netsgo install to install the server"}})
+		deps.UI.PrintSummary("Server 未安装", [][2]string{{"下一步", "运行 netsgo install 安装 server"}})
 		return errReturnToSelection
 	}
 }
@@ -102,50 +104,53 @@ func showServerDetails(deps serverDeps) error {
 	env, envErr := loadServerEnv(deps)
 
 	rows := [][2]string{
-		{"Service name", layout.ServiceName},
-		{"Role", string(svcmgr.RoleServer)},
-		{"State", inspection.State.String()},
-		{"Installed", boolLabel(inspection.State == svcmgr.StateInstalled)},
-		{"Running", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsActive)},
-		{"Enabled", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsEnabled)},
-		{"Binary path", layout.BinaryPath},
-		{"Data dir", layout.DataDir},
-		{"Data path", serverDataPath(layout)},
-		{"Lock path", lockPath(layout.DataDir)},
-		{"Log target", "journald"},
-		{"Unit path", layout.UnitPath},
-		{"Env path", layout.EnvPath},
-		{"Run as user", layout.RunAsUser},
-		{"Listen port", intOrUnavailable(env.Port, envErr)},
-		{"TLS mode", stringOrUnavailable(env.TLSMode, envErr)},
-		{"Server address", stringOrUnavailable(env.ServerAddr, envErr)},
+		{"服务", layout.ServiceName},
+		{"角色", string(svcmgr.RoleServer)},
+		{"状态", lifecycleStateLabel(inspection.State)},
+		{"已安装", boolLabel(inspection.State == svcmgr.StateInstalled)},
+		{"运行中", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsActive)},
+		{"已启用", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsEnabled)},
+		{"二进制路径", layout.BinaryPath},
+		{"数据目录", layout.DataDir},
+		{"数据路径", serverDataPath(layout)},
+		{"锁路径", lockPath(layout.DataDir)},
+		{"日志目标", "journald"},
+		{"Unit 路径", layout.UnitPath},
+		{"Env 路径", layout.EnvPath},
+		{"运行用户", layout.RunAsUser},
+		{"监听端口", intOrUnavailable(env.Port, envErr)},
+		{"TLS 模式", stringOrUnavailable(env.TLSMode, envErr)},
+		{"Server 地址", stringOrUnavailable(env.ServerAddr, envErr)},
 	}
 	if envErr != nil {
-		rows = append(rows, [2]string{"Env status", fmt.Sprintf("Unavailable (%v)", envErr)})
+		rows = append(rows, [2]string{"Env 状态", fmt.Sprintf("不可用（%v）", envErr)})
 	}
 	rows = appendProblemRows(rows, inspection.Problems)
-	deps.UI.PrintSummary("Server inspect", rows)
+	deps.UI.PrintSummary("Server 检查", rows)
 	return nil
 }
 
 func uninstallServer(deps serverDeps) (bool, error) {
-	mode, err := deps.UI.Select("Uninstall mode", []string{"Remove service only, keep data", "Remove service and delete data"})
+	mode, err := selectWithOptions(deps.UI, "Server 卸载模式", []tui.SelectOption{
+		{Label: "仅移除服务，保留数据", Description: "移除 server unit 和 env 文件，同时保留现有 server 数据。"},
+		{Label: "移除服务并删除数据", Description: "移除服务文件，并永久删除 server 数据。"},
+	})
 	if err != nil {
 		return false, err
 	}
 	layout := svcmgr.NewLayout(svcmgr.RoleServer)
 	deleteData := mode == 1
-	rows := [][2]string{{"Mode", uninstallModeLabel(deleteData)}}
-	rows = appendRemovalRows(rows, "Remove", layout.UnitPath, layout.EnvPath)
+	rows := [][2]string{{"模式", uninstallModeLabel(deleteData)}}
+	rows = appendRemovalRows(rows, "移除", layout.UnitPath, layout.EnvPath)
 	if deleteData {
-		rows = appendRemovalRows(rows, "Remove", serverDataPath(layout))
+		rows = appendRemovalRows(rows, "移除", serverDataPath(layout))
 	} else {
-		rows = append(rows, [2]string{"Keep", serverDataPath(layout)})
+		rows = append(rows, [2]string{"保留", serverDataPath(layout)})
 	}
 	rows = append(rows, sharedBinaryPlanRow(deps.DetectClient))
-	deps.UI.PrintSummary("Server uninstall plan", rows)
+	deps.UI.PrintSummary("Server 卸载计划", rows)
 
-	ok, err := deps.UI.Confirm("Proceed with server uninstall?")
+	ok, err := deps.UI.ConfirmWithOptions("继续卸载 server？", tui.ConfirmOptions{ConfirmText: serverUninstallConfirmText(deleteData)})
 	if err != nil {
 		return false, err
 	}
@@ -169,13 +174,17 @@ func uninstallServer(deps serverDeps) (bool, error) {
 	if err := maybeRemoveSharedBinary(deps.UI, deps.DetectClient, deps.RemoveBinary); err != nil {
 		return false, err
 	}
-	deps.UI.PrintSummary("Server uninstalled", [][2]string{{"State", "Removed"}, {"Next step", "Run netsgo manage to continue managing services"}})
+	deps.UI.PrintSummary("Server 已卸载", [][2]string{{"状态", "已移除"}, {"下一步", "选择其他操作，或选择返回"}})
 	return true, nil
 }
 
 func runRecoverableServerMenu(deps serverDeps) error {
 	for {
-		action, err := deps.UI.Select("Select a recovery action", []string{"Inspect recoverable server state", "Run netsgo install", "Back"})
+		action, err := selectWithOptions(deps.UI, "选择恢复操作", []tui.SelectOption{
+			{Label: "检查可恢复的 server 状态", Description: "显示可用于恢复的已保存 server 数据和路径。"},
+			{Label: "运行 netsgo install", Description: "使用现有配置和数据恢复 server。"},
+			{Label: "返回", Description: "返回上一级服务选择菜单。"},
+		})
 		if err != nil {
 			return err
 		}
@@ -199,7 +208,11 @@ func runRecoverableServerMenu(deps serverDeps) error {
 
 func runBrokenServerMenu(deps serverDeps) error {
 	for {
-		action, err := deps.UI.Select("Select a recovery action", []string{"Inspect broken server state", "Cleanup broken server installation", "Back"})
+		action, err := selectWithOptions(deps.UI, "选择恢复操作", []tui.SelectOption{
+			{Label: "检查异常 server 状态", Description: "选择清理前显示检测到的 server 服务问题。"},
+			{Label: "清理异常 server 安装", Description: "通过输入确认短语移除残留的 server 服务文件。"},
+			{Label: "返回", Description: "返回上一级服务选择菜单。"},
+		})
 		if err != nil {
 			return err
 		}
@@ -225,24 +238,27 @@ func runBrokenServerMenu(deps serverDeps) error {
 }
 
 func cleanupBrokenServer(deps serverDeps) (bool, error) {
-	mode, err := deps.UI.Select("Cleanup mode", []string{"Remove broken service files, keep data", "Remove broken service files and delete data"})
+	mode, err := selectWithOptions(deps.UI, "Server 清理模式", []tui.SelectOption{
+		{Label: "移除异常服务文件，保留数据", Description: "移除残留 server unit/env 文件，同时保留 server 数据。"},
+		{Label: "移除异常服务文件并删除数据", Description: "移除残留服务文件，并永久删除 server 数据。"},
+	})
 	if err != nil {
 		return false, err
 	}
 	layout := svcmgr.NewLayout(svcmgr.RoleServer)
 	deleteData := mode == 1
 
-	rows := [][2]string{{"Mode", uninstallModeLabel(deleteData)}}
-	rows = appendRemovalRows(rows, "Remove", layout.UnitPath, layout.EnvPath)
+	rows := [][2]string{{"模式", uninstallModeLabel(deleteData)}}
+	rows = appendRemovalRows(rows, "移除", layout.UnitPath, layout.EnvPath)
 	if deleteData {
-		rows = appendRemovalRows(rows, "Remove", serverDataPath(layout))
+		rows = appendRemovalRows(rows, "移除", serverDataPath(layout))
 	} else {
-		rows = append(rows, [2]string{"Keep", serverDataPath(layout)})
+		rows = append(rows, [2]string{"保留", serverDataPath(layout)})
 	}
 	rows = append(rows, sharedBinaryPlanRow(deps.DetectClient))
-	deps.UI.PrintSummary("Broken server cleanup plan", rows)
+	deps.UI.PrintSummary("异常 server 清理计划", rows)
 
-	ok, err := deps.UI.Confirm("Proceed with broken server cleanup?")
+	ok, err := deps.UI.ConfirmWithOptions("继续清理异常 server？", tui.ConfirmOptions{ConfirmText: serverCleanupConfirmText(deleteData)})
 	if err != nil {
 		return false, err
 	}
@@ -263,7 +279,7 @@ func cleanupBrokenServer(deps serverDeps) (bool, error) {
 	if err := maybeRemoveSharedBinary(deps.UI, deps.DetectClient, deps.RemoveBinary); err != nil {
 		return false, err
 	}
-	deps.UI.PrintSummary("Broken server cleanup complete", [][2]string{{"State", "Cleaned"}, {"Next step", "Run netsgo install to restore the server if needed"}})
+	deps.UI.PrintSummary("异常 server 清理完成", [][2]string{{"状态", "已清理"}, {"下一步", "需要时运行 netsgo install 恢复 server"}})
 	return true, nil
 }
 
@@ -280,34 +296,48 @@ func serverDataPath(layout svcmgr.ServiceLayout) string {
 
 func uninstallModeLabel(deleteData bool) string {
 	if deleteData {
-		return "Remove service and delete data"
+		return "移除服务并删除数据"
 	}
-	return "Remove service only, keep data"
+	return "仅移除服务，保留数据"
+}
+
+func serverUninstallConfirmText(deleteData bool) string {
+	if deleteData {
+		return "remove server data"
+	}
+	return "uninstall server"
+}
+
+func serverCleanupConfirmText(deleteData bool) string {
+	if deleteData {
+		return "remove server data"
+	}
+	return "cleanup server"
 }
 
 func sharedBinaryPlanRow(otherRoleState func() svcmgr.InstallState) [2]string {
 	if otherRoleState != nil && otherRoleState() == svcmgr.StateNotInstalled {
-		return [2]string{"Optional", "You can choose whether to remove the shared binary " + svcmgr.BinaryPath}
+		return [2]string{"可选", "可选择是否移除共享二进制 " + svcmgr.BinaryPath}
 	}
-	return [2]string{"Keep", svcmgr.BinaryPath}
+	return [2]string{"保留", svcmgr.BinaryPath}
 }
 
 func stringOrUnavailable(value string, err error) string {
 	if err != nil {
-		return fmt.Sprintf("Unavailable (%v)", err)
+		return fmt.Sprintf("不可用（%v）", err)
 	}
 	if value == "" {
-		return "(none)"
+		return "（无）"
 	}
 	return value
 }
 
 func intOrUnavailable(value int, err error) string {
 	if err != nil {
-		return fmt.Sprintf("Unavailable (%v)", err)
+		return fmt.Sprintf("不可用（%v）", err)
 	}
 	if value == 0 {
-		return "(none)"
+		return "（无）"
 	}
 	return itoa(value)
 }

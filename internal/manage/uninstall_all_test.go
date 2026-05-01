@@ -52,9 +52,15 @@ func TestUninstallAllWithRemovesBothRolesAndOptionalBinary(t *testing.T) {
 	if !binaryRemoved {
 		t.Fatal("bulk uninstall should support removing the shared binary after both roles are removed")
 	}
-	if len(ui.summaries) != 3 || ui.summaries[2].title != "Managed services uninstalled" {
+	if len(ui.summaries) != 3 || ui.summaries[2].title != "托管服务已卸载" {
 		t.Fatalf("bulk uninstall should end with a completion summary, got %#v", ui.summaries)
 	}
+	assertSummaryCallDoesNotContain(t, ui.summaries[1], "身份")
+	assertSummaryCallRow(t, ui.summaries[2], "server 角色", "已移除")
+	assertSummaryCallRow(t, ui.summaries[2], "client 角色", "已移除")
+	assertConfirmPhrase(t, ui.confirmCalls, "在批量移除中包含 server 卸载？", "remove server data")
+	assertConfirmPhrase(t, ui.confirmCalls, "在批量移除中包含 client 卸载？", "uninstall client")
+	assertConfirmPhrase(t, ui.confirmCalls, "未检测到其他托管角色。是否同时移除共享二进制 /usr/local/bin/netsgo？", "remove binary")
 }
 
 func containsPath(paths []string, target string) bool {

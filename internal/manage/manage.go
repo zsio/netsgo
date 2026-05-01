@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"golang.org/x/term"
@@ -17,6 +18,7 @@ import (
 type uiProvider interface {
 	Select(prompt string, options []string) (int, error)
 	Confirm(prompt string) (bool, error)
+	ConfirmWithOptions(prompt string, opts tui.ConfirmOptions) (bool, error)
 	PrintSummary(title string, rows [][2]string)
 }
 
@@ -25,7 +27,13 @@ type defaultUI struct{}
 func (defaultUI) Select(prompt string, options []string) (int, error) {
 	return tui.Select(prompt, options)
 }
-func (defaultUI) Confirm(prompt string) (bool, error)         { return tui.Confirm(prompt) }
+func (defaultUI) SelectWithOptions(prompt string, options []tui.SelectOption) (int, error) {
+	return tui.SelectWithOptions(prompt, options)
+}
+func (defaultUI) Confirm(prompt string) (bool, error) { return tui.Confirm(prompt) }
+func (defaultUI) ConfirmWithOptions(prompt string, opts tui.ConfirmOptions) (bool, error) {
+	return tui.ConfirmWithOptions(prompt, opts)
+}
 func (defaultUI) PrintSummary(title string, rows [][2]string) { tui.PrintSummary(title, rows) }
 
 type Deps struct {
@@ -167,11 +175,11 @@ func RunWith(deps Deps) error {
 }
 
 func runDualInstalledMenu(deps Deps) (bool, error) {
-	role, err := deps.UI.Select("Select a role to manage", []string{
-		"Manage server",
-		"Manage client",
-		"Uninstall all managed services",
-		"Exit",
+	role, err := selectWithOptions(deps.UI, "选择要管理的角色", []tui.SelectOption{
+		{Label: "管理 server", Description: "检查、重启、更新或卸载 server 服务。"},
+		{Label: "管理 client", Description: "检查、重启、更新或卸载 client 服务。"},
+		{Label: "卸载全部托管服务", Description: "通过一个引导流程移除两个托管角色。"},
+		{Label: "退出", Description: "离开服务管理，不做任何修改。"},
 	})
 	if err != nil {
 		return false, err
@@ -208,9 +216,12 @@ func runDualInstalledMenu(deps Deps) (bool, error) {
 }
 
 func runNoInstalledMenu(deps Deps) (bool, error) {
-	deps.UI.PrintSummary("No services installed", [][2]string{{"Next step", "Select whether to start netsgo install or exit"}})
+	deps.UI.PrintSummary("未安装托管服务", [][2]string{{"下一步", "选择启动 netsgo install 或退出"}})
 
-	action, err := deps.UI.Select("Select an action", []string{"Run netsgo install", "Exit"})
+	action, err := selectWithOptions(deps.UI, "选择操作", []tui.SelectOption{
+		{Label: "运行 netsgo install", Description: "启动 server 或 client 角色的引导安装。"},
+		{Label: "退出", Description: "不安装托管服务并离开。"},
+	})
 	if err != nil {
 		return false, err
 	}
@@ -238,9 +249,9 @@ func runRecoveryEntryMenu(deps Deps, serverInspection, clientInspection svcmgr.I
 	if clientInspection.State != svcmgr.StateNotInstalled {
 		appendRole(recoveryRoleLabel(clientInspection), deps.ManageClient)
 	}
-	options = append(options, "Run netsgo install", "Exit")
+	options = append(options, "运行 netsgo install", "退出")
 
-	choice, err := deps.UI.Select("Select a recovery action", options)
+	choice, err := selectWithOptions(deps.UI, "选择恢复操作", recoveryEntryOptions(options))
 	if err != nil {
 		return false, err
 	}
@@ -263,15 +274,53 @@ func runRecoveryEntryMenu(deps Deps, serverInspection, clientInspection svcmgr.I
 	return false, nil
 }
 
+type selectOptionsUI interface {
+	SelectWithOptions(prompt string, options []tui.SelectOption) (int, error)
+}
+
+func selectWithOptions(ui uiProvider, prompt string, options []tui.SelectOption) (int, error) {
+	if described, ok := ui.(selectOptionsUI); ok {
+		return described.SelectWithOptions(prompt, options)
+	}
+	labels := make([]string, len(options))
+	for i, option := range options {
+		labels[i] = option.Label
+	}
+	return ui.Select(prompt, labels)
+}
+
+func recoveryEntryOptions(labels []string) []tui.SelectOption {
+	options := make([]tui.SelectOption, len(labels))
+	for i, label := range labels {
+		options[i] = tui.SelectOption{Label: label, Description: recoveryEntryDescription(label)}
+	}
+	return options
+}
+
+func recoveryEntryDescription(label string) string {
+	switch {
+	case strings.HasPrefix(label, "检查可恢复"):
+		return "查看可通过安装器恢复的已保存数据。"
+	case strings.HasPrefix(label, "检查/清理异常"):
+		return "检查残留服务文件，并可选择移除异常状态。"
+	case label == "运行 netsgo install":
+		return "启动引导安装器以恢复或新增托管服务。"
+	case label == "退出":
+		return "离开服务管理，不做任何修改。"
+	default:
+		return "打开对应角色的服务管理操作。"
+	}
+}
+
 func recoveryRoleLabel(inspection svcmgr.InstallInspection) string {
 	role := roleLabel(inspection.Role)
 	switch inspection.State {
 	case svcmgr.StateHistoricalDataOnly:
-		return "Inspect recoverable " + role + " state"
+		return "检查可恢复的 " + role + " 状态"
 	case svcmgr.StateBroken:
-		return "Inspect / cleanup broken " + role + " state"
+		return "检查/清理异常的 " + role + " 状态"
 	default:
-		return "Manage " + role
+		return "管理 " + role
 	}
 }
 
@@ -280,30 +329,30 @@ func printDegradedSummary(ui uiProvider, inspection svcmgr.InstallInspection) {
 		return
 	}
 
-	rows := [][2]string{{"Role", roleLabel(inspection.Role)}, {"State", inspection.State.String()}, {"Advice", degradedAdvice(inspection.Role, inspection.State)}}
+	rows := [][2]string{{"角色", roleLabel(inspection.Role)}, {"状态", lifecycleStateLabel(inspection.State)}, {"建议", degradedAdvice(inspection.Role, inspection.State)}}
 	for _, problem := range inspection.Problems {
-		rows = append(rows, [2]string{"Problem", problem})
+		rows = append(rows, [2]string{"问题", lifecycleProblem(problem)})
 	}
 	ui.PrintSummary(degradedTitle(inspection.Role, inspection.State), rows)
 }
 
 func degradedTitle(role svcmgr.Role, state svcmgr.InstallState) string {
 	if role == svcmgr.RoleServer && state == svcmgr.StateHistoricalDataOnly {
-		return "Recoverable server data detected"
+		return "检测到可恢复的 server 数据"
 	}
-	return roleLabel(role) + " installation is in an abnormal state"
+	return roleLabel(role) + " 安装状态异常"
 }
 
 func degradedAdvice(role svcmgr.Role, state svcmgr.InstallState) string {
 	if role == svcmgr.RoleServer && state == svcmgr.StateHistoricalDataOnly {
-		return "Run netsgo install to restore the installation (existing configuration will be preserved)"
+		return "运行 netsgo install 恢复安装（将保留现有配置）"
 	}
-	return "Run netsgo install to repair the installation, or manually clean up leftover files before reinstalling"
+	return "运行 netsgo install 修复安装，或在重新安装前手动清理残留文件"
 }
 
 func roleLabel(role svcmgr.Role) string {
 	if role == svcmgr.RoleServer {
-		return "Server"
+		return "server"
 	}
-	return "Client"
+	return "client"
 }

@@ -7,8 +7,9 @@ import (
 )
 
 var manageCmd = &cobra.Command{
-	Use:   "manage",
-	Short: "Manage installed NetsGo systemd services (Linux only)",
+	Use:          "manage",
+	Short:        "Manage installed NetsGo systemd services (Linux only)",
+	SilenceUsage: true,
 	Long: `Manage installed NetsGo server and client systemd services.
 
 	Supports status inspection, start/stop/restart, update checks and installation,
@@ -17,7 +18,7 @@ var manageCmd = &cobra.Command{
 	The manager will auto-elevate via sudo if not already running as root.`,
 	Example: `  sudo netsgo manage`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return manage.Run()
+		return runInteractiveCommand(manage.Run)
 	},
 }
 

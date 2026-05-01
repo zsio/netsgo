@@ -40,10 +40,10 @@ func InstallServerWith(deps serverDeps) error {
 	state := inspection.State
 	switch state {
 	case svcmgr.StateInstalled:
-		printInstalledSummary(deps.UI, "Server already installed", svcmgr.RoleServer)
+		printInstalledSummary(deps.UI, "Server 已安装", svcmgr.RoleServer)
 		return nil
 	case svcmgr.StateBroken:
-		printBrokenSummary(deps.UI, "Server installation state is broken", inspection)
+		printBrokenSummary(deps.UI, "Server 安装状态异常", inspection)
 		return errInstallBrokenState
 	}
 
@@ -52,7 +52,7 @@ func InstallServerWith(deps serverDeps) error {
 	installMode := "fresh"
 	if state == svcmgr.StateHistoricalDataOnly {
 		printRecoverableSummary(deps.UI, inspection)
-		ok, err := deps.UI.Confirm("Continue installation using existing data?")
+		ok, err := deps.UI.Confirm("使用现有数据继续安装？")
 		if err != nil {
 			return err
 		}
@@ -68,17 +68,17 @@ func InstallServerWith(deps serverDeps) error {
 			return err
 		}
 		serverAddr = initParams.ServerAddr
-		installMode = "recover existing data"
+		installMode = "恢复现有数据"
 	}
 
-	portRaw, err := deps.UI.Input("Listening port", tui.InputOptions{
+	portRaw, err := deps.UI.Input("监听端口", tui.InputOptions{
 		Placeholder: "e.g. 9527",
-		Description: "TCP port for the server to listen on (1024–65535)",
+		Description: "server 监听的 TCP 端口（1024-65535）。",
 		Default:     "9527",
 		Validate: func(s string) error {
 			n, err := strconv.Atoi(s)
 			if err != nil || n < 1024 || n > 65535 {
-				return fmt.Errorf("port must be a number between 1024 and 65535")
+				return fmt.Errorf("端口必须是 1024 到 65535 之间的数字")
 			}
 			return nil
 		},
@@ -97,10 +97,10 @@ func InstallServerWith(deps serverDeps) error {
 	if err != nil {
 		return err
 	}
-	trustedProxies, err := deps.UI.Input("Trusted proxy CIDRs", tui.InputOptions{
-		Placeholder: "e.g. 127.0.0.1/8,192.168.0.0/16",
-		Description: "Comma-separated trusted proxy CIDRs. If NetsGo is behind Nginx/Caddy on this host, keep the default. If unsure, keep it; you can change it later.",
-		Default:     "127.0.0.1/8",
+	trustedProxies, err := deps.UI.Input("可信代理 CIDR", tui.InputOptions{
+		Placeholder: "e.g. 0.0.0.0/0 or 127.0.0.1/8",
+		Description: "逗号分隔的可信代理 CIDR；默认接受所有来源。若 NetsGo 位于本机 Nginx/Caddy 后方，建议使用 127.0.0.1/8。",
+		Default:     "0.0.0.0/0",
 	})
 	if err != nil {
 		return err
@@ -111,11 +111,11 @@ func InstallServerWith(deps serverDeps) error {
 	tlsCert := ""
 	tlsKey := ""
 	if tlsMode == "custom" {
-		tlsCert, err = deps.UI.Input("TLS certificate path", tui.InputOptions{
+		tlsCert, err = deps.UI.Input("TLS 证书路径", tui.InputOptions{
 			Placeholder: "e.g. /etc/ssl/certs/netsgo.pem",
 			Validate: func(s string) error {
 				if strings.TrimSpace(s) == "" {
-					return fmt.Errorf("TLS certificate path cannot be empty")
+					return fmt.Errorf("TLS 证书路径不能为空")
 				}
 				return nil
 			},
@@ -123,11 +123,11 @@ func InstallServerWith(deps serverDeps) error {
 		if err != nil {
 			return err
 		}
-		tlsKey, err = deps.UI.Input("TLS private key path", tui.InputOptions{
+		tlsKey, err = deps.UI.Input("TLS 私钥路径", tui.InputOptions{
 			Placeholder: "e.g. /etc/ssl/private/netsgo.key",
 			Validate: func(s string) error {
 				if strings.TrimSpace(s) == "" {
-					return fmt.Errorf("TLS private key path cannot be empty")
+					return fmt.Errorf("TLS 私钥路径不能为空")
 				}
 				return nil
 			},
@@ -137,20 +137,20 @@ func InstallServerWith(deps serverDeps) error {
 		}
 	}
 	if state != svcmgr.StateHistoricalDataOnly {
-		serverAddr, err = deps.UI.Input("Server external address", tui.InputOptions{
+		serverAddr, err = deps.UI.Input("Server 外部访问地址", tui.InputOptions{
 			Placeholder: "e.g. https://netsgo.example.com",
-			Description: "Public URL used by clients to reach this server (http:// or https://)",
-			Validate:    server.ValidateServerAddr,
+			Description: "client 访问此 server 的公网 URL（http:// 或 https://）。",
+			Validate:    validateInstallServerAddr,
 		})
 		if err != nil {
 			return err
 		}
 		initParams.ServerAddr = serverAddr
-		initParams.AdminUsername, err = deps.UI.Input("Admin username", tui.InputOptions{
+		initParams.AdminUsername, err = deps.UI.Input("管理员用户名", tui.InputOptions{
 			Placeholder: "e.g. admin",
 			Validate: func(s string) error {
 				if strings.TrimSpace(s) == "" {
-					return fmt.Errorf("admin username cannot be empty")
+					return fmt.Errorf("管理员用户名不能为空")
 				}
 				return nil
 			},
@@ -158,10 +158,10 @@ func InstallServerWith(deps serverDeps) error {
 		if err != nil {
 			return err
 		}
-		initParams.AdminPassword, err = deps.UI.Password("Admin password", tui.InputOptions{
+		initParams.AdminPassword, err = deps.UI.Password("管理员密码", tui.InputOptions{
 			Validate: func(s string) error {
 				if strings.TrimSpace(s) == "" {
-					return fmt.Errorf("admin password cannot be empty")
+					return fmt.Errorf("管理员密码不能为空")
 				}
 				return nil
 			},
@@ -169,10 +169,10 @@ func InstallServerWith(deps serverDeps) error {
 		if err != nil {
 			return err
 		}
-		confirmPassword, err := deps.UI.Password("Confirm admin password", tui.InputOptions{
+		confirmPassword, err := deps.UI.Password("确认管理员密码", tui.InputOptions{
 			Validate: func(s string) error {
 				if strings.TrimSpace(s) == "" {
-					return fmt.Errorf("admin password confirmation cannot be empty")
+					return fmt.Errorf("管理员密码确认不能为空")
 				}
 				return nil
 			},
@@ -181,27 +181,19 @@ func InstallServerWith(deps serverDeps) error {
 			return err
 		}
 		if initParams.AdminPassword != confirmPassword {
-			return fmt.Errorf("admin password confirmation does not match")
+			return fmt.Errorf("两次输入的管理员密码不一致")
 		}
-		initParams.AllowedPorts, err = deps.UI.Input("Allowed port ranges", tui.InputOptions{
-			Placeholder: "e.g. 10000-11000",
-			Description: "Comma-separated list of port ranges or single ports (e.g. 10000-11000,8080)",
-			Default:     "10000-11000",
-			Validate:    server.ValidateAllowedPorts,
-		})
-		if err != nil {
-			return err
-		}
+		initParams.AllowedPorts = "1024-65535"
 	}
 
-	deps.UI.PrintSummary("Installation summary", confirmSummaryRows(svcmgr.RoleServer,
-		[2]string{"Install mode", installMode},
-		[2]string{"Port", strconv.Itoa(port)},
-		[2]string{"TLS mode", tlsMode},
-		[2]string{"Service address", serverAddr},
-		[2]string{"Trusted proxies", trustedProxies},
+	deps.UI.PrintSummary("安装摘要", confirmSummaryRows(svcmgr.RoleServer,
+		[2]string{"安装模式", installMode},
+		[2]string{"端口", strconv.Itoa(port)},
+		[2]string{"TLS 模式", tlsMode},
+		[2]string{"服务地址", serverAddr},
+		[2]string{"可信代理", trustedProxies},
 	))
-	ok, err := deps.UI.ConfirmWithOptions("Proceed with installation?", tui.ConfirmOptions{Default: true})
+	ok, err := deps.UI.ConfirmWithOptions("继续安装？", tui.ConfirmOptions{})
 	if err != nil {
 		return err
 	}
@@ -247,7 +239,7 @@ func InstallServerWith(deps serverDeps) error {
 	}); err != nil {
 		return err
 	}
-	deps.UI.PrintSummary("Server installation complete", completionSummaryRows(svcmgr.RoleServer, "Panel URL", serverAddr))
+	deps.UI.PrintSummary("Server 安装完成", completionSummaryRows(svcmgr.RoleServer, "Web 控制台", serverAddr))
 	return nil
 }
 
@@ -257,10 +249,10 @@ func defaultServerDeps() serverDeps {
 		Inspect: svcmgr.Inspect,
 		Detect:  svcmgr.Detect,
 		SelectTLSMode: func(ui uiProvider) (string, error) {
-			index, err := ui.Select("TLS mode", []string{
-				"off    — No TLS (recommended behind a reverse proxy)",
-				"auto   — Auto-generate self-signed certificate (TOFU mode)",
-				"custom — Use custom certificate files",
+			index, err := selectWithOptions(ui, "TLS 模式", []tui.SelectOption{
+				{Label: "off", Description: "不启用 TLS；适合由反向代理终止 HTTPS 的部署。"},
+				{Label: "auto", Description: "生成自签名证书，供 client 首次信任使用。"},
+				{Label: "custom", Description: "使用已有证书和私钥文件。"},
 			})
 			if err != nil {
 				return "", err

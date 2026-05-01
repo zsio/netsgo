@@ -47,6 +47,7 @@ func TestManageServerInspectRedactsSensitiveData(t *testing.T) {
 	if len(ui.summaries) == 0 {
 		t.Fatal("inspect should output a summary")
 	}
+	assertSelectOptionsDescribed(t, ui.selectOptionCalls, "选择 server 操作")
 	for _, row := range ui.summaries[0].rows {
 		if strings.Contains(strings.ToLower(row[0]), "password") || strings.Contains(strings.ToLower(row[1]), "password") {
 			t.Fatalf("inspect should not expose sensitive fields: %#v", ui.summaries[0].rows)
@@ -79,6 +80,11 @@ func TestManageServerUninstallKeepData(t *testing.T) {
 	if binaryRemoved {
 		t.Fatal("should not remove the shared binary while the client is still installed")
 	}
+	if !hasSelectPrompt(ui.selectCalls, "Server 卸载模式") {
+		t.Fatalf("server uninstall should identify the role in the mode prompt, got %#v", ui.selectCalls)
+	}
+	assertSelectOptionsDescribed(t, ui.selectOptionCalls, "Server 卸载模式")
+	assertConfirmPhrase(t, ui.confirmCalls, "继续卸载 server？", "uninstall server")
 }
 
 func TestManageServerRestart(t *testing.T) {
@@ -95,7 +101,7 @@ func TestManageServerRestart(t *testing.T) {
 	if !stopped || !started {
 		t.Fatalf("restart should stop before start, stopped=%v started=%v", stopped, started)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Operation successful" {
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "操作成功" {
 		t.Fatalf("restart should show a success message, got %#v", ui.summaries)
 	}
 }
@@ -125,7 +131,7 @@ func TestManageServerStartPrintsSuccess(t *testing.T) {
 	err := ManageServerWith(deps)
 	assertSelectionExit(t, err)
 
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Operation successful" {
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "操作成功" {
 		t.Fatalf("start should show a success message, got %#v", ui.summaries)
 	}
 }
@@ -137,9 +143,10 @@ func TestManageServerUninstallCancelPrintsCancelled(t *testing.T) {
 	err := ManageServerWith(deps)
 	assertSelectionExit(t, err)
 
-	if len(ui.summaries) != 2 || ui.summaries[1].title != "Cancelled" {
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "已取消" {
 		t.Fatalf("canceling uninstall should show a canceled message, got %#v", ui.summaries)
 	}
+	assertSummaryCallRow(t, ui.summaries[1], "下一步", "选择其他操作，或选择返回")
 }
 
 func TestManageServerUninstallLastRoleCanRemoveSharedBinary(t *testing.T) {
@@ -158,4 +165,60 @@ func TestManageServerUninstallLastRoleCanRemoveSharedBinary(t *testing.T) {
 	if !binaryRemoved {
 		t.Fatal("expected the last-role uninstall flow to allow removing the shared binary")
 	}
+	assertConfirmPhrase(t, ui.confirmCalls, "继续卸载 server？", "uninstall server")
+	assertConfirmPhrase(t, ui.confirmCalls, "未检测到其他托管角色。是否同时移除共享二进制 /usr/local/bin/netsgo？", "remove binary")
+}
+
+func TestCleanupBrokenServerUsesCleanupPhraseWhenKeepingData(t *testing.T) {
+	ui := &fakeUI{selects: []int{0}, confirms: []bool{true}}
+	deps, _ := newInstalledServerDeps(t, ui)
+
+	cleaned, err := cleanupBrokenServer(deps)
+	if err != nil {
+		t.Fatalf("cleanupBrokenServer should not fail: %v", err)
+	}
+	if !cleaned {
+		t.Fatal("cleanupBrokenServer should report cleanup complete")
+	}
+	if len(ui.selectCalls) == 0 || ui.selectCalls[0].prompt != "Server 清理模式" {
+		t.Fatalf("server cleanup should identify the role in the mode prompt, got %#v", ui.selectCalls)
+	}
+	assertSelectOptionsDescribed(t, ui.selectOptionCalls, "Server 清理模式")
+	assertConfirmPhrase(t, ui.confirmCalls, "继续清理异常 server？", "cleanup server")
+}
+
+func TestCleanupBrokenServerDeleteDataRequiresRemovePhrase(t *testing.T) {
+	ui := &fakeUI{selects: []int{1}, confirms: []bool{true}}
+	deps, _ := newInstalledServerDeps(t, ui)
+
+	cleaned, err := cleanupBrokenServer(deps)
+	if err != nil {
+		t.Fatalf("cleanupBrokenServer should not fail: %v", err)
+	}
+	if !cleaned {
+		t.Fatal("cleanupBrokenServer should report cleanup complete")
+	}
+	assertConfirmPhrase(t, ui.confirmCalls, "继续清理异常 server？", "remove server data")
+}
+
+func assertSummaryCallRow(t *testing.T, summary summaryCall, key, want string) {
+	t.Helper()
+	for _, row := range summary.rows {
+		if row[0] == key {
+			if row[1] != want {
+				t.Fatalf("summary row %q = %q, want %q", key, row[1], want)
+			}
+			return
+		}
+	}
+	t.Fatalf("summary row %q not found in %#v", key, summary.rows)
+}
+
+func hasSelectPrompt(calls []selectCall, prompt string) bool {
+	for _, call := range calls {
+		if call.prompt == prompt {
+			return true
+		}
+	}
+	return false
 }

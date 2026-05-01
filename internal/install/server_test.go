@@ -2,6 +2,7 @@ package install
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"netsgo/internal/server"
@@ -25,8 +26,8 @@ func TestInstallServerWithAlreadyInstalled(t *testing.T) {
 	if called {
 		t.Fatal("should not continue install when already installed")
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Server already installed" {
-		t.Fatalf("expected 'Server already installed' summary, got %#v", ui.summaries)
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Server 已安装" {
+		t.Fatalf("expected 'Server 已安装' summary, got %#v", ui.summaries)
 	}
 }
 
@@ -72,14 +73,14 @@ func TestInstallServerWithHistoricalDataSkipsInit(t *testing.T) {
 	if len(ui.summaries) != 3 {
 		t.Fatalf("expected 3 summaries (historical data, install confirm, complete), got %d", len(ui.summaries))
 	}
-	if ui.summaries[0].title != "Recoverable server data detected" {
-		t.Fatalf("expected first summary to be 'Recoverable server data detected', got %#v", ui.summaries)
+	if ui.summaries[0].title != "检测到可恢复的 server 数据" {
+		t.Fatalf("expected first summary to be '检测到可恢复的 server 数据', got %#v", ui.summaries)
 	}
-	if ui.summaries[2].title != "Server installation complete" {
-		t.Fatalf("expected last summary to be 'Server installation complete', got %#v", ui.summaries)
+	if ui.summaries[2].title != "Server 安装完成" {
+		t.Fatalf("expected last summary to be 'Server 安装完成', got %#v", ui.summaries)
 	}
-	assertConfirmDefault(t, ui.confirmCalls, "Continue installation using existing data?", false)
-	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
+	assertConfirmPrompt(t, ui.confirmCalls, "使用现有数据继续安装？")
+	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
 }
 
 func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
@@ -111,15 +112,15 @@ func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 	if writeEnvCalled {
 		t.Fatal("should not continue install after declining historical data")
 	}
-	if len(ui.summaries) != 2 || ui.summaries[1].title != "Installation cancelled" {
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "安装已取消" {
 		t.Fatalf("should show cancellation summary after declining, got %#v", ui.summaries)
 	}
-	assertConfirmDefault(t, ui.confirmCalls, "Continue installation using existing data?", false)
+	assertConfirmPrompt(t, ui.confirmCalls, "使用现有数据继续安装？")
 }
 
 func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"9527", "127.0.0.1/32", "/tmp/cert.pem", "/tmp/key.pem", "https://panel.example.com", "admin", "10000-11000"},
+		inputs:    []string{"9527", "127.0.0.1/32", "/tmp/cert.pem", "/tmp/key.pem", "https://panel.example.com", "admin"},
 		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{true},
 	}
@@ -150,15 +151,15 @@ func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 	if writtenEnv.TLSCert != "/tmp/cert.pem" || writtenEnv.TLSKey != "/tmp/key.pem" {
 		t.Fatalf("custom TLS should write cert/key, got %#v", writtenEnv)
 	}
-	if len(ui.summaries) != 2 || ui.summaries[1].title != "Server installation complete" {
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "Server 安装完成" {
 		t.Fatalf("should show completion summary after successful install, got %#v", ui.summaries)
 	}
-	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
+	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
 }
 
 func TestInstallServerFreshInstallPreparesDirsBeforeApplyInit(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"9527", "127.0.0.1/32", "https://panel.example.com", "admin", "10000-11000"},
+		inputs:    []string{"9527", "0.0.0.0/0", "https://panel.example.com", "admin"},
 		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{true},
 	}
@@ -166,6 +167,7 @@ func TestInstallServerFreshInstallPreparesDirsBeforeApplyInit(t *testing.T) {
 	record := func(name string) {
 		calls = append(calls, name)
 	}
+	var gotInitParams server.InitParams
 
 	err := InstallServerWith(serverDeps{
 		UI:            ui,
@@ -181,6 +183,7 @@ func TestInstallServerFreshInstallPreparesDirsBeforeApplyInit(t *testing.T) {
 		},
 		ApplyInit: func(dataDir string, params server.InitParams) error {
 			record("apply-init")
+			gotInitParams = params
 			return nil
 		},
 		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
@@ -195,6 +198,14 @@ func TestInstallServerFreshInstallPreparesDirsBeforeApplyInit(t *testing.T) {
 	}
 	assertCallBefore(t, calls, "ensure-user", "apply-init")
 	assertCallBefore(t, calls, "ensure-dirs", "apply-init")
+	if gotInitParams.AllowedPorts != "1024-65535" {
+		t.Fatalf("fresh server init allowed ports = %q, want %q", gotInitParams.AllowedPorts, "1024-65535")
+	}
+	assertInputPromptAbsent(t, ui.inputCalls, "Allowed port ranges")
+	assertSummaryRowAbsent(t, ui.summaries[0], "Allowed ports")
+	assertInputPromptDefault(t, ui.inputCalls, "可信代理 CIDR", "0.0.0.0/0")
+	assertInputPromptDescriptionContains(t, ui.inputCalls, "可信代理 CIDR", "127.0.0.1/8")
+	assertInputPromptDescriptionContains(t, ui.inputCalls, "可信代理 CIDR", "本机 Nginx/Caddy")
 }
 
 func assertCallBefore(t *testing.T, calls []string, first, second string) {
@@ -217,6 +228,50 @@ func assertCallBefore(t *testing.T, calls []string, first, second string) {
 	}
 }
 
+func assertInputPromptAbsent(t *testing.T, calls []inputCall, prompt string) {
+	t.Helper()
+	for _, call := range calls {
+		if call.prompt == prompt {
+			t.Fatalf("input prompt %q should not be shown, calls=%#v", prompt, calls)
+		}
+	}
+}
+
+func assertInputPromptDefault(t *testing.T, calls []inputCall, prompt, want string) {
+	t.Helper()
+	for _, call := range calls {
+		if call.prompt == prompt {
+			if call.opts.Default != want {
+				t.Fatalf("input prompt %q default = %q, want %q", prompt, call.opts.Default, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("input prompt %q not found in %#v", prompt, calls)
+}
+
+func assertInputPromptDescriptionContains(t *testing.T, calls []inputCall, prompt, want string) {
+	t.Helper()
+	for _, call := range calls {
+		if call.prompt == prompt {
+			if !strings.Contains(call.opts.Description, want) {
+				t.Fatalf("input prompt %q description = %q, want to contain %q", prompt, call.opts.Description, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("input prompt %q not found in %#v", prompt, calls)
+}
+
+func assertSummaryRowAbsent(t *testing.T, summary summaryCall, key string) {
+	t.Helper()
+	for _, row := range summary.rows {
+		if row[0] == key {
+			t.Fatalf("summary %q should not include row %q: %#v", summary.title, key, summary.rows)
+		}
+	}
+}
+
 func TestInstallServerWithBrokenStateFails(t *testing.T) {
 	ui := &fakeUI{}
 	err := InstallServerWith(serverDeps{
@@ -231,14 +286,14 @@ func TestInstallServerWithBrokenStateFails(t *testing.T) {
 	if !errors.Is(err, errInstallBrokenState) {
 		t.Fatalf("broken state should return errInstallBrokenState, got %v", err)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "Server installation state is broken" {
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "Server 安装状态异常" {
 		t.Fatalf("broken state should show problem summary, got %#v", ui.summaries)
 	}
 }
 
 func TestInstallServerWithConfirmNoPrintsCancelledSummary(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"9527", "127.0.0.1/32", "https://panel.example.com", "admin", "10000-11000"},
+		inputs:    []string{"9527", "0.0.0.0/0", "https://panel.example.com", "admin"},
 		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{false},
 	}
@@ -259,8 +314,8 @@ func TestInstallServerWithConfirmNoPrintsCancelledSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cancelling install should not error: %v", err)
 	}
-	if len(ui.summaries) != 2 || ui.summaries[1].title != "Installation cancelled" {
+	if len(ui.summaries) != 2 || ui.summaries[1].title != "安装已取消" {
 		t.Fatalf("should show cancellation summary after declining, got %#v", ui.summaries)
 	}
-	assertConfirmDefault(t, ui.confirmCalls, "Proceed with installation?", true)
+	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -59,7 +60,8 @@ func IsInitializedDB(path string) (bool, error) {
 }
 
 func ApplyInit(dataDir string, params InitParams) error {
-	adminStore, err := NewAdminStore(filepath.Join(dataDir, "server", serverDBFileName))
+	log.Printf("正在初始化 server 数据...")
+	adminStore, err := NewAdminStoreWithOptions(filepath.Join(dataDir, "server", serverDBFileName), AdminStoreOptions{SuppressUninitializedWarning: true})
 	if err != nil {
 		return err
 	}

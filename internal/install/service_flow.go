@@ -2,6 +2,7 @@ package install
 
 import (
 	"fmt"
+	"strings"
 
 	"netsgo/internal/svcmgr"
 )
@@ -17,34 +18,42 @@ type managedInstallDeps struct {
 
 func printInstalledSummary(ui uiProvider, title string, role svcmgr.Role) {
 	rows := [][2]string{
-		{"Status", "Installed"},
-		{"Service", svcmgr.UnitName(role)},
-		{"Next step", "Run netsgo manage to manage the installed service"},
+		{"状态", "已安装"},
+		{"服务", svcmgr.UnitName(role)},
+		{"下一步", "运行 netsgo manage 管理已安装服务"},
 	}
 	ui.PrintSummary(title, rows)
 }
 
 func printBrokenSummary(ui uiProvider, title string, inspection svcmgr.InstallInspection) {
-	ui.PrintSummary(title, degradedRows(inspection, "Clean up residual state first, then re-run netsgo install"))
+	ui.PrintSummary(title, degradedRows(inspection, "先清理残留状态，然后重新运行 netsgo install"))
 }
 
 func printRecoverableSummary(ui uiProvider, inspection svcmgr.InstallInspection) {
 	rows := [][2]string{
-		{"Status", "Recoverable"},
-		{"Advice", "Continue installation to restore the managed service using existing server data"},
+		{"状态", "可恢复"},
+		{"建议", "继续安装以使用现有 server 数据恢复托管服务"},
 	}
 	for _, problem := range inspection.Problems {
-		rows = append(rows, [2]string{"Problem", problem})
+		rows = append(rows, [2]string{"问题", userFacingInstallProblem(problem)})
 	}
-	ui.PrintSummary("Recoverable server data detected", rows)
+	ui.PrintSummary("检测到可恢复的 server 数据", rows)
 }
 
 func printInstallCancelled(ui uiProvider) {
-	ui.PrintSummary("Installation cancelled", [][2]string{{"Next step", "Run netsgo install again to continue"}})
+	ui.PrintSummary("安装已取消", [][2]string{{"下一步", "再次运行 netsgo install 继续"}})
+}
+
+func printOptionalRoleInstallCancelled(ui uiProvider, installedRole svcmgr.Role) {
+	ui.PrintSummary("已取消安装，未进行任何修改", [][2]string{
+		{"当前角色", string(installedRole)},
+		{"状态", "保持当前安装状态"},
+		{"下一步", fmt.Sprintf("运行 netsgo manage 管理已安装的 %s 服务", installedRole)},
+	})
 }
 
 func confirmSummaryRows(role svcmgr.Role, rows ...[2]string) [][2]string {
-	base := [][2]string{{"Role", string(role)}}
+	base := [][2]string{{"角色", string(role)}}
 	for _, row := range rows {
 		if row[1] == "" {
 			continue
@@ -56,16 +65,16 @@ func confirmSummaryRows(role svcmgr.Role, rows ...[2]string) [][2]string {
 
 func completionSummaryRows(role svcmgr.Role, endpointLabel, endpoint string) [][2]string {
 	rows := [][2]string{
-		{"Status", "Running"},
-		{"Service", svcmgr.UnitName(role)},
-		{"Run as", svcmgr.SystemUser},
+		{"状态", "运行中"},
+		{"服务", svcmgr.UnitName(role)},
+		{"运行用户", svcmgr.SystemUser},
 	}
 	if endpointLabel != "" && endpoint != "" {
 		rows = append(rows, [2]string{endpointLabel, endpoint})
 	}
 	rows = append(rows,
-		[2]string{"Logs", journalctlCommand(role)},
-		[2]string{"Next step", "Run netsgo manage to manage the service"},
+		[2]string{"日志", journalctlCommand(role)},
+		[2]string{"下一步", "运行 netsgo manage 管理服务"},
 	)
 	return rows
 }
@@ -85,11 +94,50 @@ func resolveInspection(inspect func(svcmgr.Role) svcmgr.InstallInspection, detec
 }
 
 func degradedRows(inspection svcmgr.InstallInspection, advice string) [][2]string {
-	rows := [][2]string{{"Status", inspection.State.String()}, {"Advice", advice}}
+	rows := [][2]string{{"状态", installStateLabel(inspection.State)}, {"建议", advice}}
 	for _, problem := range inspection.Problems {
-		rows = append(rows, [2]string{"Problem", problem})
+		rows = append(rows, [2]string{"问题", userFacingInstallProblem(problem)})
 	}
 	return rows
+}
+
+func installStateLabel(state svcmgr.InstallState) string {
+	switch state {
+	case svcmgr.StateNotInstalled:
+		return "未安装"
+	case svcmgr.StateInstalled:
+		return "已安装"
+	case svcmgr.StateHistoricalDataOnly:
+		return "可恢复"
+	case svcmgr.StateBroken:
+		return "需要处理"
+	default:
+		return state.String()
+	}
+}
+
+func userFacingInstallProblem(problem string) string {
+	switch {
+	case strings.Contains(problem, "Recoverable server historical data was detected"):
+		return "检测到历史 server 数据，但 systemd 服务文件不存在。继续安装会恢复服务。"
+	case strings.Contains(problem, "missing unit file"):
+		return "systemd 服务文件不存在：" + suffixAfter(problem, ": ")
+	case strings.Contains(problem, "missing env file"):
+		return "服务环境配置文件不存在：" + suffixAfter(problem, ": ")
+	case strings.Contains(problem, "missing runtime data directory"):
+		return "运行数据目录不存在：" + suffixAfter(problem, ": ")
+	case strings.Contains(problem, "leftover runtime data directory still exists"):
+		return "检测到残留运行数据目录：" + suffixAfter(problem, ": ")
+	default:
+		return problem
+	}
+}
+
+func suffixAfter(value, sep string) string {
+	if idx := strings.Index(value, sep); idx >= 0 {
+		return value[idx+len(sep):]
+	}
+	return value
 }
 
 func completeManagedInstall(role svcmgr.Role, deps managedInstallDeps, writeArtifacts func(layout svcmgr.ServiceLayout) error) error {

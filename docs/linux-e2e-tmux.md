@@ -5,7 +5,7 @@
 
 ## 连接方式
 
-使用共享 tmux 会话，让 AI/agent 可以复用同一个长期终端，避免每次测试都重新建立 SSH 连接。
+必须使用共享 tmux 会话，让 AI/agent 可以复用同一个长期终端，避免每次测试都重新建立 SSH 连接。
 
 如果会话已经存在，直接进入：
 
@@ -24,6 +24,8 @@ tmux new -s netsgo-e2e-session
 ```bash
 ssh netsgo-e2e-linux
 ```
+
+需要注意的是, 必须在tmux中的会话中进行ssh连接, 这样才可以长久的测试下去.
 
 目标主机是专门用于 NetsGo E2E 验证的 Debian 13 x86 AMD 系统，也就是测试机。
 

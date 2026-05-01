@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"golang.org/x/term"
+	"netsgo/internal/svcmgr"
 	"netsgo/internal/tui"
 )
 
@@ -25,6 +26,9 @@ type defaultUI struct{}
 
 func (defaultUI) Select(prompt string, options []string) (int, error) {
 	return tui.Select(prompt, options)
+}
+func (defaultUI) SelectWithOptions(prompt string, options []tui.SelectOption) (int, error) {
+	return tui.SelectWithOptions(prompt, options)
 }
 func (defaultUI) Input(prompt string, opts ...tui.InputOptions) (string, error) {
 	return tui.Input(prompt, opts...)
@@ -44,6 +48,8 @@ type Deps struct {
 	UID           int
 	HasSystemd    bool
 	UI            uiProvider
+	Inspect       func(svcmgr.Role) svcmgr.InstallInspection
+	Detect        func(svcmgr.Role) svcmgr.InstallState
 	InstallServer func() error
 	InstallClient func() error
 	LookPath      func(file string) (string, error)
@@ -57,6 +63,8 @@ func Run() error {
 		UID:        os.Getuid(),
 		HasSystemd: hasSystemd(),
 		UI:         defaultUI{},
+		Inspect:    svcmgr.Inspect,
+		Detect:     svcmgr.Detect,
 		InstallServer: func() error {
 			return InstallServer()
 		},
@@ -95,7 +103,16 @@ func RunWith(deps Deps) error {
 		return errors.New("install dependencies are incomplete")
 	}
 
-	role, err := deps.UI.Select("Select installation role", []string{"Server", "Client"})
+	serverInspection := resolveInspection(deps.Inspect, deps.Detect, svcmgr.RoleServer)
+	clientInspection := resolveInspection(deps.Inspect, deps.Detect, svcmgr.RoleClient)
+	if handled, err := runInstallPreflight(deps, serverInspection, clientInspection); handled {
+		return err
+	}
+
+	role, err := selectWithOptions(deps.UI, "选择安装角色", []tui.SelectOption{
+		{Label: "安装 server", Description: "在本机安装 Web 控制台和公网隧道入口。"},
+		{Label: "安装 client", Description: "连接到现有 NetsGo server，并在本机作为托管服务运行。"},
+	})
 	if err != nil {
 		return err
 	}
@@ -107,6 +124,101 @@ func RunWith(deps Deps) error {
 	}
 	printInstallCancelled(deps.UI)
 	return nil
+}
+
+type selectOptionsUI interface {
+	SelectWithOptions(prompt string, options []tui.SelectOption) (int, error)
+}
+
+func selectWithOptions(ui uiProvider, prompt string, options []tui.SelectOption) (int, error) {
+	if described, ok := ui.(selectOptionsUI); ok {
+		return described.SelectWithOptions(prompt, options)
+	}
+	labels := make([]string, len(options))
+	for i, option := range options {
+		labels[i] = option.Label
+	}
+	return ui.Select(prompt, labels)
+}
+
+func runInstallPreflight(deps Deps, serverInspection, clientInspection svcmgr.InstallInspection) (bool, error) {
+	serverInstalled := serverInspection.State == svcmgr.StateInstalled
+	clientInstalled := clientInspection.State == svcmgr.StateInstalled
+	serverAvailableForInstall := serverInspection.State == svcmgr.StateNotInstalled
+	clientAvailableForInstall := clientInspection.State == svcmgr.StateNotInstalled
+
+	switch {
+	case serverInstalled && clientInstalled:
+		deps.UI.PrintSummary("托管服务已安装", installStateRows(
+			serverInspection,
+			clientInspection,
+			"运行 netsgo manage 管理已安装服务",
+		))
+		return true, nil
+	case serverInstalled && clientAvailableForInstall:
+		deps.UI.PrintSummary("本机已安装 server", optionalRoleInstallRows(
+			svcmgr.RoleServer,
+			svcmgr.RoleClient,
+		))
+		ok, err := deps.UI.ConfirmWithOptions("是否也在本机安装 client？", tui.ConfirmOptions{})
+		if err != nil {
+			return true, err
+		}
+		if !ok {
+			printOptionalRoleInstallCancelled(deps.UI, svcmgr.RoleServer)
+			return true, nil
+		}
+		return true, deps.InstallClient()
+	case clientInstalled && serverAvailableForInstall:
+		deps.UI.PrintSummary("本机已安装 client", optionalRoleInstallRows(
+			svcmgr.RoleClient,
+			svcmgr.RoleServer,
+		))
+		ok, err := deps.UI.ConfirmWithOptions("是否也在本机安装 server？", tui.ConfirmOptions{})
+		if err != nil {
+			return true, err
+		}
+		if !ok {
+			printOptionalRoleInstallCancelled(deps.UI, svcmgr.RoleClient)
+			return true, nil
+		}
+		return true, deps.InstallServer()
+	case serverInstalled || clientInstalled:
+		deps.UI.PrintSummary("托管服务状态需要处理", installStateRows(
+			serverInspection,
+			clientInspection,
+			"运行 netsgo manage 检查或清理异常服务状态",
+		))
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func installStateRows(serverInspection, clientInspection svcmgr.InstallInspection, nextStep string) [][2]string {
+	return [][2]string{
+		{"server 角色", installStateLabel(serverInspection.State)},
+		{"client 角色", installStateLabel(clientInspection.State)},
+		{"下一步", nextStep},
+	}
+}
+
+func optionalRoleInstallRows(installedRole, optionalRole svcmgr.Role) [][2]string {
+	explanation := fmt.Sprintf("本机已安装 %s。", installedRole)
+	switch installedRole {
+	case svcmgr.RoleServer:
+		explanation += "如果这台机器还需要作为 client 连接到另一个 NetsGo server，可以继续安装 client。"
+	case svcmgr.RoleClient:
+		explanation += "如果这台机器还需要作为 server 提供 Web 控制台和公网隧道入口，可以继续安装 server。"
+	default:
+		explanation += fmt.Sprintf("如果这台机器还需要运行 %s，可以继续安装。", optionalRole)
+	}
+
+	return [][2]string{
+		{"当前状态", fmt.Sprintf("%s 托管服务已安装", installedRole)},
+		{"说明", explanation},
+		{"下一步", fmt.Sprintf("需要时继续安装 %s；否则保持当前状态", optionalRole)},
+	}
 }
 
 func hasSystemd() bool {

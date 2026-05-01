@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	clientstate "netsgo/internal/client"
 	"netsgo/internal/install"
 	"netsgo/internal/svcmgr"
+	"netsgo/internal/tui"
 	"netsgo/pkg/version"
 )
 
@@ -39,7 +39,8 @@ func ManageClientWith(deps clientDeps) error {
 	switch inspection.State {
 	case svcmgr.StateInstalled:
 		return runServiceMenu(serviceMenuDeps{
-			UI: deps.UI,
+			UI:   deps.UI,
+			Role: svcmgr.RoleClient,
 			Status: func() error {
 				return showStatusSummary(deps.UI, svcmgr.RoleClient, deps.Inspect(), deps.IsActive, deps.IsEnabled)
 			},
@@ -59,7 +60,7 @@ func ManageClientWith(deps clientDeps) error {
 	case svcmgr.StateBroken:
 		return runBrokenClientMenu(deps)
 	default:
-		deps.UI.PrintSummary("Client is not installed", [][2]string{{"Next step", "Run netsgo install to install the client"}})
+		deps.UI.PrintSummary("Client 未安装", [][2]string{{"下一步", "运行 netsgo install 安装 client"}})
 		return errReturnToSelection
 	}
 }
@@ -101,33 +102,33 @@ func showClientDetails(deps clientDeps) error {
 	inspection := deps.Inspect()
 	layout := svcmgr.NewLayout(svcmgr.RoleClient)
 	env, envErr := loadClientEnv(deps)
-	identitySummary, identityErr := clientIdentitySummary(layout)
+	localStateSummary, localStateErr := clientLocalStateSummary(layout)
 
 	rows := [][2]string{
-		{"Service name", layout.ServiceName},
-		{"Role", string(svcmgr.RoleClient)},
-		{"State", inspection.State.String()},
-		{"Installed", boolLabel(inspection.State == svcmgr.StateInstalled)},
-		{"Running", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsActive)},
-		{"Enabled", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsEnabled)},
-		{"Binary path", layout.BinaryPath},
-		{"Data dir", layout.DataDir},
-		{"Data path", clientDataPath(layout)},
-		{"Lock path", lockPath(layout.DataDir)},
-		{"Log target", "journald"},
-		{"Unit path", layout.UnitPath},
-		{"Env path", layout.EnvPath},
-		{"Run as user", layout.RunAsUser},
-		{"Server URL", stringOrUnavailable(env.Server, envErr)},
-		{"Skip TLS verification", boolOrUnavailable(env.TLSSkipVerify, envErr)},
-		{"TLS fingerprint", stringOrUnavailable(env.TLSFingerprint, envErr)},
-		{"Client identity state", stringOrUnavailable(identitySummary, identityErr)},
+		{"服务", layout.ServiceName},
+		{"角色", string(svcmgr.RoleClient)},
+		{"状态", lifecycleStateLabel(inspection.State)},
+		{"已安装", boolLabel(inspection.State == svcmgr.StateInstalled)},
+		{"运行中", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsActive)},
+		{"已启用", boolStateLabel(inspection.State == svcmgr.StateInstalled, deps.IsEnabled)},
+		{"二进制路径", layout.BinaryPath},
+		{"数据目录", layout.DataDir},
+		{"数据路径", clientDataPath(layout)},
+		{"锁路径", lockPath(layout.DataDir)},
+		{"日志目标", "journald"},
+		{"Unit 路径", layout.UnitPath},
+		{"Env 路径", layout.EnvPath},
+		{"运行用户", layout.RunAsUser},
+		{"服务地址", stringOrUnavailable(env.Server, envErr)},
+		{"跳过 TLS 校验", boolOrUnavailable(env.TLSSkipVerify, envErr)},
+		{"TLS 指纹", stringOrUnavailable(env.TLSFingerprint, envErr)},
+		{"Client 本地状态", stringOrUnavailable(localStateSummary, localStateErr)},
 	}
 	if envErr != nil {
-		rows = append(rows, [2]string{"Env status", fmt.Sprintf("Unavailable (%v)", envErr)})
+		rows = append(rows, [2]string{"Env 状态", fmt.Sprintf("不可用（%v）", envErr)})
 	}
 	rows = appendProblemRows(rows, inspection.Problems)
-	deps.UI.PrintSummary("Client inspect", rows)
+	deps.UI.PrintSummary("Client 检查", rows)
 	return nil
 }
 
@@ -135,15 +136,15 @@ func uninstallClient(deps clientDeps) (bool, error) {
 	layout := svcmgr.NewLayout(svcmgr.RoleClient)
 
 	rows := [][2]string{
-		{"Impact", "Remove the managed client service and local client identity/state"},
-		{"Effect", "Reinstalling the client creates a new local identity"},
-		{"Effect", "Server-side history is not cleaned automatically"},
+		{"影响", "移除托管 client 服务和本地连接状态"},
+		{"结果", "重新安装 client 时请从 Web 控制台获取新的 client key"},
+		{"结果", "不会自动清理 server 端历史记录"},
 	}
-	rows = appendRemovalRows(rows, "Remove", layout.UnitPath, layout.EnvPath, clientDataPath(layout))
+	rows = appendRemovalRows(rows, "移除", layout.UnitPath, layout.EnvPath, clientDataPath(layout))
 	rows = append(rows, sharedBinaryPlanRow(deps.DetectServer))
-	deps.UI.PrintSummary("Client uninstall plan", rows)
+	deps.UI.PrintSummary("Client 卸载计划", rows)
 
-	ok, err := deps.UI.Confirm("Proceed with client uninstall?")
+	ok, err := deps.UI.ConfirmWithOptions("继续卸载 client？", tui.ConfirmOptions{ConfirmText: "uninstall client"})
 	if err != nil {
 		return false, err
 	}
@@ -163,13 +164,18 @@ func uninstallClient(deps clientDeps) (bool, error) {
 	if err := maybeRemoveSharedBinary(deps.UI, deps.DetectServer, deps.RemoveBinary); err != nil {
 		return false, err
 	}
-	deps.UI.PrintSummary("Client uninstalled", [][2]string{{"State", "Removed"}, {"Next step", "Run netsgo install to create a new client identity if needed"}})
+	deps.UI.PrintSummary("Client 已卸载", [][2]string{{"状态", "已移除"}, {"下一步", "需要时运行 netsgo install 重新安装 client"}})
 	return true, nil
 }
 
 func runBrokenClientMenu(deps clientDeps) error {
 	for {
-		action, err := deps.UI.Select("Select a recovery action", []string{"Inspect broken client state", "Cleanup broken client installation", "Run netsgo install", "Back"})
+		action, err := selectWithOptions(deps.UI, "选择恢复操作", []tui.SelectOption{
+			{Label: "检查异常 client 状态", Description: "选择清理前显示检测到的 client 服务问题。"},
+			{Label: "清理异常 client 安装", Description: "通过输入确认短语移除残留的 client 服务文件。"},
+			{Label: "运行 netsgo install", Description: "清理或确认当前状态后重新安装 client。"},
+			{Label: "返回", Description: "返回上一级服务选择菜单。"},
+		})
 		if err != nil {
 			return err
 		}
@@ -203,14 +209,14 @@ func cleanupBrokenClient(deps clientDeps) (bool, error) {
 	layout := svcmgr.NewLayout(svcmgr.RoleClient)
 
 	rows := [][2]string{
-		{"Impact", "Remove broken client service files and local client identity/state"},
-		{"Effect", "Reinstalling the client creates a new local identity"},
+		{"影响", "移除异常 client 服务文件和本地连接状态"},
+		{"结果", "重新安装 client 时请从 Web 控制台获取新的 client key"},
 	}
-	rows = appendRemovalRows(rows, "Remove", layout.UnitPath, layout.EnvPath, clientDataPath(layout))
+	rows = appendRemovalRows(rows, "移除", layout.UnitPath, layout.EnvPath, clientDataPath(layout))
 	rows = append(rows, sharedBinaryPlanRow(deps.DetectServer))
-	deps.UI.PrintSummary("Broken client cleanup plan", rows)
+	deps.UI.PrintSummary("异常 client 清理计划", rows)
 
-	ok, err := deps.UI.Confirm("Proceed with broken client cleanup?")
+	ok, err := deps.UI.ConfirmWithOptions("继续清理异常 client？", tui.ConfirmOptions{ConfirmText: "cleanup client"})
 	if err != nil {
 		return false, err
 	}
@@ -227,7 +233,7 @@ func cleanupBrokenClient(deps clientDeps) (bool, error) {
 	if err := maybeRemoveSharedBinary(deps.UI, deps.DetectServer, deps.RemoveBinary); err != nil {
 		return false, err
 	}
-	deps.UI.PrintSummary("Broken client cleanup complete", [][2]string{{"State", "Cleaned"}, {"Next step", "Run netsgo install to install the client again if needed"}})
+	deps.UI.PrintSummary("异常 client 清理完成", [][2]string{{"状态", "已清理"}, {"下一步", "需要时运行 netsgo install 重新安装 client"}})
 	return true, nil
 }
 
@@ -242,35 +248,28 @@ func clientDataPath(layout svcmgr.ServiceLayout) string {
 	return layout.RuntimeDir
 }
 
-func clientIdentitySummary(layout svcmgr.ServiceLayout) (string, error) {
+func clientLocalStateSummary(layout svcmgr.ServiceLayout) (string, error) {
 	path := filepath.Join(clientDataPath(layout), clientstate.ClientDBFileName)
 	state, ok, err := clientstate.LoadClientIdentity(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "本地状态文件未发现", nil
+		}
 		return "", err
 	}
 	if !ok {
-		return "state database present without usable identity data", nil
+		return "本地状态文件存在，但内容不可用", nil
 	}
 
-	parts := []string{}
-	if state.InstallID != "" {
-		parts = append(parts, "persisted install id")
+	if state.InstallID == "" && state.Token == "" && state.TLSFingerprint == "" {
+		return "本地状态文件存在，但内容不可用", nil
 	}
-	if state.Token != "" {
-		parts = append(parts, "saved token")
-	}
-	if state.TLSFingerprint != "" {
-		parts = append(parts, "saved TLS fingerprint")
-	}
-	if len(parts) == 0 {
-		return "state database present without usable identity data", nil
-	}
-	return strings.Join(parts, ", "), nil
+	return "已保存本地连接状态", nil
 }
 
 func boolOrUnavailable(value bool, err error) string {
 	if err != nil {
-		return fmt.Sprintf("Unavailable (%v)", err)
+		return fmt.Sprintf("不可用（%v）", err)
 	}
 	return boolLabel(value)
 }
