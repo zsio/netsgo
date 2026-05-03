@@ -226,15 +226,6 @@ func assertCallBefore(t *testing.T, calls []string, first, second string) {
 	}
 }
 
-func assertInputPromptAbsent(t *testing.T, calls []inputCall, prompt string) {
-	t.Helper()
-	for _, call := range calls {
-		if call.prompt == prompt {
-			t.Fatalf("input prompt %q should not be shown, calls=%#v", prompt, calls)
-		}
-	}
-}
-
 func assertInputPromptDefault(t *testing.T, calls []inputCall, prompt, want string) {
 	t.Helper()
 	for _, call := range calls {
@@ -259,15 +250,6 @@ func assertInputPromptDescriptionContains(t *testing.T, calls []inputCall, promp
 		}
 	}
 	t.Fatalf("input prompt %q not found in %#v", prompt, calls)
-}
-
-func assertSummaryRowAbsent(t *testing.T, summary summaryCall, key string) {
-	t.Helper()
-	for _, row := range summary.rows {
-		if row[0] == key {
-			t.Fatalf("summary %q should not include row %q: %#v", summary.title, key, summary.rows)
-		}
-	}
 }
 
 func TestInstallServerWithBrokenStateFails(t *testing.T) {
