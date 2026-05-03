@@ -183,22 +183,13 @@ func InstallServerWith(deps serverDeps) error {
 		if initParams.AdminPassword != confirmPassword {
 			return fmt.Errorf("两次输入的管理员密码不一致")
 		}
-		initParams.AllowedPorts, err = deps.UI.Input("允许的端口范围", tui.InputOptions{
-			Placeholder: "e.g. 1024-65535 or 80,443,8000-9000",
-			Description: "逗号分隔的端口范围或单端口，tunnel 可使用的远程端口。",
-			Default:     "1024-65535",
-			Validate:    server.ValidateAllowedPorts,
-		})
-		if err != nil {
-			return err
-		}
+		initParams.AllowedPorts = "1024-65535"
 	}
 
 	deps.UI.PrintSummary("安装摘要", confirmSummaryRows(svcmgr.RoleServer,
 		[2]string{"安装模式", installMode},
 		[2]string{"端口", strconv.Itoa(port)},
 		[2]string{"TLS 模式", tlsMode},
-		[2]string{"允许端口", initParams.AllowedPorts},
 		[2]string{"服务地址", serverAddr},
 		[2]string{"可信代理", trustedProxies},
 	))
