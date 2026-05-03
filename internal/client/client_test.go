@@ -223,6 +223,29 @@ func (ms *mockServer) getDataProtocols() [][]string {
 	return result
 }
 
+// waitForConn polls until at least one control connection is established or the
+// timeout expires, then returns the most recent connection.  It replaces the
+// common pattern of time.Sleep + immediate lock-check which is flaky under CI.
+func (ms *mockServer) waitForConn(t *testing.T, timeout time.Duration) *websocket.Conn {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		ms.mu.Lock()
+		if len(ms.conns) > 0 {
+			conn := ms.conns[len(ms.conns)-1]
+			ms.mu.Unlock()
+			return conn
+		}
+		ms.mu.Unlock()
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("client control connection was not established within " + timeout.String())
+	return nil
+}
+
 func newMockHTTPServer(ms *mockServer) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/control", ms.controlHandler)
@@ -258,7 +281,7 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 	}()
 
 	// Wait for the client to finish authentication
-	time.Sleep(500 * time.Millisecond)
+	_ = ms.waitForConn(t, 2*time.Second)
 
 	// Verify that ClientID was set
 	if c.CurrentClientID() != "mock_client_1" {
@@ -634,7 +657,8 @@ func TestClient_RequestProxy(t *testing.T) {
 
 	// Start the client (it blocks in controlLoop in the background)
 	go func() { _ = c.Start() }()
-	time.Sleep(500 * time.Millisecond) // Wait for authentication and the data channel attempt to complete
+	// Wait for authentication and the data channel attempt to complete
+	_ = ms.waitForConn(t, 2*time.Second)
 
 	// Call requestProxy manually
 	cfg := protocol.ProxyNewRequest{
@@ -681,24 +705,16 @@ func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 	c.DisableReconnect = true
 
 	go func() { _ = c.Start() }()
-	time.Sleep(500 * time.Millisecond)
+	conn := ms.waitForConn(t, 2*time.Second)
 
 	// The server proactively sends proxy_create_resp (success)
-	ms.mu.Lock()
-	var conn *websocket.Conn
-	if len(ms.conns) > 0 {
-		conn = ms.conns[len(ms.conns)-1]
-	}
-	ms.mu.Unlock()
-	if conn != nil {
-		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
-			Success:    true,
-			Message:    "tunnel created",
-			RemotePort: 19090,
-		})
-		if err := ms.writeControlJSON(conn, resp); err != nil {
-			t.Fatalf("server failed to send proxy_create_resp: %v", err)
-		}
+	resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
+		Success:    true,
+		Message:    "tunnel created",
+		RemotePort: 19090,
+	})
+	if err := ms.writeControlJSON(conn, resp); err != nil {
+		t.Fatalf("server failed to send proxy_create_resp: %v", err)
 	}
 
 	// Wait for the client to handle it; not crashing is enough
@@ -715,16 +731,10 @@ func TestClient_ControlLoop_ProxyCreateResp_Failure(t *testing.T) {
 	c.DisableReconnect = true
 
 	go func() { _ = c.Start() }()
-	time.Sleep(500 * time.Millisecond)
+	conn := ms.waitForConn(t, 2*time.Second)
 
 	// The server proactively sends proxy_create_resp (failure)
-	ms.mu.Lock()
-	var conn *websocket.Conn
-	if len(ms.conns) > 0 {
-		conn = ms.conns[len(ms.conns)-1]
-	}
-	ms.mu.Unlock()
-	if conn != nil {
+	{
 		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
 			Success: false,
 			Message: "port conflict",
@@ -761,15 +771,8 @@ func TestClient_ControlLoop_ServerProvisionSendsProvisionAck(t *testing.T) {
 	c.DisableReconnect = true
 
 	go func() { _ = c.Start() }()
-	time.Sleep(500 * time.Millisecond)
+	conn := ms.waitForConn(t, 2*time.Second)
 
-	ms.mu.Lock()
-	if len(ms.conns) == 0 {
-		ms.mu.Unlock()
-		t.Fatal("client control connection was not established")
-	}
-	conn := ms.conns[len(ms.conns)-1]
-	ms.mu.Unlock()
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyProvision, protocol.ProxyProvisionRequest{
 		Name:       "server-pushed-proxy",
 		Type:       protocol.ProxyTypeTCP,
@@ -819,15 +822,8 @@ func TestClient_ControlLoop_ServerProvisionDoesNotGateOnBackendHealth(t *testing
 	c.DisableReconnect = true
 
 	go func() { _ = c.Start() }()
-	time.Sleep(500 * time.Millisecond)
+	conn := ms.waitForConn(t, 2*time.Second)
 
-	ms.mu.Lock()
-	if len(ms.conns) == 0 {
-		ms.mu.Unlock()
-		t.Fatal("client control connection was not established")
-	}
-	conn := ms.conns[len(ms.conns)-1]
-	ms.mu.Unlock()
 	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyProvision, protocol.ProxyProvisionRequest{
 		Name:       "unreachable-backend",
 		Type:       protocol.ProxyTypeTCP,
