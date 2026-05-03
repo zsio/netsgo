@@ -120,7 +120,7 @@ func TestInstallServerWithHistoricalDataDeclineReuseStopsInstall(t *testing.T) {
 
 func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"9527", "127.0.0.1/32", "/tmp/cert.pem", "/tmp/key.pem", "https://panel.example.com", "admin"},
+		inputs:    []string{"9527", "127.0.0.1/8", "/tmp/cert.pem", "/tmp/key.pem", "https://panel.example.com", "admin", "1024-65535"},
 		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{true},
 	}
@@ -159,7 +159,7 @@ func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 
 func TestInstallServerFreshInstallPreparesDirsBeforeApplyInit(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"9527", "0.0.0.0/0", "https://panel.example.com", "admin"},
+		inputs:    []string{"9527", "127.0.0.1/8", "https://panel.example.com", "admin", "1024-65535"},
 		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{true},
 	}
@@ -201,11 +201,10 @@ func TestInstallServerFreshInstallPreparesDirsBeforeApplyInit(t *testing.T) {
 	if gotInitParams.AllowedPorts != "1024-65535" {
 		t.Fatalf("fresh server init allowed ports = %q, want %q", gotInitParams.AllowedPorts, "1024-65535")
 	}
-	assertInputPromptAbsent(t, ui.inputCalls, "Allowed port ranges")
-	assertSummaryRowAbsent(t, ui.summaries[0], "Allowed ports")
-	assertInputPromptDefault(t, ui.inputCalls, "可信代理 CIDR", "0.0.0.0/0")
-	assertInputPromptDescriptionContains(t, ui.inputCalls, "可信代理 CIDR", "127.0.0.1/8")
-	assertInputPromptDescriptionContains(t, ui.inputCalls, "可信代理 CIDR", "本机 Nginx/Caddy")
+	assertInputPromptDefault(t, ui.inputCalls, "可信代理 CIDR", "127.0.0.1/8")
+	assertInputPromptDescriptionContains(t, ui.inputCalls, "可信代理 CIDR", "0.0.0.0/0")
+	assertInputPromptDescriptionContains(t, ui.inputCalls, "可信代理 CIDR", "反向代理")
+	assertInputPromptDefault(t, ui.inputCalls, "允许的端口范围", "1024-65535")
 }
 
 func assertCallBefore(t *testing.T, calls []string, first, second string) {
@@ -293,7 +292,7 @@ func TestInstallServerWithBrokenStateFails(t *testing.T) {
 
 func TestInstallServerWithConfirmNoPrintsCancelledSummary(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"9527", "0.0.0.0/0", "https://panel.example.com", "admin"},
+		inputs:    []string{"9527", "127.0.0.1/8", "https://panel.example.com", "admin", "1024-65535"},
 		passwords: []string{"Password123", "Password123"},
 		confirms:  []bool{false},
 	}

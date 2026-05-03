@@ -98,9 +98,9 @@ func InstallServerWith(deps serverDeps) error {
 		return err
 	}
 	trustedProxies, err := deps.UI.Input("可信代理 CIDR", tui.InputOptions{
-		Placeholder: "e.g. 0.0.0.0/0 or 127.0.0.1/8",
-		Description: "逗号分隔的可信代理 CIDR；默认接受所有来源。若 NetsGo 位于本机 Nginx/Caddy 后方，建议使用 127.0.0.1/8。",
-		Default:     "0.0.0.0/0",
+		Placeholder: "e.g. 127.0.0.1/8,10.0.0.0/8 or 0.0.0.0/0",
+		Description: "逗号分隔的可信代理 CIDR；默认仅信任本机回环地址。若 NetsGo 位于反向代理后方，可添加代理所在网段；若需信任所有来源可设为 0.0.0.0/0，但需注意此配置允许客户端伪造 X-Forwarded-For。",
+		Default:     "127.0.0.1/8",
 	})
 	if err != nil {
 		return err
@@ -183,13 +183,22 @@ func InstallServerWith(deps serverDeps) error {
 		if initParams.AdminPassword != confirmPassword {
 			return fmt.Errorf("两次输入的管理员密码不一致")
 		}
-		initParams.AllowedPorts = "1024-65535"
+		initParams.AllowedPorts, err = deps.UI.Input("允许的端口范围", tui.InputOptions{
+			Placeholder: "e.g. 1024-65535 or 80,443,8000-9000",
+			Description: "逗号分隔的端口范围或单端口，tunnel 可使用的远程端口。",
+			Default:     "1024-65535",
+			Validate:    server.ValidateAllowedPorts,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	deps.UI.PrintSummary("安装摘要", confirmSummaryRows(svcmgr.RoleServer,
 		[2]string{"安装模式", installMode},
 		[2]string{"端口", strconv.Itoa(port)},
 		[2]string{"TLS 模式", tlsMode},
+		[2]string{"允许端口", initParams.AllowedPorts},
 		[2]string{"服务地址", serverAddr},
 		[2]string{"可信代理", trustedProxies},
 	))

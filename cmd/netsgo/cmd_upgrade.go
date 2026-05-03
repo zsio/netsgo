@@ -206,7 +206,18 @@ func init() {
 }
 
 func readUpgradeConfirmation(prompt, confirmText string) (bool, error) {
+	if !isInteractive() {
+		return readConfirmationFrom(bufio.NewReader(os.Stdin), confirmText), nil
+	}
 	return tui.ConfirmWithOptions(prompt, tui.ConfirmOptions{ConfirmText: confirmText})
+}
+
+func isInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func readConfirmationFrom(reader *bufio.Reader, confirmText string) bool {
