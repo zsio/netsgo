@@ -1,5 +1,0 @@
-{"file": ".trellis/spec/backend/index.md", "reason": "Backend guideline index for quality review."}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality contracts relevant to service address and CLI UX review."}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check cancellation and expected-error handling against project guidance."}
-{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Review log/message changes for user-facing clarity and sensitive data safety."}
-{"file": ".trellis/tasks/05-01-service-lifecycle-cli-ux-audit/research/lifecycle-walkthrough.md", "reason": "Verify implementation addresses confirmed walkthrough findings."}
