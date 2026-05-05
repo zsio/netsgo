@@ -9,8 +9,17 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/zsio/netsgo/actions/workflows/ci.yml"><img src="https://github.com/zsio/netsgo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/zsio/netsgo/releases"><img src="https://img.shields.io/github/v/release/zsio/netsgo?include_prereleases&label=release" alt="Release"></a>
+  <a href="https://github.com/zsio/netsgo/pkgs/container/netsgo"><img src="https://img.shields.io/badge/docker-ghcr.io%2Fzsio%2Fnetsgo-blue?logo=docker" alt="Docker"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.25.9-00ADD8?logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React">
+  <img src="https://img.shields.io/badge/deploy-single--binary-brightgreen" alt="Single Binary">
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20Windows-lightgrey" alt="Platform">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
 </p>
 
 ---
@@ -19,14 +28,32 @@
 
 ---
 
-## 为什么用 NetsGo
+## 目录
 
-如果你只是想尽快把服务端跑起来、把内网机器连上来、然后开始建隧道，NetsGo 的设计重点就是这四件事：
+- [界面预览](#界面预览)
+- [快速开始](#快速开始)
+- [为什么用 NetsGo](#为什么用-netsgo)
+- [生产部署建议](#生产部署建议)
+- [附录](#附录)
+- [和常见方案的区别](#和常见方案的区别)
+- [架构概览](#架构概览)
+- [License](#license)
 
-- **一个二进制就能跑**：`./netsgo server` 启服务端，`./netsgo client` 连远程节点。
-- **一个端口就够**：Web 控制台、控制通道和数据通道共用同一个入口，防火墙和反向代理只配一处就够。（TCP/UDP 隧道按需使用额外端口。）
-- **部署路径清晰**：容器或直接运行都可以；Linux 长驻场景可用 `netsgo install` + `netsgo manage`。
-- **默认就带控制台**：连上客户端后，直接在 Web 面板里管理节点、查看状态、配置隧道。
+---
+
+## 界面预览
+
+<p align="center">
+  <img src=".github/assets/dashboard.webp" alt="NetsGo Web 控制台总览" width="92%" />
+  <br/>
+  <sub><strong>Web 控制台总览</strong></sub>
+</p>
+
+<p align="center">
+  <img src=".github/assets/client.webp" alt="NetsGo 客户端详情与隧道管理" width="92%" />
+  <br/>
+  <sub><strong>客户端详情与隧道管理</strong></sub>
+</p>
 
 ---
 
@@ -68,24 +95,21 @@ services:
     ports:
       - "9527:9527"
     environment:
+      NETSGO_DATA_DIR: "/var/lib/netsgo"
       NETSGO_INIT_ADMIN_USERNAME: "admin"
       NETSGO_INIT_ADMIN_PASSWORD: "Password123"
       NETSGO_INIT_SERVER_ADDR: "https://your-netsgo-domain.com"
       NETSGO_INIT_ALLOWED_PORTS: "10000-11000"
     volumes:
       - netsgo-data:/var/lib/netsgo
-    command:
-      - "server"
-      - "--data-dir"
-      - "/var/lib/netsgo"
-      - "--tls-mode"
-      - "off"
 
 volumes:
   netsgo-data:
 ```
 
-如果你不走反向代理、准备直接对外暴露 NetsGo，请把 `--tls-mode off` 改成 `--tls-mode auto` 或 `--tls-mode custom`。
+Docker 镜像默认执行 `netsgo server`。这里通过 `NETSGO_DATA_DIR=/var/lib/netsgo` 明确把数据目录指向挂载卷。
+
+服务端默认不启用内置 TLS，适合放在反向代理后作为 HTTP upstream。如果你不走反向代理、准备直接对外暴露 NetsGo，请设置 `NETSGO_TLS_MODE=auto` 或 `NETSGO_TLS_MODE=custom`。如果在反向代理后需要信任 `X-Forwarded-*` 头，请额外设置 `NETSGO_TLS_MODE=off` 和精确的 `NETSGO_TRUSTED_PROXIES`。
 
 </details>
 
@@ -134,18 +158,56 @@ sudo ./netsgo install
 
 之后用 `sudo netsgo manage` 查看状态和日志。
 
-#### 方式二：直接运行（仅试用/调试）
+#### 方式二：Docker Compose 示例
 
-```bash
-./netsgo client --server https://your-netsgo-domain.com --key <your-client-key>
+<details>
+<summary>点击展开 docker-compose.yml 示例</summary>
+
+```yaml
+services:
+  netsgo-client:
+    image: ghcr.io/zsio/netsgo:latest
+    restart: unless-stopped
+    environment:
+      NETSGO_DATA_DIR: "/var/lib/netsgo"
+      NETSGO_SERVER: "https://your-netsgo-domain.com"
+      NETSGO_KEY: "<your-client-key>"
+    volumes:
+      - netsgo-client-data:/var/lib/netsgo
+    command:
+      - "client"
+    # 如果 tunnel 需要访问宿主机上的服务（Linux Docker），可以启用：
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+
+volumes:
+  netsgo-client-data:
 ```
 
-直接运行 `netsgo client` 时，推荐填写 `http(s)` 服务地址；旧的 `ws(s)` 输入仍兼容并会自动规范化：
+Docker 镜像默认执行 `netsgo server`，所以客户端容器需要把 `command` 改成 `client`。如果 tunnel 的本地目标服务也在同一个 Compose 网络中，可以在 Web 面板里把目标地址填成对应服务名；如果目标服务在宿主机上，可以使用 `host.docker.internal`。
+
+</details>
+
+#### 方式三：直接运行（仅试用/调试）
+
+<details>
+<summary>点击展开 CLI 直跑命令</summary>
+
+```bash
+./netsgo client \
+  --data-dir ~/.local/state/netsgo \
+  --server https://your-netsgo-domain.com \
+  --key <your-client-key>
+```
+
+直接运行 `netsgo client` 时，推荐显式指定 `--data-dir`，并填写 `http(s)` 服务地址；旧的 `ws(s)` 输入仍兼容并会自动规范化：
 
 - `http://host:port`
 - `https://host:port`
 - `ws://host:port`
 - `wss://host:port`
+
+</details>
 
 ---
 
@@ -154,6 +216,17 @@ sudo ./netsgo install
 client 在线后，在 Web 面板里直接添加、修改或删除 tunnel，无需再登录 client 机器改配置。
 
 创建完成后，直接从公网入口访问或连接对应 tunnel，确认流量已经正确转发。
+
+---
+
+## 为什么用 NetsGo
+
+如果你只是想尽快把服务端跑起来、把内网机器连上来、然后开始建隧道，NetsGo 的设计重点就是这四件事：
+
+- **一个二进制就能跑**：`./netsgo server` 启服务端，`./netsgo client` 连远程节点。
+- **一个端口就够**：Web 控制台、控制通道和数据通道共用同一个入口，防火墙和反向代理只配一处就够。（TCP/UDP 隧道按需使用额外端口。）
+- **部署路径清晰**：容器或直接运行都可以；Linux 长驻场景可用 `netsgo install` + `netsgo manage`。
+- **默认就带控制台**：连上客户端后，直接在 Web 面板里管理节点、查看状态、配置隧道。
 
 ---
 
@@ -248,13 +321,22 @@ netsgo server --tls-mode off --trusted-proxies 127.0.0.1/32,10.0.0.0/8
 
 ```bash
 # 连接远端 HTTPS 服务端
-netsgo client --server https://1.2.3.4:9527 --key mykey
+netsgo client \
+  --data-dir ~/.local/state/netsgo \
+  --server https://1.2.3.4:9527 \
+  --key mykey
 
 # 仅用于测试：跳过 TLS 校验
-netsgo client --server https://1.2.3.4:9527 --key mykey --tls-skip-verify
+netsgo client \
+  --data-dir ~/.local/state/netsgo \
+  --server https://1.2.3.4:9527 \
+  --key mykey \
+  --tls-skip-verify
 ```
 
 旧的 WebSocket 形式仍兼容，会自动规范化为 `http(s)` 服务地址；首次使用建议优先复制 Web 面板展示的服务地址。
+
+`--data-dir` 是 NetsGo 的数据根目录。直接运行时默认是 `~/.local/state/netsgo`；作为 systemd 服务运行时默认是 `/var/lib/netsgo`。Client 状态会写入该目录下的 `client/`，进程锁会写入 `locks/`。
 
 ### `netsgo install` / `netsgo manage`
 
@@ -275,6 +357,7 @@ sudo netsgo manage    # 查看状态、启停、日志、卸载
 | 环境变量 | 对应参数 | 说明 |
 |---|---|---|
 | `NETSGO_PORT` | `--port` | 监听端口，默认 `9527` |
+| `NETSGO_DATA_DIR` | `--data-dir` | 数据根目录；直接运行默认 `~/.local/state/netsgo`，systemd 服务默认 `/var/lib/netsgo` |
 | `NETSGO_SERVER_ADDR` | `--server-addr` | 强制指定对外访问地址 |
 | `NETSGO_INIT_ADMIN_USERNAME` | `--init-admin-username` | 首次初始化管理员用户名 |
 | `NETSGO_INIT_ADMIN_PASSWORD` | `--init-admin-password` | 首次初始化管理员密码 |
@@ -287,8 +370,41 @@ sudo netsgo manage    # 查看状态、启停、日志、卸载
 |---|---|---|
 | `NETSGO_SERVER` | `--server` | 服务地址，例如 `https://netsgo.example.com` |
 | `NETSGO_KEY` | `--key` | client 鉴权 key |
+| `NETSGO_DATA_DIR` | `--data-dir` | 数据根目录；直接运行默认 `~/.local/state/netsgo`，systemd 服务默认 `/var/lib/netsgo` |
 
 </details>
+
+---
+
+## 和常见方案的区别
+
+下面对比基于这些工具的常见使用方式，具体能力以各项目当前版本为准。NetsGo 的定位不是替代所有网络工具，而是提供一个更偏“自托管 Web 控制台 + 节点管理 + tunnel 统一配置”的选择。
+
+| 方案 | 主要定位 | 自托管控制面 | Web 管理面板 | 节点 / tunnel 统一管理 | 配置方式 | 适合场景 |
+|---|---|---:|---:|---:|---|---|
+| **NetsGo** | 内网穿透 + 节点管理平台 | ✅ | ✅ | ✅ | Web 控制台 | 自托管部署、统一管理多节点与 tunnel |
+| **frp** | 成熟高性能内网穿透工具 | ✅ | 监控面板 | 部分 | 配置文件为主 | 熟悉配置文件、追求成熟穿透能力 |
+| **ngrok** | 托管式开发调试隧道 | ❌ | ✅ | 部分 | Web / CLI | 快速临时暴露本地服务 |
+| **cloudflared** | Cloudflare Tunnel / Zero Trust 接入 | ❌ | ✅ | 部分 | Cloudflare 控制台 / CLI | 已使用 Cloudflare 生态的公网接入 |
+| **rathole** | 轻量级反向代理隧道 | ✅ | ❌ | ❌ | 配置文件 | 轻量、简单、偏底层的隧道转发 |
+
+---
+
+## 架构概览
+
+NetsGo Server 使用单端口承载 Web 控制台、REST API、SSE、控制通道和数据通道；Client 主动连接 Server，并通过 WebSocket + yamux 承载数据面流量。
+
+```mermaid
+flowchart LR
+  Admin[Admin Browser] -->|Web UI / REST API / SSE| Server[NetsGo Server<br/>single listener]
+  Client[NetsGo Client] -->|Control WebSocket| Server
+  Client -->|Data WebSocket + yamux| Server
+  User[External User] -->|HTTP / TCP / UDP tunnel| Server
+  Server -->|Multiplexed tunnel traffic| Client
+  Client -->|Local TCP / UDP| Local[Internal Services]
+```
+
+> Web 面板、API、SSE、控制通道和数据通道共用同一个服务端入口；TCP / UDP tunnel 的公网入口端口按 tunnel 配置按需开放。
 
 ---
 
