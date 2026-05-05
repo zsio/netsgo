@@ -1,11 +1,13 @@
 package install
 
 import (
+	"crypto/x509"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"netsgo/internal/clientaddr"
 	"netsgo/internal/svcmgr"
 )
 
@@ -84,9 +86,9 @@ func TestInstallClientWithHistoricalDataOnlyFailsWithReauthMessage(t *testing.T)
 
 func TestInstallClientWithFreshInstall(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"https://panel.example.com", "AA:BB:CC"},
+		inputs:    []string{"https://panel.example.com"},
 		passwords: []string{"sk-test-key"},
-		confirms:  []bool{true, true},
+		confirms:  []bool{true},
 	}
 	writeEnvCalled := false
 	var writtenEnv svcmgr.ClientEnv
@@ -116,17 +118,24 @@ func TestInstallClientWithFreshInstall(t *testing.T) {
 	if writtenEnv.Server != "https://panel.example.com" {
 		t.Fatalf("client env should write normalized base URL, got %#v", writtenEnv)
 	}
+	if writtenEnv.TLSSkipVerify || writtenEnv.TLSFingerprint != "" {
+		t.Fatalf("client install should not write TLS bypass settings, got %#v", writtenEnv)
+	}
 	if len(ui.summaries) != 2 {
 		t.Fatalf("should show confirmation and completion summaries, got %d", len(ui.summaries))
 	}
 	if ui.summaries[1].title != "Client 安装完成" {
 		t.Fatalf("expected 'Client 安装完成' summary, got %#v", ui.summaries)
 	}
-	assertConfirmPrompt(t, ui.confirmCalls, "跳过 TLS 证书校验？")
 	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
-	assertClientServerInputUsesServiceAddressWording(t, ui.inputCalls)
+	assertNoConfirmPrompt(t, ui.confirmCalls, "跳过 TLS 证书校验？")
+	assertNoInputPrompt(t, ui.inputCalls, "TLS 证书指纹")
+	assertClientServerInputUsesConsoleAddressWording(t, ui.inputCalls)
 	assertClientKeyPromptUsesChineseTitle(t, ui.passwordCalls)
 	assertSummaryRow(t, ui.summaries[1], "NetsGo 链路", string(ClientLinkEstablished))
+	assertSummaryRow(t, ui.summaries[0], "TLS 状态", "启用")
+	assertNoSummaryRow(t, ui.summaries[0], "跳过 TLS 校验")
+	assertNoSummaryRow(t, ui.summaries[0], "TLS 指纹")
 	assertNoSummaryRow(t, ui.summaries[0], "Control endpoint")
 	assertNoSummaryRow(t, ui.summaries[0], "Data endpoint")
 	assertNoSummaryRow(t, ui.summaries[1], "Control endpoint")
@@ -135,9 +144,9 @@ func TestInstallClientWithFreshInstall(t *testing.T) {
 
 func TestInstallClientWithEnsureDirs(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"https://panel.example.com", ""},
+		inputs:    []string{"https://panel.example.com"},
 		passwords: []string{"sk-test-key"},
-		confirms:  []bool{false, true},
+		confirms:  []bool{true},
 	}
 	ensureDirsCalled := false
 	err := InstallClientWith(clientDeps{
@@ -163,9 +172,9 @@ func TestInstallClientWithEnsureDirs(t *testing.T) {
 
 func TestInstallClientWithConfirmNoShowsCancelledSummary(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"https://panel.example.com", ""},
+		inputs:    []string{"https://panel.example.com"},
 		passwords: []string{"sk-test-key"},
-		confirms:  []bool{false, false},
+		confirms:  []bool{false},
 	}
 	err := InstallClientWith(clientDeps{
 		UI:                ui,
@@ -186,8 +195,8 @@ func TestInstallClientWithConfirmNoShowsCancelledSummary(t *testing.T) {
 	if len(ui.summaries) != 2 || ui.summaries[1].title != "安装已取消" {
 		t.Fatalf("expected '安装已取消' summary after declining, got %#v", ui.summaries)
 	}
-	assertConfirmPrompt(t, ui.confirmCalls, "跳过 TLS 证书校验？")
 	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
+	assertNoConfirmPrompt(t, ui.confirmCalls, "跳过 TLS 证书校验？")
 }
 
 func TestInstallClientAcceptsHTTPAndWritesServiceAddress(t *testing.T) {
@@ -212,6 +221,10 @@ func TestInstallClientAcceptsHTTPAndWritesServiceAddress(t *testing.T) {
 		DaemonReload:     func() error { return nil },
 		EnableAndStart:   func(unit string) error { return nil },
 		VerifyClientLink: fakeClientLinkWithDetail(ClientLinkNotEstablished, "服务已启动，但 8 秒内未确认连接成功。"),
+		CheckServerTLS: func(addr clientaddr.Address, skipVerify bool) error {
+			t.Fatal("HTTP install should not probe TLS")
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("HTTP client install should not error: %v", err)
@@ -220,7 +233,10 @@ func TestInstallClientAcceptsHTTPAndWritesServiceAddress(t *testing.T) {
 		t.Fatalf("NETSGO_SERVER should be normalized HTTP base URL, got %#v", writtenEnv)
 	}
 	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
+	assertNoConfirmPrompt(t, ui.confirmCalls, "跳过 TLS 证书校验？")
 	assertSummaryRow(t, ui.summaries[0], "服务地址", "http://netsgo.zsio.dev:9527")
+	assertNoSummaryRow(t, ui.summaries[0], "跳过 TLS 校验")
+	assertNoSummaryRow(t, ui.summaries[0], "TLS 指纹")
 	assertNoSummaryRow(t, ui.summaries[0], "Control endpoint")
 	assertNoSummaryRow(t, ui.summaries[0], "Data endpoint")
 	assertSummaryRow(t, ui.summaries[1], "NetsGo 链路", string(ClientLinkNotEstablished))
@@ -229,11 +245,98 @@ func TestInstallClientAcceptsHTTPAndWritesServiceAddress(t *testing.T) {
 	assertNoSummaryRow(t, ui.summaries[1], "Data endpoint")
 }
 
+func TestInstallClientHTTPSCertificateFailureCanSkipWithoutConsumingKeyDuringProbe(t *testing.T) {
+	ui := &fakeUI{
+		inputs:    []string{"https://netsgo.zsio.dev"},
+		passwords: []string{"sk-test-key"},
+		confirms:  []bool{true, true},
+	}
+	var probeSkips []bool
+	var writtenEnv svcmgr.ClientEnv
+	err := InstallClientWith(clientDeps{
+		UI:                ui,
+		Detect:            func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateNotInstalled },
+		EnsureUser:        func(name string) error { return nil },
+		EnsureDirs:        func() error { return nil },
+		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
+		InstallBinary:     func(src string) error { return nil },
+		WriteClientEnv: func(layout svcmgr.ServiceLayout, env svcmgr.ClientEnv) error {
+			writtenEnv = env
+			return nil
+		},
+		WriteClientUnit:  func(layout svcmgr.ServiceLayout) error { return nil },
+		DaemonReload:     func() error { return nil },
+		EnableAndStart:   func(unit string) error { return nil },
+		VerifyClientLink: fakeClientLink(ClientLinkEstablished),
+		CheckServerTLS: func(addr clientaddr.Address, skipVerify bool) error {
+			if len(ui.passwordCalls) != 0 {
+				t.Fatal("TLS probe should happen before asking for the client key")
+			}
+			probeSkips = append(probeSkips, skipVerify)
+			if !skipVerify {
+				return x509.UnknownAuthorityError{}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("client install with accepted TLS skip should not error: %v", err)
+	}
+	if len(probeSkips) != 2 || probeSkips[0] || !probeSkips[1] {
+		t.Fatalf("TLS probe skip sequence = %#v, want []bool{false, true}", probeSkips)
+	}
+	if !writtenEnv.TLSSkipVerify {
+		t.Fatalf("accepted TLS skip should be written to env, got %#v", writtenEnv)
+	}
+	assertConfirmPrompt(t, ui.confirmCalls, "HTTPS 证书校验失败，是否跳过 TLS 证书校验？")
+	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
+	assertSummaryRow(t, ui.summaries[0], "跳过 TLS 校验", "是")
+	assertSummaryRow(t, ui.summaries[0], "TLS 风险", "连接会加密，但不会验证服务端证书身份")
+}
+
+func TestInstallClientHTTPSCertificateFailureDeclinedDoesNotAskForKey(t *testing.T) {
+	ui := &fakeUI{
+		inputs:   []string{"https://netsgo.zsio.dev"},
+		confirms: []bool{false},
+	}
+	err := InstallClientWith(clientDeps{
+		UI:             ui,
+		Detect:         func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateNotInstalled },
+		CheckServerTLS: func(addr clientaddr.Address, skipVerify bool) error { return x509.UnknownAuthorityError{} },
+	})
+	if err == nil || !strings.Contains(err.Error(), "HTTPS 证书校验失败") {
+		t.Fatalf("declined TLS skip should return certificate error, got %v", err)
+	}
+	if len(ui.passwordCalls) != 0 {
+		t.Fatalf("client key should not be requested after declined TLS skip: %#v", ui.passwordCalls)
+	}
+	assertConfirmPrompt(t, ui.confirmCalls, "HTTPS 证书校验失败，是否跳过 TLS 证书校验？")
+	assertNoConfirmPrompt(t, ui.confirmCalls, "继续安装？")
+}
+
+func TestInstallClientHTTPSNonCertificateFailureDoesNotOfferTLSSkip(t *testing.T) {
+	ui := &fakeUI{
+		inputs: []string{"https://netsgo.zsio.dev"},
+	}
+	err := InstallClientWith(clientDeps{
+		UI:             ui,
+		Detect:         func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateNotInstalled },
+		CheckServerTLS: func(addr clientaddr.Address, skipVerify bool) error { return errors.New("connection refused") },
+	})
+	if err == nil || !strings.Contains(err.Error(), "无法连接 HTTPS 服务") {
+		t.Fatalf("non-certificate HTTPS failure should return connection error, got %v", err)
+	}
+	assertNoConfirmPrompt(t, ui.confirmCalls, "HTTPS 证书校验失败，是否跳过 TLS 证书校验？")
+	if len(ui.passwordCalls) != 0 {
+		t.Fatalf("client key should not be requested after HTTPS connection failure: %#v", ui.passwordCalls)
+	}
+}
+
 func TestInstallClientAcceptsLegacyWSSAndWritesHTTPSServiceAddress(t *testing.T) {
 	ui := &fakeUI{
 		inputs:    []string{"wss://netsgo.zsio.dev"},
 		passwords: []string{"sk-test-key"},
-		confirms:  []bool{true, true},
+		confirms:  []bool{true},
 	}
 	var writtenEnv svcmgr.ClientEnv
 	err := InstallClientWith(clientDeps{
@@ -258,7 +361,14 @@ func TestInstallClientAcceptsLegacyWSSAndWritesHTTPSServiceAddress(t *testing.T)
 	if writtenEnv.Server != "https://netsgo.zsio.dev" {
 		t.Fatalf("NETSGO_SERVER should be normalized HTTPS service address, got %#v", writtenEnv)
 	}
+	if writtenEnv.TLSSkipVerify || writtenEnv.TLSFingerprint != "" {
+		t.Fatalf("client install should not write TLS bypass settings, got %#v", writtenEnv)
+	}
+	assertNoConfirmPrompt(t, ui.confirmCalls, "跳过 TLS 证书校验？")
 	assertSummaryRow(t, ui.summaries[0], "服务地址", "https://netsgo.zsio.dev")
+	assertSummaryRow(t, ui.summaries[0], "TLS 状态", "启用")
+	assertNoSummaryRow(t, ui.summaries[0], "跳过 TLS 校验")
+	assertNoSummaryRow(t, ui.summaries[0], "TLS 指纹")
 	assertNoSummaryRow(t, ui.summaries[0], "Control endpoint")
 	assertNoSummaryRow(t, ui.summaries[0], "Data endpoint")
 }
@@ -365,6 +475,24 @@ func assertConfirmPrompt(t *testing.T, calls []confirmCall, prompt string) {
 	t.Fatalf("confirm %q not called; calls=%#v", prompt, calls)
 }
 
+func assertNoConfirmPrompt(t *testing.T, calls []confirmCall, prompt string) {
+	t.Helper()
+	for _, call := range calls {
+		if call.prompt == prompt {
+			t.Fatalf("confirm %q should not be called; calls=%#v", prompt, calls)
+		}
+	}
+}
+
+func assertNoInputPrompt(t *testing.T, calls []inputCall, prompt string) {
+	t.Helper()
+	for _, call := range calls {
+		if call.prompt == prompt {
+			t.Fatalf("input %q should not be called; calls=%#v", prompt, calls)
+		}
+	}
+}
+
 func assertSummaryRow(t *testing.T, summary summaryCall, key, want string) {
 	t.Helper()
 	for _, row := range summary.rows {
@@ -387,22 +515,22 @@ func assertNoSummaryRow(t *testing.T, summary summaryCall, key string) {
 	}
 }
 
-func assertClientServerInputUsesServiceAddressWording(t *testing.T, calls []inputCall) {
+func assertClientServerInputUsesConsoleAddressWording(t *testing.T, calls []inputCall) {
 	t.Helper()
 	for _, call := range calls {
 		if call.prompt != "服务地址" {
 			continue
 		}
-		if call.opts.Placeholder != "e.g. http://netsgo.example.com:9527" {
-			t.Fatalf("service address placeholder = %q", call.opts.Placeholder)
+		if call.opts.Placeholder != "https://netsgo.domain.com" {
+			t.Fatalf("console address placeholder = %q", call.opts.Placeholder)
 		}
-		if !strings.Contains(call.opts.Description, "服务地址") || !strings.Contains(call.opts.Description, "http(s)://") {
-			t.Fatalf("service address description should prefer service address/http(s), got %q", call.opts.Description)
+		if call.opts.Description != "请输入服务端控制台地址, 通常是http(s)://域名" {
+			t.Fatalf("console address description = %q", call.opts.Description)
 		}
 		if strings.Contains(call.opts.Description, "control/data") {
-			t.Fatalf("service address description should not expose control/data endpoints, got %q", call.opts.Description)
+			t.Fatalf("console address description should not expose control/data endpoints, got %q", call.opts.Description)
 		}
 		return
 	}
-	t.Fatalf("service address input prompt not called; calls=%#v", calls)
+	t.Fatalf("console address input prompt not called; calls=%#v", calls)
 }
