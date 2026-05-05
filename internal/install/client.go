@@ -1,7 +1,12 @@
 package install
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -47,6 +52,7 @@ type clientDeps struct {
 	DaemonReload      func() error
 	EnableAndStart    func(string) error
 	VerifyClientLink  func(unit string, since time.Time, timeout time.Duration) ClientLinkEvidence
+	CheckServerTLS    func(addr clientaddr.Address, skipVerify bool) error
 }
 
 func InstallClient() error {
@@ -73,8 +79,8 @@ func InstallClientWith(deps clientDeps) error {
 	}
 
 	serverInput, err := deps.UI.Input("服务地址", tui.InputOptions{
-		Placeholder: "e.g. http://netsgo.example.com:9527",
-		Description: "粘贴 Web 控制台或 server 安装摘要中的服务地址，通常为 http(s)://；兼容旧的 ws(s):// 输入并会自动规范化。",
+		Placeholder: "https://netsgo.domain.com",
+		Description: "请输入服务端控制台地址, 通常是http(s)://域名",
 		Validate:    validateInstallClientServerURL,
 	})
 	if err != nil {
@@ -85,6 +91,26 @@ func InstallClientWith(deps clientDeps) error {
 		return err
 	}
 	serverURL := serverAddr.BaseURL
+	tlsSkipVerify := false
+	if serverAddr.UseTLS && deps.CheckServerTLS != nil {
+		if err := deps.CheckServerTLS(serverAddr, false); err != nil {
+			if !isTLSCertificateVerificationError(err) {
+				return fmt.Errorf("无法连接 HTTPS 服务: %w", err)
+			}
+			ok, confirmErr := deps.UI.Confirm("HTTPS 证书校验失败，是否跳过 TLS 证书校验？")
+			if confirmErr != nil {
+				return confirmErr
+			}
+			if !ok {
+				return fmt.Errorf("HTTPS 证书校验失败: %w", err)
+			}
+			tlsSkipVerify = true
+			if retryErr := deps.CheckServerTLS(serverAddr, true); retryErr != nil {
+				return fmt.Errorf("跳过 TLS 证书校验后仍无法连接 HTTPS 服务: %w", retryErr)
+			}
+		}
+	}
+
 	clientKey, err := deps.UI.Password("客户端接入密钥", tui.InputOptions{
 		Placeholder: "sk-...",
 		Description: "从 Web 控制台的 Clients 页面获取 client key。",
@@ -99,30 +125,18 @@ func InstallClientWith(deps clientDeps) error {
 		return err
 	}
 	usesTLS := serverAddr.UseTLS
-	tlsSkipVerify := false
-	tlsFingerprint := ""
-	if usesTLS {
-		tlsSkipVerify, err = deps.UI.Confirm("跳过 TLS 证书校验？")
-		if err != nil {
-			return err
-		}
-		if !tlsSkipVerify {
-			tlsFingerprint, err = deps.UI.Input("TLS 证书指纹", tui.InputOptions{
-				Placeholder: "AA:BB:CC:...",
-				Description: "用于固定自签名证书的 SHA-256 指纹（可选）。",
-			})
-			if err != nil {
-				return err
-			}
-		}
-	}
 
-	deps.UI.PrintSummary("安装摘要", confirmSummaryRows(svcmgr.RoleClient,
+	summaryRows := confirmSummaryRows(svcmgr.RoleClient,
 		[2]string{"服务地址", serverURL},
 		[2]string{"TLS 状态", ternary(usesTLS, "启用", "未启用")},
-		[2]string{"跳过 TLS 校验", ternary(usesTLS, boolText(tlsSkipVerify), "不适用")},
-		[2]string{"TLS 指纹", ternary(tlsFingerprint != "", tlsFingerprint, "未设置")},
-	))
+	)
+	if tlsSkipVerify {
+		summaryRows = append(summaryRows,
+			[2]string{"跳过 TLS 校验", "是"},
+			[2]string{"TLS 风险", "连接会加密，但不会验证服务端证书身份"},
+		)
+	}
+	deps.UI.PrintSummary("安装摘要", summaryRows)
 	ok, err := deps.UI.ConfirmWithOptions("继续安装？", tui.ConfirmOptions{})
 	if err != nil {
 		return err
@@ -141,7 +155,7 @@ func InstallClientWith(deps clientDeps) error {
 		DaemonReload:      deps.DaemonReload,
 		EnableAndStart:    deps.EnableAndStart,
 	}, func(layout svcmgr.ServiceLayout) error {
-		if err := deps.WriteClientEnv(layout, svcmgr.ClientEnv{Server: serverURL, Key: clientKey, TLSSkipVerify: tlsSkipVerify, TLSFingerprint: tlsFingerprint}); err != nil {
+		if err := deps.WriteClientEnv(layout, svcmgr.ClientEnv{Server: serverURL, Key: clientKey, TLSSkipVerify: tlsSkipVerify}); err != nil {
 			return err
 		}
 		return deps.WriteClientUnit(layout)
@@ -171,7 +185,53 @@ func defaultClientDeps() clientDeps {
 		DaemonReload:      svcmgr.DaemonReload,
 		EnableAndStart:    svcmgr.EnableAndStart,
 		VerifyClientLink:  defaultVerifyClientLink,
+		CheckServerTLS:    defaultCheckServerTLS,
 	}
+}
+
+func defaultCheckServerTLS(addr clientaddr.Address, skipVerify bool) error {
+	if !addr.UseTLS {
+		return nil
+	}
+	baseURL, err := url.Parse(addr.BaseURL)
+	if err != nil {
+		return err
+	}
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: skipVerify,
+		ServerName:         baseURL.Hostname(),
+		MinVersion:         tls.VersionTLS12,
+	}
+	hostPort := baseURL.Host
+	if baseURL.Port() == "" {
+		hostPort = net.JoinHostPort(baseURL.Hostname(), "443")
+	}
+	dialer := tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: 8 * time.Second},
+		Config:    tlsConfig,
+	}
+	conn, err := dialer.Dial("tcp", hostPort)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	return err
+}
+
+func isTLSCertificateVerificationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	var roots x509.SystemRootsError
+	if errors.As(err, &unknownAuthority) ||
+		errors.As(err, &hostname) ||
+		errors.As(err, &invalid) ||
+		errors.As(err, &roots) {
+		return true
+	}
+	return strings.Contains(err.Error(), "x509:")
 }
 
 func clientCompletionSummaryRows(serverURL string, link ClientLinkEvidence) [][2]string {
@@ -188,7 +248,7 @@ func clientCompletionSummaryRows(serverURL string, link ClientLinkEvidence) [][2
 	rows = append(rows, [2]string{"日志", journalctlCommand(svcmgr.RoleClient)})
 	if link.State != ClientLinkEstablished {
 		rows = append(rows,
-			[2]string{"建议", "检查 DNS/服务地址、客户端接入密钥、TLS 设置、server 服务和 client 日志"},
+			[2]string{"建议", "检查 DNS/服务地址、HTTPS 证书、客户端接入密钥、server 服务和 client 日志"},
 		)
 	}
 	rows = append(rows, [2]string{"下一步", "运行 netsgo manage 管理服务"})
@@ -220,13 +280,6 @@ func defaultVerifyClientLink(unit string, since time.Time, timeout time.Duration
 
 func clientLinkEstablishedFromLogs(logs string) bool {
 	return strings.Contains(logs, "Authentication succeeded") && strings.Contains(logs, "Data channel established")
-}
-
-func boolText(v bool) string {
-	if v {
-		return "是"
-	}
-	return "否"
 }
 
 func ternary(ok bool, a, b string) string {
