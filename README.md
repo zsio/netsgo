@@ -179,9 +179,6 @@ services:
       - netsgo-client-data:/var/lib/netsgo
     command:
       - "client"
-    # 如果 tunnel 需要访问宿主机上的服务（Linux Docker），可以启用：
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
 
 volumes:
   netsgo-client-data:
