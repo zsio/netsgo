@@ -93,14 +93,14 @@ services:
     image: ghcr.io/zsio/netsgo:latest
     restart: unless-stopped
     ports:
-      - "9527:9527"     # Web/API/控制通道/数据通道共用入口
+      - "9527:9527"     # Web/API/控制通道/数据通道/HTTP 隧道入口
       # 如需 TCP/UDP tunnel，请额外映射对应 remote port，例如：
       # - "10000:10000/tcp"
       # - "10001:10001/udp"
     environment:
       NETSGO_DATA_DIR: "/var/lib/netsgo"
       NETSGO_INIT_ADMIN_USERNAME: "admin"
-      NETSGO_INIT_ADMIN_PASSWORD: "Password123"
+      NETSGO_INIT_ADMIN_PASSWORD: "<change-me-strong-password>"
       NETSGO_INIT_SERVER_ADDR: "https://your-netsgo-domain.com"
       NETSGO_INIT_ALLOWED_PORTS: "10000-11000"
     volumes:
@@ -127,12 +127,12 @@ Docker 镜像默认执行 `netsgo server`。这里通过 `NETSGO_DATA_DIR=/var/l
 ./netsgo server \
   --port 9527 \
   --init-admin-username admin \
-  --init-admin-password Password123 \
+  --init-admin-password '<change-me-strong-password>' \
   --init-server-addr https://your-netsgo-domain.com \
   --init-allowed-ports 10000-11000
 ```
 
-初始化完成后，同一数据目录后续启动可省略 `init-*` 参数。
+请务必把示例中的 `<change-me-strong-password>` 替换为高强度密码，不要直接用于生产环境。初始化完成后，同一数据目录后续启动可省略 `init-*` 参数。
 
 </details>
 
@@ -303,7 +303,7 @@ your-netsgo-domain.com {
 # 首次初始化
 netsgo server \
   --init-admin-username admin \
-  --init-admin-password Password123 \
+  --init-admin-password '<change-me-strong-password>' \
   --init-server-addr https://panel.example.com \
   --init-allowed-ports 10000-11000
 
