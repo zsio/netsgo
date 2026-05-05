@@ -5,7 +5,15 @@ import { api } from '@/lib/api';
 import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
 import { useConnectionStore } from '@/stores/connection-store';
 import { useAuthStore } from '@/stores/auth-store';
-import type { Client, ConsoleSnapshot, ConsoleSummary, ServerStatus } from '@/types';
+import { buildClientTrafficQueryKey } from '@/hooks/use-client-traffic';
+import type {
+  Client,
+  ClientTrafficResponse,
+  ConsoleSnapshot,
+  ConsoleSummary,
+  ServerStatus,
+  TrafficRealtimeEvent,
+} from '@/types';
 
 type EventStreamQueryClient = ReturnType<typeof useQueryClient>;
 
@@ -51,6 +59,27 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
             client.id === parsed.client_id ? { ...client, stats: parsed.stats } : client,
           ),
         );
+      } catch {
+        // ignore malformed events
+      }
+      return;
+    }
+    case 'traffic_realtime': {
+      try {
+        const parsed = JSON.parse(data) as TrafficRealtimeEvent;
+        for (const client of parsed.clients ?? []) {
+          if (!client.client_id) {
+            continue;
+          }
+          const traffic: ClientTrafficResponse = {
+            resolution: client.resolution,
+            items: client.items ?? [],
+          };
+          queryClient.setQueryData<ClientTrafficResponse>(
+            buildClientTrafficQueryKey(client.client_id, '60s'),
+            traffic,
+          );
+        }
       } catch {
         // ignore malformed events
       }

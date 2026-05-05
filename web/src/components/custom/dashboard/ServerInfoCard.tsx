@@ -1,14 +1,14 @@
 import { useState } from 'react';
-import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp } from 'lucide-react';
+import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp, Globe, Wifi } from 'lucide-react';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Skeleton } from '@/components/ui/skeleton';
+import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
 import { formatUptime, formatBytes } from '@/lib/format';
 import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
-import { NetworkInfoPopover } from '@/components/custom/common/NetworkInfoPopover';
 
 function ProgressBar({ value, label, total, colorClass = "bg-primary" }: { value: number, label: string, total?: string, colorClass?: string }) {
   return (
@@ -71,20 +71,33 @@ export function ServerInfoCard() {
           <span className="text-xs text-muted-foreground">{status?.os_arch || '-'}</span>
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 md:border-r border-border/40">
-          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Network className="w-4 h-4" />IP 地址</span>
-          <NetworkInfoPopover
-            localIP={status?.ip_address}
-            publicIPv4={status?.public_ipv4}
-            publicIPv6={status?.public_ipv6}
-            port={status?.listen_port}
-          >
-            <span className="font-medium text-sm cursor-default border-b border-dashed border-muted-foreground/40 hover:border-foreground/60 transition-colors w-fit">
-              {status?.public_ipv4 || status?.ip_address || '-'}
-            </span>
-          </NetworkInfoPopover>
-          {status?.public_ipv4 && status?.ip_address && status.public_ipv4 !== status.ip_address && (
-            <span className="text-xs text-muted-foreground">内网: {status.ip_address}</span>
-          )}
+          <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Network className="w-4 h-4" />
+            <HoverCard>
+              <HoverCardTrigger asChild>
+                <span className="border-b border-dashed border-muted-foreground/40 hover:border-foreground/60 transition-colors w-fit cursor-help">
+                  IP 地址
+                </span>
+              </HoverCardTrigger>
+              <HoverCardContent className="w-auto min-w-[180px] p-3 text-xs text-muted-foreground" side="bottom" align="start">
+                <span>
+                  <span className="mr-1">端口:</span>
+                  <span className="font-mono text-foreground">{status?.listen_port ? status.listen_port : '-'}</span>
+                </span>
+              </HoverCardContent>
+            </HoverCard>
+          </div>
+          <CopyableIpLine
+            primary
+            title="公网 IP"
+            icon={<Globe className="h-3.5 w-3.5" />}
+            value={status?.public_ipv4 || status?.public_ipv6 || '-'}
+          />
+          <CopyableIpLine
+            title="内网 IP"
+            icon={<Wifi className="h-3.5 w-3.5" />}
+            value={status?.ip_address || '-'}
+          />
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />运行时长</span>
@@ -141,7 +154,7 @@ export function ServerInfoCard() {
                     <span className="text-muted-foreground">进程占用</span>
                     <span className="font-medium text-foreground">{status?.app_mem_sys ? formatBytes(status.app_mem_sys) : '-'}</span>
                   </div>
-                  <p className="text-muted-foreground/70 text-[11px] pt-1 border-t border-border/40">进程占用包含运行时、嵌入资源等开销。</p>
+                  <p className="text-muted-foreground/70 text-[11px] pt-1 border-t border-border/40">进程占用包含运行时、嵌入资源。</p>
                 </div>
               </HoverCardContent>
             </HoverCard>

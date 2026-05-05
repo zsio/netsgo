@@ -95,8 +95,8 @@ export interface CreateTunnelInput {
   egress_bps?: number;
 }
 
-export type TrafficResolution = 'minute' | 'hour';
-export type ClientTrafficRange = '1h' | '24h' | '7d';
+export type TrafficResolution = 'second' | 'minute' | 'hour';
+export type ClientTrafficRange = '60s' | '1h' | '24h' | '7d';
 
 export interface TrafficPoint {
   bucket_start: string;
@@ -114,6 +114,15 @@ export interface TunnelTrafficSeries {
 export interface ClientTrafficResponse {
   resolution: TrafficResolution;
   items: TunnelTrafficSeries[];
+}
+
+export interface TrafficRealtimeClient extends ClientTrafficResponse {
+  client_id: string;
+}
+
+export interface TrafficRealtimeEvent {
+  generated_at: string;
+  clients: TrafficRealtimeClient[];
 }
 
 export interface ClientBandwidthSettingsResponse {

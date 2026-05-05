@@ -29,25 +29,43 @@ func (s *Server) handleGetClientTraffic(w http.ResponseWriter, r *http.Request) 
 	}
 
 	tunnelName := q.Get("tunnel")
-	resolutionStr := q.Get("resolution")
-	resolution := autoTrafficResolution(from, to)
-
-	if resolutionStr != "" && resolutionStr != "minute" && resolutionStr != "hour" {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "resolution must be 'minute' or 'hour'"})
+	resolution, err := parseTrafficResolution(q.Get("resolution"), from, to)
+	if err != nil {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-
-	if resolutionStr != "" {
-		resolution = TrafficResolution(resolutionStr)
+	if resolution == TrafficResolutionSecond {
+		if err := validateRealtimeTrafficTimeRange(from, to); err != nil {
+			encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
 	}
 
-	result, err := s.trafficStore.QueryWithResolution(clientID, tunnelName, from, to, resolution)
+	var result TrafficQueryResult
+	if resolution == TrafficResolutionSecond {
+		result, err = s.buildRealtimeTrafficResult(clientID, tunnelName, from, to, s.knownTrafficTunnels(clientID, tunnelName))
+	} else {
+		result, err = s.trafficStore.QueryWithResolution(clientID, tunnelName, from, to, resolution)
+	}
 	if err != nil {
 		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to query traffic"})
 		return
 	}
 
 	encodeJSON(w, http.StatusOK, result)
+}
+
+func parseTrafficResolution(resolutionStr string, from, to time.Time) (TrafficResolution, error) {
+	if resolutionStr == "" {
+		return autoTrafficResolution(from, to), nil
+	}
+
+	switch TrafficResolution(resolutionStr) {
+	case TrafficResolutionSecond, TrafficResolutionMinute, TrafficResolutionHour:
+		return TrafficResolution(resolutionStr), nil
+	default:
+		return "", errors.New("resolution must be 'second', 'minute', or 'hour'")
+	}
 }
 
 func parseTrafficTimeRange(fromStr, toStr string, now time.Time) (time.Time, time.Time, error) {

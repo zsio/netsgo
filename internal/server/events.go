@@ -11,7 +11,7 @@ import (
 
 // SSEEvent represents a single SSE event.
 type SSEEvent struct {
-	Type string // "ready" | "snapshot" | "stats_update" | "client_online" | "client_offline" | "tunnel_changed"
+	Type string // "ready" | "snapshot" | "stats_update" | "traffic_realtime" | "client_online" | "client_offline" | "tunnel_changed"
 	Data string // JSON string
 }
 

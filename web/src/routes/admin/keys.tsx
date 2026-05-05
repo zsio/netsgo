@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Key, Power, PowerOff, Trash2 } from 'lucide-react';
+import { TableActionIconButton } from '@/components/custom/common/TableActionIconButton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
 import {
@@ -206,11 +207,9 @@ function AdminKeysPage() {
                       <div className="flex items-center justify-end gap-1">
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              aria-label={key.is_active ? '禁用 API Key' : '启用 API Key'}
-                              className={`h-8 w-8 ${key.is_active ? 'hover:text-amber-500 hover:bg-amber-500/10' : 'hover:text-emerald-500 hover:bg-emerald-500/10'}`}
+                            <TableActionIconButton
+                              label={key.is_active ? '禁用 API Key' : '启用 API Key'}
+                              tone={key.is_active ? 'warning' : 'success'}
                               onClick={() => key.is_active ? disableKey.mutate(key.id) : enableKey.mutate(key.id)}
                             >
                               {key.is_active ? (
@@ -218,22 +217,20 @@ function AdminKeysPage() {
                               ) : (
                                 <Power className="h-4 w-4" />
                               )}
-                            </Button>
+                            </TableActionIconButton>
                           </TooltipTrigger>
                           <TooltipContent>{key.is_active ? '禁用' : '启用'}</TooltipContent>
                         </Tooltip>
 
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              aria-label="删除 API Key"
-                              className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                            <TableActionIconButton
+                              label="删除 API Key"
+                              tone="destructive"
                               onClick={() => setDeleteTarget({ id: key.id, name: key.name })}
                             >
                               <Trash2 className="h-4 w-4" />
-                            </Button>
+                            </TableActionIconButton>
                           </TooltipTrigger>
                           <TooltipContent>删除</TooltipContent>
                         </Tooltip>

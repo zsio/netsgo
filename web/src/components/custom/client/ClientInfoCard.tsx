@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   Monitor, Network, Clock, Cpu, HardDrive, Database,
-  Box, CircleHelp, Globe, ArrowDownCircle, ArrowUpCircle,
+  Box, CircleHelp, Globe, Wifi, ArrowDownCircle, ArrowUpCircle,
 } from 'lucide-react';
 import { formatBytes, formatUptime, formatNetSpeed } from '@/lib/format';
 import {
@@ -9,7 +9,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from '@/components/ui/hover-card';
-import { NetworkInfoPopover } from '@/components/custom/common/NetworkInfoPopover';
+import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 
@@ -85,19 +85,17 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 md:border-r border-border/40">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Network className="w-4 h-4" />IP 地址</span>
-          <NetworkInfoPopover
-            localIP={info.ip}
-            publicIPv4={info.public_ipv4}
-            publicIPv6={info.public_ipv6}
-            remoteIP={client.last_ip}
-          >
-            <span className="font-medium text-sm cursor-default border-b border-dashed border-muted-foreground/40 hover:border-foreground/60 transition-colors w-fit">
-              {info.public_ipv4 || info.ip || '-'}
-            </span>
-          </NetworkInfoPopover>
-          {info.public_ipv4 && info.ip && info.public_ipv4 !== info.ip && (
-            <span className="text-xs text-muted-foreground">内网: {info.ip}</span>
-          )}
+          <CopyableIpLine
+            primary
+            title="公网 IP"
+            icon={<Globe className="h-3.5 w-3.5" />}
+            value={info.public_ipv4 || info.public_ipv6 || client.last_ip || '-'}
+          />
+          <CopyableIpLine
+            title="内网 IP"
+            icon={<Wifi className="h-3.5 w-3.5" />}
+            value={info.ip || '-'}
+          />
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />运行时长</span>
@@ -159,7 +157,7 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
                       <span className="text-muted-foreground">进程占用</span>
                       <span className="font-medium text-foreground">{stats.app_mem_sys ? formatBytes(stats.app_mem_sys) : '-'}</span>
                     </div>
-                    <p className="text-muted-foreground/70 text-[11px] pt-1 border-t border-border/40">进程占用包含运行时、嵌入资源等开销。</p>
+                    <p className="text-muted-foreground/70 text-[11px] pt-1 border-t border-border/40">进程占用包含运行时、嵌入资源。</p>
                   </div>
                 </HoverCardContent>
               </HoverCard>

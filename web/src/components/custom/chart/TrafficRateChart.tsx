@@ -1,5 +1,5 @@
 import { Line, LineChart, CartesianGrid, XAxis, YAxis } from 'recharts';
-import { AlertCircle, Activity } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 
 import {
   type ChartConfig,
@@ -48,47 +48,30 @@ function getQueryTunnel(tunnelFilter: Pick<ProxyConfig, 'name' | 'type'>[] | und
 }
 
 export function TrafficRateChart({ clientId, tunnelFilter }: TrafficRateChartProps) {
-  const { data, isLoading, isError, error, isFetching } = useClientTraffic(clientId, '24h', {
+  const { data, isLoading, isError, error } = useClientTraffic(clientId, '24h', {
     tunnel: getQueryTunnel(tunnelFilter),
   });
   const chartData = useAggregatedTrafficRates(data, '24h', tunnelFilter);
   const hasSamples = hasTrafficSamples(data, tunnelFilter);
 
-  const tunnelLabel = tunnelFilter && tunnelFilter.length > 0
-    ? ` · ${tunnelFilter.length} 条隧道`
-    : '';
-
   return (
-    <div className="rounded-xl border border-border/40 bg-card/30 p-6 shadow-sm backdrop-blur-sm">
-      <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-lg font-semibold text-foreground">
-            <Activity className="h-5 w-5 text-primary" />
-            <h3>24 小时网络速率</h3>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            最近 24 小时 · 按分钟聚合速率{tunnelLabel}
-            {isFetching && !isLoading ? ' · 刷新中…' : ''}
-          </p>
-        </div>
-      </div>
-
+    <div className="min-w-0">
       {isLoading ? (
-        <div className="h-72 animate-pulse rounded-xl border border-border/60 bg-background/30" />
+        <div className="h-80 animate-pulse rounded-xl border border-border/60 bg-background/30" />
       ) : isError ? (
-        <div className="flex h-72 flex-col items-center justify-center rounded-xl border border-dashed border-destructive/30 bg-destructive/5 text-center">
+        <div className="flex h-80 flex-col items-center justify-center rounded-xl border border-dashed border-destructive/30 bg-destructive/5 text-center">
           <AlertCircle className="mb-3 h-5 w-5 text-destructive" />
           <p className="text-sm font-medium text-foreground">流量数据加载失败</p>
           <p className="mt-1 max-w-md text-sm text-muted-foreground">{getErrorMessage(error)}</p>
         </div>
       ) : !hasSamples ? (
-        <div className="flex h-72 flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/30 text-center">
+        <div className="flex h-80 flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/30 text-center">
           <p className="text-sm font-medium text-foreground">该时间范围内暂无流量数据</p>
         </div>
       ) : (
-        <div className="h-80 w-full">
-          <ChartContainer config={chartConfig} className="h-full w-full">
-            <LineChart data={chartData} margin={{ top: 12, right: 12, left: 20, bottom: 4 }}>
+        <div className="h-80 min-w-0 w-full">
+          <ChartContainer config={chartConfig} className="h-full min-w-0 w-full aspect-auto">
+            <LineChart data={chartData} margin={{ top: 12, right: 12, left: 8, bottom: 4 }}>
               <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" strokeOpacity={0.45} />
               <XAxis
                 dataKey="timestamp"

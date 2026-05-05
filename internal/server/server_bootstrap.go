@@ -173,6 +173,7 @@ func (s *Server) Start() error {
 	go s.serverStatusLoop()
 	go s.trafficRollupLoop()
 	go s.trafficPersistLoop()
+	go s.trafficRealtimeLoop()
 
 	serving = true
 	return s.httpServer.Serve(serveLn)

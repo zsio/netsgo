@@ -31,6 +31,7 @@ type ChartRow = {
 };
 
 const RANGE_OPTIONS: Array<{ value: ClientTrafficRange; label: string }> = [
+  { value: '60s', label: '60s' },
   { value: '24h', label: '24h' },
   { value: '7d', label: '7d' },
 ];
@@ -43,6 +44,11 @@ const CHART_COLORS = [
   'var(--chart-5)',
 ] as const;
 
+const ZERO_FILLED_RANGE_CONFIG: Partial<Record<ClientTrafficRange, { pointCount: number; bucketMs: number }>> = {
+  '24h': { pointCount: 24 * 60, bucketMs: 60_000 },
+  '7d': { pointCount: 7 * 24, bucketMs: 3_600_000 },
+};
+
 function getTunnelColor(index: number) {
   return CHART_COLORS[index] ?? `hsl(${(index * 67) % 360} 72% 58%)`;
 }
@@ -51,12 +57,16 @@ function getTunnelSeriesKey(name: string, type: ProxyType) {
   return `${type}:${name}`;
 }
 
-function formatTrafficValue(value: number) {
-  return formatBytes(value).replace('.0 ', ' ');
+function formatTrafficValue(value: number, range?: ClientTrafficRange) {
+  const formatted = formatBytes(value).replace('.0 ', ' ');
+  return range === '60s' ? `${formatted}/s` : formatted;
 }
 
 function formatXAxisLabel(timestamp: number, range: ClientTrafficRange) {
   const date = new Date(timestamp);
+  if (range === '60s') {
+    return date.toLocaleString('zh-CN', { minute: '2-digit', second: '2-digit' });
+  }
   return date.toLocaleString('zh-CN', range === '24h'
     ? { hour: '2-digit', minute: '2-digit' }
     : { month: 'numeric', day: 'numeric', hour: '2-digit' });
@@ -64,16 +74,25 @@ function formatXAxisLabel(timestamp: number, range: ClientTrafficRange) {
 
 function formatTooltipLabel(timestamp: number, range: ClientTrafficRange) {
   const date = new Date(timestamp);
+  if (range === '60s') {
+    return date.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
   return date.toLocaleString('zh-CN', range === '24h'
     ? { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }
     : { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit' });
 }
 
 function getRangeSummary(range: ClientTrafficRange) {
-  if (range === '24h') {
-    return '最近 24 小时 · 按分钟聚合 · 自动刷新';
+  switch (range) {
+    case '60s':
+      return '实时 60 秒 · 每秒采样 · 推送更新';
+    case '24h':
+      return '最近 24 小时 · 按分钟聚合 · 自动刷新';
+    case '7d':
+      return '最近 7 天 · 按小时聚合 · 自动刷新';
+    default:
+      return '最近 1 小时 · 按分钟聚合 · 自动刷新';
   }
-  return '最近 7 天 · 按小时聚合 · 自动刷新';
 }
 
 function getErrorMessage(error: unknown) {
@@ -83,9 +102,22 @@ function getErrorMessage(error: unknown) {
   return '流量数据加载失败';
 }
 
+function buildZeroFilledTimestamps(range: ClientTrafficRange, nowMs = Date.now()) {
+  const config = ZERO_FILLED_RANGE_CONFIG[range];
+  if (!config) {
+    return [];
+  }
+
+  const endTimestamp = Math.floor(nowMs / config.bucketMs) * config.bucketMs;
+  return Array.from({ length: config.pointCount }, (_, index) => (
+    endTimestamp - (config.pointCount - index - 1) * config.bucketMs
+  ));
+}
+
 function buildTrafficTrendChartState(
   data: ClientTrafficResponse | undefined,
   tunnels: Pick<ProxyConfig, 'name' | 'type'>[],
+  range: ClientTrafficRange,
 ) {
   const knownTunnels = new Map<string, Pick<TunnelMeta, 'name' | 'type'>>();
 
@@ -129,7 +161,7 @@ function buildTrafficTrendChartState(
   }, {});
 
   const pointsByTunnel = new Map<string, Map<number, number>>();
-  const timestamps = new Set<number>();
+  const timestamps = new Set<number>(buildZeroFilledTimestamps(range));
 
   for (const item of data?.items ?? []) {
     const pointMap = new Map<number, number>();
@@ -162,12 +194,12 @@ function buildTrafficTrendChartState(
 }
 
 export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
-  const [range, setRange] = useState<ClientTrafficRange>('24h');
+  const [range, setRange] = useState<ClientTrafficRange>('60s');
   const { data, isLoading, isError, error, isFetching } = useClientTraffic(clientId, range);
 
   const { chartConfig, chartData, tunnelSeries } = useMemo(
-    () => buildTrafficTrendChartState(data, tunnels),
-    [data, tunnels],
+    () => buildTrafficTrendChartState(data, tunnels, range),
+    [data, tunnels, range],
   );
 
   const hasTunnels = tunnelSeries.length > 0;
@@ -225,7 +257,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
       ) : (
         <div className="h-80 w-full">
           <ChartContainer config={chartConfig} className="h-full w-full">
-            <LineChart data={chartData} margin={{ top: 12, right: 12, left: 20, bottom: 4 }}>
+            <LineChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 4 }}>
               <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" strokeOpacity={0.45} />
               <XAxis
                 dataKey="timestamp"
@@ -239,8 +271,8 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
                 axisLine={false}
                 tickLine={false}
                 tickMargin={10}
-                width={96}
-                tickFormatter={(value) => formatTrafficValue(Number(value))}
+                width="auto"
+                tickFormatter={(value) => formatTrafficValue(Number(value), range)}
               />
               <ChartTooltip
                 content={(
@@ -256,7 +288,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
                       <>
                         <span className="text-muted-foreground">{chartConfig[String(name)]?.label ?? String(name)}</span>
                         <span className="font-mono font-medium text-foreground tabular-nums">
-                          {formatTrafficValue(Number(value))}
+                          {formatTrafficValue(Number(value), range)}
                         </span>
                       </>
                     )}
