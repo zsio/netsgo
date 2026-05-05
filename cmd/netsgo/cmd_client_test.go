@@ -25,6 +25,25 @@ func TestMaskKey(t *testing.T) {
 	}
 }
 
+func TestResolveClientDataDir(t *testing.T) {
+	t.Setenv("NETSGO_DATA_DIR", "/env/data")
+
+	if got := resolveClientDataDir("/flag/data", true); got != "/flag/data" {
+		t.Fatalf("changed flag should override NETSGO_DATA_DIR, got %q", got)
+	}
+	if got := resolveClientDataDir("/default/data", false); got != "/env/data" {
+		t.Fatalf("NETSGO_DATA_DIR should override unchanged default, got %q", got)
+	}
+}
+
+func TestResolveClientDataDirUsesDefaultWithoutEnv(t *testing.T) {
+	t.Setenv("NETSGO_DATA_DIR", "")
+
+	if got := resolveClientDataDir("/default/data", false); got != "/default/data" {
+		t.Fatalf("default data dir mismatch: got %q", got)
+	}
+}
+
 func TestClientHelpPrefersHTTPServiceAddress(t *testing.T) {
 	serverFlag := clientCmd.Flags().Lookup("server")
 	if serverFlag == nil {

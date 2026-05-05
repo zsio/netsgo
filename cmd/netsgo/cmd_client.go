@@ -61,7 +61,8 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 		}
 
 		c := client.New(serverAddr, key)
-		c.DataDir = viper.GetString("data-dir")
+		dataDirFlag := cmd.Flag("data-dir")
+		c.DataDir = resolveClientDataDir(dataDirFlag.Value.String(), dataDirFlag.Changed)
 
 		unlock, err := flock.TryLock(filepath.Join(c.DataDir, "locks", "client.lock"))
 		if err != nil {
@@ -98,6 +99,16 @@ func maskKey(key string) string {
 		return strings.Repeat("*", len(key))
 	}
 	return strings.Repeat("*", len(key)-4) + key[len(key)-4:]
+}
+
+func resolveClientDataDir(flagValue string, flagChanged bool) string {
+	if flagChanged {
+		return flagValue
+	}
+	if envDataDir := os.Getenv("NETSGO_DATA_DIR"); envDataDir != "" {
+		return envDataDir
+	}
+	return flagValue
 }
 
 func init() {
