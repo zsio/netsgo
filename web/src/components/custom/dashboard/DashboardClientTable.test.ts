@@ -58,16 +58,46 @@ function renderTable(clients: Client[], rowVisibilityHook: RowVisibilityHook) {
 }
 
 describe('DashboardClientTableContent', () => {
+  test('orders online clients before offline clients and renders icon actions', () => {
+    const markup = renderToStaticMarkup(
+      createElement(DashboardClientTableContent, {
+        clients: [
+          createClient({
+            id: 'offline-client',
+            online: false,
+            info: { hostname: 'offline-host', os: 'linux', arch: 'amd64', ip: '10.0.0.2', version: '1.0.0' },
+          }),
+          createClient({
+            id: 'online-client',
+            online: true,
+            info: { hostname: 'online-host', os: 'linux', arch: 'amd64', ip: '10.0.0.1', version: '1.0.0' },
+          }),
+        ],
+        onNavigate: () => {},
+        onDelete: () => {},
+        rowVisibilityHook: createRowVisibilityHook([
+          { hasVisibilitySupport: false, isDesktop: true, isVisible: true },
+          { hasVisibilitySupport: false, isDesktop: true, isVisible: true },
+        ]),
+        renderSparkline: (clientId: string) => createElement('span', { 'data-chart-client': clientId }, 'chart'),
+      }),
+    );
+
+    expect(markup.indexOf('online-host')).toBeLessThan(markup.indexOf('offline-host'));
+    expect(markup).toContain('title="查看详情"');
+    expect(markup).toContain('title="删除离线节点"');
+  });
+
   test('only mounts sparklines for visible desktop rows', () => {
     const markup = renderTable(
       [
         createClient({
           id: 'client-visible',
-          info: { hostname: 'visible', os: 'linux', arch: 'amd64', ip: '10.0.0.1', version: '1.0.0' },
+          info: { hostname: 'a-visible', os: 'linux', arch: 'amd64', ip: '10.0.0.1', version: '1.0.0' },
         }),
         createClient({
           id: 'client-hidden',
-          info: { hostname: 'hidden', os: 'linux', arch: 'amd64', ip: '10.0.0.2', version: '1.0.0' },
+          info: { hostname: 'z-hidden', os: 'linux', arch: 'amd64', ip: '10.0.0.2', version: '1.0.0' },
         }),
       ],
       createRowVisibilityHook([

@@ -356,7 +356,7 @@ func retryIntervalWithJitter(disconnectTime time.Time, jitter float64) time.Dura
 }
 
 // Start starts the client, connects to the server, and begins work.
-// If the connection drops, it reconnects automatically except for fatal errors such as authentication failures.
+// If the connection drops, it reconnects automatically except for unrecoverable local errors.
 func (c *Client) Start() error {
 	for {
 		err := c.connectAndRun()
@@ -702,8 +702,8 @@ func (c *Client) handleAuthFailure(authResp protocol.AuthResponse, attemptedWith
 
 	if authResp.Retryable {
 		return &clientRunError{
-			message: fmt.Sprintf("authentication failed (%s), retrying later", authResp.Code),
-			fatal:   false,
+			message: fmt.Sprintf("authentication failed (%s): %s", authResp.Code, message),
+			fatal:   true,
 		}
 	}
 

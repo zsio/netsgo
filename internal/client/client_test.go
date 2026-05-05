@@ -571,6 +571,34 @@ func TestClient_RetryInterval(t *testing.T) {
 	}
 }
 
+func TestClient_RetryableAuthFailureIsFatal(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	err := c.handleAuthFailure(protocol.AuthResponse{
+		Success:   false,
+		Code:      protocol.AuthCodeRateLimited,
+		Retryable: true,
+	}, false)
+
+	if !isFatalError(err) {
+		t.Fatal("retryable auth failure should stop the client instead of reconnecting")
+	}
+}
+
+func TestClient_ClearTokenWithKeyCanRetryOnce(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	c.DataDir = t.TempDir()
+	c.InstallID = "install-test"
+	err := c.handleAuthFailure(protocol.AuthResponse{
+		Success:    false,
+		Code:       protocol.AuthCodeInvalidToken,
+		ClearToken: true,
+	}, true)
+
+	if isFatalError(err) {
+		t.Fatal("clear-token auth failure with a configured key should allow one retry using the key")
+	}
+}
+
 func TestClient_Cleanup(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	c.ClientID = "cleanup-test"

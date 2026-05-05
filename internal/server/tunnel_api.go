@@ -107,6 +107,53 @@ func (s *Server) handleUpdateBandwidthSettings(w http.ResponseWriter, r *http.Re
 	})
 }
 
+func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
+	clientID := r.PathValue("id")
+	if clientID == "" {
+		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing client id"})
+		return
+	}
+	if s.auth.adminStore == nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "admin store unavailable"})
+		return
+	}
+	if value, ok := s.clients.Load(clientID); ok {
+		client := value.(*ClientConn)
+		if client.getState() != clientStateClosing {
+			encodeJSON(w, http.StatusConflict, map[string]any{"error": "client is online and cannot be deleted"})
+			return
+		}
+	}
+	if _, ok := s.auth.adminStore.GetRegisteredClient(clientID); !ok {
+		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+		return
+	}
+
+	if s.store != nil {
+		if err := s.store.DeleteTunnelsByClientID(clientID); err != nil {
+			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+	}
+	if s.trafficStore != nil {
+		if err := s.trafficStore.EvictClient(clientID); err != nil {
+			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+	}
+	if err := s.auth.adminStore.DeleteRegisteredClient(clientID); err != nil {
+		switch {
+		case errors.Is(err, ErrRegisteredClientNotFound):
+			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+		default:
+			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func tunnelMutationErrorStatusAndBody(err error) (int, tunnelMutationErrorResponse) {
 	status := http.StatusInternalServerError
 	payload := tunnelMutationErrorResponse{
