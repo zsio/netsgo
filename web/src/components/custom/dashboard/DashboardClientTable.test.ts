@@ -84,8 +84,12 @@ describe('DashboardClientTableContent', () => {
     );
 
     expect(markup.indexOf('online-host')).toBeLessThan(markup.indexOf('offline-host'));
+    expect(markup).toContain('客户端');
+    expect(markup).not.toContain('在线端点 (Clients)');
     expect(markup).toContain('title="查看详情"');
     expect(markup).toContain('title="删除离线节点"');
+    expect(markup).toContain('title="在线客户端不能删除"');
+    expect(markup).not.toContain('data-slot="button"');
   });
 
   test('only mounts sparklines for visible desktop rows', () => {

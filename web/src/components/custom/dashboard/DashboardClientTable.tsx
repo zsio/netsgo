@@ -3,13 +3,12 @@ import { useNavigate } from '@tanstack/react-router';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Laptop, Cpu, HardDrive, Eye, Trash2 } from 'lucide-react';
 import { formatPercent } from '@/lib/format';
-import { Button } from '@/components/ui/button';
 import { CompactTrafficChart } from '@/components/custom/chart/CompactTrafficChart';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { useRowVisibility, type RowVisibilityHook } from '@/hooks/use-row-visibility';
 import { canRenderDashboardTrafficSparkline } from '@/lib/dashboard-traffic-visibility';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
 import toast from 'react-hot-toast';
@@ -23,28 +22,42 @@ function sortClientsForDashboard(clients: Client[] | undefined) {
   });
 }
 
-function IconActionButton({
+function ActionIcon({
   label,
-  variant = 'ghost',
+  disabled = false,
   onClick,
   children,
 }: {
   label: string;
-  variant?: 'ghost' | 'destructive';
-  onClick: () => void;
+  disabled?: boolean;
+  onClick?: () => void;
   children: ReactNode;
 }) {
+  const handleKeyDown = (event: KeyboardEvent<HTMLSpanElement>) => {
+    if (disabled || !onClick) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onClick();
+    }
+  };
+
   return (
-    <Button
-      type="button"
-      variant={variant}
-      size="icon-sm"
+    <span
+      role={disabled || !onClick ? undefined : 'button'}
+      tabIndex={disabled || !onClick ? undefined : 0}
       title={label}
       aria-label={label}
+      aria-disabled={disabled || undefined}
+      className={`inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors ${
+        disabled || !onClick
+          ? 'opacity-30'
+          : 'cursor-pointer hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40'
+      }`}
       onClick={onClick}
+      onKeyDown={handleKeyDown}
     >
       {children}
-    </Button>
+    </span>
   );
 }
 
@@ -84,14 +97,16 @@ function ClientMobileCard({
         )}
       </div>
       <div className="flex items-center gap-1 -ml-2">
-        <IconActionButton label="查看详情" onClick={onNavigate}>
+        <ActionIcon label="查看详情" onClick={onNavigate}>
           <Eye className="h-4 w-4" />
-        </IconActionButton>
-        {!client.online && (
-          <IconActionButton label="删除离线节点" variant="destructive" onClick={onDelete}>
-            <Trash2 className="h-4 w-4" />
-          </IconActionButton>
-        )}
+        </ActionIcon>
+        <ActionIcon
+          label={client.online ? '在线客户端不能删除' : '删除离线节点'}
+          disabled={client.online}
+          onClick={client.online ? undefined : onDelete}
+        >
+          <Trash2 className={`h-4 w-4 ${client.online ? '' : 'text-destructive'}`} />
+        </ActionIcon>
       </div>
     </div>
   );
@@ -162,14 +177,16 @@ function DashboardClientDesktopRow({
       </td>
       <td className="px-6 py-3 text-right">
         <div className="flex items-center justify-end gap-1">
-          <IconActionButton label="查看详情" onClick={() => onNavigate(client.id)}>
+          <ActionIcon label="查看详情" onClick={() => onNavigate(client.id)}>
             <Eye className="h-4 w-4" />
-          </IconActionButton>
-          {!client.online && onDelete && (
-            <IconActionButton label="删除离线节点" variant="destructive" onClick={() => onDelete(client)}>
-              <Trash2 className="h-4 w-4" />
-            </IconActionButton>
-          )}
+          </ActionIcon>
+          <ActionIcon
+            label={client.online ? '在线客户端不能删除' : '删除离线节点'}
+            disabled={client.online || !onDelete}
+            onClick={!client.online && onDelete ? () => onDelete(client) : undefined}
+          >
+            <Trash2 className={`h-4 w-4 ${client.online || !onDelete ? '' : 'text-destructive'}`} />
+          </ActionIcon>
         </div>
       </td>
     </tr>
@@ -194,7 +211,7 @@ export function DashboardClientTableContent({
       <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-border/40 bg-muted/20 flex items-center justify-between">
         <h3 className="font-semibold text-foreground flex items-center gap-2">
           <Laptop className="h-5 w-5 text-primary" />
-          在线端点 (Clients)
+          客户端
         </h3>
       </div>
 
