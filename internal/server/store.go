@@ -354,6 +354,17 @@ func (s *TunnelStore) GetTunnelsByClientID(clientID string) ([]StoredTunnel, err
 	return tunnels, nil
 }
 
+func (s *TunnelStore) DeleteTunnelsByClientID(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.maybeFailSave(); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM tunnels WHERE client_id = ?`, clientID)
+	return err
+}
+
 // GetTunnelsByHostname returns all tunnels matching the given hostname (for display/query purposes).
 func (s *TunnelStore) GetTunnelsByHostname(hostname string) ([]StoredTunnel, error) {
 	s.mu.RLock()

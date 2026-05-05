@@ -60,7 +60,7 @@ DEV_KEY  ?= sk-8ccf857d-db62-4806-9719-776900e0785d
 # 服务端首次初始化参数（已初始化后自动忽略，均可通过环境变量覆盖）
 # DEV_INIT_ADMIN_PASSWORD 必须由本地环境显式提供，避免把可预测的开发管理员密码写入源码。
 DEV_INIT_ADMIN_USERNAME ?= admin
-DEV_INIT_ADMIN_PASSWORD ?=
+DEV_INIT_ADMIN_PASSWORD ?= admin.2026
 DEV_INIT_SERVER_ADDR    ?= http://localhost:$(DEV_PORT)
 DEV_INIT_ALLOWED_PORTS  ?= 10000-11000
 STACK_PROXY ?= nginx

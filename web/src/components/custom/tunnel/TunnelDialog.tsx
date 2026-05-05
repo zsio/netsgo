@@ -21,8 +21,11 @@ export interface TunnelDialogEditData extends ProxyConfig {
 interface TunnelDialogCreateProps {
   mode: 'create';
   clientId: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /** 触发按钮（作为 DialogTrigger children） */
   trigger?: React.ReactNode;
+  hideTrigger?: boolean;
 }
 
 interface TunnelDialogEditProps {
@@ -93,16 +96,16 @@ export function TunnelDialog(props: TunnelDialogProps) {
 
   // --- 弹窗开关 ---
   const [internalOpen, setInternalOpen] = useState(false);
-  const open = isEdit ? props.open : internalOpen;
+  const open = isEdit ? props.open : (props.open ?? internalOpen);
   const setOpen = isEdit
     ? props.onOpenChange
-    : setInternalOpen;
+    : (props.onOpenChange ?? setInternalOpen);
 
   const formKey = getFormKey(props, open);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      {!isEdit && (
+      {!isEdit && !props.hideTrigger && (
         <DialogTrigger asChild>
           {(props as TunnelDialogCreateProps).trigger ?? (
             <Button>添加隧道</Button>

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ArrowRightLeft, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
@@ -12,6 +12,7 @@ interface TunnelTableProps {
 }
 
 export function TunnelTable({ client }: TunnelTableProps) {
+  const [createOpen, setCreateOpen] = useState(false);
   const {
     data: trafficData,
     isLoading: isTraffic24hLoading,
@@ -40,33 +41,41 @@ export function TunnelTable({ client }: TunnelTableProps) {
   }));
 
   return (
-    <TunnelListTable
-      tunnels={tunnels}
-      title="下属隧道"
-      icon={<ArrowRightLeft className="h-5 w-5 text-primary" />}
-      showClient={false}
-      showTraffic24h
-      traffic24hState={
-        isTraffic24hError
-          ? 'error'
-          : isTraffic24hLoading
-            ? 'loading'
-            : 'ready'
-      }
-      showActions
-      showSearch
-      emptyAction={
-        <TunnelDialog
-          mode="create"
-          clientId={client.id}
-          trigger={
-            <Button variant="outline" className="mt-4">
-              <Plus className="h-4 w-4 mr-1" />
-              立即创建
-            </Button>
-          }
-        />
-      }
-    />
+    <>
+      <TunnelListTable
+        tunnels={tunnels}
+        title="下属隧道"
+        icon={<ArrowRightLeft className="h-5 w-5 text-primary" />}
+        showClient={false}
+        showTraffic24h
+        traffic24hState={
+          isTraffic24hError
+            ? 'error'
+            : isTraffic24hLoading
+              ? 'loading'
+              : 'ready'
+        }
+        showActions
+        showSearch
+        emptyAction={
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-4"
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus className="h-4 w-4 mr-1" />
+            立即创建
+          </Button>
+        }
+      />
+      <TunnelDialog
+        mode="create"
+        clientId={client.id}
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        hideTrigger
+      />
+    </>
   );
 }

@@ -64,9 +64,14 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetReadLimit(wsMaxMessageSize)
 
-	log.Printf("📡 New control channel connection: %s", r.RemoteAddr)
+	clientAddr := s.clientIP(r)
+	if clientAddr == "" {
+		clientAddr = remoteIP(r.RemoteAddr)
+	}
 
-	client, err := s.handleAuth(conn, r.RemoteAddr)
+	log.Printf("📡 New control channel connection: %s [client_ip=%s]", r.RemoteAddr, clientAddr)
+
+	client, err := s.handleAuth(conn, r.RemoteAddr, clientAddr)
 	if err != nil {
 		log.Printf("❌ Client authentication failed [%s]: %v", r.RemoteAddr, err)
 		return
@@ -86,11 +91,14 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	s.controlLoop(client)
 }
 
-func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientConn, error) {
-	ip := remoteIP(remoteAddr)
+func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string) (*ClientConn, error) {
+	ip := clientAddr
+	if ip == "" {
+		ip = remoteIP(remoteAddr)
+	}
 	if s.auth.clientLimiter != nil {
 		if allowed, retryAfter := s.auth.clientLimiter.Allow(ip); !allowed {
-			log.Printf("🚫 Client authentication rate limited [%s]: wait %v", remoteAddr, retryAfter)
+			log.Printf("🚫 Client authentication rate limited [%s, client_ip=%s]: wait %v", remoteAddr, ip, retryAfter)
 			slog.Warn("Client authentication rate limited", "ip", ip, "module", "security")
 			_ = writeAuthResult(conn, protocol.AuthResponse{
 				Success:   false,
@@ -208,7 +216,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 				s.auth.clientLimiter.ResetFailures(ip)
 			}
 		} else {
-			record, err := s.auth.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, remoteAddr)
+			record, err := s.auth.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, ip)
 			if err != nil {
 				return nil, fmt.Errorf("failed to register client: %w", err)
 			}
@@ -228,7 +236,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 				}
 			}
 
-			tokenStr, _, err := s.auth.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, clientID, remoteAddr)
+			tokenStr, _, err := s.auth.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, clientID, ip)
 			if err != nil {
 				log.Printf("❌ Failed to exchange client key for token [%s]: %v", remoteAddr, err)
 				if s.auth.clientLimiter != nil {
@@ -257,7 +265,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr string) (*ClientCon
 		ID:         clientID,
 		InstallID:  authReq.InstallID,
 		Info:       authReq.Client,
-		RemoteAddr: remoteAddr,
+		RemoteAddr: ip,
 		conn:       conn,
 		proxies:    make(map[string]*ProxyTunnel),
 		dataToken:  generateDataToken(),

@@ -1,7 +1,7 @@
-import { useClients } from '@/hooks/use-clients';
+import { useClients, useDeleteClient } from '@/hooks/use-clients';
 import { useNavigate } from '@tanstack/react-router';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Laptop, Cpu, HardDrive } from 'lucide-react';
+import { Laptop, Cpu, HardDrive, Eye, Trash2 } from 'lucide-react';
 import { formatPercent } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 import { CompactTrafficChart } from '@/components/custom/chart/CompactTrafficChart';
@@ -10,8 +10,53 @@ import { getClientDisplayName } from '@/lib/client-utils';
 import { useRowVisibility, type RowVisibilityHook } from '@/hooks/use-row-visibility';
 import { canRenderDashboardTrafficSparkline } from '@/lib/dashboard-traffic-visibility';
 import type { ReactNode } from 'react';
+import { useMemo, useState } from 'react';
+import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
+import toast from 'react-hot-toast';
 
-function ClientMobileCard({ client, onNavigate }: { client: Client; onNavigate: () => void }) {
+function sortClientsForDashboard(clients: Client[] | undefined) {
+  return [...(clients ?? [])].sort((a, b) => {
+    if (a.online !== b.online) {
+      return a.online ? -1 : 1;
+    }
+    return getClientDisplayName(a).localeCompare(getClientDisplayName(b));
+  });
+}
+
+function IconActionButton({
+  label,
+  variant = 'ghost',
+  onClick,
+  children,
+}: {
+  label: string;
+  variant?: 'ghost' | 'destructive';
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      type="button"
+      variant={variant}
+      size="icon-sm"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  );
+}
+
+function ClientMobileCard({
+  client,
+  onNavigate,
+  onDelete,
+}: {
+  client: Client;
+  onNavigate: () => void;
+  onDelete: () => void;
+}) {
   return (
     <div className="p-4 flex flex-col gap-3 border-b border-border/40 last:border-b-0">
       <div className="flex items-center justify-between">
@@ -38,9 +83,16 @@ function ClientMobileCard({ client, onNavigate }: { client: Client; onNavigate: 
           </span>
         )}
       </div>
-      <Button variant="ghost" size="sm" className="self-start -ml-2 h-7 text-xs" onClick={onNavigate}>
-        查看详情
-      </Button>
+      <div className="flex items-center gap-1 -ml-2">
+        <IconActionButton label="查看详情" onClick={onNavigate}>
+          <Eye className="h-4 w-4" />
+        </IconActionButton>
+        {!client.online && (
+          <IconActionButton label="删除离线节点" variant="destructive" onClick={onDelete}>
+            <Trash2 className="h-4 w-4" />
+          </IconActionButton>
+        )}
+      </div>
     </div>
   );
 }
@@ -48,6 +100,7 @@ function ClientMobileCard({ client, onNavigate }: { client: Client; onNavigate: 
 interface DashboardClientTableContentProps {
   clients?: Client[];
   onNavigate: (clientId: string) => void;
+  onDelete?: (client: Client) => void;
   rowVisibilityHook?: RowVisibilityHook;
   renderSparkline?: (clientId: string) => ReactNode;
 }
@@ -59,11 +112,13 @@ function defaultRenderSparkline(clientId: string) {
 function DashboardClientDesktopRow({
   client,
   onNavigate,
+  onDelete,
   rowVisibilityHook,
   renderSparkline,
 }: {
   client: Client;
   onNavigate: (clientId: string) => void;
+  onDelete?: (client: Client) => void;
   rowVisibilityHook: RowVisibilityHook;
   renderSparkline: (clientId: string) => ReactNode;
 }) {
@@ -106,9 +161,16 @@ function DashboardClientDesktopRow({
         {showSparkline ? renderSparkline(client.id) : <span className="text-muted-foreground">-</span>}
       </td>
       <td className="px-6 py-3 text-right">
-        <Button variant="ghost" size="sm" onClick={() => onNavigate(client.id)}>
-          查看详情
-        </Button>
+        <div className="flex items-center justify-end gap-1">
+          <IconActionButton label="查看详情" onClick={() => onNavigate(client.id)}>
+            <Eye className="h-4 w-4" />
+          </IconActionButton>
+          {!client.online && onDelete && (
+            <IconActionButton label="删除离线节点" variant="destructive" onClick={() => onDelete(client)}>
+              <Trash2 className="h-4 w-4" />
+            </IconActionButton>
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -117,9 +179,12 @@ function DashboardClientDesktopRow({
 export function DashboardClientTableContent({
   clients,
   onNavigate,
+  onDelete,
   rowVisibilityHook = useRowVisibility,
   renderSparkline = defaultRenderSparkline,
 }: DashboardClientTableContentProps) {
+  const sortedClients = useMemo(() => sortClientsForDashboard(clients), [clients]);
+
   const navigateToClient = (clientId: string) => {
     onNavigate(clientId);
   };
@@ -135,11 +200,16 @@ export function DashboardClientTableContent({
 
       {/* Mobile: Card List */}
       <div className="md:hidden">
-        {(!clients || clients.length === 0) ? (
+        {sortedClients.length === 0 ? (
           <div className="px-4 py-8 text-center text-muted-foreground text-sm">暂无 Client 连接</div>
         ) : (
-          clients.map((client) => (
-            <ClientMobileCard key={client.id} client={client} onNavigate={() => navigateToClient(client.id)} />
+          sortedClients.map((client) => (
+            <ClientMobileCard
+              key={client.id}
+              client={client}
+              onNavigate={() => navigateToClient(client.id)}
+              onDelete={() => onDelete?.(client)}
+            />
           ))
         )}
       </div>
@@ -159,18 +229,19 @@ export function DashboardClientTableContent({
             </tr>
           </thead>
           <tbody className="divide-y divide-border/40">
-            {(!clients || clients.length === 0) ? (
+            {sortedClients.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-6 py-8 text-center text-muted-foreground">
                   暂无 Client 连接
                 </td>
               </tr>
             ) : (
-              clients.map((client) => (
+              sortedClients.map((client) => (
                 <DashboardClientDesktopRow
                   key={client.id}
                   client={client}
                   onNavigate={navigateToClient}
+                  onDelete={onDelete}
                   rowVisibilityHook={rowVisibilityHook}
                   renderSparkline={renderSparkline}
                 />
@@ -185,18 +256,40 @@ export function DashboardClientTableContent({
 
 export function DashboardClientTable() {
   const { data: clients, isLoading } = useClients();
+  const deleteClient = useDeleteClient();
   const navigate = useNavigate();
+  const [deleteTarget, setDeleteTarget] = useState<Client | null>(null);
 
   if (isLoading) {
     return <Skeleton className="h-64 rounded-xl" />;
   }
 
   return (
-    <DashboardClientTableContent
-      clients={clients}
-      onNavigate={(clientId) => {
-        navigate({ to: '/dashboard/clients/$clientId', params: { clientId } });
-      }}
-    />
+    <>
+      <DashboardClientTableContent
+        clients={clients}
+        onNavigate={(clientId) => {
+          navigate({ to: '/dashboard/clients/$clientId', params: { clientId } });
+        }}
+        onDelete={setDeleteTarget}
+      />
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="删除离线节点"
+        description={`确认删除离线节点「${deleteTarget ? getClientDisplayName(deleteTarget) : ''}」？相关隧道配置和流量历史也会被清理。`}
+        confirmLabel="删除"
+        variant="destructive"
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const target = deleteTarget;
+          deleteClient.mutate(target.id, {
+            onSuccess: () => toast.success(`节点「${getClientDisplayName(target)}」已删除`),
+            onError: (err) => toast.error((err as Error).message),
+          });
+          setDeleteTarget(null);
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
+    </>
   );
 }

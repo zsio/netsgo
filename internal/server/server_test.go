@@ -647,6 +647,65 @@ func TestAPI_Clients_OfflineLegacyRunningTunnelUsesDesiredAndRuntimeStates(t *te
 	t.Fatalf("client %s not found", clientID)
 }
 
+func TestAPI_DeleteClient_OfflineClient(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	clientID := registerOfflineHTTPTestClient(t, s, "delete-offline-client")
+	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
+		Name:       "delete-me",
+		Type:       protocol.ProxyTypeTCP,
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8080,
+		RemotePort: 18080,
+	}, protocol.ProxyStatusStopped)
+
+	resp := doMuxRequest(t, handler, http.MethodDelete, "/api/clients/"+clientID, token, nil)
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("deleting offline client: want 204, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if _, ok := s.auth.adminStore.GetRegisteredClient(clientID); ok {
+		t.Fatal("registered client should be deleted")
+	}
+	tunnels, err := s.store.GetTunnelsByClientID(clientID)
+	if err != nil {
+		t.Fatalf("loading client tunnels after delete: %v", err)
+	}
+	if len(tunnels) != 0 {
+		t.Fatalf("client tunnels should be deleted, got %d", len(tunnels))
+	}
+}
+
+func TestAPI_DeleteClient_RejectsOnlineClient(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	record, err := s.auth.adminStore.GetOrCreateClient("online-delete-install", protocol.ClientInfo{
+		Hostname: "online-delete-client",
+		OS:       "linux",
+		Arch:     "amd64",
+		IP:       "127.0.0.1",
+		Version:  "test",
+	}, "127.0.0.1:10001")
+	if err != nil {
+		t.Fatalf("register client: %v", err)
+	}
+	s.clients.Store(record.ID, &ClientConn{
+		ID:      record.ID,
+		Info:    record.Info,
+		proxies: make(map[string]*ProxyTunnel),
+		state:   clientStateLive,
+	})
+
+	resp := doMuxRequest(t, handler, http.MethodDelete, "/api/clients/"+record.ID, token, nil)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("deleting online client: want 409, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if _, ok := s.auth.adminStore.GetRegisteredClient(record.ID); !ok {
+		t.Fatal("online client should not be deleted")
+	}
+}
+
 func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
@@ -1047,6 +1106,43 @@ func TestAuth_Success(t *testing.T) {
 	uuidPattern := `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
 	if matched, _ := regexp.MatchString(uuidPattern, authResp.ClientID); !matched {
 		t.Errorf("ClientID should be in UUID v4 format, got: %q", authResp.ClientID)
+	}
+}
+
+func TestAuth_TrustedProxyHeadersPersistClientIP(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	header := http.Header{}
+	header.Set("X-Forwarded-For", "198.51.100.24, 127.0.0.1")
+	header.Set("X-Real-IP", "198.51.100.25")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatalf("WebSocket connection failed: %v", err)
+	}
+	defer mustClose(t, conn)
+
+	authResp := doAuthWithInstallID(t, conn, "proxy-ip-host", "install-proxy-ip-host", "test-key")
+	if !authResp.Success {
+		t.Fatalf("authentication should succeed: %s", authResp.Message)
+	}
+	dataConn := connectDataWSForClient(t, ts, authResp)
+	defer mustClose(t, dataConn)
+
+	registered, ok := s.auth.adminStore.GetRegisteredClient(authResp.ClientID)
+	if !ok {
+		t.Fatal("registered client should exist")
+	}
+	if registered.LastIP != "198.51.100.24" {
+		t.Fatalf("LastIP = %q, want forwarded client IP", registered.LastIP)
+	}
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatal("live client should exist")
+	}
+	if got := value.(*ClientConn).RemoteAddr; got != "198.51.100.24" {
+		t.Fatalf("ClientConn.RemoteAddr = %q, want forwarded client IP", got)
 	}
 }
 

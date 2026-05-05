@@ -1,7 +1,7 @@
 import { useClients } from '@/hooks/use-clients';
 import { useNavigate } from '@tanstack/react-router';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowRightLeft } from 'lucide-react';
+import { ArrowRightLeft, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
 import { getClientDisplayName } from '@/lib/client-utils';
@@ -22,7 +22,12 @@ export function DashboardTunnelTable() {
       clientName: getClientDisplayName(client),
       clientOnline: client.online,
     }))
-  ) || [];
+  ).sort((a, b) => {
+    if (a.clientOnline !== b.clientOnline) {
+      return a.clientOnline ? -1 : 1;
+    }
+    return (a.clientName ?? '').localeCompare(b.clientName ?? '') || a.name.localeCompare(b.name);
+  }) || [];
 
   return (
     <TunnelListTable
@@ -35,10 +40,12 @@ export function DashboardTunnelTable() {
       renderRowAction={(tunnel) => (
         <Button
           variant="ghost"
-          size="sm"
+          size="icon-sm"
+          title="管理"
+          aria-label="管理"
           onClick={() => navigate({ to: '/dashboard/clients/$clientId', params: { clientId: tunnel.clientId } })}
         >
-          管理
+          <Settings className="h-4 w-4" />
         </Button>
       )}
     />

@@ -1096,6 +1096,47 @@ func (s *AdminStore) GetRegisteredClient(clientID string) (RegisteredClient, boo
 	return client, true
 }
 
+func (s *AdminStore) DeleteRegisteredClient(clientID string) error {
+	if clientID == "" {
+		return ErrRegisteredClientNotFound
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	var installID string
+	if err := tx.QueryRow(`SELECT install_id FROM registered_clients WHERE id = ?`, clientID).Scan(&installID); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrRegisteredClientNotFound
+		}
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM client_disk_partitions WHERE client_id = ?`, clientID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM client_stats WHERE client_id = ?`, clientID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM client_tokens WHERE client_id = ? OR install_id = ?`, clientID, installID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM registered_clients WHERE id = ?`, clientID); err != nil {
+		return err
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
+}
+
 func registeredClientBandwidthSettings(client RegisteredClient) protocol.BandwidthSettings {
 	return protocol.BandwidthSettings{
 		IngressBPS: client.IngressBPS,
