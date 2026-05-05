@@ -41,6 +41,8 @@ func (s *Server) handleGetClientTraffic(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	s.flushTrafficObservations()
+
 	var result TrafficQueryResult
 	if resolution == TrafficResolutionSecond {
 		result, err = s.buildRealtimeTrafficResult(clientID, tunnelName, from, to, s.knownTrafficTunnels(clientID, tunnelName))

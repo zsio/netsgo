@@ -218,6 +218,39 @@ func TestTrafficStore_RecordBytesAtKeepsRealtimeSecondWindow(t *testing.T) {
 	}
 }
 
+func TestTrafficStore_RealtimeSecondQueryIsScopedByClientAndTunnel(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	base := secondFloorUTC(time.Now().UTC())
+	ts.recordBytesAt(base, "c1", "web", "http", 100, 10)
+	ts.recordBytesAt(base, "c1", "ssh", "tcp", 200, 20)
+	ts.recordBytesAt(base, "c2", "web", "http", 900, 90)
+
+	got := mustQueryWithResolution(t, ts, "c1", "", base.Add(-time.Second), base.Add(time.Second), TrafficResolutionSecond)
+	if len(got.Items) != 2 {
+		t.Fatalf("c1 realtime query should return its two tunnels only, got %+v", got.Items)
+	}
+	web := findSeries(t, got, "web")
+	if web.Points[0].IngressBytes != 100 || web.Points[0].EgressBytes != 10 {
+		t.Fatalf("c1 web point mismatch: %+v", web.Points[0])
+	}
+
+	filtered := mustQueryWithResolution(t, ts, "c1", "ssh", base.Add(-time.Second), base.Add(time.Second), TrafficResolutionSecond)
+	if len(filtered.Items) != 1 || filtered.Items[0].TunnelName != "ssh" {
+		t.Fatalf("tunnel-filtered realtime query returned %+v", filtered.Items)
+	}
+	if filtered.Items[0].Points[0].IngressBytes != 200 || filtered.Items[0].Points[0].EgressBytes != 20 {
+		t.Fatalf("c1 ssh point mismatch: %+v", filtered.Items[0].Points[0])
+	}
+
+	c2 := mustQueryWithResolution(t, ts, "c2", "web", base.Add(-time.Second), base.Add(time.Second), TrafficResolutionSecond)
+	c2Web := mustSingleSeries(t, c2, "web")
+	if c2Web.Points[0].IngressBytes != 900 || c2Web.Points[0].EgressBytes != 90 {
+		t.Fatalf("c2 web point mismatch: %+v", c2Web.Points[0])
+	}
+}
+
 func TestTrafficStore_QueryWithResolutionReturnsPersistedErrors(t *testing.T) {
 	ts, cleanup := newTestTrafficStore(t)
 	defer cleanup()

@@ -305,9 +305,9 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 
 	proxy.ServeHTTP(w, r)
 
-	if s.trafficStore != nil && cc != nil {
+	if cc != nil {
 		ingressBytes, egressBytes := cc.ingressEgressBytes()
-		s.trafficStore.RecordBytes(route.client.ID, route.config.Name, route.config.Type, ingressBytes, egressBytes)
+		s.recordTraffic(route.client.ID, route.config.Name, route.config.Type, ingressBytes, egressBytes)
 	}
 }
 

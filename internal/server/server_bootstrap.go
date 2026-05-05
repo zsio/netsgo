@@ -300,6 +300,7 @@ func (s *Server) Shutdown(ctx context.Context) (err error) {
 	}
 
 	if s.trafficStore != nil {
+		s.flushTrafficObservations()
 		if err := s.trafficStore.Flush(); err != nil {
 			log.Printf("⚠️ Failed to persist traffic data: %v", err)
 		}
@@ -354,6 +355,7 @@ func (s *Server) trafficRollupLoop() {
 			return
 		case <-ticker.C:
 			if s.trafficStore != nil {
+				s.flushTrafficObservations()
 				if err := s.trafficStore.Compact(time.Now()); err != nil {
 					log.Printf("⚠️ Failed to compact traffic data: %v", err)
 				}
@@ -372,6 +374,7 @@ func (s *Server) trafficPersistLoop() {
 			return
 		case <-ticker.C:
 			if s.trafficStore != nil {
+				s.flushTrafficObservations()
 				if err := s.trafficStore.Flush(); err != nil {
 					log.Printf("⚠️ Failed to persist traffic data: %v", err)
 				}

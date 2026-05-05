@@ -21,11 +21,12 @@ type Server struct {
 	AllowLoopbackManagementHost bool
 	TLS                         *TLSConfig
 	TLSFingerprint              string
-	clients                     sync.Map      // stable clientID -> *ClientConn
-	events                      *EventBus     // SSE event bus
-	store                       *TunnelStore  // tunnel persistent store
-	trafficStore                *TrafficStore // traffic history store
-	serverDB                    *sql.DB       // owned shared SQLite handle for borrowed server stores; close only via closeServerDB
+	clients                     sync.Map            // stable clientID -> *ClientConn
+	events                      *EventBus           // SSE event bus
+	store                       *TunnelStore        // tunnel persistent store
+	trafficStore                *TrafficStore       // traffic history store
+	trafficAccumulator          *trafficAccumulator // batched traffic observations waiting to be applied to trafficStore
+	serverDB                    *sql.DB             // owned shared SQLite handle for borrowed server stores; close only via closeServerDB
 	serverDBCloseOnce           sync.Once
 	serverDBCloseErr            error
 	startTime                   time.Time         // server start time
@@ -76,13 +77,14 @@ type ClientConn struct {
 // New creates a new Server instance.
 func New(port int) *Server {
 	return &Server{
-		Port:      port,
-		events:    NewEventBus(),
-		auth:      newAuthService(),
-		sessions:  newSessionManager(),
-		tunnels:   newTunnelRegistry(),
-		startTime: time.Now(),
-		done:      make(chan struct{}),
+		Port:               port,
+		events:             NewEventBus(),
+		trafficAccumulator: newTrafficAccumulator(),
+		auth:               newAuthService(),
+		sessions:           newSessionManager(),
+		tunnels:            newTunnelRegistry(),
+		startTime:          time.Now(),
+		done:               make(chan struct{}),
 	}
 }
 

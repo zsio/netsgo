@@ -49,7 +49,7 @@ func (s *Server) trafficRealtimeLoop() {
 		case <-s.done:
 			return
 		case now := <-ticker.C:
-			if s.trafficStore == nil || s.events == nil {
+			if s.trafficStore == nil || s.events == nil || !s.events.HasSubscribers() {
 				continue
 			}
 			event := s.collectRealtimeTrafficEvent(now)
@@ -62,6 +62,8 @@ func (s *Server) trafficRealtimeLoop() {
 }
 
 func (s *Server) collectRealtimeTrafficEvent(now time.Time) realtimeTrafficEvent {
+	s.flushTrafficObservations()
+
 	from, to := realtimeTrafficWindow(now)
 	event := realtimeTrafficEvent{
 		GeneratedAt: now.UTC(),

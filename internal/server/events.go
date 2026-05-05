@@ -51,6 +51,12 @@ func (eb *EventBus) Unsubscribe(ch chan SSEEvent) {
 	}
 }
 
+func (eb *EventBus) HasSubscribers() bool {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
+	return len(eb.subscribers) > 0
+}
+
 // Close shuts down the event bus and disconnects all subscribers. (P15)
 func (eb *EventBus) Close() {
 	eb.mu.Lock()

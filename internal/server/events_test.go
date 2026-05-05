@@ -52,9 +52,16 @@ func (w *lockedRecorder) BodyString() string {
 func TestEventBus_PubSub(t *testing.T) {
 	eb := NewEventBus()
 
+	if eb.HasSubscribers() {
+		t.Fatal("new event bus should not have subscribers")
+	}
+
 	// 1. 订阅
 	ch1 := eb.Subscribe()
 	ch2 := eb.Subscribe()
+	if !eb.HasSubscribers() {
+		t.Fatal("event bus should report subscribers after Subscribe")
+	}
 
 	// 2. 发布事件
 	eb.PublishJSON("test_event", map[string]string{"foo": "bar"})
@@ -79,6 +86,9 @@ func TestEventBus_PubSub(t *testing.T) {
 
 	// 4. 退订
 	eb.Unsubscribe(ch1)
+	if !eb.HasSubscribers() {
+		t.Fatal("event bus should still have one subscriber after unsubscribing ch1")
+	}
 
 	// 验证退订后的通道不应再收到新事件
 	eb.PublishJSON("hello", "world")
@@ -92,6 +102,11 @@ func TestEventBus_PubSub(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 		// 正常，没有事件
 		// 正常，没有事件
+	}
+
+	eb.Unsubscribe(ch2)
+	if eb.HasSubscribers() {
+		t.Fatal("event bus should not have subscribers after all channels unsubscribe")
 	}
 }
 
