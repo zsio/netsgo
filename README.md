@@ -93,7 +93,10 @@ services:
     image: ghcr.io/zsio/netsgo:latest
     restart: unless-stopped
     ports:
-      - "9527:9527"
+      - "9527:9527"     # Web/API/控制通道/数据通道共用入口
+      # 如需 TCP/UDP tunnel，请额外映射对应 remote port，例如：
+      # - "10000:10000/tcp"
+      # - "10001:10001/udp"
     environment:
       NETSGO_DATA_DIR: "/var/lib/netsgo"
       NETSGO_INIT_ADMIN_USERNAME: "admin"
