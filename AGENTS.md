@@ -42,7 +42,7 @@
   - `web/src/lib/`：API 封装、路由、工具函数。
   - `web/src/hooks/`：查询、事件流、状态相关 hooks。
   - `web/src/stores/`：Zustand 状态。
-  - `web/src/components/ui/`：shadcn/ui 源码层，谨慎修改。
+  - `web/src/components/ui/`：shadcn/ui 源码层，禁止手动修改和创建。
   - `web/src/components/custom/`：业务组件，新增业务 UI 优先放这里。
 - `test/e2e/`：反向代理、Compose stack、端到端验证。
 - `.github/workflows/`：CI / Release 的真实执行标准。
@@ -83,7 +83,7 @@
 - 前端请求统一走 `web/src/lib/api.ts`；不要到处散写裸 `fetch`，除非是在极少数非常明确的底层场景。
 - 服务端状态优先使用 TanStack Query；不要把服务端返回数据再复制成一套平行的客户端状态源。
 - `web/src/components/ui/` 视为 shadcn/ui 源码层；只有确有必要时才改，新增业务组件放 `web/src/components/custom/`。
-- 样式与组件写法遵守 `.agents/docs/style-guide.md`。
+- 样式与组件写法遵守 `.agent/docs/style-guide.md`。
 
 
 ## 后端与协议约束
