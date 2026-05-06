@@ -40,6 +40,28 @@ async function resyncConsoleSnapshot(queryClient: EventStreamQueryClient) {
   applyConsoleSnapshot(queryClient, snapshot);
 }
 
+function applyRealtimeTraffic(queryClient: EventStreamQueryClient, client: TrafficRealtimeEvent['clients'][number]) {
+  const traffic: ClientTrafficResponse = {
+    resolution: client.resolution,
+    items: client.items ?? [],
+  };
+  const baseKey = buildClientTrafficQueryKey(client.client_id, '60s');
+  queryClient.setQueryData<ClientTrafficResponse>(baseKey, traffic);
+
+  const realtimeQueries = queryClient.getQueryCache().findAll({
+    queryKey: ['client-traffic', client.client_id, '60s'],
+  });
+  for (const query of realtimeQueries) {
+    const tunnelName = typeof query.queryKey[3] === 'string' ? query.queryKey[3] : '';
+    queryClient.setQueryData<ClientTrafficResponse>(
+      query.queryKey,
+      tunnelName
+        ? { ...traffic, items: traffic.items.filter((item) => item.tunnel_name === tunnelName) }
+        : traffic,
+    );
+  }
+}
+
 function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data: string) {
   switch (eventType) {
     case 'snapshot': {
@@ -71,14 +93,7 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
           if (!client.client_id) {
             continue;
           }
-          const traffic: ClientTrafficResponse = {
-            resolution: client.resolution,
-            items: client.items ?? [],
-          };
-          queryClient.setQueryData<ClientTrafficResponse>(
-            buildClientTrafficQueryKey(client.client_id, '60s'),
-            traffic,
-          );
+          applyRealtimeTraffic(queryClient, client);
         }
       } catch {
         // ignore malformed events

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, Copy } from 'lucide-react';
 
 interface CopyableIpLineProps {
@@ -30,7 +30,24 @@ async function copyText(value: string) {
 
 export function CopyableIpLine({ icon, value, title, primary = false }: CopyableIpLineProps) {
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | null>(null);
   const copyable = canCopy(value);
+
+  useEffect(() => () => {
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+  }, []);
+
+  const resetCopyTimer = () => {
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopied(false);
+      copyTimerRef.current = null;
+    }, 1200);
+  };
 
   const handleCopy = async () => {
     if (!copyable) return;
@@ -38,7 +55,7 @@ export function CopyableIpLine({ icon, value, title, primary = false }: Copyable
     try {
       await copyText(value);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
+      resetCopyTimer();
     } catch {
       setCopied(false);
     }
