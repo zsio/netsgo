@@ -40,4 +40,13 @@ describe('buildClientTrafficUrl', () => {
     expect(parsed.searchParams.get('resolution')).toBe('minute');
     expect(parsed.searchParams.get('tunnel')).toBe('api edge/1');
   });
+
+  test('builds a 60-point second-resolution realtime window', () => {
+    const url = buildClientTrafficUrl('client-1', '60s', {}, 1_800_000);
+    const parsed = new URL(url, 'https://netsgo.test');
+
+    expect(parsed.searchParams.get('from')).toBe('1799940');
+    expect(parsed.searchParams.get('to')).toBe('1799999');
+    expect(parsed.searchParams.get('resolution')).toBe('second');
+  });
 });

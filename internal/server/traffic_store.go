@@ -11,15 +11,18 @@ import (
 )
 
 const (
-	trafficFlushInterval   = 10 * time.Second
-	trafficMinuteRetention = 24 * time.Hour
-	trafficHourRetention   = 7 * 24 * time.Hour
-	trafficMaxRange        = 7 * 24 * time.Hour
+	trafficFlushInterval        = 10 * time.Second
+	trafficRealtimePointCount   = 60
+	trafficRealtimePushInterval = time.Second
+	trafficMinuteRetention      = 24 * time.Hour
+	trafficHourRetention        = 7 * 24 * time.Hour
+	trafficMaxRange             = 7 * 24 * time.Hour
 )
 
 type TrafficResolution string
 
 const (
+	TrafficResolutionSecond TrafficResolution = "second"
 	TrafficResolutionMinute TrafficResolution = "minute"
 	TrafficResolutionHour   TrafficResolution = "hour"
 )
@@ -28,6 +31,7 @@ type TrafficDelta struct {
 	ClientID     string
 	TunnelName   string
 	TunnelType   string
+	SecondStart  int64
 	MinuteStart  int64
 	IngressBytes uint64
 	EgressBytes  uint64
@@ -74,8 +78,9 @@ type TrafficStore struct {
 	closeOnce sync.Once
 	closeErr  error
 
-	pendingMinute map[string]TrafficBucket
-	pendingErr    error
+	realtimeSecond *realtimeSecondIndex
+	pendingMinute  map[string]TrafficBucket
+	pendingErr     error
 
 	failSaveErr   error
 	failSaveCount int
@@ -93,10 +98,11 @@ func NewTrafficStore(path string) (*TrafficStore, error) {
 // When closeDB is false the caller retains DB ownership.
 func newTrafficStoreWithDB(path string, db *sql.DB, closeDB bool) *TrafficStore {
 	return &TrafficStore{
-		path:          path,
-		db:            db,
-		closeDB:       closeDB,
-		pendingMinute: make(map[string]TrafficBucket),
+		path:           path,
+		db:             db,
+		closeDB:        closeDB,
+		realtimeSecond: newRealtimeSecondIndex(),
+		pendingMinute:  make(map[string]TrafficBucket),
 	}
 }
 
@@ -133,6 +139,7 @@ func (s *TrafficStore) ApplyDeltas(deltas []TrafficDelta) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var newestSecond int64
 	for _, delta := range deltas {
 		if delta.ClientID == "" || delta.TunnelName == "" || delta.TunnelType == "" {
 			continue
@@ -141,7 +148,7 @@ func (s *TrafficStore) ApplyDeltas(deltas []TrafficDelta) {
 			continue
 		}
 
-		bucket := TrafficBucket{
+		minuteBucket := TrafficBucket{
 			ClientID:     delta.ClientID,
 			TunnelName:   delta.TunnelName,
 			TunnelType:   delta.TunnelType,
@@ -151,16 +158,40 @@ func (s *TrafficStore) ApplyDeltas(deltas []TrafficDelta) {
 			EgressBytes:  delta.EgressBytes,
 		}
 
-		key := trafficBucketKey(bucket)
+		key := trafficBucketKey(minuteBucket)
 		if existing, ok := s.pendingMinute[key]; ok {
-			if err := addTrafficBucketValues(&existing, bucket); err != nil {
+			if err := addTrafficBucketValues(&existing, minuteBucket); err != nil {
 				s.pendingErr = err
 				continue
 			}
 			s.pendingMinute[key] = existing
 		} else {
-			s.pendingMinute[key] = bucket
+			s.pendingMinute[key] = minuteBucket
 		}
+
+		if delta.SecondStart == 0 {
+			continue
+		}
+
+		secondBucket := TrafficBucket{
+			ClientID:     delta.ClientID,
+			TunnelName:   delta.TunnelName,
+			TunnelType:   delta.TunnelType,
+			Resolution:   TrafficResolutionSecond,
+			BucketStart:  delta.SecondStart,
+			IngressBytes: delta.IngressBytes,
+			EgressBytes:  delta.EgressBytes,
+		}
+		if err := s.realtimeSecond.Add(secondBucket); err != nil {
+			s.pendingErr = err
+			continue
+		}
+		if delta.SecondStart > newestSecond {
+			newestSecond = delta.SecondStart
+		}
+	}
+	if newestSecond != 0 {
+		s.pruneRealtimeLocked(time.Unix(newestSecond, 0).UTC())
 	}
 }
 
@@ -198,7 +229,20 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 	}
 
 	buckets := []TrafficBucket{}
-	if resolution == TrafficResolutionMinute {
+	switch resolution {
+	case TrafficResolutionSecond:
+		combined := make(map[string]TrafficBucket)
+		fromUnix := secondFloorUTC(from).Unix()
+		toUnix := secondFloorUTC(to).Unix()
+		for _, bucket := range s.realtimeSecond.Query(clientID, tunnelName, fromUnix, toUnix) {
+			if err := addTrafficBucket(combined, bucket); err != nil {
+				return TrafficQueryResult{}, err
+			}
+		}
+		for _, bucket := range combined {
+			buckets = append(buckets, bucket)
+		}
+	case TrafficResolutionMinute:
 		combined := make(map[string]TrafficBucket)
 		persisted, err := s.queryBucketsLocked(clientID, tunnelName, TrafficResolutionMinute, minuteFloorUTC(from).Unix(), minuteFloorUTC(to).Unix())
 		if err != nil {
@@ -219,7 +263,7 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 		for _, bucket := range combined {
 			buckets = append(buckets, bucket)
 		}
-	} else {
+	case TrafficResolutionHour:
 		combined := make(map[string]TrafficBucket)
 		currentHourStart := hourFloorUTC(time.Now()).Unix()
 		persistedHours, err := s.queryBucketsLocked(clientID, tunnelName, TrafficResolutionHour, hourFloorUTC(from).Unix(), hourFloorUTC(to).Unix())
@@ -251,6 +295,8 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 		for _, bucket := range combined {
 			buckets = append(buckets, bucket)
 		}
+	default:
+		return TrafficQueryResult{}, fmt.Errorf("invalid traffic resolution %q", resolution)
 	}
 
 	sort.Slice(buckets, func(i, j int) bool {
@@ -479,7 +525,13 @@ func (s *TrafficStore) pruneLocked(now time.Time) error {
 	if _, err := s.db.Exec(`DELETE FROM traffic_buckets WHERE resolution = ? AND bucket_start < ?`, string(TrafficResolutionHour), hourCutoff); err != nil {
 		return err
 	}
+	s.pruneRealtimeLocked(now)
 	return nil
+}
+
+func (s *TrafficStore) pruneRealtimeLocked(now time.Time) {
+	cutoff := secondFloorUTC(now).Add(-time.Duration(trafficRealtimePointCount-1) * time.Second).Unix()
+	s.realtimeSecond.PruneBefore(cutoff)
 }
 
 func collectSortedBuckets(source map[string]TrafficBucket) []TrafficBucket {
@@ -697,6 +749,10 @@ func bucketMatchesRange(bucket TrafficBucket, clientID, tunnelName string, fromU
 	return bucket.BucketStart >= fromUnix && bucket.BucketStart <= toUnix
 }
 
+func secondFloorUTC(t time.Time) time.Time {
+	return t.UTC().Truncate(time.Second)
+}
+
 func minuteFloorUTC(t time.Time) time.Time {
 	return t.UTC().Truncate(time.Minute)
 }
@@ -706,19 +762,23 @@ func hourFloorUTC(t time.Time) time.Time {
 }
 
 func autoTrafficResolution(from, to time.Time) TrafficResolution {
+	if secondFloorUTC(to).Sub(secondFloorUTC(from)) <= time.Duration(trafficRealtimePointCount-1)*time.Second {
+		return TrafficResolutionSecond
+	}
 	if to.Sub(from) <= trafficMinuteRetention {
 		return TrafficResolutionMinute
 	}
 	return TrafficResolutionHour
 }
 
-func (s *TrafficStore) RecordBytes(clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
-	minuteStart := minuteFloorUTC(time.Now()).Unix()
+func (s *TrafficStore) recordBytesAt(now time.Time, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
+	now = now.UTC()
 	s.ApplyDeltas([]TrafficDelta{{
 		ClientID:     clientID,
 		TunnelName:   tunnelName,
 		TunnelType:   tunnelType,
-		MinuteStart:  minuteStart,
+		SecondStart:  secondFloorUTC(now).Unix(),
+		MinuteStart:  minuteFloorUTC(now).Unix(),
 		IngressBytes: ingressBytes,
 		EgressBytes:  egressBytes,
 	}})
@@ -733,6 +793,7 @@ func (s *TrafficStore) EvictTunnel(clientID, tunnelName string) error {
 			delete(s.pendingMinute, key)
 		}
 	}
+	s.realtimeSecond.EvictTunnel(clientID, tunnelName)
 	if len(s.pendingMinute) == 0 {
 		s.pendingErr = nil
 	}
@@ -749,6 +810,7 @@ func (s *TrafficStore) EvictClient(clientID string) error {
 			delete(s.pendingMinute, key)
 		}
 	}
+	s.realtimeSecond.EvictClient(clientID)
 	if len(s.pendingMinute) == 0 {
 		s.pendingErr = nil
 	}

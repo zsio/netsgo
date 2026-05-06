@@ -334,8 +334,8 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			// and avoid a double-decrement.
 			sess.Close()
 			state.removeSession(key)
-		} else if s.trafficStore != nil {
-			s.trafficStore.RecordBytes(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(n), 0)
+		} else {
+			s.recordTraffic(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(n), 0)
 		}
 	}
 }
@@ -378,9 +378,7 @@ func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clien
 				proxyName, sess.srcAddr.String(), err)
 			return
 		}
-		if s.trafficStore != nil {
-			s.trafficStore.RecordBytes(clientID, proxyName, protocol.ProxyTypeUDP, 0, uint64(len(payload)))
-		}
+		s.recordTraffic(clientID, proxyName, protocol.ProxyTypeUDP, 0, uint64(len(payload)))
 	}
 }
 

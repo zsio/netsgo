@@ -4,11 +4,16 @@ import { adminRoute } from '../admin';
 import { ApiError } from '@/lib/api';
 import { useAdminConfig, useUpdateAdminConfig } from '@/hooks/use-admin-config';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, AlertTriangle, ShieldAlert, Edit2, Check, X, Trash2 } from 'lucide-react';
+import { Plus, AlertTriangle, ShieldAlert, Edit2, Check, X, Trash2, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { TableActionIconButton } from '@/components/custom/common/TableActionIconButton';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
@@ -67,7 +72,6 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
   const initialServerAddr = (initialConfig.server_addr || '').trim();
   const initialServerAddrIsLegacy = initialServerAddr !== '' && getServerAddrValidationError(initialServerAddr) !== null;
   const serverAddrLocked = initialConfig.server_addr_locked;
-  const effectiveServerAddr = initialConfig.effective_server_addr || initialServerAddr;
   // 为每行分配一个绝对稳定的本地 id 以保证增删、编辑改值时 React 动画不会重组闪烁
   const [portRanges, setPortRanges] = useState<LocalPortRange[]>(() => {
     const ports = initialConfig.allowed_ports || [];
@@ -282,9 +286,10 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
 
   // 渲染正在编辑的行还是渲染正在新增的行都会共用一部分逻辑。
   // 为了美观，我们把 `portRanges` 和如果 `editingIndex === length` 的虚拟行拼在一起 map。
-  const displayRanges: DisplayRangeRow[] = editingIndex === portRanges.length 
-    ? [...portRanges, { isAdding: true }] 
+  const displayRanges: DisplayRangeRow[] = editingIndex === portRanges.length
+    ? [...portRanges, { isAdding: true }]
     : portRanges;
+
 
   return (
     <>
@@ -297,13 +302,30 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
           </div>
           <div className="p-6">
             <div className="max-w-md">
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center justify-between gap-2 mb-2">
                 <span className="text-sm font-medium text-foreground">server_addr</span>
-                {serverAddrLocked && (
-                  <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-700">
-                    只读锁定
-                  </Badge>
-                )}
+                {serverAddrLocked ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="连接地址已锁定"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                      >
+                        <HelpCircle className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-[320px]">
+                      <p>
+                        当前连接地址由环境变量
+                        <code className="mx-1 rounded px-1.5 py-0.5">NETSGO_SERVER_ADDR</code>
+                        或服务启动参数
+                        <code className="mx-1 rounded px-1.5 py-0.5">--server-addr</code>
+                        指定，当前实例以该值为准，服务配置页面不能直接修改。
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                ) : null}
               </div>
               <Input
                 value={serverAddr}
@@ -321,44 +343,30 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                   当前保存值来自旧版本格式。本次可以先仅修改端口规则；如果要修改服务地址，请改成完整的 HTTP(S) URL。
                 </p>
               )}
-              <div className="mt-4 flex flex-col gap-3">
-                <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">当前保存值</p>
-                  <code className="mt-1 block break-all text-sm text-foreground">{initialServerAddr || '-'}</code>
-                  <p className="mt-1 text-[11px] text-muted-foreground">这是管理配置里持久化保存的默认推荐地址。</p>
-                </div>
-                <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">当前生效值</p>
-                  <code className="mt-1 block break-all text-sm text-foreground">{effectiveServerAddr || '-'}</code>
-                  <p className="mt-1 text-[11px] text-muted-foreground">
-                    真正用于管理 Host 校验的运行时地址。
-                    {serverAddrLocked ? ' 当前由环境变量 NETSGO_SERVER_ADDR 锁定。' : ''}
-                  </p>
-                </div>
-                {conflictingHTTPTunnels.length > 0 && (
-                  <div className="rounded-lg border border-destructive/30 bg-destructive/8 p-3 text-sm">
-                    <div className="flex items-start gap-2 text-destructive">
-                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                      <div className="flex flex-col gap-1">
-                        <p className="font-medium">保存已阻止：`server_addr` 与现有 HTTP 隧道域名冲突</p>
-                        <p className="text-xs text-destructive/80">
-                          请先调整管理地址或相关 HTTP 隧道域名，再重新提交。
-                        </p>
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          {conflictingHTTPTunnels.map((tunnel) => (
-                            <code
-                              key={tunnel}
-                              className="rounded bg-background/80 px-2 py-1 text-[11px] text-foreground"
-                            >
-                              {tunnel}
-                            </code>
-                          ))}
-                        </div>
+
+              {conflictingHTTPTunnels.length > 0 && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/8 p-3 text-sm">
+                  <div className="flex items-start gap-2 text-destructive">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div className="flex flex-col gap-1">
+                      <p className="font-medium">保存已阻止：`server_addr` 与现有 HTTP 隧道域名冲突</p>
+                      <p className="text-xs text-destructive/80">
+                        请先调整管理地址或相关 HTTP 隧道域名，再重新提交。
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {conflictingHTTPTunnels.map((tunnel) => (
+                          <code
+                            key={tunnel}
+                            className="rounded bg-background/80 px-2 py-1 text-[11px] text-foreground"
+                          >
+                            {tunnel}
+                          </code>
+                        ))}
                       </div>
                     </div>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -367,7 +375,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
         <div className="grid grid-cols-[280px_1fr] border-b border-border/40">
           <div className="p-6 bg-muted/20">
             <h4 className="font-semibold text-foreground">穿透端口范围</h4>
-            <p className="text-sm text-muted-foreground mt-1">管控放行区间的流量端口。为了避免冲突覆盖，仅支持每次处理一条规则的编辑与新增。</p>
+            <p className="text-sm text-muted-foreground mt-1">管控放行区间的流量端口。</p>
           </div>
           <div className="p-6 flex flex-col items-start min-h-[160px]">
             {displayRanges.length === 0 ? (
@@ -424,12 +432,12 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                                   />
                                 </td>
                                 <td className="py-2 px-4 text-right flex items-center justify-end gap-1.5 h-full pt-3">
-                                  <Button type="button" variant="ghost" size="sm" onClick={saveEdit} className="text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/10 h-8 px-2.5">
-                                    <Check className="w-3.5 h-3.5 mr-1" /> 保存
-                                  </Button>
-                                  <Button type="button" variant="ghost" size="sm" onClick={cancelEdit} className="text-muted-foreground hover:bg-muted h-8 px-2.5">
-                                    <X className="w-3.5 h-3.5 mr-1" /> 取消
-                                  </Button>
+                                  <TableActionIconButton type="button" label="保存" tone="success" onClick={saveEdit}>
+                                    <Check className="w-3.5 h-3.5" />
+                                  </TableActionIconButton>
+                                  <TableActionIconButton type="button" label="取消" tone="neutral" onClick={cancelEdit}>
+                                    <X className="w-3.5 h-3.5" />
+                                  </TableActionIconButton>
                                 </td>
                               </>
                             ) : (
@@ -438,26 +446,24 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                                   <td className="py-3 px-4 font-mono">{range.start}</td>
                                   <td className="py-3 px-4 font-mono">{range.end}</td>
                                   <td className="py-2 px-4 text-right flex items-center justify-end gap-1">
-                                    <Button 
-                                      type="button" 
-                                      variant="ghost" 
-                                      size="sm" 
+                                    <TableActionIconButton
+                                      type="button"
+                                      label="编辑"
+                                      tone="primary"
                                       disabled={editingIndex !== null}
-                                      onClick={() => startEdit(index)} 
-                                      className="text-primary hover:text-primary hover:bg-primary/10 h-8 px-2.5"
+                                      onClick={() => startEdit(index)}
                                     >
-                                      <Edit2 className="w-3.5 h-3.5 mr-1.5" /> 编辑
-                                    </Button>
-                                    <Button 
-                                      type="button" 
-                                      variant="ghost" 
-                                      size="sm"
-                                      disabled={editingIndex !== null} 
-                                      onClick={() => removePortRange(index)} 
-                                      className="text-red-500 hover:text-red-600 hover:bg-red-500/10 h-8 px-2.5"
+                                      <Edit2 className="w-3.5 h-3.5" />
+                                    </TableActionIconButton>
+                                    <TableActionIconButton
+                                      type="button"
+                                      label="删除"
+                                      tone="destructive"
+                                      disabled={editingIndex !== null}
+                                      onClick={() => removePortRange(index)}
                                     >
-                                      <Trash2 className="w-3.5 h-3.5 mr-1.5" /> 删除
-                                    </Button>
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </TableActionIconButton>
                                   </td>
                                 </>
                               ) : null
@@ -479,7 +485,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
               disabled={editingIndex !== null}
               className="gap-2 shrink-0 border-dashed"
             >
-              <Plus className="w-3.5 h-3.5" /> 声明新的端口防区
+              <Plus className="w-3.5 h-3.5" /> 添加端口范围
             </Button>
           </div>
         </div>

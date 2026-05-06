@@ -25,14 +25,14 @@ export function TunnelSpeedDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="w-[calc(100vw-2rem)] gap-3 sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Activity className="h-5 w-5 text-primary" />
-            <span>{tunnel.name} 的 24 小时速率</span>
+          <DialogTitle className="flex min-w-0 items-center gap-2 pr-8">
+            <Activity className="h-5 w-5 shrink-0 text-primary" />
+            <span className="truncate">{tunnel.name} 的 24 小时速率</span>
           </DialogTitle>
         </DialogHeader>
-        <div className="py-4">
+        <div className="min-w-0">
           <TrafficRateChart clientId={clientId} tunnelFilter={[tunnel]} />
         </div>
       </DialogContent>

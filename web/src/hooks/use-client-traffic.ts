@@ -8,20 +8,25 @@ export interface UseClientTrafficOptions {
 
 const TRAFFIC_RANGE_CONFIG: Record<
   ClientTrafficRange,
-  { durationHours: number; resolution: TrafficResolution; refetchInterval: number }
+  { durationSeconds: number; resolution: TrafficResolution; refetchInterval: number }
 > = {
+  '60s': {
+    durationSeconds: 60,
+    resolution: 'second',
+    refetchInterval: 10_000,
+  },
   '1h': {
-    durationHours: 1,
+    durationSeconds: 60 * 60,
     resolution: 'minute',
     refetchInterval: 30_000,
   },
   '24h': {
-    durationHours: 24,
+    durationSeconds: 24 * 60 * 60,
     resolution: 'minute',
     refetchInterval: 60_000,
   },
   '7d': {
-    durationHours: 7 * 24,
+    durationSeconds: 7 * 24 * 60 * 60,
     resolution: 'hour',
     refetchInterval: 5 * 60_000,
   },
@@ -42,9 +47,13 @@ export function buildClientTrafficUrl(
   nowSeconds = Math.floor(Date.now() / 1000),
 ) {
   const config = TRAFFIC_RANGE_CONFIG[range];
+  const toSeconds = range === '60s' ? nowSeconds - 1 : nowSeconds;
+  const fromSeconds = range === '60s'
+    ? toSeconds - (config.durationSeconds - 1)
+    : toSeconds - config.durationSeconds;
   const params = new URLSearchParams({
-    from: String(nowSeconds - config.durationHours * 60 * 60),
-    to: String(nowSeconds),
+    from: String(fromSeconds),
+    to: String(toSeconds),
     resolution: config.resolution,
   });
 

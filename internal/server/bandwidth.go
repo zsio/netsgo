@@ -395,6 +395,10 @@ func writeFull(dst io.Writer, payload []byte) (int, error) {
 }
 
 func copyWithBandwidth(dst io.Writer, src io.Reader, slots ...*budgetSlot) (int64, error) {
+	return copyWithBandwidthObserved(dst, src, nil, slots...)
+}
+
+func copyWithBandwidthObserved(dst io.Writer, src io.Reader, onWrite func(int), slots ...*budgetSlot) (int64, error) {
 	buf := make([]byte, 32*1024)
 	var total int64
 
@@ -407,6 +411,9 @@ func copyWithBandwidth(dst io.Writer, src io.Reader, slots ...*budgetSlot) (int6
 		if nr > 0 {
 			nw, ew := writeFull(dst, buf[:nr])
 			total += int64(nw)
+			if nw > 0 && onWrite != nil {
+				onWrite(nw)
+			}
 			if unwritten := nr - nw; unwritten > 0 {
 				refundBandwidthAllowance(unwritten, slots...)
 			}
@@ -426,7 +433,9 @@ func copyWithBandwidth(dst io.Writer, src io.Reader, slots ...*budgetSlot) (int6
 	}
 }
 
-func relayTunnelPayload(stream io.ReadWriteCloser, extConn io.ReadWriteCloser, clientRuntime, tunnelRuntime *directionalBandwidthRuntime) (int64, int64) {
+type tunnelTrafficObserver func(ingressBytes, egressBytes uint64)
+
+func relayTunnelPayload(stream io.ReadWriteCloser, extConn io.ReadWriteCloser, clientRuntime, tunnelRuntime *directionalBandwidthRuntime, observe tunnelTrafficObserver) (int64, int64) {
 	ingressSlots := payloadBudgetSlots(payloadDirectionIngress, clientRuntime, tunnelRuntime)
 	egressSlots := payloadBudgetSlots(payloadDirectionEgress, clientRuntime, tunnelRuntime)
 
@@ -443,13 +452,21 @@ func relayTunnelPayload(stream io.ReadWriteCloser, extConn io.ReadWriteCloser, c
 
 	go func() {
 		defer wg.Done()
-		egressBytes, _ = copyWithBandwidth(extConn, stream, egressSlots...)
+		egressBytes, _ = copyWithBandwidthObserved(extConn, stream, func(n int) {
+			if observe != nil {
+				observe(0, uint64(n))
+			}
+		}, egressSlots...)
 		once.Do(closeAll)
 	}()
 
 	go func() {
 		defer wg.Done()
-		ingressBytes, _ = copyWithBandwidth(stream, extConn, ingressSlots...)
+		ingressBytes, _ = copyWithBandwidthObserved(stream, extConn, func(n int) {
+			if observe != nil {
+				observe(uint64(n), 0)
+			}
+		}, ingressSlots...)
 		once.Do(closeAll)
 	}()
 

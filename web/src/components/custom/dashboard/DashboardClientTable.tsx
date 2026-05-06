@@ -1,9 +1,10 @@
 import { useClients, useDeleteClient } from '@/hooks/use-clients';
 import { useNavigate } from '@tanstack/react-router';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Laptop, Cpu, HardDrive, Eye, Trash2 } from 'lucide-react';
+import { Laptop, Cpu, HardDrive, Eye, Trash2, Globe, Wifi } from 'lucide-react';
 import { formatPercent } from '@/lib/format';
-import { Button } from '@/components/ui/button';
+import { TableActionIconButton } from '@/components/custom/common/TableActionIconButton';
+import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
 import { CompactTrafficChart } from '@/components/custom/chart/CompactTrafficChart';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
@@ -25,26 +26,45 @@ function sortClientsForDashboard(clients: Client[] | undefined) {
 
 function IconActionButton({
   label,
-  variant = 'ghost',
+  variant = 'neutral',
   onClick,
   children,
 }: {
   label: string;
-  variant?: 'ghost' | 'destructive';
+  variant?: 'neutral' | 'destructive';
   onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <Button
-      type="button"
-      variant={variant}
-      size="icon-sm"
-      title={label}
+    <TableActionIconButton
+      label={label}
+      tone={variant === 'destructive' ? 'destructive' : 'neutral'}
       aria-label={label}
       onClick={onClick}
     >
       {children}
-    </Button>
+    </TableActionIconButton>
+  );
+}
+
+function DashboardClientNetworkInfo({ client }: { client: Client }) {
+  const privateIP = client.info.ip || '-';
+  const publicIP = client.info.public_ipv4 || client.info.public_ipv6 || client.last_ip || '-';
+
+  return (
+    <div className="flex flex-col gap-1.5 min-w-0">
+      <CopyableIpLine
+        primary
+        title="公网 IP"
+        icon={<Globe className="h-3.5 w-3.5" />}
+        value={publicIP}
+      />
+      <CopyableIpLine
+        title="内网 IP"
+        icon={<Wifi className="h-3.5 w-3.5" />}
+        value={privateIP}
+      />
+    </div>
   );
 }
 
@@ -74,7 +94,7 @@ function ClientMobileCard({
         )}
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span>{client.last_ip || client.info.ip || '-'}</span>
+        <DashboardClientNetworkInfo client={client} />
         <span>{client.info.os}/{client.info.arch}</span>
         {client.stats && (
           <span className="flex items-center gap-2">
@@ -132,7 +152,6 @@ function DashboardClientDesktopRow({
   return (
     <tr ref={ref} className="hover:bg-muted/30 transition-colors">
       <td className="px-6 py-3 font-medium text-foreground">{getClientDisplayName(client)}</td>
-      <td className="px-6 py-3">{client.last_ip || client.info.ip || '-'}</td>
       <td className="px-6 py-3">
         {client.online ? (
           <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-500 text-xs font-medium">
@@ -220,18 +239,17 @@ export function DashboardClientTableContent({
           <thead className="text-xs text-muted-foreground bg-muted/30 uppercase">
             <tr>
               <th className="px-6 py-3 font-medium">节点名称</th>
-              <th className="px-6 py-3 font-medium">IP 地址</th>
               <th className="px-6 py-3 font-medium">状态</th>
               <th className="px-6 py-3 font-medium">系统/架构</th>
               <th className="px-6 py-3 font-medium">CPU / 内存</th>
-              <th className="px-6 py-3 font-medium">网络趋势 (1h)</th>
+              <th className="px-6 py-3 font-medium">流量</th>
               <th className="px-6 py-3 font-medium text-right">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/40">
             {sortedClients.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-6 py-8 text-center text-muted-foreground">
+                <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
                   暂无 Client 连接
                 </td>
               </tr>

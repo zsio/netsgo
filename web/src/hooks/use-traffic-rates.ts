@@ -8,6 +8,11 @@ export interface RatePoint {
 }
 
 const RANGE_WINDOW_CONFIG: Record<ClientTrafficRange, { pointCount: number; bucketMs: number; divisor: number }> = {
+  '60s': {
+    pointCount: 60,
+    bucketMs: 1_000,
+    divisor: 1,
+  },
   '1h': {
     pointCount: 60,
     bucketMs: 60_000,

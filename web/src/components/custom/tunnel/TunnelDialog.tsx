@@ -6,6 +6,12 @@ import {
 import { AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupText,
+} from '@/components/ui/input-group';
 import toast from 'react-hot-toast';
 import { useCreateTunnel, useUpdateTunnel } from '@/hooks/use-tunnel-mutations';
 import { getTunnelMutationErrorMessage } from '@/lib/tunnel-model';
@@ -243,11 +249,11 @@ function TunnelDialogForm({
     <DialogContent className="sm:max-w-md">
       <DialogHeader>
         <DialogTitle>{isEdit ? '编辑隧道' : '创建代理隧道'}</DialogTitle>
-        <DialogDescription>
-          {props.mode === 'edit'
-            ? `修改隧道「${props.tunnel?.name}」的映射配置。隧道名称和协议类型不可变更。`
-            : '配置内网穿透隧道。TCP / UDP 通过公网端口映射，HTTP 通过域名分流到 Client 侧服务。'}
-        </DialogDescription>
+        {props.mode === 'edit' && (
+          <DialogDescription>
+            {`修改隧道「${props.tunnel?.name}」的映射配置。隧道名称和协议类型不可变更。`}
+          </DialogDescription>
+        )}
       </DialogHeader>
 
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -298,7 +304,7 @@ function TunnelDialogForm({
             <label className="text-sm font-medium">本地端口</label>
             <Input
               type="number"
-              placeholder="22"
+              placeholder="e.g. 22"
               value={localPort}
               onChange={(e) => setLocalPort(e.target.value)}
               min={1}
@@ -311,7 +317,7 @@ function TunnelDialogForm({
           <div className="space-y-1.5">
             <label className="text-sm font-medium">业务域名</label>
             <Input
-              placeholder="例如 app.example.com"
+              placeholder="e.g. app.example.com"
               value={domain}
               onChange={(e) => setDomain(e.target.value)}
               autoCapitalize="none"
@@ -347,29 +353,39 @@ function TunnelDialogForm({
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <label className="text-sm font-medium">入站限速</label>
-            <Input
-              type="number"
-              step="any"
-              placeholder="0"
-              value={ingressBps}
-              onChange={(e) => setIngressBps(e.target.value)}
-              min={0}
-            />
+            <InputGroup>
+              <InputGroupInput
+                type="number"
+                step="any"
+                placeholder="0"
+                value={ingressBps}
+                onChange={(e) => setIngressBps(e.target.value)}
+                min={0}
+              />
+              <InputGroupAddon align="inline-end">
+                <InputGroupText>MiB/s</InputGroupText>
+              </InputGroupAddon>
+            </InputGroup>
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium">出站限速</label>
-            <Input
-              type="number"
-              step="any"
-              placeholder="0"
-              value={egressBps}
-              onChange={(e) => setEgressBps(e.target.value)}
-              min={0}
-            />
+            <InputGroup>
+              <InputGroupInput
+                type="number"
+                step="any"
+                placeholder="0"
+                value={egressBps}
+                onChange={(e) => setEgressBps(e.target.value)}
+                min={0}
+              />
+              <InputGroupAddon align="inline-end">
+                <InputGroupText>MiB/s</InputGroupText>
+              </InputGroupAddon>
+            </InputGroup>
           </div>
         </div>
         <p className="text-[11px] text-muted-foreground -mt-1">
-          单位为 MiB/s，留空或填写 0 表示不限速。
+          留空或填写 0 表示不限速。
         </p>
 
         {mutation.isError && (

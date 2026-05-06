@@ -327,6 +327,22 @@ func TestCountingConnRead_RefundsUnusedReservedBytes(t *testing.T) {
 	}
 }
 
+func TestCopyWithBandwidthObserved_ReportsWrittenBytes(t *testing.T) {
+	src := bytes.NewBufferString("abcd")
+	var dst bytes.Buffer
+	var observed int
+
+	n, err := copyWithBandwidthObserved(&dst, src, func(written int) {
+		observed += written
+	})
+	if err != nil {
+		t.Fatalf("copyWithBandwidthObserved returned error: %v", err)
+	}
+	if n != 4 || observed != 4 || dst.String() != "abcd" {
+		t.Fatalf("observed copy mismatch: n=%d observed=%d dst=%q", n, observed, dst.String())
+	}
+}
+
 func TestCopyWithBandwidth_RefundsUnwrittenBytesOnWriteError(t *testing.T) {
 	clock := &fakeBandwidthClock{now: time.Unix(700, 0)}
 	slot := newBudgetSlot(10, clock)

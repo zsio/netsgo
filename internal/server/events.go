@@ -11,7 +11,7 @@ import (
 
 // SSEEvent represents a single SSE event.
 type SSEEvent struct {
-	Type string // "ready" | "snapshot" | "stats_update" | "client_online" | "client_offline" | "tunnel_changed"
+	Type string // "ready" | "snapshot" | "stats_update" | "traffic_realtime" | "client_online" | "client_offline" | "tunnel_changed"
 	Data string // JSON string
 }
 
@@ -49,6 +49,12 @@ func (eb *EventBus) Unsubscribe(ch chan SSEEvent) {
 	if exists {
 		close(ch)
 	}
+}
+
+func (eb *EventBus) HasSubscribers() bool {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
+	return len(eb.subscribers) > 0
 }
 
 // Close shuts down the event bus and disconnects all subscribers. (P15)

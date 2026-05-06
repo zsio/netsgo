@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"netsgo/pkg/protocol"
 )
 
 func newTestTrafficStore(t *testing.T) (*TrafficStore, func()) {
@@ -180,6 +182,72 @@ func TestTrafficStore_RecordAndQuery(t *testing.T) {
 	c2Tun1 := mustSingleSeries(t, gotC2, "tun1")
 	if c2Tun1.Points[0].IngressBytes != 999 {
 		t.Errorf("c2 tun1 ingress expected 999, got %d", c2Tun1.Points[0].IngressBytes)
+	}
+}
+
+func TestTrafficStore_RecordBytesAtKeepsRealtimeSecondWindow(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	base := secondFloorUTC(time.Now().UTC())
+	ts.recordBytesAt(base.Add(-60*time.Second), "c1", "tun1", "tcp", 100, 50)
+	ts.recordBytesAt(base.Add(-59*time.Second), "c1", "tun1", "tcp", 200, 75)
+	ts.recordBytesAt(base, "c1", "tun1", "tcp", 300, 125)
+
+	got := mustQueryWithResolution(t, ts, "c1", "tun1", base.Add(-60*time.Second), base, TrafficResolutionSecond)
+	series := mustSingleSeries(t, got, "tun1")
+	if len(series.Points) != 2 {
+		t.Fatalf("realtime query should only keep the latest 60-second window, got %d points", len(series.Points))
+	}
+	if series.Points[0].BucketStart != base.Add(-59*time.Second) {
+		t.Fatalf("oldest realtime point = %s, want %s", series.Points[0].BucketStart, base.Add(-59*time.Second))
+	}
+	if series.Points[1].IngressBytes != 300 || series.Points[1].EgressBytes != 125 || series.Points[1].TotalBytes != 425 {
+		t.Fatalf("latest realtime point mismatch: %+v", series.Points[1])
+	}
+
+	minute := mustQueryWithResolution(t, ts, "c1", "tun1", base.Add(-time.Minute), base.Add(time.Minute), TrafficResolutionMinute)
+	minuteSeries := mustSingleSeries(t, minute, "tun1")
+	var ingressTotal, egressTotal uint64
+	for _, point := range minuteSeries.Points {
+		ingressTotal += point.IngressBytes
+		egressTotal += point.EgressBytes
+	}
+	if ingressTotal != 600 || egressTotal != 250 {
+		t.Fatalf("recordBytesAt should still aggregate minute traffic, got ingress=%d egress=%d", ingressTotal, egressTotal)
+	}
+}
+
+func TestTrafficStore_RealtimeSecondQueryIsScopedByClientAndTunnel(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	base := secondFloorUTC(time.Now().UTC())
+	ts.recordBytesAt(base, "c1", "web", "http", 100, 10)
+	ts.recordBytesAt(base, "c1", "ssh", "tcp", 200, 20)
+	ts.recordBytesAt(base, "c2", "web", "http", 900, 90)
+
+	got := mustQueryWithResolution(t, ts, "c1", "", base.Add(-time.Second), base.Add(time.Second), TrafficResolutionSecond)
+	if len(got.Items) != 2 {
+		t.Fatalf("c1 realtime query should return its two tunnels only, got %+v", got.Items)
+	}
+	web := findSeries(t, got, "web")
+	if web.Points[0].IngressBytes != 100 || web.Points[0].EgressBytes != 10 {
+		t.Fatalf("c1 web point mismatch: %+v", web.Points[0])
+	}
+
+	filtered := mustQueryWithResolution(t, ts, "c1", "ssh", base.Add(-time.Second), base.Add(time.Second), TrafficResolutionSecond)
+	if len(filtered.Items) != 1 || filtered.Items[0].TunnelName != "ssh" {
+		t.Fatalf("tunnel-filtered realtime query returned %+v", filtered.Items)
+	}
+	if filtered.Items[0].Points[0].IngressBytes != 200 || filtered.Items[0].Points[0].EgressBytes != 20 {
+		t.Fatalf("c1 ssh point mismatch: %+v", filtered.Items[0].Points[0])
+	}
+
+	c2 := mustQueryWithResolution(t, ts, "c2", "web", base.Add(-time.Second), base.Add(time.Second), TrafficResolutionSecond)
+	c2Web := mustSingleSeries(t, c2, "web")
+	if c2Web.Points[0].IngressBytes != 900 || c2Web.Points[0].EgressBytes != 90 {
+		t.Fatalf("c2 web point mismatch: %+v", c2Web.Points[0])
 	}
 }
 
@@ -865,6 +933,64 @@ func TestTrafficAPI_Query(t *testing.T) {
 	}
 	if web.Points[0].EgressBytes != 512 {
 		t.Errorf("web egress expected 512, got %d", web.Points[0].EgressBytes)
+	}
+}
+
+func TestTrafficAPI_RealtimeSecondQueryReturnsSixtyZeroFilledPoints(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	ts, trafficCleanup := newTestTrafficStore(t)
+	defer trafficCleanup()
+	s.trafficStore = ts
+
+	clientID := "test-client-realtime"
+	end := time.Unix(1_800_000, 0).UTC()
+	from := end.Add(-59 * time.Second)
+	sampleTime := end.Add(-2 * time.Second)
+	ts.recordBytesAt(sampleTime, clientID, "web", protocol.ProxyTypeHTTP, 1024, 512)
+
+	s.clients.Store(clientID, &ClientConn{
+		ID:    clientID,
+		state: clientStateLive,
+		proxies: map[string]*ProxyTunnel{
+			"web": {
+				Config: protocol.ProxyConfig{Name: "web", Type: protocol.ProxyTypeHTTP},
+				done:   make(chan struct{}),
+			},
+		},
+	})
+
+	path := "/api/clients/" + clientID + "/traffic?from=" + itoa(from.Unix()) + "&to=" + itoa(end.Unix()) + "&resolution=second"
+	w := doMuxRequest(t, handler, http.MethodGet, path, token, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp TrafficQueryResult
+	if err := mustDecodeJSON(t, w.Body, &resp); err != nil {
+		t.Fatalf("Failed to parse realtime response: %v", err)
+	}
+	if resp.Resolution != TrafficResolutionSecond {
+		t.Fatalf("Expected resolution=second, got %q", resp.Resolution)
+	}
+
+	web := mustSingleSeries(t, resp, "web")
+	if len(web.Points) != trafficRealtimePointCount {
+		t.Fatalf("Expected %d realtime points, got %d", trafficRealtimePointCount, len(web.Points))
+	}
+	if web.Points[0].BucketStart != from {
+		t.Fatalf("first realtime point = %s, want %s", web.Points[0].BucketStart, from)
+	}
+	sampleIndex := trafficRealtimePointCount - 3
+	if web.Points[sampleIndex].BucketStart != sampleTime {
+		t.Fatalf("sample timestamp = %s, want %s", web.Points[sampleIndex].BucketStart, sampleTime)
+	}
+	if web.Points[sampleIndex].IngressBytes != 1024 || web.Points[sampleIndex].EgressBytes != 512 || web.Points[sampleIndex].TotalBytes != 1536 {
+		t.Fatalf("sample point mismatch: %+v", web.Points[sampleIndex])
+	}
+	if web.Points[trafficRealtimePointCount-1].TotalBytes != 0 {
+		t.Fatalf("missing realtime seconds should be zero-filled, got %+v", web.Points[trafficRealtimePointCount-1])
 	}
 }
 
