@@ -247,7 +247,7 @@ func TestInstallClientAcceptsHTTPAndWritesServiceAddress(t *testing.T) {
 
 func TestInstallClientHTTPSCertificateFailureCanSkipWithoutConsumingKeyDuringProbe(t *testing.T) {
 	ui := &fakeUI{
-		inputs:    []string{"https://netsgo.zsio.dev"},
+		inputs:    []string{"https://netsgo.zsio.dev", ""},
 		passwords: []string{"sk-test-key"},
 		confirms:  []bool{true, true},
 	}
@@ -294,9 +294,55 @@ func TestInstallClientHTTPSCertificateFailureCanSkipWithoutConsumingKeyDuringPro
 	assertSummaryRow(t, ui.summaries[0], "TLS 风险", "连接会加密，但不会验证服务端证书身份")
 }
 
+func TestInstallClientHTTPSCertificateFailureCanPinFingerprint(t *testing.T) {
+	ui := &fakeUI{
+		inputs:    []string{"https://netsgo.zsio.dev", "AA:BB:CC"},
+		passwords: []string{"sk-test-key"},
+		confirms:  []bool{true},
+	}
+	var probeSkips []bool
+	var writtenEnv svcmgr.ClientEnv
+	err := InstallClientWith(clientDeps{
+		UI:                ui,
+		Detect:            func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateNotInstalled },
+		EnsureUser:        func(name string) error { return nil },
+		EnsureDirs:        func() error { return nil },
+		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
+		InstallBinary:     func(src string) error { return nil },
+		WriteClientEnv: func(layout svcmgr.ServiceLayout, env svcmgr.ClientEnv) error {
+			writtenEnv = env
+			return nil
+		},
+		WriteClientUnit:  func(layout svcmgr.ServiceLayout) error { return nil },
+		DaemonReload:     func() error { return nil },
+		EnableAndStart:   func(unit string) error { return nil },
+		VerifyClientLink: fakeClientLink(ClientLinkEstablished),
+		CheckServerTLS: func(addr clientaddr.Address, skipVerify bool) error {
+			probeSkips = append(probeSkips, skipVerify)
+			return x509.UnknownAuthorityError{}
+		},
+	})
+	if err != nil {
+		t.Fatalf("client install with pinned TLS fingerprint should not error: %v", err)
+	}
+	if len(probeSkips) != 1 || probeSkips[0] {
+		t.Fatalf("TLS probe skip sequence = %#v, want []bool{false}", probeSkips)
+	}
+	if writtenEnv.TLSSkipVerify {
+		t.Fatalf("pinned TLS fingerprint should not enable skip verify, got %#v", writtenEnv)
+	}
+	if writtenEnv.TLSFingerprint != "AA:BB:CC" {
+		t.Fatalf("pinned TLS fingerprint should be written to env, got %#v", writtenEnv)
+	}
+	assertNoConfirmPrompt(t, ui.confirmCalls, "HTTPS 证书校验失败，是否跳过 TLS 证书校验？")
+	assertConfirmPrompt(t, ui.confirmCalls, "继续安装？")
+	assertSummaryRow(t, ui.summaries[0], "TLS 指纹", "AA:BB:CC")
+	assertNoSummaryRow(t, ui.summaries[0], "跳过 TLS 校验")
+}
+
 func TestInstallClientHTTPSCertificateFailureDeclinedDoesNotAskForKey(t *testing.T) {
 	ui := &fakeUI{
-		inputs:   []string{"https://netsgo.zsio.dev"},
+		inputs:   []string{"https://netsgo.zsio.dev", ""},
 		confirms: []bool{false},
 	}
 	err := InstallClientWith(clientDeps{

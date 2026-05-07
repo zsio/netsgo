@@ -7,19 +7,23 @@ import (
 	"netsgo/pkg/version"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var downloadAndExtractFunc = downloadAndExtract
 var osMkdirTempFunc = os.MkdirTemp
 
 func checkUpdateNeeded(currentVersion, latestVersion string) (bool, error) {
-	currentNormalized, err := version.NormalizeVersionString(currentVersion)
-	if err != nil {
-		return false, fmt.Errorf("parse current: %w", err)
-	}
 	latestNormalized, err := version.NormalizeVersionString(latestVersion)
 	if err != nil {
 		return false, fmt.Errorf("parse latest: %w", err)
+	}
+	currentNormalized, err := version.NormalizeVersionString(currentVersion)
+	if err != nil {
+		return true, nil
+	}
+	if isDevelopmentSnapshotVersion(currentVersion) || isDevelopmentSnapshotVersion(currentNormalized) {
+		return currentNormalized != latestNormalized, nil
 	}
 	current, err := version.ParseSemver(currentNormalized)
 	if err != nil {
@@ -30,6 +34,34 @@ func checkUpdateNeeded(currentVersion, latestVersion string) (bool, error) {
 		return false, fmt.Errorf("parse latest: %w", err)
 	}
 	return latest.Compare(current) > 0, nil
+}
+
+func releaseTrackForCurrentVersion(currentVersion string) releaseTrack {
+	currentNormalized, err := version.NormalizeVersionString(currentVersion)
+	if err != nil {
+		return releaseTrackAny
+	}
+	current, err := version.ParseSemver(currentNormalized)
+	if err != nil {
+		return releaseTrackAny
+	}
+	if current.Prerelease == "" {
+		return releaseTrackStable
+	}
+	return releaseTrackAny
+}
+
+func isDevelopmentSnapshotVersion(v string) bool {
+	lower := strings.ToLower(v)
+	return strings.Contains(lower, "snapshot") || strings.Contains(lower, "dirty") || strings.Contains(lower, "dev")
+}
+
+func normalizedVersionOrOriginal(v string) string {
+	normalized, err := version.NormalizeVersionString(v)
+	if err != nil {
+		return v
+	}
+	return normalized
 }
 
 func installedUnits() []string {
@@ -58,8 +90,13 @@ type updatePlan struct {
 func CheckForUpdate(channel DownloadChannel, currentVersion string) (*Result, bool, error) {
 	result := &Result{OldVersion: currentVersion}
 
-	latest, err := fetchLatestVersionFunc(channel)
+	track := releaseTrackForCurrentVersion(currentVersion)
+	latest, err := fetchLatestVersionFunc(channel, track)
 	if err != nil {
+		if errors.Is(err, errNoCompatibleRelease) && track == releaseTrackStable {
+			result.NewVersion = normalizedVersionOrOriginal(currentVersion)
+			return result, false, nil
+		}
 		return result, false, fmt.Errorf("check latest: %w", err)
 	}
 	result.NewVersion = latest

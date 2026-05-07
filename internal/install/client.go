@@ -92,21 +92,31 @@ func InstallClientWith(deps clientDeps) error {
 	}
 	serverURL := serverAddr.BaseURL
 	tlsSkipVerify := false
+	tlsFingerprint := ""
 	if serverAddr.UseTLS && deps.CheckServerTLS != nil {
 		if err := deps.CheckServerTLS(serverAddr, false); err != nil {
 			if !isTLSCertificateVerificationError(err) {
 				return fmt.Errorf("无法连接 HTTPS 服务: %w", err)
 			}
-			ok, confirmErr := deps.UI.Confirm("HTTPS 证书校验失败，是否跳过 TLS 证书校验？")
-			if confirmErr != nil {
-				return confirmErr
+			tlsFingerprint, err = deps.UI.Input("TLS 证书指纹", tui.InputOptions{
+				Description: "请输入服务端 TLS 证书指纹（例如 SHA-256，格式 AA:BB:...）。留空则改为跳过 TLS 证书校验。",
+			})
+			if err != nil {
+				return err
 			}
-			if !ok {
-				return fmt.Errorf("HTTPS 证书校验失败: %w", err)
-			}
-			tlsSkipVerify = true
-			if retryErr := deps.CheckServerTLS(serverAddr, true); retryErr != nil {
-				return fmt.Errorf("跳过 TLS 证书校验后仍无法连接 HTTPS 服务: %w", retryErr)
+			tlsFingerprint = strings.TrimSpace(tlsFingerprint)
+			if tlsFingerprint == "" {
+				ok, confirmErr := deps.UI.Confirm("HTTPS 证书校验失败，是否跳过 TLS 证书校验？")
+				if confirmErr != nil {
+					return confirmErr
+				}
+				if !ok {
+					return fmt.Errorf("HTTPS 证书校验失败: %w", err)
+				}
+				tlsSkipVerify = true
+				if retryErr := deps.CheckServerTLS(serverAddr, true); retryErr != nil {
+					return fmt.Errorf("跳过 TLS 证书校验后仍无法连接 HTTPS 服务: %w", retryErr)
+				}
 			}
 		}
 	}
@@ -130,6 +140,9 @@ func InstallClientWith(deps clientDeps) error {
 		[2]string{"服务地址", serverURL},
 		[2]string{"TLS 状态", ternary(usesTLS, "启用", "未启用")},
 	)
+	if tlsFingerprint != "" {
+		summaryRows = append(summaryRows, [2]string{"TLS 指纹", tlsFingerprint})
+	}
 	if tlsSkipVerify {
 		summaryRows = append(summaryRows,
 			[2]string{"跳过 TLS 校验", "是"},
@@ -155,7 +168,7 @@ func InstallClientWith(deps clientDeps) error {
 		DaemonReload:      deps.DaemonReload,
 		EnableAndStart:    deps.EnableAndStart,
 	}, func(layout svcmgr.ServiceLayout) error {
-		if err := deps.WriteClientEnv(layout, svcmgr.ClientEnv{Server: serverURL, Key: clientKey, TLSSkipVerify: tlsSkipVerify}); err != nil {
+		if err := deps.WriteClientEnv(layout, svcmgr.ClientEnv{Server: serverURL, Key: clientKey, TLSSkipVerify: tlsSkipVerify, TLSFingerprint: tlsFingerprint}); err != nil {
 			return err
 		}
 		return deps.WriteClientUnit(layout)

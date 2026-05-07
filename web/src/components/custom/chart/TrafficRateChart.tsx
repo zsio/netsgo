@@ -116,6 +116,7 @@ export function TrafficRateChart({ clientId, tunnelFilter }: TrafficRateChartPro
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 4 }}
+                isAnimationActive={false}
                 connectNulls
               />
               <Line
@@ -125,6 +126,7 @@ export function TrafficRateChart({ clientId, tunnelFilter }: TrafficRateChartPro
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 4 }}
+                isAnimationActive={false}
                 connectNulls
               />
             </LineChart>

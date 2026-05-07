@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -32,7 +33,7 @@ func TestFetchLatestVersion(t *testing.T) {
 		return http.ErrUseLastResponse
 	}}
 
-	version, err := fetchLatestVersionWithClient(server.URL+"/releases/latest", client)
+	version, err := fetchLatestVersionWithClient(server.URL+"/releases/latest", client, releaseTrackAny)
 	if err != nil {
 		t.Fatalf("fetchLatestVersion: %v", err)
 	}
@@ -56,12 +57,76 @@ func TestFetchLatestVersionFromFinalTagURL(t *testing.T) {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	version, err := fetchLatestVersionWithClient(server.URL+"/releases/latest", client)
+	version, err := fetchLatestVersionWithClient(server.URL+"/releases/latest", client, releaseTrackAny)
 	if err != nil {
 		t.Fatalf("fetchLatestVersionWithClient final tag URL: %v", err)
 	}
 	if version != "v1.2.3" {
 		t.Fatalf("expected v1.2.3, got %q", version)
+	}
+}
+
+func TestFetchLatestVersionFromReleasesPageWhenLatestRedirects(t *testing.T) {
+	releaseBody := `<!doctype html><a href="` + "/releases/tag/v1.2.4" + `">v1.2.4</a> <a href="` + "/releases/tag/v1.2.3" + `">v1.2.3</a>`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			http.Redirect(w, r, "/releases", http.StatusFound)
+		case "/releases":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(releaseBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	version, err := fetchLatestVersionWithClient(server.URL+"/releases/latest", client, releaseTrackAny)
+	if err != nil {
+		t.Fatalf("fetchLatestVersionWithClient from releases page: %v", err)
+	}
+	if version != "v1.2.4" {
+		t.Fatalf("expected v1.2.4, got %q", version)
+	}
+}
+
+func TestFetchLatestVersionStableTrackSkipsPrereleases(t *testing.T) {
+	releaseBody := strings.Join([]string{
+		`<a href="/releases/tag/v0.2.0-beta.1">v0.2.0-beta.1</a>`,
+		`<a href="/releases/tag/v0.1.1">v0.1.1</a>`,
+		`<a href="/releases/tag/v0.1.0">v0.1.0</a>`,
+	}, "")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/releases" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(releaseBody))
+	}))
+	defer server.Close()
+
+	version, err := fetchLatestVersionWithClient(server.URL+"/releases", &http.Client{Timeout: 5 * time.Second}, releaseTrackStable)
+	if err != nil {
+		t.Fatalf("fetch stable latest: %v", err)
+	}
+	if version != "v0.1.1" {
+		t.Fatalf("expected latest stable v0.1.1, got %q", version)
+	}
+}
+
+func TestFetchLatestVersionStableTrackReportsNoCompatibleRelease(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<a href="/releases/tag/v0.2.0-beta.1">v0.2.0-beta.1</a>`))
+	}))
+	defer server.Close()
+
+	_, err := fetchLatestVersionWithClient(server.URL+"/releases", &http.Client{Timeout: 5 * time.Second}, releaseTrackStable)
+	if !errors.Is(err, errNoCompatibleRelease) {
+		t.Fatalf("expected no compatible release, got %v", err)
 	}
 }
 
@@ -357,7 +422,8 @@ func TestCheckUpdateNeeded(t *testing.T) {
 		{"v1.1.0", "v1.1.0", false, false},
 		{"v1.2.0", "v1.1.0", false, false},
 		{"1.1.0+build.1", "v1.1.0+build.2", false, false},
-		{"dev", "v1.1.0", false, true},
+		{"dev", "v1.1.0", true, false},
+		{"0.1.0-beta.4-SNAPSHOT-4bb2dd1", "v0.1.0-beta.6", true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.current+"_vs_"+tt.latest, func(t *testing.T) {
@@ -378,7 +444,7 @@ func TestCheckForUpdateReturnsLatestWithoutApplying(t *testing.T) {
 		fetchLatestVersionFunc = origFetchLatestVersion
 	})
 
-	fetchLatestVersionFunc = func(channel DownloadChannel) (string, error) {
+	fetchLatestVersionFunc = func(channel DownloadChannel, track releaseTrack) (string, error) {
 		return "v1.1.0", nil
 	}
 
@@ -401,8 +467,10 @@ func TestCheckForUpdateUsesSelectedChannelForLatestLookup(t *testing.T) {
 	})
 
 	var gotChannel DownloadChannel
-	fetchLatestVersionFunc = func(channel DownloadChannel) (string, error) {
+	var gotTrack releaseTrack
+	fetchLatestVersionFunc = func(channel DownloadChannel, track releaseTrack) (string, error) {
 		gotChannel = channel
+		gotTrack = track
 		return "v1.0.0", nil
 	}
 
@@ -412,6 +480,58 @@ func TestCheckForUpdateUsesSelectedChannelForLatestLookup(t *testing.T) {
 	}
 	if gotChannel != ChannelGhproxy {
 		t.Fatalf("expected fetch latest to use %q, got %q", ChannelGhproxy, gotChannel)
+	}
+	if gotTrack != releaseTrackStable {
+		t.Fatalf("expected stable current version to use stable release track, got %v", gotTrack)
+	}
+}
+
+func TestCheckForUpdateUsesAnyReleaseTrackForPrereleaseCurrent(t *testing.T) {
+	origFetchLatestVersion := fetchLatestVersionFunc
+	t.Cleanup(func() {
+		fetchLatestVersionFunc = origFetchLatestVersion
+	})
+
+	var gotTrack releaseTrack
+	fetchLatestVersionFunc = func(channel DownloadChannel, track releaseTrack) (string, error) {
+		gotTrack = track
+		return "v0.1.0-beta.6", nil
+	}
+
+	result, needed, err := CheckForUpdate(ChannelGitHub, "0.1.0-beta.4-SNAPSHOT-4bb2dd1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotTrack != releaseTrackAny {
+		t.Fatalf("expected prerelease current version to use any release track, got %v", gotTrack)
+	}
+	if !needed || result.NewVersion != "v0.1.0-beta.6" {
+		t.Fatalf("expected snapshot beta to update to latest beta, needed=%v result=%+v", needed, result)
+	}
+}
+
+func TestCheckForUpdateTreatsMissingStableReleaseAsNoUpdate(t *testing.T) {
+	origFetchLatestVersion := fetchLatestVersionFunc
+	t.Cleanup(func() {
+		fetchLatestVersionFunc = origFetchLatestVersion
+	})
+
+	fetchLatestVersionFunc = func(channel DownloadChannel, track releaseTrack) (string, error) {
+		if track != releaseTrackStable {
+			t.Fatalf("expected stable release track, got %v", track)
+		}
+		return "", errNoCompatibleRelease
+	}
+
+	result, needed, err := CheckForUpdate(ChannelGitHub, "1.0.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if needed {
+		t.Fatalf("expected no update when no stable release exists, result=%+v", result)
+	}
+	if result.NewVersion != "1.0.0" {
+		t.Fatalf("expected current version to be kept as latest compatible version, got %+v", result)
 	}
 }
 
@@ -431,7 +551,7 @@ func TestApplyConfirmedUpdateUsesConfirmedVersionWithoutRefetch(t *testing.T) {
 		installedBinaryPath = origBinaryPath
 	})
 
-	fetchLatestVersionFunc = func(channel DownloadChannel) (string, error) {
+	fetchLatestVersionFunc = func(channel DownloadChannel, track releaseTrack) (string, error) {
 		t.Fatal("ApplyConfirmedUpdate should not refetch latest version")
 		return "", nil
 	}
