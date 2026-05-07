@@ -305,6 +305,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
                   strokeWidth={2}
                   dot={false}
                   activeDot={{ r: 4 }}
+                  isAnimationActive={false}
                   connectNulls
                 />
               ))}
