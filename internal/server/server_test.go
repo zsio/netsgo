@@ -2035,6 +2035,44 @@ func TestControlLoop_ProxyCreateResponse(t *testing.T) {
 	}
 }
 
+func TestControlLoop_ProxyCreateRejectsHTTP(t *testing.T) {
+	_, _, ts, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	conn, _ := connectAndAuth(t, ts, "legacy-proxy-create-http-host")
+	defer mustClose(t, conn)
+
+	req := protocol.ProxyNewRequest{
+		Name:   "legacy-http-tunnel",
+		Type:   protocol.ProxyTypeHTTP,
+		Domain: "legacy-http.example.com",
+	}
+	msg, _ := protocol.NewMessage(protocol.MsgTypeProxyCreate, req)
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
+
+	var resp protocol.Message
+	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
+	if err := conn.ReadJSON(&resp); err != nil {
+		t.Fatalf("failed to read create-proxy response: %v", err)
+	}
+	if resp.Type != protocol.MsgTypeProxyCreateResp {
+		t.Fatalf("want returned %s, got %s", protocol.MsgTypeProxyCreateResp, resp.Type)
+	}
+
+	var payload protocol.ProxyCreateResponse
+	if err := resp.ParsePayload(&payload); err != nil {
+		t.Fatalf("failed to parse create-proxy response: %v", err)
+	}
+	if payload.Success {
+		t.Fatalf("HTTP proxy creation should fail on client control channel")
+	}
+	if payload.Message == "" {
+		t.Fatalf("expected rejection reason for HTTP proxy creation")
+	}
+}
+
 func TestControlLoop_ProxyCreateWaitsForPendingDataChannel(t *testing.T) {
 	s, ts, cleanup := setupWSTestNoConn(t)
 	defer cleanup()

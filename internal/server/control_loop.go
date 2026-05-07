@@ -123,6 +123,18 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 	req.IngressBPS = 0
 	req.EgressBPS = 0
 
+	if req.Type == protocol.ProxyTypeHTTP {
+		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
+			Name:    req.Name,
+			Success: false,
+			Message: "HTTP tunnels can only be created via admin API",
+		})
+		if writeErr := client.writeJSON(resp); writeErr != nil {
+			log.Printf("⚠️ Failed to send proxy response [%s]: %v", client.ID, writeErr)
+		}
+		return
+	}
+
 	if !s.isCurrentLive(client.ID, client.generation) {
 		if err := s.waitForCurrentDataReady(client, s.sessions.pendingDataTimeout); err != nil {
 			log.Printf("⚠️ Failed while waiting for data channel readiness before proxy creation [%s]: %v", client.ID, err)
