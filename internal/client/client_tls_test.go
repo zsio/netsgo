@@ -516,8 +516,8 @@ func TestScenario_PlainWS_NoTLSUsed(t *testing.T) {
 	}
 }
 
-// Scenario: skip TOFU fingerprint checks when TLSSkipVerify=true
-func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
+// Scenario: TLSSkipVerify bypasses PKI checks but TOFU fingerprint checks still apply
+func TestScenario_TLS_SkipVerify_StillChecksFingerprintTOFU(t *testing.T) {
 	cert, _ := generateTestCert(t)
 	ms := newMockServer(true)
 	httpMux := http.NewServeMux()
@@ -538,9 +538,8 @@ func TestScenario_TLS_SkipVerify_SkipsFingerprintCheck(t *testing.T) {
 	go func() { _ = c.Start() }()
 	time.Sleep(3 * time.Second)
 
-	// TLSSkipVerify=true -> checkTLSFingerprint is not called -> the fingerprint is not recorded
-	if c.CurrentTLSFingerprint() != "" {
-		t.Errorf("should not record fingerprint when TLSSkipVerify=true, got: %q", c.CurrentTLSFingerprint())
+	if c.CurrentTLSFingerprint() == "" {
+		t.Error("fingerprint should still be recorded when TLSSkipVerify=true")
 	}
 	if c.CurrentClientID() != "mock_client_1" {
 		t.Errorf("authentication should succeed, ClientID: want 'mock_client_1', got %q", c.CurrentClientID())
