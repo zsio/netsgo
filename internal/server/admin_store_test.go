@@ -1105,6 +1105,23 @@ func TestAdminStore_Token_ReuseExistingToken(t *testing.T) {
 	}
 }
 
+
+func TestAdminStore_Token_ReuseRequiresValidKey(t *testing.T) {
+	store := newTestAdminStore(t)
+	rawKey := "sk-reuse-key-guard"
+	if _, err := store.AddAPIKey("reuse-guard", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
+
+	if _, _, err := store.ExchangeToken(rawKey, "install-guard", "client-1", "1.2.3.4:5678"); err != nil {
+		t.Fatalf("first ExchangeToken failed: %v", err)
+	}
+
+	if _, _, err := store.ExchangeToken("invalid-key", "install-guard", "client-1", "1.2.3.4:5678"); err == nil {
+		t.Fatal("expected invalid key to be rejected even when token already exists")
+	}
+}
+
 func TestAdminStore_Token_CleanExpired(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-clean-key"
