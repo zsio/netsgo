@@ -6,9 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
-  packages: write
-  security-events: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -59,6 +57,8 @@ jobs:
 
   binaries:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs:
       - web-dist
       - verify
@@ -85,6 +85,9 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     needs:
       - web-dist
       - verify
@@ -151,6 +154,10 @@ jobs:
 
   scan-docker:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
     needs: docker
     steps:
       - uses: actions/checkout@v4
@@ -163,7 +170,7 @@ jobs:
         id: release-vars
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@44e98cb6e9d0d5f2f889f3d1c3b2a6a128f5f7bb
         with:
           image-ref: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ steps.release-vars.outputs.version }}
           format: sarif
