@@ -518,7 +518,7 @@ func (c *Client) connectAndRun() error {
 		return fmt.Errorf("failed to connect to server: %w", err)
 	}
 
-	if useTLS && !c.TLSSkipVerify {
+	if useTLS {
 		if err := c.checkTLSFingerprint(conn); err != nil {
 			_ = conn.Close()
 			c.clearCurrentRuntime(rt)
@@ -743,6 +743,14 @@ func (c *Client) connectDataChannelRuntime(rt *sessionRuntime) error {
 	if err != nil {
 		return fmt.Errorf("failed to open data-channel WebSocket: %w", err)
 	}
+
+	if c.UsesTLS() {
+		if err := c.checkTLSFingerprint(wsConn); err != nil {
+			_ = wsConn.Close()
+			return fmt.Errorf("TLS certificate fingerprint verification failed on data channel: %w", err)
+		}
+	}
+
 	wsConn.SetReadLimit(wsDataMaxMessageSize)
 	if err := wsConn.SetReadDeadline(time.Now().Add(c.dataHandshakeTimeout)); err != nil {
 		_ = wsConn.Close()
