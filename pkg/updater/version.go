@@ -1,29 +1,44 @@
 package updater
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
+
+	buildversion "netsgo/pkg/version"
 )
 
 const (
-	githubBaseURL   = "https://github.com/zsio/netsgo"
-	ghproxyBaseURL  = "https://ghproxy.com/https://github.com/zsio/netsgo"
-	releaseAssetTpl = "netsgo_%s_%s_%s.tar.gz"
-	checksumsAsset  = "checksums.txt"
+	githubBaseURL    = "https://github.com/zsio/netsgo"
+	ghproxyBaseURL   = "https://ghproxy.com/https://github.com/zsio/netsgo"
+	releaseAssetTpl  = "netsgo_%s_%s_%s.tar.gz"
+	checksumsAsset   = "checksums.txt"
+	releaseTagMarker = "/releases/tag/"
 )
 
 type DownloadChannel string
+
+type releaseTrack int
 
 const (
 	ChannelGitHub  DownloadChannel = "github"
 	ChannelGhproxy DownloadChannel = "ghproxy"
 )
+
+const (
+	releaseTrackAny releaseTrack = iota
+	releaseTrackStable
+)
+
+var errNoCompatibleRelease = errors.New("no compatible release found")
 
 var defaultHTTPClient = &http.Client{
 	Timeout: 15 * time.Second,
@@ -38,33 +53,64 @@ var fetchLatestVersionFunc = fetchLatestVersion
 var readBuildInfoFunc = debug.ReadBuildInfo
 var getenvFunc = os.Getenv
 
-func fetchLatestVersion(channel DownloadChannel) (string, error) {
+var releaseTagLinkRe = regexp.MustCompile(releaseTagMarker + `[^"'<>\s]+`)
+var releaseTagLinkMaxReadBytes int64 = 1 << 20
+
+func fetchLatestVersion(channel DownloadChannel, track releaseTrack) (string, error) {
 	base := githubBaseURL
 	if channel == ChannelGhproxy {
 		base = ghproxyBaseURL
 	}
-	return fetchLatestVersionWithClient(base+"/releases/latest", defaultHTTPClient)
+	return fetchLatestVersionWithClient(base+"/releases", defaultHTTPClient, track)
 }
 
-func fetchLatestVersionWithClient(url string, client *http.Client) (string, error) {
-	resp, err := client.Get(url)
-	if err != nil {
-		return "", fmt.Errorf("fetch latest: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+func fetchLatestVersionWithClient(url string, client *http.Client, track releaseTrack) (string, error) {
+	currentURL := url
 
-	switch resp.StatusCode {
-	case http.StatusFound:
-		location := resp.Header.Get("Location")
-		if location == "" {
-			return "", fmt.Errorf("no redirect location")
+	for redirectCount := 0; redirectCount < 5; redirectCount++ {
+		resp, err := client.Get(currentURL)
+		if err != nil {
+			return "", fmt.Errorf("fetch latest: %w", err)
 		}
-		return extractVersionFromReleaseTagURL(location)
-	case http.StatusOK:
-		return extractVersionFromReleaseTagPath(resp.Request.URL.Path)
-	default:
-		return "", fmt.Errorf("unexpected status: %d", resp.StatusCode)
+
+		switch resp.StatusCode {
+		case http.StatusFound, http.StatusMovedPermanently, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			location := resp.Header.Get("Location")
+			if location == "" {
+				_ = resp.Body.Close()
+				return "", fmt.Errorf("no redirect location")
+			}
+			resolvedLocation, err := resolveLocation(resp.Request.URL, location)
+			_ = resp.Body.Close()
+			if err != nil {
+				return "", err
+			}
+
+			if version, err := extractVersionFromReleaseTagURL(resolvedLocation.String()); err == nil && releaseVersionMatchesTrack(version, track) {
+				return version, nil
+			}
+			currentURL = resolvedLocation.String()
+			continue
+		case http.StatusOK:
+			pathVersion, err := extractVersionFromReleaseTagPath(resp.Request.URL.Path)
+			if err == nil && releaseVersionMatchesTrack(pathVersion, track) {
+				_ = resp.Body.Close()
+				return pathVersion, nil
+			}
+
+			version, bodyErr := extractLatestReleaseTagFromBody(io.LimitReader(resp.Body, releaseTagLinkMaxReadBytes), track)
+			_ = resp.Body.Close()
+			if bodyErr == nil {
+				return version, nil
+			}
+			return "", bodyErr
+		default:
+			_ = resp.Body.Close()
+			return "", fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		}
 	}
+
+	return "", fmt.Errorf("too many redirects when checking latest version")
 }
 
 func extractVersionFromReleaseTagURL(location string) (string, error) {
@@ -75,9 +121,81 @@ func extractVersionFromReleaseTagURL(location string) (string, error) {
 	return extractVersionFromReleaseTagPath(parsed.Path)
 }
 
-func extractVersionFromReleaseTagPath(path string) (string, error) {
-	const releaseTagMarker = "/releases/tag/"
+func resolveLocation(base *url.URL, location string) (*url.URL, error) {
+	resolved, err := base.Parse(location)
+	if err != nil {
+		return nil, fmt.Errorf("invalid redirect location: %q", location)
+	}
+	return resolved, nil
+}
 
+func extractLatestReleaseTagFromBody(reader io.Reader, track releaseTrack) (string, error) {
+	payload, err := io.ReadAll(reader)
+	if err != nil {
+		return "", fmt.Errorf("fetch latest body: %w", err)
+	}
+
+	version, err := selectLatestReleaseTag(releaseTagLinkRe.FindAllString(string(payload), -1), track)
+	if err != nil {
+		return "", err
+	}
+	return version, nil
+}
+
+func selectLatestReleaseTag(matches []string, track releaseTrack) (string, error) {
+	seen := map[string]bool{}
+	var bestTag string
+	var bestVersion buildversion.Semver
+	found := false
+
+	for _, match := range matches {
+		tag, err := extractVersionFromReleaseTagPath(match)
+		if err != nil {
+			continue
+		}
+		normalized, err := buildversion.NormalizeVersionString(tag)
+		if err != nil {
+			continue
+		}
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+
+		parsed, err := buildversion.ParseSemver(normalized)
+		if err != nil {
+			continue
+		}
+		if track == releaseTrackStable && parsed.Prerelease != "" {
+			continue
+		}
+
+		if !found || parsed.Compare(bestVersion) > 0 {
+			bestTag = tag
+			bestVersion = parsed
+			found = true
+		}
+	}
+
+	if !found {
+		return "", errNoCompatibleRelease
+	}
+	return bestTag, nil
+}
+
+func releaseVersionMatchesTrack(tag string, track releaseTrack) bool {
+	normalized, err := buildversion.NormalizeVersionString(tag)
+	if err != nil {
+		return false
+	}
+	parsed, err := buildversion.ParseSemver(normalized)
+	if err != nil {
+		return false
+	}
+	return track != releaseTrackStable || parsed.Prerelease == ""
+}
+
+func extractVersionFromReleaseTagPath(path string) (string, error) {
 	idx := strings.LastIndex(path, releaseTagMarker)
 	if idx == -1 {
 		return "", fmt.Errorf("invalid release tag path: %q", path)
