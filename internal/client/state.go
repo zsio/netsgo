@@ -2,8 +2,10 @@ package client
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"netsgo/pkg/datadir"
@@ -15,6 +17,14 @@ func (c *Client) statePath() string {
 		root = datadir.DefaultDataDir()
 	}
 	return filepath.Join(root, "client", clientDBFileName)
+}
+
+func (c *Client) legacyStatePath() string {
+	root := c.DataDir
+	if root == "" {
+		root = datadir.DefaultDataDir()
+	}
+	return filepath.Join(root, "client", "client.json")
 }
 
 func (c *Client) ensureInstallID() error {
@@ -41,6 +51,26 @@ func (c *Client) ensureInstallID() error {
 		return nil
 	}
 
+	if legacyState, ok, err := c.loadLegacyState(); err != nil {
+		return err
+	} else if ok && legacyState.InstallID != "" {
+		if c.Token == "" {
+			c.Token = legacyState.Token
+		}
+		if c.TLSFingerprint == "" {
+			c.TLSFingerprint = legacyState.TLSFingerprint
+		}
+		if err := store.Save(persistedState{
+			InstallID:      legacyState.InstallID,
+			Token:          c.Token,
+			TLSFingerprint: c.TLSFingerprint,
+		}); err != nil {
+			return err
+		}
+		c.InstallID = legacyState.InstallID
+		return nil
+	}
+
 	installID, err := generateInstallID()
 	if err != nil {
 		return err
@@ -56,6 +86,21 @@ func (c *Client) ensureInstallID() error {
 
 	c.InstallID = installID
 	return nil
+}
+
+func (c *Client) loadLegacyState() (persistedState, bool, error) {
+	data, err := os.ReadFile(c.legacyStatePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return persistedState{}, false, nil
+		}
+		return persistedState{}, false, fmt.Errorf("read legacy client state: %w", err)
+	}
+	var state persistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return persistedState{}, false, fmt.Errorf("decode legacy client state: %w", err)
+	}
+	return state, true, nil
 }
 
 func (c *Client) saveState(update func(*persistedState)) error {
