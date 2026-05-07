@@ -1,7 +1,7 @@
 package manage
 
 import (
-	"strings"
+	"errors"
 	"testing"
 
 	"netsgo/internal/tui"
@@ -52,20 +52,74 @@ func TestRunUpdate_NoServices(t *testing.T) {
 	}
 }
 
-func TestRunUpdate_DevVersion(t *testing.T) {
-	ui := &mockUI{}
-	err := runUpdate(ui, "dev", func() bool { return true })
+func TestRunUpdate_DevVersionCanUseReleaseUpdater(t *testing.T) {
+	ui := &mockUI{confirmVal: false}
+	applyCalled := 0
+	mockCheck := func(_ updater.DownloadChannel, ver string) (*updater.Result, bool, error) {
+		if ver != "dev" {
+			t.Fatalf("current version = %q, want dev", ver)
+		}
+		return &updater.Result{OldVersion: ver, NewVersion: "v1.0.0"}, true, nil
+	}
+	mockApply := func(_ updater.DownloadChannel, currentVersion, targetVersion string) (*updater.Result, error) {
+		applyCalled++
+		return &updater.Result{OldVersion: currentVersion, NewVersion: targetVersion}, nil
+	}
+
+	err := runUpdateWithChecker(ui, "dev", func() bool { return true }, mockCheck, mockApply)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "更新" {
-		t.Fatalf("expected '更新' summary, got %v", ui.summaries)
+	if applyCalled != 0 {
+		t.Fatalf("expected canceled update not to apply, got %d calls", applyCalled)
 	}
-	assertSummaryRow(t, ui.summaries[0], "托管服务", "正式 release 可在 netsgo manage 中选择“更新”")
-	assertSummaryRow(t, ui.summaries[0], "已有新版 netsgo 文件", "执行新版文件的 netsgo upgrade")
-	assertSummaryDoesNotContain(t, ui.summaries[0], "检查、确认、下载、校验")
-	assertSummaryDoesNotContain(t, ui.summaries[0], "用该 netsgo 可执行文件")
-	assertSummaryDoesNotContain(t, ui.summaries[0], "用该文件运行")
+	if len(ui.summaries) < 2 || ui.summaries[1].title != "发现可用更新" {
+		t.Fatalf("expected dev version to proceed to release update flow, got %v", ui.summaries)
+	}
+	assertSummaryRow(t, ui.summaries[1], "最新版本", "v1.0.0")
+}
+
+func TestRunUpdate_CheckFailureShowsManualFallback(t *testing.T) {
+	ui := &mockUI{}
+	mockCheck := func(_ updater.DownloadChannel, ver string) (*updater.Result, bool, error) {
+		return nil, false, errors.New("fetch latest failed")
+	}
+	mockApply := func(_ updater.DownloadChannel, currentVersion, targetVersion string) (*updater.Result, error) {
+		t.Fatal("apply should not run when check fails")
+		return nil, nil
+	}
+
+	err := runUpdateWithChecker(ui, "v1.0.0", func() bool { return true }, mockCheck, mockApply)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ui.summaries) == 0 || ui.summaries[len(ui.summaries)-1].title != "更新失败" {
+		t.Fatalf("expected update failure summary, got %v", ui.summaries)
+	}
+	last := ui.summaries[len(ui.summaries)-1]
+	assertSummaryRow(t, last, "错误", "fetch latest failed")
+	assertSummaryRow(t, last, "提示", updateManualFallbackMessage)
+}
+
+func TestRunUpdate_ApplyFailureShowsManualFallback(t *testing.T) {
+	ui := &mockUI{confirmVal: true}
+	mockCheck := func(_ updater.DownloadChannel, ver string) (*updater.Result, bool, error) {
+		return &updater.Result{OldVersion: ver, NewVersion: "v1.1.0"}, true, nil
+	}
+	mockApply := func(_ updater.DownloadChannel, currentVersion, targetVersion string) (*updater.Result, error) {
+		return nil, errors.New("download failed")
+	}
+
+	err := runUpdateWithChecker(ui, "v1.0.0", func() bool { return true }, mockCheck, mockApply)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ui.summaries) == 0 || ui.summaries[len(ui.summaries)-1].title != "更新失败" {
+		t.Fatalf("expected update failure summary, got %v", ui.summaries)
+	}
+	last := ui.summaries[len(ui.summaries)-1]
+	assertSummaryRow(t, last, "错误", "download failed")
+	assertSummaryRow(t, last, "提示", updateManualFallbackMessage)
 }
 
 func TestRunUpdate_NoUpdateAvailable(t *testing.T) {
@@ -110,18 +164,6 @@ func assertSummaryRow(t *testing.T, summary summaryRecord, key, want string) {
 		}
 	}
 	t.Fatalf("summary row %q not found in %#v", key, summary.rows)
-}
-
-func assertSummaryDoesNotContain(t *testing.T, summary summaryRecord, notWant string) {
-	t.Helper()
-	if strings.Contains(summary.title, notWant) {
-		t.Fatalf("summary title should not contain %q: %#v", notWant, summary)
-	}
-	for _, row := range summary.rows {
-		if strings.Contains(row[0], notWant) || strings.Contains(row[1], notWant) {
-			t.Fatalf("summary should not contain %q: %#v", notWant, summary.rows)
-		}
-	}
 }
 
 func TestRunUpdate_NoUpdateAvailable_WhenLatestHasVPrefix(t *testing.T) {
