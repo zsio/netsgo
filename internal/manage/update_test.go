@@ -2,7 +2,6 @@ package manage
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"netsgo/internal/tui"
@@ -165,18 +164,6 @@ func assertSummaryRow(t *testing.T, summary summaryRecord, key, want string) {
 		}
 	}
 	t.Fatalf("summary row %q not found in %#v", key, summary.rows)
-}
-
-func assertSummaryDoesNotContain(t *testing.T, summary summaryRecord, notWant string) {
-	t.Helper()
-	if strings.Contains(summary.title, notWant) {
-		t.Fatalf("summary title should not contain %q: %#v", notWant, summary)
-	}
-	for _, row := range summary.rows {
-		if strings.Contains(row[0], notWant) || strings.Contains(row[1], notWant) {
-			t.Fatalf("summary should not contain %q: %#v", notWant, summary.rows)
-		}
-	}
 }
 
 func TestRunUpdate_NoUpdateAvailable_WhenLatestHasVPrefix(t *testing.T) {
