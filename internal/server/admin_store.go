@@ -1615,6 +1615,11 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 	committed := false
 	defer rollbackUnlessCommitted(tx, &committed)
 
+	valid, err := s.validateClientKeyLocked(tx, key)
+	if !valid {
+		return "", nil, fmt.Errorf("key validation failed: %w", err)
+	}
+
 	tokens, err := loadClientTokens(tx, `WHERE install_id = ? AND is_revoked = 0 ORDER BY created_at, id`, installID)
 	if err != nil {
 		return "", nil, err
@@ -1644,10 +1649,6 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 		}
 	}
 
-	valid, err := s.validateClientKeyLocked(tx, key)
-	if !valid {
-		return "", nil, fmt.Errorf("key validation failed: %w", err)
-	}
 	apiKey, err := s.findKeyByRaw(tx, key)
 	if err != nil {
 		return "", nil, err
