@@ -13,6 +13,8 @@ import (
 type updateChecker func(updater.DownloadChannel, string) (*updater.Result, bool, error)
 type confirmedUpdateApplier func(updater.DownloadChannel, string, string) (*updater.Result, error)
 
+const updateManualFallbackMessage = "网络连接失败，请您访问 https://github.com/zsio/netsgo/releases 下载最新版本的二进制文件，然后使用 ./netsgo upgrade 进行更新替换。"
+
 func runUpdate(ui uiProvider, currentVersion string, hasInstalled func() bool) error {
 	return runUpdateWithChecker(ui, currentVersion, hasInstalled, updater.CheckForUpdate, updater.ApplyConfirmedUpdate)
 }
@@ -27,17 +29,6 @@ func runUpdateWithChecker(ui uiProvider, currentVersion string, hasInstalled fun
 
 	if !hasInstalled() {
 		return fmt.Errorf("未发现已安装的托管服务")
-	}
-
-	if _, err := version.ParseSemver(currentVersion); err != nil {
-		ui.PrintSummary("更新", [][2]string{
-			{"版本", currentVersion},
-			{"状态", "开发构建不支持自动 release 更新"},
-			{"托管服务", "正式 release 可在 netsgo manage 中选择“更新”"},
-			{"已有新版 netsgo 文件", "执行新版文件的 netsgo upgrade"},
-			{"手动下载", "https://github.com/zsio/netsgo/releases"},
-		})
-		return nil
 	}
 
 	channelIdx, err := selectWithOptions(ui, "选择下载通道", []tui.SelectOption{
@@ -68,7 +59,7 @@ func runUpdateWithChecker(ui uiProvider, currentVersion string, hasInstalled fun
 
 	result, needsUpdate, err := checkForUpdate(channel, currentVersion)
 	if err != nil {
-		ui.PrintSummary("更新失败", [][2]string{{"错误", err.Error()}})
+		ui.PrintSummary("更新失败", updateFailureRows(err))
 		return nil
 	}
 
@@ -103,7 +94,7 @@ func runUpdateWithChecker(ui uiProvider, currentVersion string, hasInstalled fun
 
 	result, err = applyConfirmedUpdate(channel, currentVersion, result.NewVersion)
 	if err != nil {
-		ui.PrintSummary("更新失败", [][2]string{{"错误", err.Error()}})
+		ui.PrintSummary("更新失败", updateFailureRows(err))
 		return nil
 	}
 
@@ -119,6 +110,13 @@ func runUpdateWithChecker(ui uiProvider, currentVersion string, hasInstalled fun
 	}
 	ui.PrintSummary("更新完成", rows)
 	return nil
+}
+
+func updateFailureRows(err error) [][2]string {
+	return [][2]string{
+		{"错误", err.Error()},
+		{"提示", updateManualFallbackMessage},
+	}
 }
 
 func formatServiceList(services []string) string {
