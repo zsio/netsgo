@@ -3716,7 +3716,7 @@ func TestDeleteManagedTunnel_EventPreservesBandwidthFields(t *testing.T) {
 			EgressBPS:  8765,
 		},
 	}
-	config := s.upsertTunnelPlaceholder(client, req, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
+	config := s.upsertTunnelPlaceholder(client, req, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "", time.Time{})
 	if err := s.store.AddTunnel(storedTunnelFromRuntime(client, client.proxies[req.Name])); err != nil {
 		t.Fatalf("failed to persist tunnel: %v", err)
 	}
@@ -3730,6 +3730,46 @@ func TestDeleteManagedTunnel_EventPreservesBandwidthFields(t *testing.T) {
 
 	tunnelPayload := waitForTunnelChangedEvent(t, ch, "deleted", req.Name)
 	assertTunnelBandwidthFields(t, tunnelPayload, config.IngressBPS, config.EgressBPS)
+}
+
+func TestFailRestoredTunnelAfterReadyPreservesCreatedAt(t *testing.T) {
+	s := New(0)
+	createdAt := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	client := &ClientConn{
+		ID:      "client-created-at",
+		proxies: make(map[string]*ProxyTunnel),
+	}
+	client.proxies["restored"] = &ProxyTunnel{
+		Config: protocol.ProxyConfig{Name: "restored", Type: protocol.ProxyTypeTCP},
+		done:   make(chan struct{}),
+	}
+
+	stored := StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			ID:        "tunnel-created-at",
+			Name:      "restored",
+			Type:      protocol.ProxyTypeTCP,
+			LocalIP:   "127.0.0.1",
+			LocalPort: 8080,
+		},
+		ClientID:  client.ID,
+		CreatedAt: createdAt,
+	}
+
+	s.failRestoredTunnelAfterReady(client, stored, "restore failed")
+
+	client.proxyMu.RLock()
+	placeholder := client.proxies["restored"]
+	client.proxyMu.RUnlock()
+	if placeholder == nil {
+		t.Fatal("expected restored tunnel placeholder")
+	}
+	if !placeholder.Config.CreatedAt.Equal(createdAt) {
+		t.Fatalf("CreatedAt should be preserved: want %s, got %s", createdAt, placeholder.Config.CreatedAt)
+	}
+	if placeholder.Config.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("RuntimeState should be error, got %q", placeholder.Config.RuntimeState)
+	}
 }
 
 func TestDeleteOfflineManagedTunnel_EventPreservesBandwidthFields(t *testing.T) {

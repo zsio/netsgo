@@ -529,7 +529,10 @@ func (s *Server) rollbackResumedTunnelAfterReady(client *ClientConn, name, previ
 	s.emitTunnelChanged(client.ID, config, tunnelChangedActionForStates(previousDesired, previousRuntime))
 }
 
-func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, errMsg string) protocol.ProxyConfig {
+func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, errMsg string, createdAt time.Time) protocol.ProxyConfig {
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
 	config := protocol.ProxyConfig{
 		ID:                req.ID,
 		Name:              req.Name,
@@ -540,7 +543,7 @@ func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyN
 		Domain:            req.Domain,
 		ClientID:          client.ID,
 		BandwidthSettings: req.BandwidthSettings,
-		CreatedAt:         time.Now().UTC(),
+		CreatedAt:         createdAt.UTC(),
 	}
 	setProxyConfigStates(&config, desiredState, runtimeState, errMsg)
 	client.proxyMu.Lock()
@@ -559,7 +562,7 @@ func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyN
 func (s *Server) failRestoredTunnelAfterReady(client *ClientConn, stored StoredTunnel, message string) {
 	s.removeTunnelRuntime(client, stored.Name)
 	_ = s.notifyClientProxyClose(client, stored.Name, "provision_failed")
-	config := s.upsertTunnelPlaceholder(client, stored.ProxyNewRequest, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
+	config := s.upsertTunnelPlaceholder(client, stored.ProxyNewRequest, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message, stored.CreatedAt)
 	_ = s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
 	s.emitTunnelChanged(client.ID, config, "error")
 }
@@ -594,28 +597,6 @@ func storedTunnelFromRuntime(client *ClientConn, tunnel *ProxyTunnel) StoredTunn
 	stored.Error = tunnel.Config.Error
 	_ = stored.normalize()
 	return stored
-}
-
-func (s *Server) loadOfflineManagedTunnel(clientID, name string) (StoredTunnel, error) {
-	if s.auth.adminStore == nil {
-		return StoredTunnel{}, errManagedTunnelClientNotFound
-	}
-	if _, ok := s.auth.adminStore.GetRegisteredClient(clientID); !ok {
-		return StoredTunnel{}, errManagedTunnelClientNotFound
-	}
-	if s.store == nil {
-		return StoredTunnel{}, errManagedTunnelNotFound
-	}
-
-	stored, err := s.store.GetTunnelE(clientID, name)
-	if errors.Is(err, ErrTunnelNotFound) {
-		return StoredTunnel{}, errManagedTunnelNotFound
-	}
-	if err != nil {
-		return StoredTunnel{}, err
-	}
-
-	return stored, nil
 }
 
 func (s *Server) loadOfflineManagedTunnelBySelector(clientID, selector string) (StoredTunnel, error) {

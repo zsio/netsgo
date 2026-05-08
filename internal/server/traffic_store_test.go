@@ -795,6 +795,98 @@ func TestTrafficStore_EvictTunnelAndClient(t *testing.T) {
 	mustSingleSeries(t, got3, "tun1")
 }
 
+func TestTrafficStore_RenameTunnelMergesPendingAndRealtimeBuckets(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	secondStart := secondFloorUTC(now).Unix()
+	minuteStart := minuteFloorUTC(now).Unix()
+	ts.ApplyDeltas([]TrafficDelta{
+		{ClientID: "c1", TunnelName: "old", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: 10, EgressBytes: 4},
+		{ClientID: "c1", TunnelName: "new", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: 7, EgressBytes: 3},
+	})
+
+	if err := ts.RenameTunnel("c1", "old", "new"); err != nil {
+		t.Fatalf("RenameTunnel failed: %v", err)
+	}
+
+	from := time.Unix(secondStart, 0).Add(-time.Second)
+	to := time.Unix(secondStart, 0).Add(time.Second)
+	secondResult := mustQueryWithResolution(t, ts, "c1", "new", from, to, TrafficResolutionSecond)
+	secondSeries := mustSingleSeries(t, secondResult, "new")
+	if len(secondSeries.Points) != 1 || secondSeries.Points[0].IngressBytes != 17 || secondSeries.Points[0].EgressBytes != 7 {
+		t.Fatalf("realtime buckets should be merged under new name, got %+v", secondSeries.Points)
+	}
+
+	minuteResult := mustQueryWithResolution(t, ts, "c1", "new", from, to, TrafficResolutionMinute)
+	minuteSeries := mustSingleSeries(t, minuteResult, "new")
+	if len(minuteSeries.Points) != 1 || minuteSeries.Points[0].IngressBytes != 17 || minuteSeries.Points[0].EgressBytes != 7 {
+		t.Fatalf("pending minute buckets should be merged under new name, got %+v", minuteSeries.Points)
+	}
+	oldResult := mustQueryWithResolution(t, ts, "c1", "old", from, to, TrafficResolutionMinute)
+	if len(oldResult.Items) != 0 {
+		t.Fatalf("old tunnel buckets should be gone after rename, got %+v", oldResult.Items)
+	}
+}
+
+func TestTrafficStore_RenameTunnelMergesPersistedBuckets(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := minuteFloorUTC(time.Now().UTC())
+	mustInsertTrafficBucket(t, ts, TrafficBucket{ClientID: "c1", TunnelName: "old", TunnelType: "tcp", Resolution: TrafficResolutionMinute, BucketStart: now.Unix(), IngressBytes: 10, EgressBytes: 4})
+	mustInsertTrafficBucket(t, ts, TrafficBucket{ClientID: "c1", TunnelName: "new", TunnelType: "tcp", Resolution: TrafficResolutionMinute, BucketStart: now.Unix(), IngressBytes: 7, EgressBytes: 3})
+
+	if err := ts.RenameTunnel("c1", "old", "new"); err != nil {
+		t.Fatalf("RenameTunnel failed: %v", err)
+	}
+
+	result := mustQueryWithResolution(t, ts, "c1", "new", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	series := mustSingleSeries(t, result, "new")
+	if len(series.Points) != 1 || series.Points[0].IngressBytes != 17 || series.Points[0].EgressBytes != 7 {
+		t.Fatalf("persisted buckets should be merged under new name, got %+v", series.Points)
+	}
+	oldResult := mustQueryWithResolution(t, ts, "c1", "old", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	if len(oldResult.Items) != 0 {
+		t.Fatalf("old persisted buckets should be gone after rename, got %+v", oldResult.Items)
+	}
+}
+
+func TestTrafficStore_RenameTunnelOverflowDoesNotMutatePendingOrRealtimeBuckets(t *testing.T) {
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	secondStart := secondFloorUTC(now).Unix()
+	minuteStart := minuteFloorUTC(now).Unix()
+	ts.ApplyDeltas([]TrafficDelta{
+		{ClientID: "c1", TunnelName: "old", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: ^uint64(0)},
+		{ClientID: "c1", TunnelName: "new", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: 1},
+	})
+
+	err := ts.RenameTunnel("c1", "old", "new")
+	if err == nil {
+		t.Fatal("RenameTunnel should reject overflow while merging renamed buckets")
+	}
+	if !strings.Contains(err.Error(), "ingress_bytes") {
+		t.Fatalf("overflow error should name ingress_bytes, got %v", err)
+	}
+
+	from := time.Unix(secondStart, 0).Add(-time.Second)
+	to := time.Unix(secondStart, 0).Add(time.Second)
+	for _, resolution := range []TrafficResolution{TrafficResolutionMinute, TrafficResolutionSecond} {
+		oldSeries := mustSingleSeries(t, mustQueryWithResolution(t, ts, "c1", "old", from, to, resolution), "old")
+		if oldSeries.Points[0].IngressBytes != ^uint64(0) {
+			t.Fatalf("old %s bucket should be unchanged after failed rename, got %+v", resolution, oldSeries.Points[0])
+		}
+		newSeries := mustSingleSeries(t, mustQueryWithResolution(t, ts, "c1", "new", from, to, resolution), "new")
+		if newSeries.Points[0].IngressBytes != 1 {
+			t.Fatalf("new %s bucket should be unchanged after failed rename, got %+v", resolution, newSeries.Points[0])
+		}
+	}
+}
+
 func TestTrafficStore_AutoResolutionBoundary(t *testing.T) {
 	ts, cleanup := newTestTrafficStore(t)
 	defer cleanup()
