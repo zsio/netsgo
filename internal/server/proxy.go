@@ -199,12 +199,15 @@ func (s *Server) ensureClientDataReady(client *ClientConn) error {
 }
 
 func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState string) (*ProxyTunnel, error) {
-	return s.prepareProxyTunnelWithExclusions(client, req, desiredState, runtimeState, "", "")
+	return s.prepareProxyTunnelWithExclusions(client, req, desiredState, runtimeState, "", "", time.Time{})
 }
 
-func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, excludeName, excludeClientID string) (*ProxyTunnel, error) {
+func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, excludeName, excludeClientID string, createdAt time.Time) (*ProxyTunnel, error) {
 	if req.ID == "" {
 		req.ID = generateUUID()
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
 	}
 	if err := s.validateProxyRequestWithExclusions(client, req, excludeName, excludeClientID); err != nil {
 		return nil, err
@@ -235,7 +238,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 			Domain:            req.Domain,
 			ClientID:          client.ID,
 			BandwidthSettings: req.BandwidthSettings,
-			CreatedAt:         time.Now().UTC(),
+			CreatedAt:         createdAt.UTC(),
 		},
 		limits: newDirectionalBandwidthRuntime(req.BandwidthSettings, realBandwidthClock{}),
 		done:   make(chan struct{}),

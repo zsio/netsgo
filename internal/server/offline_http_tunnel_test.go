@@ -28,6 +28,33 @@ func registerOfflineHTTPTestClient(t *testing.T, s *Server, hostname string) str
 	return record.ID
 }
 
+func TestLoadOfflineManagedTunnelBySelectorPrefersNameOverID(t *testing.T) {
+	s, _, _, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	clientID := registerOfflineHTTPTestClient(t, s, "offline-selector")
+	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
+		ID:         "name-tunnel-id",
+		Name:       "id-of-other",
+		Type:       protocol.ProxyTypeTCP,
+		RemotePort: 18081,
+	}, protocol.ProxyStatusStopped)
+	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
+		ID:         "id-of-other",
+		Name:       "other",
+		Type:       protocol.ProxyTypeTCP,
+		RemotePort: 18082,
+	}, protocol.ProxyStatusStopped)
+
+	stored, err := s.loadOfflineManagedTunnelBySelector(clientID, "id-of-other")
+	if err != nil {
+		t.Fatalf("loadOfflineManagedTunnelBySelector failed: %v", err)
+	}
+	if stored.Name != "id-of-other" || stored.ID != "name-tunnel-id" {
+		t.Fatalf("selector should prefer exact name matches over ID matches, got name=%q id=%q", stored.Name, stored.ID)
+	}
+}
+
 func TestOfflineHTTPTunnel_Update_StoreFirst(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()

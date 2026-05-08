@@ -3204,6 +3204,7 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 		t.Fatalf("failed to preregister client: %v", err)
 	}
 
+	createdAt := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	mustAddStableTunnel(t, s.store, StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
 			Name:      "restore-http",
@@ -3216,6 +3217,7 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 		RuntimeState: protocol.ProxyRuntimeStateExposed,
 		ClientID:     record.ID,
 		Hostname:     "restore-http-host",
+		CreatedAt:    createdAt,
 	})
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
@@ -3260,6 +3262,20 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 	}
 	if restoreReq.Domain != "app.example.com" {
 		t.Fatalf("restore tunnel domain: want app.example.com, got %s", restoreReq.Domain)
+	}
+
+	client, ok := s.loadLiveClient(authResp.ClientID)
+	if !ok {
+		t.Fatal("expected restored client to be live")
+	}
+	client.proxyMu.RLock()
+	tunnel := client.proxies["restore-http"]
+	client.proxyMu.RUnlock()
+	if tunnel == nil {
+		t.Fatal("restore should create an in-memory tunnel before waiting for ack")
+	}
+	if !tunnel.Config.CreatedAt.Equal(createdAt) {
+		t.Fatalf("restored active tunnel should preserve CreatedAt: want %s, got %s", createdAt, tunnel.Config.CreatedAt)
 	}
 }
 

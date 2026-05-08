@@ -415,6 +415,7 @@ func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) e
 		protocol.ProxyRuntimeStatePending,
 		stored.Name,
 		client.ID,
+		stored.CreatedAt,
 	)
 	if err != nil {
 		return err
@@ -470,16 +471,15 @@ func findTunnelBySelector(client *ClientConn, selector string) (string, *ProxyTu
 	client.proxyMu.RLock()
 	defer client.proxyMu.RUnlock()
 
+	if tunnel, ok := client.proxies[selector]; ok {
+		return selector, tunnel, true
+	}
 	for name, tunnel := range client.proxies {
 		if tunnel.Config.ID == selector {
 			return name, tunnel, true
 		}
 	}
-	tunnel, ok := client.proxies[selector]
-	if !ok {
-		return "", nil, false
-	}
-	return selector, tunnel, true
+	return "", nil, false
 }
 
 func (s *Server) setTunnelStates(client *ClientConn, name, desiredState, runtimeState, errMsg string) (protocol.ProxyConfig, bool) {
@@ -610,7 +610,7 @@ func (s *Server) loadOfflineManagedTunnelBySelector(clientID, selector string) (
 		return StoredTunnel{}, errManagedTunnelNotFound
 	}
 
-	stored, err := s.store.GetTunnelByIDE(clientID, selector)
+	stored, err := s.store.GetTunnelE(clientID, selector)
 	if err == nil {
 		return stored, nil
 	}
@@ -618,7 +618,7 @@ func (s *Server) loadOfflineManagedTunnelBySelector(clientID, selector string) (
 		return StoredTunnel{}, err
 	}
 
-	stored, err = s.store.GetTunnelE(clientID, selector)
+	stored, err = s.store.GetTunnelByIDE(clientID, selector)
 	if errors.Is(err, ErrTunnelNotFound) {
 		return StoredTunnel{}, errManagedTunnelNotFound
 	}
