@@ -3,7 +3,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, GitBranchPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -89,7 +89,7 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
 function getFormKey(props: TunnelDialogProps, open: boolean) {
   if (props.mode === 'edit') {
     const tunnelKey = props.tunnel
-      ? `${props.tunnel.clientId}:${props.tunnel.name}`
+      ? `${props.tunnel.clientId}:${props.tunnel.id}`
       : 'empty';
     return `edit:${tunnelKey}:${open ? 'open' : 'closed'}`;
   }
@@ -114,7 +114,10 @@ export function TunnelDialog(props: TunnelDialogProps) {
       {!isEdit && !props.hideTrigger && (
         <DialogTrigger asChild>
           {(props as TunnelDialogCreateProps).trigger ?? (
-            <Button>添加隧道</Button>
+            <Button>
+              <GitBranchPlus className="h-4 w-4 mr-1.5" />
+              添加隧道
+            </Button>
           )}
         </DialogTrigger>
       )}
@@ -179,7 +182,8 @@ function TunnelDialogForm({
       updateTunnel.mutate(
         {
           clientId: tunnel.clientId,
-          tunnelName: tunnel.name,
+          tunnelId: tunnel.id,
+          name,
           type: tunnel.type,
           local_ip: localIp,
           local_port: parsedLocalPort,
@@ -191,7 +195,7 @@ function TunnelDialogForm({
         {
           onSuccess: () => {
             setOpen(false);
-            toast.success(`隧道「${tunnel.name}」已更新`);
+            toast.success(`隧道「${name}」已更新`);
           },
           onError: (err) => {
             toast.error(getTunnelMutationErrorMessage(err));
@@ -230,7 +234,8 @@ function TunnelDialogForm({
   const parsedEgressBps = parseMbpsInputToBps(egressBps);
   const isValid = isEdit
     ? Boolean(
-      localPort
+      name.trim()
+      && localPort
       && Number.parseInt(localPort, 10) > 0
       && (isHttp ? domain.trim() : parsedRemotePort > 0)
       && parsedIngressBps !== null
@@ -251,7 +256,7 @@ function TunnelDialogForm({
         <DialogTitle>{isEdit ? '编辑隧道' : '创建代理隧道'}</DialogTitle>
         {props.mode === 'edit' && (
           <DialogDescription>
-            {`修改隧道「${props.tunnel?.name}」的映射配置。隧道名称和协议类型不可变更。`}
+            {`修改隧道「${props.tunnel?.name}」的名称和映射配置。协议类型不可变更。`}
           </DialogDescription>
         )}
       </DialogHeader>
@@ -264,9 +269,7 @@ function TunnelDialogForm({
             placeholder="例如 ssh-dev"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            disabled={isEdit}
-            className={isEdit ? 'opacity-60' : undefined}
-            autoFocus={!isEdit}
+            autoFocus
           />
         </div>
 
@@ -297,7 +300,6 @@ function TunnelDialogForm({
               placeholder="127.0.0.1"
               value={localIp}
               onChange={(e) => setLocalIp(e.target.value)}
-              autoFocus={isEdit}
             />
           </div>
           <div className="space-y-1.5">

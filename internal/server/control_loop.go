@@ -120,6 +120,7 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 		log.Printf("⚠️ Failed to parse proxy request [%s]: %v", client.ID, err)
 		return
 	}
+	req.ID = ""
 	req.IngressBPS = 0
 	req.EgressBPS = 0
 

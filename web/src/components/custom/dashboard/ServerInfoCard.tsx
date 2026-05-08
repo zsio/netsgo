@@ -38,13 +38,16 @@ export function ServerInfoCard() {
   const diskPartitions = status?.disk_partitions || [];
   const multipleDisks = diskPartitions.length > 1;
 
-  const hasValidUptime = (status?.uptime ?? 0) > 0;
-  const startTimeText = hasValidUptime
-    ? new Date(now - (status?.uptime ?? 0) * 1000).toLocaleString('zh-CN', {
+  const runtimeSeconds = status?.uptime && status.uptime > 0
+    ? status.uptime
+    : undefined;
+  const startTimeText = runtimeSeconds
+    ? new Date(now - runtimeSeconds * 1000).toLocaleString(undefined, {
+        year: 'numeric',
         month: 'numeric',
         day: 'numeric',
         hour: '2-digit',
-        minute: '2-digit'
+        minute: '2-digit',
       })
     : '-';
 
@@ -73,19 +76,7 @@ export function ServerInfoCard() {
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 md:border-r border-border/40">
           <div className="text-xs text-muted-foreground flex items-center gap-1.5">
             <Network className="w-4 h-4" />
-            <HoverCard>
-              <HoverCardTrigger asChild>
-                <span className="border-b border-dashed border-muted-foreground/40 hover:border-foreground/60 transition-colors w-fit cursor-help">
-                  IP 地址
-                </span>
-              </HoverCardTrigger>
-              <HoverCardContent className="w-auto min-w-[180px] p-3 text-xs text-muted-foreground" side="bottom" align="start">
-                <span>
-                  <span className="mr-1">端口:</span>
-                  <span className="font-mono text-foreground">{status?.listen_port ? status.listen_port : '-'}</span>
-                </span>
-              </HoverCardContent>
-            </HoverCard>
+            <span>端口:{status?.listen_port ? status.listen_port : '-'}</span>
           </div>
           <CopyableIpLine
             primary
@@ -101,24 +92,15 @@ export function ServerInfoCard() {
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />运行时长</span>
-          <HoverCard>
-            <HoverCardTrigger asChild>
-              <span className="font-medium text-sm cursor-help border-b border-dashed border-muted-foreground/40 hover:border-foreground/60 transition-colors w-fit">
-                {formatUptime(status?.uptime ?? 0)}
-              </span>
-            </HoverCardTrigger>
-            <HoverCardContent className="w-[200px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
-              <div className="text-muted-foreground">
-                启动于 {startTimeText}
-              </div>
-            </HoverCardContent>
-          </HoverCard>
-          <span className="text-xs text-muted-foreground">v{status?.version}</span>
+          <span className="font-medium text-sm">
+            {runtimeSeconds ? formatUptime(runtimeSeconds) : '-'}
+          </span>
+          <span className="text-xs text-muted-foreground">启动于 {startTimeText}</span>
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Box className="w-4 h-4" />运行状态</span>
           <span className="font-medium text-sm truncate" title={status?.go_version}>{status?.go_version || '-'}</span>
-          <span className="text-xs text-muted-foreground">{status?.goroutine_count || 0} Goroutines</span>
+          <span className="text-xs text-muted-foreground">v{status?.version || '-'}</span>
         </div>
       </div>
 

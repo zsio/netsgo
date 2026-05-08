@@ -6,7 +6,9 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"netsgo/pkg/protocol"
 )
@@ -61,6 +63,10 @@ func (s *Server) validateProxyRequest(client *ClientConn, req protocol.ProxyNewR
 }
 
 func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, excludeName, excludeClientID string) error {
+	if strings.TrimSpace(req.Name) == "" {
+		return newProxyRequestValidationError(fmt.Errorf("tunnel name is required"), protocol.TunnelMutationFieldName, "", http.StatusBadRequest)
+	}
+
 	if err := validateBandwidthSettings(req.BandwidthSettings); err != nil {
 		switch {
 		case req.IngressBPS < 0:
@@ -197,6 +203,9 @@ func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewReq
 }
 
 func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, excludeName, excludeClientID string) (*ProxyTunnel, error) {
+	if req.ID == "" {
+		req.ID = generateUUID()
+	}
 	if err := s.validateProxyRequestWithExclusions(client, req, excludeName, excludeClientID); err != nil {
 		return nil, err
 	}
@@ -217,6 +226,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 	}
 	tunnel := &ProxyTunnel{
 		Config: protocol.ProxyConfig{
+			ID:                req.ID,
 			Name:              req.Name,
 			Type:              req.Type,
 			LocalIP:           req.LocalIP,
@@ -225,6 +235,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 			Domain:            req.Domain,
 			ClientID:          client.ID,
 			BandwidthSettings: req.BandwidthSettings,
+			CreatedAt:         time.Now().UTC(),
 		},
 		limits: newDirectionalBandwidthRuntime(req.BandwidthSettings, realBandwidthClock{}),
 		done:   make(chan struct{}),

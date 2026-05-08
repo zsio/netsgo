@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ============================================================
@@ -245,6 +246,7 @@ func TestRoundTrip_AuthRequest(t *testing.T) {
 
 func TestRoundTrip_ProxyConfig(t *testing.T) {
 	original := ProxyConfig{
+		ID:           "tunnel-1",
 		Name:         "my-tunnel",
 		Type:         ProxyTypeTCP,
 		LocalIP:      "127.0.0.1",
@@ -252,6 +254,7 @@ func TestRoundTrip_ProxyConfig(t *testing.T) {
 		RemotePort:   13306,
 		Domain:       "",
 		ClientID:     "client_host_1",
+		CreatedAt:    time.Date(2026, 5, 8, 1, 0, 0, 0, time.UTC),
 		DesiredState: ProxyDesiredStateRunning,
 		RuntimeState: ProxyRuntimeStateExposed,
 	}
@@ -474,8 +477,8 @@ func TestAllStructs_JSONTags(t *testing.T) {
 		},
 		{
 			"ProxyConfig",
-			ProxyConfig{Name: "n", Type: "t", LocalIP: "l", LocalPort: 1, RemotePort: 1, Domain: "d", ClientID: "a", DesiredState: ProxyDesiredStateRunning, RuntimeState: ProxyRuntimeStateExposed},
-			[]string{"name", "type", "local_ip", "local_port", "remote_port", "domain", "client_id", "desired_state", "runtime_state"},
+			ProxyConfig{ID: "i", Name: "n", Type: "t", LocalIP: "l", LocalPort: 1, RemotePort: 1, Domain: "d", ClientID: "a", CreatedAt: time.Date(2026, 5, 8, 1, 0, 0, 0, time.UTC), DesiredState: ProxyDesiredStateRunning, RuntimeState: ProxyRuntimeStateExposed},
+			[]string{"id", "name", "type", "local_ip", "local_port", "remote_port", "domain", "client_id", "created_at", "desired_state", "runtime_state"},
 		},
 		{
 			"ProxyNewRequest",

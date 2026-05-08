@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"netsgo/pkg/protocol"
 )
@@ -54,6 +55,34 @@ func TestTunnelStore_NewEmpty(t *testing.T) {
 	}
 	if len(allTunnels) != 0 {
 		t.Errorf("new store should be empty, got %d records", len(allTunnels))
+	}
+}
+
+func TestTunnelStore_GetTunnelsByClientIDOrdersNewestFirst(t *testing.T) {
+	store := newTestTunnelStore(t)
+	base := time.Date(2026, 5, 8, 1, 0, 0, 0, time.UTC)
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{ID: "old", Name: "old", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 80, RemotePort: 18080},
+		ClientID:        "client-1",
+		Hostname:        "host-1",
+		CreatedAt:       base,
+	})
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{ID: "new", Name: "new", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 81, RemotePort: 18081},
+		ClientID:        "client-1",
+		Hostname:        "host-1",
+		CreatedAt:       base.Add(time.Hour),
+	})
+
+	tunnels, err := store.GetTunnelsByClientID("client-1")
+	if err != nil {
+		t.Fatalf("GetTunnelsByClientID failed: %v", err)
+	}
+	if len(tunnels) != 2 {
+		t.Fatalf("expected 2 tunnels, got %d", len(tunnels))
+	}
+	if tunnels[0].Name != "new" || tunnels[1].Name != "old" {
+		t.Fatalf("tunnels should be ordered newest first, got %s then %s", tunnels[0].Name, tunnels[1].Name)
 	}
 }
 
@@ -164,6 +193,42 @@ func TestTunnelStore_BandwidthSettingsRoundTripAndUpdate(t *testing.T) {
 	}
 	if updated.IngressBPS != 0 || updated.EgressBPS != 0 {
 		t.Fatalf("explicit zero bandwidth settings should persist as unlimited: %+v", updated.BandwidthSettings)
+	}
+}
+
+func TestTunnelStore_UpdateTunnelByIDCanRenameTunnel(t *testing.T) {
+	store := newTestTunnelStore(t)
+	mustAddStableTunnel(t, store, StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			ID:         "tunnel-1",
+			Name:       "old-name",
+			Type:       protocol.ProxyTypeTCP,
+			LocalIP:    "127.0.0.1",
+			LocalPort:  80,
+			RemotePort: 8080,
+		},
+		ClientID: "client-1",
+		Hostname: "host-1",
+	})
+
+	if err := store.UpdateTunnelByID("client-1", "tunnel-1", "new-name", "127.0.0.2", 81, 8081, "", 1024, 2048); err != nil {
+		t.Fatalf("UpdateTunnelByID failed: %v", err)
+	}
+	if _, ok := store.GetTunnel("client-1", "old-name"); ok {
+		t.Fatal("old tunnel name should no longer resolve after rename")
+	}
+	updated, ok := store.GetTunnel("client-1", "new-name")
+	if !ok {
+		t.Fatal("renamed tunnel should resolve by new name")
+	}
+	if updated.ID != "tunnel-1" {
+		t.Fatalf("stable id changed after rename: %s", updated.ID)
+	}
+	if updated.LocalIP != "127.0.0.2" || updated.LocalPort != 81 || updated.RemotePort != 8081 {
+		t.Fatalf("renamed tunnel did not persist updated mapping: %+v", updated.ProxyNewRequest)
+	}
+	if updated.IngressBPS != 1024 || updated.EgressBPS != 2048 {
+		t.Fatalf("renamed tunnel did not persist bandwidth settings: %+v", updated.BandwidthSettings)
 	}
 }
 

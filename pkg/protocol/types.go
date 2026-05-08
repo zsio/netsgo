@@ -63,6 +63,7 @@ type TunnelCapabilities struct {
 
 // ProxyConfig 代理隧道的完整配置
 type ProxyConfig struct {
+	ID                string              `json:"id"`          // 隧道稳定 ID（管理面唯一标识）
 	Name              string              `json:"name"`        // 隧道名称（唯一标识）
 	Type              string              `json:"type"`        // 隧道类型: tcp, udp, http
 	LocalIP           string              `json:"local_ip"`    // 内网目标服务 IP
@@ -71,6 +72,7 @@ type ProxyConfig struct {
 	Domain            string              `json:"domain"`      // HTTP 类型时的域名
 	ClientID          string              `json:"client_id"`   // 所属 Client ID
 	BandwidthSettings                     // 聚合带宽限制（payload bytes/sec，0 = unlimited）
+	CreatedAt         time.Time           `json:"created_at"`             // 创建时间
 	DesiredState      string              `json:"desired_state"`          // 用户目标状态: running, stopped
 	RuntimeState      string              `json:"runtime_state"`          // 实际运行状态: pending, exposed, offline, idle, error
 	Error             string              `json:"error,omitempty"`        // 错误状态时的具体原因
@@ -80,6 +82,7 @@ type ProxyConfig struct {
 // ToProxyNewRequest 将 ProxyConfig 转换为 ProxyNewRequest（用于发送给 Client）
 func (c ProxyConfig) ToProxyNewRequest() ProxyNewRequest {
 	return ProxyNewRequest{
+		ID:                c.ID,
 		Name:              c.Name,
 		Type:              c.Type,
 		LocalIP:           c.LocalIP,
@@ -99,6 +102,7 @@ const (
 
 // Tunnel mutation field constants used by the admin HTTP API.
 const (
+	TunnelMutationFieldName       = "name"
 	TunnelMutationFieldDomain     = "domain"
 	TunnelMutationFieldRemotePort = "remote_port"
 	TunnelMutationFieldIngressBPS = "ingress_bps"

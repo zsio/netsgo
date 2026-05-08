@@ -6,6 +6,7 @@ import { summarizeConsoleClients } from './console-summary';
 
 function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
   return {
+    id: 'tunnel-1',
     name: 'demo',
     type: 'tcp',
     local_ip: '127.0.0.1',
@@ -15,6 +16,7 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
     client_id: 'client-1',
     ingress_bps: 0,
     egress_bps: 0,
+    created_at: '2026-05-08T01:00:00Z',
     desired_state: 'running',
     runtime_state: 'exposed',
     capabilities: {

@@ -188,5 +188,20 @@ ALTER TABLE tunnels_new RENAME TO tunnels;
 CREATE INDEX idx_tunnels_hostname ON tunnels(hostname);
 `,
 		},
+		{
+			Name: "003_tunnel_stable_id",
+			Up: `
+ALTER TABLE tunnels ADD COLUMN id TEXT NOT NULL DEFAULT '';
+UPDATE tunnels SET id = lower(hex(randomblob(16))) WHERE id = '';
+CREATE UNIQUE INDEX idx_tunnels_id ON tunnels(id);
+`,
+		},
+		{
+			Name: "004_tunnel_created_at",
+			Up: `
+ALTER TABLE tunnels ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
+UPDATE tunnels SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE created_at = '';
+`,
+		},
 	}
 }

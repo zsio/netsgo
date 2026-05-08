@@ -9,7 +9,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  Key, Copy, Check, RefreshCcw, Terminal, Loader2,
+  Key, Copy, Check, RefreshCcw, Terminal, Loader2, LayersPlus,
 } from 'lucide-react';
 import { useAdminConfig } from '@/hooks/use-admin-config';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
@@ -109,7 +109,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Key className="h-5 w-5 text-primary" />
+            <LayersPlus className="h-5 w-5 text-primary" />
             添加 Client
           </DialogTitle>
           <DialogDescription>

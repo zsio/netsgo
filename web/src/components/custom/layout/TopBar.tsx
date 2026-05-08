@@ -1,12 +1,10 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  UserPlus, Monitor, Zap, MonitorOff, Pause
+  Monitor, Zap, MonitorOff, Pause
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
-import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
 import { useNavigate } from '@tanstack/react-router';
 import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
 import { useConsoleSummary } from '@/hooks/use-console-summary';
@@ -71,7 +69,6 @@ export function DualTriggerCard({ triggers, children }: { triggers: React.ReactN
 
 function TopBarInner() {
   const navigate = useNavigate();
-  const [showAddClient, setShowAddClient] = useState(false);
   const { data: summary = EMPTY_CONSOLE_SUMMARY } = useConsoleSummary();
 
   const totalClients = summary.total_clients;
@@ -204,15 +201,7 @@ function TopBarInner() {
           </div>
         )}
 
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => setShowAddClient(true)}>
-            <UserPlus className="h-4 w-4 mr-1.5" />
-            <span className="hidden sm:inline">添加 Client</span>
-          </Button>
-        </div>
       </header>
-
-      <AddClientDialog open={showAddClient} onOpenChange={setShowAddClient} />
     </>
   );
 }

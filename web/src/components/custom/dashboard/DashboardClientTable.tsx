@@ -1,11 +1,13 @@
 import { useClients, useDeleteClient } from '@/hooks/use-clients';
 import { useNavigate } from '@tanstack/react-router';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Laptop, Cpu, HardDrive, Eye, Trash2, Globe, Wifi } from 'lucide-react';
+import { Laptop, Cpu, HardDrive, Eye, Trash2, Globe, Wifi, LayersPlus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { formatPercent } from '@/lib/format';
 import { TableActionIconButton } from '@/components/custom/common/TableActionIconButton';
 import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
 import { CompactTrafficChart } from '@/components/custom/chart/CompactTrafficChart';
+import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { useRowVisibility, type RowVisibilityHook } from '@/hooks/use-row-visibility';
@@ -121,6 +123,7 @@ interface DashboardClientTableContentProps {
   clients?: Client[];
   onNavigate: (clientId: string) => void;
   onDelete?: (client: Client) => void;
+  onAddClient?: () => void;
   rowVisibilityHook?: RowVisibilityHook;
   renderSparkline?: (clientId: string) => ReactNode;
 }
@@ -199,6 +202,7 @@ export function DashboardClientTableContent({
   clients,
   onNavigate,
   onDelete,
+  onAddClient,
   rowVisibilityHook = useRowVisibility,
   renderSparkline = defaultRenderSparkline,
 }: DashboardClientTableContentProps) {
@@ -215,6 +219,12 @@ export function DashboardClientTableContent({
           <Laptop className="h-5 w-5 text-primary" />
           在线端点 (Clients)
         </h3>
+        {onAddClient && (
+          <Button type="button" variant="secondary" size="sm" onClick={onAddClient}>
+            <LayersPlus className="h-4 w-4 mr-1.5" />
+            添加客户端
+          </Button>
+        )}
       </div>
 
       {/* Mobile: Card List */}
@@ -277,6 +287,7 @@ export function DashboardClientTable() {
   const deleteClient = useDeleteClient();
   const navigate = useNavigate();
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null);
+  const [showAddClient, setShowAddClient] = useState(false);
 
   if (isLoading) {
     return <Skeleton className="h-64 rounded-xl" />;
@@ -290,7 +301,9 @@ export function DashboardClientTable() {
           navigate({ to: '/dashboard/clients/$clientId', params: { clientId } });
         }}
         onDelete={setDeleteTarget}
+        onAddClient={() => setShowAddClient(true)}
       />
+      <AddClientDialog open={showAddClient} onOpenChange={setShowAddClient} />
       <ConfirmDialog
         open={deleteTarget !== null}
         title="删除离线节点"

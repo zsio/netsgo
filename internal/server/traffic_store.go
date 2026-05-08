@@ -801,6 +801,34 @@ func (s *TrafficStore) EvictTunnel(clientID, tunnelName string) error {
 	return err
 }
 
+func (s *TrafficStore) RenameTunnel(clientID, oldName, newName string) error {
+	if oldName == newName {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for key, bucket := range s.pendingMinute {
+		if bucket.ClientID != clientID || bucket.TunnelName != oldName {
+			continue
+		}
+		delete(s.pendingMinute, key)
+		bucket.TunnelName = newName
+		newKey := trafficBucketKey(bucket)
+		if existing, ok := s.pendingMinute[newKey]; ok {
+			if err := addTrafficBucketValues(&existing, bucket); err != nil {
+				return err
+			}
+			s.pendingMinute[newKey] = existing
+			continue
+		}
+		s.pendingMinute[newKey] = bucket
+	}
+	s.realtimeSecond.RenameTunnel(clientID, oldName, newName)
+	_, err := s.db.Exec(`UPDATE traffic_buckets SET tunnel_name = ? WHERE client_id = ? AND tunnel_name = ?`, newName, clientID, oldName)
+	return err
+}
+
 func (s *TrafficStore) EvictClient(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

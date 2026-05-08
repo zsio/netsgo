@@ -111,3 +111,31 @@ func (idx *realtimeSecondIndex) EvictTunnel(clientID, tunnelName string) {
 		delete(idx.byClient, clientID)
 	}
 }
+
+func (idx *realtimeSecondIndex) RenameTunnel(clientID, oldName, newName string) {
+	if idx == nil || idx.byClient == nil || oldName == newName {
+		return
+	}
+	seriesByClient := idx.byClient[clientID]
+	for key, bucketsBySecond := range seriesByClient {
+		if key.TunnelName != oldName {
+			continue
+		}
+		delete(seriesByClient, key)
+		newKey := trafficSeriesKey{TunnelName: newName, TunnelType: key.TunnelType}
+		merged := seriesByClient[newKey]
+		if merged == nil {
+			merged = make(map[int64]TrafficBucket)
+			seriesByClient[newKey] = merged
+		}
+		for second, bucket := range bucketsBySecond {
+			bucket.TunnelName = newName
+			if existing, ok := merged[second]; ok {
+				_ = addTrafficBucketValues(&existing, bucket)
+				merged[second] = existing
+				continue
+			}
+			merged[second] = bucket
+		}
+	}
+}
