@@ -82,6 +82,13 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          if-no-files-found: error
 
   mirror-source-to-cnb:
     runs-on: ubuntu-latest
@@ -104,6 +111,125 @@ jobs:
           auth="$(printf '%s:%s' "$CNB_USERNAME" "$CNB_PASSWORD" | base64 -w 0)"
           git -c http.extraHeader="Authorization: Basic ${auth}" \
             push --force "$CNB_REPO_URL" refs/remotes/origin/main:refs/heads/main
+          git -c http.extraHeader="Authorization: Basic ${auth}" \
+            push --force "$CNB_REPO_URL" "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
+  publish-release-index:
+    runs-on: ubuntu-latest
+    needs:
+      - binaries
+      - mirror-source-to-cnb
+    env:
+      CNB_REPO_URL: ${{ secrets.CNB_REPO_URL }}
+      CNB_USERNAME: ${{ secrets.CNB_USERNAME }}
+      CNB_PASSWORD: ${{ secrets.CNB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist
+      - name: Prepare CNB variables
+        id: cnb-vars
+        if: ${{ env.CNB_REPO_URL != '' && env.CNB_USERNAME != '' && env.CNB_PASSWORD != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_url="${CNB_REPO_URL%.git}"
+          slug="${repo_url#https://cnb.cool/}"
+          slug="${slug,,}"
+          echo "slug=${slug}" >> "$GITHUB_OUTPUT"
+      - name: Create CNB release
+        id: cnb-release
+        if: ${{ steps.cnb-vars.outputs.slug != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.cnb.cool/${{ steps.cnb-vars.outputs.slug }}/-/releases"
+          body="$(jq -n \
+            --arg tag "$GITHUB_REF_NAME" \
+            --arg sha "$GITHUB_SHA" \
+            --arg name "$GITHUB_REF_NAME" \
+            '{
+              tag_name: $tag,
+              target_commitish: $sha,
+              name: $name,
+              body: "NetsGo release mirrored from GitHub Actions.",
+              draft: false,
+              prerelease: ($tag | contains("-")),
+              make_latest: (if ($tag | contains("-")) then "false" else "true" end)
+            }')"
+          status="$(curl -sS -o /tmp/cnb-release.json -w '%{http_code}' \
+            -H "Authorization: Bearer $CNB_PASSWORD" \
+            -H "Content-Type: application/json" \
+            -d "$body" \
+            "$api")"
+          if [ "$status" = "409" ] || [ "$status" = "422" ]; then
+            status="$(curl -sS -o /tmp/cnb-release.json -w '%{http_code}' \
+              -H "Authorization: Bearer $CNB_PASSWORD" \
+              "https://api.cnb.cool/${{ steps.cnb-vars.outputs.slug }}/-/releases/tags/${GITHUB_REF_NAME}")"
+          fi
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            cat /tmp/cnb-release.json >&2
+            exit 1
+          fi
+          jq -r '.id' /tmp/cnb-release.json | sed 's/^/release_id=/' >> "$GITHUB_OUTPUT"
+      - name: Upload CNB release attachments
+        if: ${{ steps.cnb-release.outputs.release_id != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://api.cnb.cool/${{ steps.cnb-vars.outputs.slug }}/-/releases/${{ steps.cnb-release.outputs.release_id }}"
+          shopt -s nullglob
+          for file in dist/*.tar.gz dist/checksums.txt; do
+            name="$(basename "$file")"
+            size="$(stat -c%s "$file")"
+            body="$(jq -n --arg name "$name" --argjson size "$size" '{asset_name: $name, overwrite: true, size: $size, ttl: 0}')"
+            status="$(curl -sS -o /tmp/cnb-upload.json -w '%{http_code}' \
+              -H "Authorization: Bearer $CNB_PASSWORD" \
+              -H "Content-Type: application/json" \
+              -d "$body" \
+              "$base/asset-upload-url")"
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              cat /tmp/cnb-upload.json >&2
+              exit 1
+            fi
+            upload_url="$(jq -r '.upload_url' /tmp/cnb-upload.json)"
+            verify_url="$(jq -r '.verify_url' /tmp/cnb-upload.json)"
+            curl -sS -X PUT --data-binary @"$file" "$upload_url" >/dev/null
+            status="$(curl -sS -o /tmp/cnb-confirm.json -w '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer $CNB_PASSWORD" \
+              "https://api.cnb.cool${verify_url}?ttl=0")"
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              cat /tmp/cnb-confirm.json >&2
+              exit 1
+            fi
+          done
+      - name: Build release index
+        shell: bash
+        run: |
+          set -euo pipefail
+          CNB_REPO_SLUG="${{ steps.cnb-vars.outputs.slug }}" node scripts/release-index.mjs build
+      - name: Push release-index branch to CNB
+        if: ${{ steps.cnb-vars.outputs.slug != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          worktree="$(mktemp -d)"
+          git init "$worktree"
+          git -C "$worktree" checkout -b release-index
+          mkdir -p "$worktree/updates"
+          cp -R release-index/updates "$worktree/"
+          git -C "$worktree" config user.name "github-actions[bot]"
+          git -C "$worktree" config user.email "github-actions[bot]@users.noreply.github.com"
+          git -C "$worktree" add updates
+          git -C "$worktree" commit -m "release index ${GITHUB_REF_NAME}"
+          auth="$(printf '%s:%s' "$CNB_USERNAME" "$CNB_PASSWORD" | base64 -w 0)"
+          git -C "$worktree" -c http.extraHeader="Authorization: Basic ${auth}" \
+            push --force "$CNB_REPO_URL" release-index:release-index
 
   docker:
     runs-on: ubuntu-latest
