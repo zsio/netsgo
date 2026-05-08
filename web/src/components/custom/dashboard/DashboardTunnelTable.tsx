@@ -1,8 +1,7 @@
 import { useClients } from '@/hooks/use-clients';
 import { useNavigate } from '@tanstack/react-router';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowRightLeft, Settings } from 'lucide-react';
-import { TableActionIconButton } from '@/components/custom/common/TableActionIconButton';
+import { ArrowRightLeft } from 'lucide-react';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
 import { getClientDisplayName } from '@/lib/client-utils';
 
@@ -37,15 +36,10 @@ export function DashboardTunnelTable() {
       showClient
       showActions={false}
       showSearch
-      renderRowAction={(tunnel) => (
-        <TableActionIconButton
-          label="管理"
-          tone="primary"
-          onClick={() => navigate({ to: '/dashboard/clients/$clientId', params: { clientId: tunnel.clientId } })}
-        >
-          <Settings className="h-4 w-4" />
-        </TableActionIconButton>
-      )}
+      onClientClick={(tunnel) => navigate({
+        to: '/dashboard/clients/$clientId',
+        params: { clientId: tunnel.clientId },
+      })}
     />
   );
 }

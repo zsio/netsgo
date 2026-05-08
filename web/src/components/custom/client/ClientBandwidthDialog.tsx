@@ -16,6 +16,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { FoldVertical } from 'lucide-react';
 
 interface ClientBandwidthDialogProps {
   client: Client;
@@ -75,7 +76,10 @@ export function ClientBandwidthDialog({ client }: ClientBandwidthDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
-        <Button variant="outline">带宽设置</Button>
+        <Button variant="outline">
+          <FoldVertical className="h-4 w-4 mr-1.5" />
+          限速
+        </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>

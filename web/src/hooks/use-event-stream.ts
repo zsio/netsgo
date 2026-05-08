@@ -159,11 +159,11 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
             if (parsed.action === 'deleted') {
               return {
                 ...client,
-                proxies: proxies.filter((proxy) => proxy.name !== parsed.tunnel.name),
+                proxies: proxies.filter((proxy) => proxy.id !== parsed.tunnel.id),
               };
             }
 
-            const existingIndex = proxies.findIndex((proxy) => proxy.name === parsed.tunnel.name);
+            const existingIndex = proxies.findIndex((proxy) => proxy.id === parsed.tunnel.id);
             if (existingIndex === -1) {
               return {
                 ...client,

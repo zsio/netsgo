@@ -42,26 +42,27 @@ var retryJitterFloat64 = rand.Float64
 
 // Client is the core client structure.
 type Client struct {
-	ServerAddr      string // Server address (supports ws://, wss://, http://, and https://, normalized internally)
-	Key             string // Authentication key (used to exchange for a token)
-	Token           string // Client connection token (exchanged from Key)
-	InstallID       string // Stable installation ID
-	DataDir         string
-	ClientID        string // Stable client ID assigned by the server
-	TLSSkipVerify   bool
-	TLSFingerprint  string
-	dataToken       string
-	conn            *websocket.Conn
-	mu              sync.Mutex // Protects the current runtime and mirrored fields
-	done            chan struct{}
-	dataSession     *yamux.Session // yamux session for the data channel
-	dataMu          sync.RWMutex
-	proxies         sync.Map // proxy_name -> ProxyNewRequest
-	useTLS          bool
-	startTime       time.Time // Program start time, used to calculate process uptime
-	publicIPv4      string    // Cached public IPv4 address
-	publicIPv6      string    // Cached public IPv6 address
-	publicIPFetched time.Time // Last fetch time
+	ServerAddr       string // Server address (supports ws://, wss://, http://, and https://, normalized internally)
+	Key              string // Authentication key (used to exchange for a token)
+	Token            string // Client connection token (exchanged from Key)
+	InstallID        string // Stable installation ID
+	DataDir          string
+	ClientID         string // Stable client ID assigned by the server
+	TLSSkipVerify    bool
+	TLSFingerprint   string
+	dataToken        string
+	conn             *websocket.Conn
+	mu               sync.Mutex // Protects the current runtime and mirrored fields
+	done             chan struct{}
+	dataSession      *yamux.Session // yamux session for the data channel
+	dataMu           sync.RWMutex
+	proxies          sync.Map // proxy_name -> ProxyNewRequest
+	useTLS           bool
+	startTime        time.Time // Program start time, used to calculate process uptime
+	publicIPv4       string    // Cached public IPv4 address
+	publicIPv6       string    // Cached public IPv6 address
+	publicIPFetched  time.Time // Last fetch time
+	publicIPFetching bool      // Public IP refresh is currently running
 	// ProxyConfigs are delivered by the server and may also be set manually in benchmarks.
 	ProxyConfigs []protocol.ProxyNewRequest
 	// DisableReconnect disables automatic reconnect (used in tests and similar scenarios).
@@ -1004,8 +1005,10 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 		return
 	}
 
-	// Refresh public IPs (internally guarded by a 5-minute TTL) and attach them to the probe data.
-	c.refreshPublicIPs()
+	// Public IP probing can be slow or unavailable on some networks. Do it in
+	// the background so routine health probes are never blocked by third-party
+	// probe services.
+	c.refreshPublicIPsAsync()
 	c.mu.Lock()
 	stats.PublicIPv4 = c.publicIPv4
 	stats.PublicIPv6 = c.publicIPv6
@@ -1019,27 +1022,31 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 	}
 }
 
-// refreshPublicIPs fetches and caches public IPs.
+// refreshPublicIPsAsync fetches and caches public IPs in the background.
 // It only performs a real request if more than 5 minutes have passed since the last fetch.
-func (c *Client) refreshPublicIPs() {
+func (c *Client) refreshPublicIPsAsync() {
 	c.mu.Lock()
-	if !c.publicIPFetched.IsZero() && time.Since(c.publicIPFetched) < 5*time.Minute {
+	if c.publicIPFetching || (!c.publicIPFetched.IsZero() && time.Since(c.publicIPFetched) < 5*time.Minute) {
 		c.mu.Unlock()
 		return // Cache is still fresh.
 	}
+	c.publicIPFetching = true
 	c.mu.Unlock()
 
-	ipv4, ipv6 := netutil.FetchPublicIPs()
+	go func() {
+		ipv4, ipv6 := netutil.FetchPublicIPs()
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if ipv4 != "" {
-		c.publicIPv4 = ipv4
-	}
-	if ipv6 != "" {
-		c.publicIPv6 = ipv6
-	}
-	c.publicIPFetched = time.Now()
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if ipv4 != "" {
+			c.publicIPv4 = ipv4
+		}
+		if ipv6 != "" {
+			c.publicIPv6 = ipv6
+		}
+		c.publicIPFetched = time.Now()
+		c.publicIPFetching = false
+	}()
 }
 
 func (c *Client) controlLoopRuntime(rt *sessionRuntime) {

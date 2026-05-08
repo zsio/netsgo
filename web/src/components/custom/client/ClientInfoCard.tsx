@@ -48,12 +48,16 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
   const multipleDisks = diskPartitions.length > 1;
 
   const [now] = useState(() => Date.now());
-  const startTimeText = stats?.process_uptime
-    ? new Date(now - stats.process_uptime * 1000).toLocaleString('zh-CN', {
+  const runtimeSeconds = stats?.process_uptime && stats.process_uptime > 0
+    ? stats.process_uptime
+    : undefined;
+  const startTimeText = runtimeSeconds
+    ? new Date(now - runtimeSeconds * 1000).toLocaleString(undefined, {
+        year: 'numeric',
         month: 'numeric',
         day: 'numeric',
         hour: '2-digit',
-        minute: '2-digit'
+        minute: '2-digit',
       })
     : '-';
 
@@ -99,19 +103,10 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />运行时长</span>
-          <HoverCard>
-            <HoverCardTrigger asChild>
-              <span className="font-medium text-sm cursor-help border-b border-dashed border-muted-foreground/40 hover:border-foreground/60 transition-colors w-fit">
-                {stats?.process_uptime ? formatUptime(stats.process_uptime) : (stats?.uptime ? formatUptime(stats.uptime) : '-')}
-              </span>
-            </HoverCardTrigger>
-            <HoverCardContent className="w-[200px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="start">
-              <div className="text-muted-foreground">
-                启动于 {startTimeText}
-              </div>
-            </HoverCardContent>
-          </HoverCard>
-          <span className="text-xs text-muted-foreground">v{info.version}</span>
+          <span className="font-medium text-sm">
+            {runtimeSeconds ? formatUptime(runtimeSeconds) : '-'}
+          </span>
+          <span className="text-xs text-muted-foreground">启动于 {startTimeText}</span>
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Box className="w-4 h-4" />隧道状态</span>

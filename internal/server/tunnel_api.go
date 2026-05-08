@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"netsgo/pkg/protocol"
 )
@@ -189,6 +190,13 @@ func tunnelMutationErrorStatusAndBody(err error) (int, tunnelMutationErrorRespon
 	return status, payload
 }
 
+func tunnelSelectorFromPath(r *http.Request) string {
+	if selector := r.PathValue("tunnel_id"); selector != "" {
+		return selector
+	}
+	return r.PathValue("name")
+}
+
 func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
 
@@ -197,6 +205,10 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}
+	// Tunnel IDs are server-owned stable identifiers. Ignore any client-supplied
+	// value on creation so callers cannot collide with or spoof existing tunnels.
+	req.ID = ""
+	req.Name = strings.TrimSpace(req.Name)
 
 	var (
 		config protocol.ProxyConfig
@@ -222,11 +234,11 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
-	tunnelName := r.PathValue("name")
+	tunnelSelector := tunnelSelectorFromPath(r)
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		if _, err := s.resumeOfflineManagedTunnel(clientID, tunnelName); err != nil {
+		if _, err := s.resumeOfflineManagedTunnel(clientID, tunnelSelector); err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
@@ -244,9 +256,7 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client.proxyMu.RLock()
-	tunnel, exists := client.proxies[tunnelName]
-	client.proxyMu.RUnlock()
+	tunnelName, tunnel, exists := findTunnelBySelector(client, tunnelSelector)
 	if !exists {
 		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 		return
@@ -274,11 +284,11 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
-	tunnelName := r.PathValue("name")
+	tunnelSelector := tunnelSelectorFromPath(r)
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		if _, err := s.stopOfflineManagedTunnel(clientID, tunnelName); err != nil {
+		if _, err := s.stopOfflineManagedTunnel(clientID, tunnelSelector); err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
@@ -294,9 +304,7 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client.proxyMu.RLock()
-	_, exists := client.proxies[tunnelName]
-	client.proxyMu.RUnlock()
+	tunnelName, _, exists := findTunnelBySelector(client, tunnelSelector)
 	if !exists {
 		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 		return
@@ -312,11 +320,11 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
-	tunnelName := r.PathValue("name")
+	tunnelSelector := tunnelSelectorFromPath(r)
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		if err := s.deleteOfflineManagedTunnel(clientID, tunnelName); err != nil {
+		if err := s.deleteOfflineManagedTunnel(clientID, tunnelSelector); err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
 				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
@@ -332,9 +340,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client.proxyMu.RLock()
-	tunnel, exists := client.proxies[tunnelName]
-	client.proxyMu.RUnlock()
+	tunnelName, tunnel, exists := findTunnelBySelector(client, tunnelSelector)
 	if !exists {
 		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 		return
@@ -357,9 +363,10 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
-	tunnelName := r.PathValue("name")
+	tunnelSelector := tunnelSelectorFromPath(r)
 
 	var req struct {
+		Name       string `json:"name"`
 		LocalIP    string `json:"local_ip"`
 		LocalPort  int    `json:"local_port"`
 		RemotePort int    `json:"remote_port"`
@@ -371,10 +378,11 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
 
 	client, ok := s.loadLiveClient(clientID)
 	if !ok {
-		updated, err := s.updateOfflineManagedTunnel(clientID, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS)
+		updated, err := s.updateOfflineManagedTunnel(clientID, tunnelSelector, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS)
 		if err != nil {
 			status, payload := tunnelMutationErrorStatusAndBody(err)
 			encodeJSON(w, status, payload)
@@ -390,9 +398,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client.proxyMu.RLock()
-	tunnel, exists := client.proxies[tunnelName]
-	client.proxyMu.RUnlock()
+	_, tunnel, exists := findTunnelBySelector(client, tunnelSelector)
 	if !exists {
 		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 		return
@@ -405,7 +411,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := s.updateManagedTunnel(client, tunnelName, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS)
+	updated, err := s.updateManagedTunnel(client, tunnelSelector, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS)
 	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)

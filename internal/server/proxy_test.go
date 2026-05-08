@@ -128,6 +128,21 @@ func TestPrepareProxyTunnel_PreservesHTTPDomain(t *testing.T) {
 	}
 }
 
+func TestFindTunnelBySelectorPrefersNameOverID(t *testing.T) {
+	client := &ClientConn{proxies: map[string]*ProxyTunnel{
+		"id-of-other": {Config: protocol.ProxyConfig{Name: "id-of-other", ID: "name-tunnel-id"}},
+		"other":       {Config: protocol.ProxyConfig{Name: "other", ID: "id-of-other"}},
+	}}
+
+	name, tunnel, ok := findTunnelBySelector(client, "id-of-other")
+	if !ok {
+		t.Fatal("expected selector to match a tunnel")
+	}
+	if name != "id-of-other" || tunnel.Config.ID != "name-tunnel-id" {
+		t.Fatalf("selector should prefer exact name matches over ID matches, got name=%q id=%q", name, tunnel.Config.ID)
+	}
+}
+
 func TestActivatePreparedTunnel_HTTPDoesNotBindListener(t *testing.T) {
 	s := New(0)
 	client := &ClientConn{

@@ -9,6 +9,7 @@ import { TunnelListTable, type TunnelEntry } from './TunnelListTable';
 
 function createTunnel(overrides: Partial<ProxyConfig> = {}): TunnelEntry {
   return {
+    id: 'tunnel-1',
     name: 'demo',
     type: 'tcp',
     local_ip: '127.0.0.1',
@@ -18,6 +19,7 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): TunnelEntry {
     client_id: 'client-1',
     ingress_bps: 0,
     egress_bps: 0,
+    created_at: '2026-05-08T01:00:00Z',
     desired_state: 'running',
     runtime_state: 'exposed',
     capabilities: {
@@ -72,6 +74,8 @@ describe('TunnelListTable', () => {
     const markup = renderTable([createTunnel()]);
 
     expect(markup).toContain('title="停止"');
+    expect(markup).toContain('lucide-pause');
+    expect(markup).not.toContain('lucide-square');
     expect(markup).not.toContain('group-hover:opacity-100');
     expect(markup).not.toContain('opacity-0');
   });
@@ -107,6 +111,116 @@ describe('TunnelListTable', () => {
 
     expect(markup).toContain('24 小时流量');
     expect(markup).toContain('1.5 KB');
+  });
+
+  test('显示隧道限速列，未配置限速时展示无限符号', () => {
+    const markup = renderTable([createTunnel()]);
+
+    expect(markup).toContain('限速');
+    expect(markup).toContain('aria-label="不限速"');
+    expect(markup).toContain('lucide-infinity');
+  });
+
+  test('显示上下行限速策略', () => {
+    const markup = renderTable([
+      createTunnel({
+        ingress_bps: 1024 * 1024,
+        egress_bps: 2 * 1024 * 1024,
+      }),
+    ]);
+
+    expect(markup).toContain('1.0 MiB/s');
+    expect(markup).toContain('2.0 MiB/s');
+    expect(markup).toContain('lucide-arrow-down');
+    expect(markup).toContain('lucide-arrow-up');
+  });
+
+  test('只配置单方向限速时仅显示该方向', () => {
+    const markup = renderTable([
+      createTunnel({
+        ingress_bps: 0,
+        egress_bps: 1024 * 1024,
+      }),
+    ]);
+
+    expect(markup).toContain('1.0 MiB/s');
+    expect(markup).toContain('lucide-arrow-up');
+    expect(markup).not.toContain('lucide-arrow-down');
+    expect(markup).not.toContain('lucide-infinity');
+  });
+
+  test('默认按创建时间倒序展示隧道', () => {
+    const markup = renderTable([
+      createTunnel({ id: 'old', name: 'old-tunnel', created_at: '2026-05-07T01:00:00Z' }),
+      createTunnel({ id: 'new', name: 'new-tunnel', created_at: '2026-05-08T01:00:00Z' }),
+    ]);
+
+    expect(markup.indexOf('new-tunnel')).toBeLessThan(markup.indexOf('old-tunnel'));
+  });
+
+  test('标题栏自定义操作会替代搜索框', () => {
+    const client = new QueryClient();
+    const markup = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(TunnelListTable, {
+          tunnels: [createTunnel()],
+          title: '下属隧道',
+          showActions: false,
+          showSearch: true,
+          headerAction: createElement('button', null, '添加隧道'),
+        }),
+      ),
+    );
+
+    expect(markup).toContain('添加隧道');
+    expect(markup).not.toContain('搜索隧道...');
+  });
+
+  test('合并类型与映射关系为映射列', () => {
+    const markup = renderTable([
+      createTunnel({
+        type: 'tcp',
+        remote_port: 10123,
+        local_ip: '127.0.0.1',
+        local_port: 22,
+      }),
+    ]);
+
+    expect(markup).toContain('映射');
+    expect(markup).not.toContain('应用 / 类型');
+    expect(markup).not.toContain('映射关系');
+    expect(markup).toContain('TCP');
+    expect(markup).toContain(':10123');
+    expect(markup).toContain('127.0.0.1:22');
+    expect(markup).toContain('w-11');
+    expect(markup).toContain('w-4');
+  });
+
+  test('归属节点可按回调渲染为可点击按钮', () => {
+    const client = new QueryClient();
+    const markup = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(TunnelListTable, {
+          tunnels: [createTunnel({ clientName: 'edge-node' })],
+          title: '全部隧道列表',
+          showActions: false,
+          showSearch: false,
+          showClient: true,
+          onClientClick: () => undefined,
+        }),
+      ),
+    );
+
+    expect(markup).toContain('归属节点');
+    expect(markup).toContain('<button');
+    expect(markup).toContain('edge-node');
+    expect(markup).toContain('cursor-pointer');
+    expect(markup).toContain('hover:text-foreground');
+    expect(markup).not.toContain('>操作<');
   });
 
   test('仅在详情表启用速率图标动作', () => {

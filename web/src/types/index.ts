@@ -67,6 +67,7 @@ export interface TunnelCapabilities {
 
 /** 对齐 protocol.ProxyConfig */
 export interface ProxyConfig {
+  id: string;
   name: string;
   type: ProxyType;
   local_ip: string;
@@ -76,6 +77,7 @@ export interface ProxyConfig {
   client_id: string;
   ingress_bps: number;
   egress_bps: number;
+  created_at: string;
   desired_state: ProxyDesiredState;
   runtime_state: ProxyRuntimeState;
   error?: string;
@@ -85,6 +87,19 @@ export interface ProxyConfig {
 /** 创建隧道请求体 */
 export interface CreateTunnelInput {
   clientId: string;
+  name: string;
+  type: ProxyType;
+  local_ip: string;
+  local_port: number;
+  remote_port?: number;
+  domain?: string;
+  ingress_bps?: number;
+  egress_bps?: number;
+}
+
+export interface UpdateTunnelInput {
+  clientId: string;
+  tunnelId: string;
   name: string;
   type: ProxyType;
   local_ip: string;

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowRightLeft, Plus } from 'lucide-react';
+import { ArrowRightLeft, GitBranchPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
 import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
@@ -56,7 +56,17 @@ export function TunnelTable({ client }: TunnelTableProps) {
               : 'ready'
         }
         showActions
-        showSearch
+        showSearch={false}
+        headerAction={
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setCreateOpen(true)}
+          >
+            <GitBranchPlus className="h-4 w-4 mr-1" />
+            添加隧道
+          </Button>
+        }
         emptyAction={
           <Button
             type="button"
@@ -64,7 +74,7 @@ export function TunnelTable({ client }: TunnelTableProps) {
             className="mt-4"
             onClick={() => setCreateOpen(true)}
           >
-            <Plus className="h-4 w-4 mr-1" />
+            <GitBranchPlus className="h-4 w-4 mr-1" />
             立即创建
           </Button>
         }

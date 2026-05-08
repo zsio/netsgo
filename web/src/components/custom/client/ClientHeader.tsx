@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
-import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
 import { ClientBandwidthDialog } from '@/components/custom/client/ClientBandwidthDialog';
 import { Pencil, Check, X, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -21,7 +20,6 @@ const osLabels: Record<string, string> = {
 };
 
 export function ClientHeader({ client }: ClientHeaderProps) {
-  const isOnline = client.online;
   const queryClient = useQueryClient();
 
   const [isEditing, setIsEditing] = useState(false);
@@ -162,11 +160,6 @@ export function ClientHeader({ client }: ClientHeaderProps) {
                   >
                     <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
                       {displayName}
-                      {isOnline ? (
-                        <span className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">🟢 在线</span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground border border-border">🔴 离线</span>
-                      )}
                     </h1>
                     <motion.div whileHover={{ scale: 1.15 }} whileTap={{ scale: 0.9 }}>
                       <Button
@@ -204,6 +197,12 @@ export function ClientHeader({ client }: ClientHeaderProps) {
                 )}
               </AnimatePresence>
               <span>{osLabels[client.info.os] ?? client.info.os} / {client.info.arch}</span>
+              {client.info.version && (
+                <>
+                  <span>•</span>
+                  <span>v{client.info.version}</span>
+                </>
+              )}
               <span>•</span>
               <span>{client.info.ip}</span>
               {client.stats?.process_uptime != null && client.stats.process_uptime > 0 ? (
@@ -224,7 +223,6 @@ export function ClientHeader({ client }: ClientHeaderProps) {
 
       <div className="flex gap-2">
         <ClientBandwidthDialog client={client} />
-        <TunnelDialog mode="create" clientId={client.id} />
       </div>
     </div>
   );

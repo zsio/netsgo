@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"netsgo/pkg/protocol"
 )
@@ -18,20 +19,27 @@ var ErrTunnelNotFound = errors.New("tunnel not found")
 // StoredTunnel is a tunnel configuration persisted to storage.
 type StoredTunnel struct {
 	protocol.ProxyNewRequest
-	DesiredState string `json:"desired_state,omitempty"` // User's desired state
-	RuntimeState string `json:"runtime_state,omitempty"` // Actual runtime state
-	Error        string `json:"error,omitempty"`         // Reason when in error state
-	ClientID     string `json:"client_id,omitempty"`     // Owning stable Client ID
-	Hostname     string `json:"hostname,omitempty"`      // Current hostname (for display)
-	Binding      string `json:"binding,omitempty"`       // Only client_id is allowed
+	DesiredState string    `json:"desired_state,omitempty"` // User's desired state
+	RuntimeState string    `json:"runtime_state,omitempty"` // Actual runtime state
+	Error        string    `json:"error,omitempty"`         // Reason when in error state
+	ClientID     string    `json:"client_id,omitempty"`     // Owning stable Client ID
+	Hostname     string    `json:"hostname,omitempty"`      // Current hostname (for display)
+	Binding      string    `json:"binding,omitempty"`       // Only client_id is allowed
+	CreatedAt    time.Time `json:"created_at,omitempty"`    // Creation time
 }
 
 func (t *StoredTunnel) normalize() error {
+	if t.ID == "" {
+		return fmt.Errorf("tunnel %q is missing a stable id", t.Name)
+	}
 	if t.Binding != TunnelBindingClientID {
 		return fmt.Errorf("tunnel %q must use %q binding", t.Name, TunnelBindingClientID)
 	}
 	if t.ClientID == "" {
 		return fmt.Errorf("tunnel %q is missing a stable client_id", t.Name)
+	}
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = time.Now().UTC()
 	}
 	if err := validateTunnelStates(t.DesiredState, t.RuntimeState, t.Error); err != nil {
 		return err
@@ -104,11 +112,13 @@ func (s *TunnelStore) maybeFailSave() error {
 	return nil
 }
 
-const tunnelSelectColumns = `client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, desired_state, runtime_state, error, hostname, binding`
+const tunnelSelectColumns = `id, client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, created_at, desired_state, runtime_state, error, hostname, binding`
 
 func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 	var tunnel StoredTunnel
+	var createdAt string
 	err := row.Scan(
+		&tunnel.ID,
 		&tunnel.ClientID,
 		&tunnel.Name,
 		&tunnel.Type,
@@ -118,6 +128,7 @@ func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 		&tunnel.Domain,
 		&tunnel.IngressBPS,
 		&tunnel.EgressBPS,
+		&createdAt,
 		&tunnel.DesiredState,
 		&tunnel.RuntimeState,
 		&tunnel.Error,
@@ -126,6 +137,13 @@ func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 	)
 	if err != nil {
 		return StoredTunnel{}, err
+	}
+	if createdAt != "" {
+		parsed, err := parseTime(createdAt)
+		if err != nil {
+			return StoredTunnel{}, err
+		}
+		tunnel.CreatedAt = parsed
 	}
 	if err := tunnel.normalize(); err != nil {
 		return StoredTunnel{}, err
@@ -151,7 +169,7 @@ func scanStoredTunnelRows(rows *sql.Rows) ([]StoredTunnel, error) {
 }
 
 func (s *TunnelStore) validateLoadedState() error {
-	rows, err := s.db.Query(`SELECT ` + tunnelSelectColumns + ` FROM tunnels ORDER BY client_id, name`)
+	rows, err := s.db.Query(`SELECT ` + tunnelSelectColumns + ` FROM tunnels ORDER BY client_id, created_at DESC, name`)
 	if err != nil {
 		return err
 	}
@@ -174,8 +192,23 @@ func (s *TunnelStore) tunnelExists(clientID, name string) (bool, error) {
 	return true, nil
 }
 
+func (s *TunnelStore) tunnelIDExists(clientID, id string) (bool, error) {
+	var existing string
+	err := s.db.QueryRow(`SELECT id FROM tunnels WHERE client_id = ? AND id = ?`, clientID, id).Scan(&existing)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // AddTunnel adds a tunnel configuration and persists it.
 func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
+	if tunnel.ID == "" {
+		tunnel.ID = generateUUID()
+	}
 	if err := tunnel.normalize(); err != nil {
 		return err
 	}
@@ -198,8 +231,9 @@ func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
 		return err
 	}
 
-	_, err = s.db.Exec(`INSERT INTO tunnels (client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, desired_state, runtime_state, error, hostname, binding)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = s.db.Exec(`INSERT INTO tunnels (id, client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, created_at, desired_state, runtime_state, error, hostname, binding)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tunnel.ID,
 		tunnel.ClientID,
 		tunnel.Name,
 		tunnel.Type,
@@ -209,6 +243,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		tunnel.Domain,
 		tunnel.IngressBPS,
 		tunnel.EgressBPS,
+		formatTime(tunnel.CreatedAt),
 		tunnel.DesiredState,
 		tunnel.RuntimeState,
 		tunnel.Error,
@@ -247,6 +282,35 @@ func (s *TunnelStore) RemoveTunnel(clientID, name string) error {
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
+	}
+	return nil
+}
+
+func (s *TunnelStore) RemoveTunnelByID(clientID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	exists, err := s.tunnelIDExists(clientID, id)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("tunnel id %q does not exist (client_id: %s)", id, clientID)
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return err
+	}
+
+	result, err := s.db.Exec(`DELETE FROM tunnels WHERE client_id = ? AND id = ?`, clientID, id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("tunnel id %q does not exist (client_id: %s)", id, clientID)
 	}
 	return nil
 }
@@ -315,6 +379,37 @@ func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localP
 	return nil
 }
 
+// UpdateTunnelByID updates a tunnel by stable id and persists mutable configuration, including display name.
+func (s *TunnelStore) UpdateTunnelByID(clientID, id, name string, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	exists, err := s.tunnelIDExists(clientID, id)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("tunnel id %q does not exist (client_id: %s)", id, clientID)
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return err
+	}
+
+	result, err := s.db.Exec(`UPDATE tunnels SET name = ?, local_ip = ?, local_port = ?, remote_port = ?, domain = ?, ingress_bps = ?, egress_bps = ? WHERE client_id = ? AND id = ?`,
+		name, localIP, localPort, remotePort, domain, ingressBPS, egressBPS, clientID, id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("tunnel id %q does not exist (client_id: %s)", id, clientID)
+	}
+	return nil
+}
+
 // UpdateHostname updates the display hostname for a given Client.
 func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 	s.mu.Lock()
@@ -343,7 +438,7 @@ func (s *TunnelStore) GetTunnelsByClientID(clientID string) ([]StoredTunnel, err
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE client_id = ? ORDER BY name`, clientID)
+	rows, err := s.db.Query(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE client_id = ? ORDER BY created_at DESC, name`, clientID)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +465,7 @@ func (s *TunnelStore) GetTunnelsByHostname(hostname string) ([]StoredTunnel, err
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE hostname = ? ORDER BY client_id, name`, hostname)
+	rows, err := s.db.Query(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE hostname = ? ORDER BY client_id, created_at DESC, name`, hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -388,6 +483,21 @@ func (s *TunnelStore) GetTunnelE(clientID, name string) (StoredTunnel, error) {
 	defer s.mu.RUnlock()
 
 	tunnel, err := scanStoredTunnel(s.db.QueryRow(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE client_id = ? AND name = ?`, clientID, name))
+	if err == sql.ErrNoRows {
+		return StoredTunnel{}, ErrTunnelNotFound
+	}
+	if err != nil {
+		return StoredTunnel{}, err
+	}
+	return tunnel, nil
+}
+
+// GetTunnelByIDE looks up a single tunnel by stable id and client id.
+func (s *TunnelStore) GetTunnelByIDE(clientID, id string) (StoredTunnel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tunnel, err := scanStoredTunnel(s.db.QueryRow(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE client_id = ? AND id = ?`, clientID, id))
 	if err == sql.ErrNoRows {
 		return StoredTunnel{}, ErrTunnelNotFound
 	}
@@ -415,7 +525,7 @@ func (s *TunnelStore) GetAllTunnels() ([]StoredTunnel, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(`SELECT ` + tunnelSelectColumns + ` FROM tunnels ORDER BY client_id, name`)
+	rows, err := s.db.Query(`SELECT ` + tunnelSelectColumns + ` FROM tunnels ORDER BY client_id, created_at DESC, name`)
 	if err != nil {
 		return nil, err
 	}

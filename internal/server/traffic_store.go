@@ -801,6 +801,98 @@ func (s *TrafficStore) EvictTunnel(clientID, tunnelName string) error {
 	return err
 }
 
+func (s *TrafficStore) RenameTunnel(clientID, oldName, newName string) error {
+	if oldName == newName {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	renamedPending, err := renamedPendingMinuteBuckets(s.pendingMinute, clientID, oldName, newName)
+	if err != nil {
+		return err
+	}
+	renamedRealtime, realtimeChanged, err := s.realtimeSecond.renamedTunnelBuckets(clientID, oldName, newName)
+	if err != nil {
+		return err
+	}
+	if err := s.renamePersistedTrafficBucketsLocked(clientID, oldName, newName); err != nil {
+		return err
+	}
+
+	s.pendingMinute = renamedPending
+	if realtimeChanged {
+		s.realtimeSecond.byClient[clientID] = renamedRealtime
+	}
+	return nil
+}
+
+func renamedPendingMinuteBuckets(pending map[string]TrafficBucket, clientID, oldName, newName string) (map[string]TrafficBucket, error) {
+	if len(pending) == 0 {
+		return pending, nil
+	}
+
+	hasOldName := false
+	for _, bucket := range pending {
+		if bucket.ClientID == clientID && bucket.TunnelName == oldName {
+			hasOldName = true
+			break
+		}
+	}
+	if !hasOldName {
+		return pending, nil
+	}
+
+	renamed := make(map[string]TrafficBucket, len(pending))
+	for _, bucket := range pending {
+		if bucket.ClientID == clientID && bucket.TunnelName == oldName {
+			bucket.TunnelName = newName
+		}
+		key := trafficBucketKey(bucket)
+		if existing, ok := renamed[key]; ok {
+			if err := addTrafficBucketValues(&existing, bucket); err != nil {
+				return nil, err
+			}
+			renamed[key] = existing
+			continue
+		}
+		renamed[key] = bucket
+	}
+	return renamed, nil
+}
+
+func (s *TrafficStore) renamePersistedTrafficBucketsLocked(clientID, oldName, newName string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	rows, err := tx.Query(`SELECT client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes
+FROM traffic_buckets
+WHERE client_id = ? AND tunnel_name = ?
+ORDER BY tunnel_type, resolution, bucket_start`, clientID, oldName)
+	if err != nil {
+		return err
+	}
+	buckets, err := scanTrafficBucketRows(rows)
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM traffic_buckets WHERE client_id = ? AND tunnel_name = ?`, clientID, oldName); err != nil {
+		return err
+	}
+	for _, bucket := range buckets {
+		bucket.TunnelName = newName
+		if err := upsertTrafficBucketAdd(tx, bucket); err != nil {
+			return err
+		}
+	}
+	return commitTx(tx, &committed)
+}
+
 func (s *TrafficStore) EvictClient(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

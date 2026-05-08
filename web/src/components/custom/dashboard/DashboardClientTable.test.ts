@@ -110,6 +110,21 @@ describe('DashboardClientTableContent', () => {
     expect(markup).not.toContain('data-chart-client="client-hidden"');
   });
 
+  test('renders the dashboard add-client header action when provided', () => {
+    const markup = renderToStaticMarkup(
+      createElement(DashboardClientTableContent, {
+        clients: [],
+        onNavigate: () => {},
+        onAddClient: () => {},
+        rowVisibilityHook: createRowVisibilityHook([]),
+        renderSparkline: (clientId: string) => createElement('span', { 'data-chart-client': clientId }, 'chart'),
+      }),
+    );
+
+    expect(markup).toContain('在线端点 (Clients)');
+    expect(markup).toContain('添加客户端');
+  });
+
   test('does not mount sparklines in fallback or non-desktop environments', () => {
     const fallbackMarkup = renderTable(
       [createClient({ id: 'client-fallback' })],

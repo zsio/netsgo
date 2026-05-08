@@ -111,3 +111,61 @@ func (idx *realtimeSecondIndex) EvictTunnel(clientID, tunnelName string) {
 		delete(idx.byClient, clientID)
 	}
 }
+
+func (idx *realtimeSecondIndex) RenameTunnel(clientID, oldName, newName string) error {
+	renamed, changed, err := idx.renamedTunnelBuckets(clientID, oldName, newName)
+	if err != nil || !changed {
+		return err
+	}
+	idx.byClient[clientID] = renamed
+	return nil
+}
+
+func (idx *realtimeSecondIndex) renamedTunnelBuckets(clientID, oldName, newName string) (map[trafficSeriesKey]map[int64]TrafficBucket, bool, error) {
+	if idx == nil || idx.byClient == nil || oldName == newName {
+		return nil, false, nil
+	}
+	seriesByClient := idx.byClient[clientID]
+	if len(seriesByClient) == 0 {
+		return nil, false, nil
+	}
+
+	hasOldName := false
+	for key := range seriesByClient {
+		if key.TunnelName == oldName {
+			hasOldName = true
+			break
+		}
+	}
+	if !hasOldName {
+		return nil, false, nil
+	}
+
+	renamed := make(map[trafficSeriesKey]map[int64]TrafficBucket, len(seriesByClient))
+	for key, bucketsBySecond := range seriesByClient {
+		targetKey := key
+		if key.TunnelName == oldName {
+			targetKey.TunnelName = newName
+		}
+
+		targetBuckets := renamed[targetKey]
+		if targetBuckets == nil {
+			targetBuckets = make(map[int64]TrafficBucket, len(bucketsBySecond))
+			renamed[targetKey] = targetBuckets
+		}
+		for second, bucket := range bucketsBySecond {
+			if key.TunnelName == oldName {
+				bucket.TunnelName = newName
+			}
+			if existing, ok := targetBuckets[second]; ok {
+				if err := addTrafficBucketValues(&existing, bucket); err != nil {
+					return nil, false, err
+				}
+				targetBuckets[second] = existing
+				continue
+			}
+			targetBuckets[second] = bucket
+		}
+	}
+	return renamed, true, nil
+}

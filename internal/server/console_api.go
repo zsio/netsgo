@@ -157,7 +157,12 @@ func (s *Server) collectClientViews() []clientView {
 		for _, config := range configs {
 			proxies = append(proxies, proxyConfigForClientView(config, true))
 		}
-		sort.Slice(proxies, func(i, j int) bool { return proxies[i].Name < proxies[j].Name })
+		sort.Slice(proxies, func(i, j int) bool {
+			if !proxies[i].CreatedAt.Equal(proxies[j].CreatedAt) {
+				return proxies[i].CreatedAt.After(proxies[j].CreatedAt)
+			}
+			return proxies[i].Name < proxies[j].Name
+		})
 
 		view, ok := views[client.ID]
 		if !ok {
@@ -227,15 +232,24 @@ func (s *Server) serverStatusLoop() {
 func (s *Server) refreshPublicIPs() {
 	ipv4, ipv6 := netutil.FetchPublicIPs()
 	s.publicIPMu.Lock()
+	changed := false
 	if ipv4 != "" {
+		changed = s.publicIPv4 != ipv4
 		s.publicIPv4 = ipv4
 	}
 	if ipv6 != "" {
+		changed = changed || s.publicIPv6 != ipv6
 		s.publicIPv6 = ipv6
 	}
 	s.publicIPMu.Unlock()
 	if ipv4 != "" || ipv6 != "" {
 		log.Printf("🌐 Public IP refreshed: IPv4=%s IPv6=%s", ipv4, ipv6)
+	}
+	if changed {
+		status := s.collectServerStatus()
+		s.cachedStatusMu.Lock()
+		s.cachedStatus = &status
+		s.cachedStatusMu.Unlock()
 	}
 }
 

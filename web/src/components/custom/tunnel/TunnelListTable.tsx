@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Search, Play, Square, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft, Activity,
+  Search, Play, Pause, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft, Activity,
+  ArrowDown, ArrowUp, Infinity as InfinityIcon,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -24,7 +25,7 @@ import {
   useResumeTunnel, useStopTunnel, useDeleteTunnel,
 } from '@/hooks/use-tunnel-mutations';
 import type { ProxyConfig } from '@/types';
-import { formatBytes } from '@/lib/format';
+import { formatBytes, formatNetSpeed } from '@/lib/format';
 
 // 扩展的隧道条目，可以附带归属节点信息
 export interface TunnelEntry extends ProxyConfig {
@@ -53,10 +54,27 @@ interface TunnelListTableProps {
   showActions?: boolean;
   /** 是否显示搜索框 */
   showSearch?: boolean;
+  /** 表格标题栏右侧自定义内容 */
+  headerAction?: React.ReactNode;
   /** 空状态下的自定义操作（如"立即创建"按钮） */
   emptyAction?: React.ReactNode;
   /** 自定义行操作渲染（如全网视图中的"管理"按钮） */
   renderRowAction?: (tunnel: TunnelEntry) => React.ReactNode;
+  /** 归属节点点击回调（全网视图用） */
+  onClientClick?: (tunnel: TunnelEntry) => void;
+}
+
+function compareTunnelsByCreatedAtDesc(a: TunnelEntry, b: TunnelEntry) {
+  const aTime = Date.parse(a.created_at);
+  const bTime = Date.parse(b.created_at);
+
+  if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) {
+    return bTime - aTime;
+  }
+  if (Number.isFinite(aTime) !== Number.isFinite(bTime)) {
+    return Number.isFinite(aTime) ? -1 : 1;
+  }
+  return a.name.localeCompare(b.name);
 }
 
 export function TunnelListTable({
@@ -68,21 +86,24 @@ export function TunnelListTable({
   traffic24hState = 'ready',
   showActions = true,
   showSearch = true,
+  headerAction,
   emptyAction,
   renderRowAction,
+  onClientClick,
 }: TunnelListTableProps) {
   const resumeTunnel = useResumeTunnel();
   const stopTunnel = useStopTunnel();
   const deleteTunnel = useDeleteTunnel();
   const [searchQuery, setSearchQuery] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<{ name: string; clientId: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; clientId: string } | null>(null);
   const [editTarget, setEditTarget] = useState<TunnelEntry | null>(null);
   const [speedTarget, setSpeedTarget] = useState<TunnelEntry | null>(null);
+  const orderedTunnels = useMemo(() => [...tunnels].sort(compareTunnelsByCreatedAtDesc), [tunnels]);
 
   const filteredTunnels = useMemo(() => {
-    if (!searchQuery.trim()) return tunnels;
+    if (!searchQuery.trim()) return orderedTunnels;
     const q = searchQuery.toLowerCase();
-    return tunnels.filter(
+    return orderedTunnels.filter(
       (tunnel) => {
         const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
 
@@ -95,9 +116,9 @@ export function TunnelListTable({
         );
       },
     );
-  }, [tunnels, searchQuery]);
+  }, [orderedTunnels, searchQuery]);
 
-  const args = (clientId: string, name: string) => ({ clientId, tunnelName: name });
+  const args = (clientId: string, id: string) => ({ clientId, tunnelId: id });
 
   /** 根据隧道状态渲染操作按钮 */
   const renderActionButtons = (tunnel: TunnelEntry) => {
@@ -123,7 +144,7 @@ export function TunnelListTable({
           <button
             className="p-1.5 hover:bg-emerald-500/10 rounded text-emerald-500"
             title="启动"
-            onClick={() => resumeTunnel.mutate(args(tunnel.clientId, tunnel.name), {
+            onClick={() => resumeTunnel.mutate(args(tunnel.clientId, tunnel.id), {
               onSuccess: () => toast.success(`隧道「${tunnel.name}」已启动`),
               onError: (err) => toast.error((err as Error).message),
             })}
@@ -135,12 +156,12 @@ export function TunnelListTable({
           <button
             className="p-1.5 hover:bg-slate-500/10 rounded text-slate-500"
             title="停止"
-            onClick={() => stopTunnel.mutate(args(tunnel.clientId, tunnel.name), {
+            onClick={() => stopTunnel.mutate(args(tunnel.clientId, tunnel.id), {
               onSuccess: () => toast.success(`隧道「${tunnel.name}」已停止`),
               onError: (err) => toast.error((err as Error).message),
             })}
           >
-            <Square className="h-4 w-4" />
+            <Pause className="h-4 w-4" />
           </button>
         )}
         {canEdit && (
@@ -156,7 +177,7 @@ export function TunnelListTable({
           <button
             className="p-1.5 hover:bg-destructive/10 rounded text-destructive"
             title="删除"
-            onClick={() => setDeleteTarget({ name: tunnel.name, clientId: tunnel.clientId })}
+            onClick={() => setDeleteTarget({ id: tunnel.id, name: tunnel.name, clientId: tunnel.clientId })}
           >
             <Trash2 className="h-4 w-4" />
           </button>
@@ -177,7 +198,9 @@ export function TunnelListTable({
               {tunnels.length}
             </span>
           </h3>
-          {showSearch && (
+          {headerAction ? (
+            headerAction
+          ) : showSearch && (
             <div className="relative hidden sm:block">
               <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
               <input
@@ -199,8 +222,8 @@ export function TunnelListTable({
                 <thead className="text-xs text-muted-foreground bg-muted/30 uppercase">
                   <tr>
                     <th className="px-6 py-3 font-medium">隧道名称</th>
-                    <th className="px-6 py-3 font-medium">应用 / 类型</th>
-                    <th className="px-6 py-3 font-medium">映射关系</th>
+                    <th className="px-6 py-3 font-medium">映射</th>
+                    <th className="px-6 py-3 font-medium">限速</th>
                     {showTraffic24h && <th className="px-6 py-3 font-medium">24 小时流量</th>}
                     <th className="px-6 py-3 font-medium">状态</th>
                     {showClient && <th className="px-6 py-3 font-medium">归属节点</th>}
@@ -212,13 +235,14 @@ export function TunnelListTable({
                 <tbody className="divide-y divide-border/40">
                   {filteredTunnels.map((tunnel) => (
                     <TunnelTableRow
-                      key={`${tunnel.clientId}-${tunnel.name}`}
+                      key={tunnel.id}
                       tunnel={tunnel}
                       showClient={showClient}
                       showTraffic24h={showTraffic24h}
                       traffic24hState={traffic24hState}
                       showActions={showActions}
                       renderRowAction={renderRowAction}
+                      onClientClick={onClientClick}
                       renderActionButtons={renderActionButtons}
                     />
                   ))}
@@ -250,7 +274,7 @@ export function TunnelListTable({
             variant="destructive"
             onConfirm={() => {
               if (deleteTarget) {
-                deleteTunnel.mutate(args(deleteTarget.clientId, deleteTarget.name), {
+                deleteTunnel.mutate(args(deleteTarget.clientId, deleteTarget.id), {
                   onSuccess: () => toast.success(`隧道「${deleteTarget.name}」已删除`),
                   onError: (err) => toast.error((err as Error).message),
                 });
@@ -284,6 +308,7 @@ function TunnelTableRow({
   traffic24hState,
   showActions,
   renderRowAction,
+  onClientClick,
   renderActionButtons,
 }: {
   tunnel: TunnelEntry;
@@ -292,6 +317,7 @@ function TunnelTableRow({
   traffic24hState: Traffic24hState;
   showActions: boolean;
   renderRowAction?: (tunnel: TunnelEntry) => React.ReactNode;
+  onClientClick?: (tunnel: TunnelEntry) => void;
   renderActionButtons: (tunnel: TunnelEntry) => React.ReactNode;
 }) {
   const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
@@ -300,18 +326,12 @@ function TunnelTableRow({
     <tr className="hover:bg-muted/30 transition-colors">
       <td className="px-6 py-3 font-medium text-foreground">{tunnel.name}</td>
 
-      <td className="px-6 py-3">
-        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground border border-border/50 uppercase">
-          {tunnel.type}
-        </span>
+      <td className="px-6 py-3 font-mono text-xs min-w-[15rem]">
+        <TunnelMapping tunnel={tunnel} view={view} />
       </td>
 
-      <td className="px-6 py-3 font-mono text-xs">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-primary font-medium break-all">{view.targetLabel}</span>
-          <ArrowRightLeft className="w-3 h-3 text-muted-foreground" />
-          <span className="break-all">{view.destinationLabel}</span>
-        </div>
+      <td className="px-6 py-3">
+        <TunnelSpeedLimit tunnel={tunnel} />
       </td>
 
       {showTraffic24h && (
@@ -331,7 +351,19 @@ function TunnelTableRow({
       </td>
 
       {showClient && (
-        <td className="px-6 py-3 text-muted-foreground">{tunnel.clientName}</td>
+        <td className="px-6 py-3 text-muted-foreground">
+          {onClientClick ? (
+            <button
+              type="button"
+              className="cursor-pointer text-left text-muted-foreground border-b border-dashed border-muted-foreground/50 hover:text-foreground"
+              onClick={() => onClientClick(tunnel)}
+            >
+              {tunnel.clientName}
+            </button>
+          ) : (
+            tunnel.clientName
+          )}
+        </td>
       )}
 
       {(showActions || renderRowAction) && (
@@ -344,6 +376,106 @@ function TunnelTableRow({
         </td>
       )}
     </tr>
+  );
+}
+
+function TunnelSpeedLimit({ tunnel }: { tunnel: TunnelEntry }) {
+  const hasIngressLimit = tunnel.ingress_bps > 0;
+  const hasEgressLimit = tunnel.egress_bps > 0;
+
+  if (!hasIngressLimit && !hasEgressLimit) {
+    return (
+      <div className="inline-flex h-6 w-8 items-center justify-center text-muted-foreground" aria-label="不限速">
+        <InfinityIcon className="h-4 w-4" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5 font-mono text-xs leading-4 text-muted-foreground">
+      {hasIngressLimit && (
+        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <ArrowDown className="h-3.5 w-3.5 text-emerald-500" />
+          <span>{formatNetSpeed(tunnel.ingress_bps)}</span>
+        </span>
+      )}
+      {hasEgressLimit && (
+        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <ArrowUp className="h-3.5 w-3.5 text-sky-500" />
+          <span>{formatNetSpeed(tunnel.egress_bps)}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function TunnelMapping({
+  tunnel,
+  view,
+}: {
+  tunnel: TunnelEntry;
+  view: ReturnType<typeof buildTunnelViewModel>;
+}) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const sourceRef = useRef<HTMLSpanElement>(null);
+  const destinationRef = useRef<HTMLSpanElement>(null);
+  const [isWrapped, setIsWrapped] = useState(false);
+  const targetLabel = tunnel.type === 'http'
+    ? view.targetLabel
+    : `:${tunnel.remote_port}`;
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    const source = sourceRef.current;
+    const destination = destinationRef.current;
+    if (!wrapper || !source || !destination) {
+      return;
+    }
+
+    let frame = 0;
+    const measure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        setIsWrapped(destination.offsetTop > source.offsetTop);
+      });
+    };
+
+    measure();
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => {
+        cancelAnimationFrame(frame);
+        window.removeEventListener('resize', measure);
+      };
+    }
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(wrapper);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [targetLabel, view.destinationLabel]);
+
+  return (
+    <div ref={wrapperRef} className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
+      <span ref={sourceRef} className="inline-flex items-center gap-2 min-w-0">
+        <span className="inline-flex h-6 w-11 shrink-0 items-center justify-center rounded bg-secondary text-[10px] font-mono uppercase text-secondary-foreground border border-border/50">
+          {tunnel.type.toUpperCase()}
+        </span>
+        <span className="text-primary font-medium whitespace-nowrap">{targetLabel}</span>
+      </span>
+      <span ref={destinationRef} className="inline-flex items-center gap-2 min-w-0">
+        <span className={cn(
+          'inline-flex h-6 shrink-0 items-center justify-center',
+          isWrapped ? 'w-11' : 'w-4',
+        )}>
+          <ArrowRightLeft className="w-3.5 h-3.5 text-muted-foreground" />
+        </span>
+        <span className="whitespace-nowrap text-foreground">{view.destinationLabel}</span>
+      </span>
+    </div>
   );
 }
 

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Server as ServerIcon, LayoutDashboard,
   Settings, Key,
-  Plus, LogOut
+  LayersPlus, LogOut
 } from 'lucide-react';
 import { Link, useMatch, useRouterState, useNavigate } from '@tanstack/react-router';
 import type { Client } from '@/types';
@@ -126,9 +126,9 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
           <SidebarGroupAction 
             onClick={() => setShowAddClient(true)} 
             title="添加客户端"
-            className="top-4 opacity-0 text-muted-foreground transition-opacity group-hover/clients:opacity-100 hover:text-foreground"
+            className="top-4 cursor-pointer text-muted-foreground hover:text-foreground"
           >
-            <Plus />
+            <LayersPlus />
             <span className="sr-only">添加客户端</span>
           </SidebarGroupAction>
           <SidebarGroupContent className='mt-1'>
@@ -146,7 +146,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                   className="group flex flex-col items-center w-full rounded-xl border border-dashed border-border/80 bg-muted/10 transition-colors hover:border-primary/50 hover:bg-muted/40 p-5 focus:outline-none"
                 >
                   <div className="h-10 w-10 rounded-full bg-muted/50 flex items-center justify-center mb-3 group-hover:bg-background border border-transparent group-hover:border-border/50 transition-colors">
-                    <Plus className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                    <LayersPlus className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
                   </div>
                   
                   <h3 className="text-sm font-medium text-foreground mb-1">
