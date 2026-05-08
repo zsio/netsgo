@@ -184,34 +184,57 @@ jobs:
         run: |
           set -euo pipefail
           base="https://api.cnb.cool/${{ steps.cnb-vars.outputs.slug }}/-/releases/${{ steps.cnb-release.outputs.release_id }}"
+          upload_failed=0
           shopt -s nullglob
           for file in dist/*.tar.gz dist/checksums.txt; do
             name="$(basename "$file")"
             size="$(stat -c%s "$file")"
             body="$(jq -n --arg name "$name" --argjson size "$size" '{asset_name: $name, overwrite: true, size: $size, ttl: 0}')"
-            status="$(curl -sS -o /tmp/cnb-upload.json -w '%{http_code}' \
+            if ! status="$(curl -sS -o /tmp/cnb-upload.json -w '%{http_code}' \
               -H "Authorization: Bearer $CNB_PASSWORD" \
               -H "Accept: application/vnd.cnb.api+json" \
               -H "Content-Type: application/vnd.cnb.api+json" \
               -d "$body" \
-              "$base/asset-upload-url")"
+              "$base/asset-upload-url")"; then
+              echo "::warning::Failed to request CNB release attachment upload URL: ${name}"
+              upload_failed=1
+              continue
+            fi
             if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              echo "::warning::Failed to create CNB release attachment upload URL: ${name}"
               cat /tmp/cnb-upload.json >&2
-              exit 1
+              upload_failed=1
+              continue
             fi
             upload_url="$(jq -r '.upload_url' /tmp/cnb-upload.json)"
             verify_url="$(jq -r '.verify_url' /tmp/cnb-upload.json)"
-            curl -sS -X PUT --data-binary @"$file" "$upload_url" >/dev/null
-            status="$(curl -sS -o /tmp/cnb-confirm.json -w '%{http_code}' \
+            if [[ "$verify_url" != http://* && "$verify_url" != https://* ]]; then
+              verify_url="https://api.cnb.cool${verify_url}"
+            fi
+            if ! curl -fsS -X PUT --data-binary @"$file" "$upload_url" >/dev/null; then
+              echo "::warning::Failed to upload CNB release attachment: ${name}"
+              upload_failed=1
+              continue
+            fi
+            if ! status="$(curl -sS -o /tmp/cnb-confirm.json -w '%{http_code}' \
               -X POST \
               -H "Authorization: Bearer $CNB_PASSWORD" \
               -H "Accept: application/vnd.cnb.api+json" \
-              "https://api.cnb.cool${verify_url}?ttl=0")"
+              "${verify_url}?ttl=0")"; then
+              echo "::warning::Failed to request CNB release attachment confirmation: ${name}"
+              upload_failed=1
+              continue
+            fi
             if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              echo "::warning::Failed to confirm CNB release attachment: ${name}"
               cat /tmp/cnb-confirm.json >&2
-              exit 1
+              upload_failed=1
+              continue
             fi
           done
+          if [ "$upload_failed" -ne 0 ]; then
+            echo "::warning::One or more CNB release attachments failed. The release index will still be published."
+          fi
       - name: Build release index
         shell: bash
         run: |
@@ -321,6 +344,8 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ steps.meta-ghcr.outputs.tags }}
             ${{ steps.meta-dockerhub.outputs.tags }}
