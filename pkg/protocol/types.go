@@ -114,6 +114,7 @@ const (
 	TunnelMutationErrorCodeDomainInvalid      = "domain_invalid"
 	TunnelMutationErrorCodeServerAddrConflict = "server_addr_conflict"
 	TunnelMutationErrorCodeHTTPTunnelConflict = "http_tunnel_conflict"
+	TunnelMutationErrorCodeTunnelBusy         = "tunnel_busy"
 )
 
 // WebSocket 子协议常量

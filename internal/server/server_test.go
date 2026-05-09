@@ -3777,10 +3777,17 @@ func TestDeleteRunningTunnelReturnsLocalizedError(t *testing.T) {
 	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
-	if body["error"] != "请先停止隧道后再删除" {
-		t.Fatalf("error: want localized delete hint, got %v", body["error"])
+	if body["error_code"] != protocol.TunnelMutationErrorCodeTunnelBusy {
+		t.Fatalf("error_code: want %q, got %v", protocol.TunnelMutationErrorCodeTunnelBusy, body["error_code"])
 	}
-	if strings.Contains(fmt.Sprint(body["error"]), "running/exposed") {
+	errorMessage, _ := body["error"].(string)
+	if errorMessage == "" {
+		t.Fatalf("error should be non-empty, got %v", body["error"])
+	}
+	if errorMessage != "请先停止隧道后再删除" {
+		t.Fatalf("error: want running delete hint, got %q", errorMessage)
+	}
+	if strings.Contains(errorMessage, "running/exposed") {
 		t.Fatalf("error should not expose internal state wording: %v", body["error"])
 	}
 }

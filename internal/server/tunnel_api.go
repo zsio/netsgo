@@ -347,9 +347,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !canEditOrDeleteLiveTunnel(tunnel.Config) {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "请先停止隧道后再删除",
-		})
+		encodeJSON(w, http.StatusBadRequest, tunnelDeleteBlockedErrorBody(tunnel.Config))
 		return
 	}
 
@@ -359,6 +357,19 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func tunnelDeleteBlockedErrorBody(config protocol.ProxyConfig) map[string]any {
+	message := "当前隧道暂时不能删除"
+	if config.DesiredState == protocol.ProxyDesiredStateRunning && config.RuntimeState == protocol.ProxyRuntimeStateExposed {
+		message = "请先停止隧道后再删除"
+	} else if config.RuntimeState == protocol.ProxyRuntimeStatePending {
+		message = "隧道正在处理中，请稍后再删除"
+	}
+	return map[string]any{
+		"error":      message,
+		"error_code": protocol.TunnelMutationErrorCodeTunnelBusy,
+	}
 }
 
 func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
