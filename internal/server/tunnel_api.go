@@ -348,7 +348,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 
 	if !canEditOrDeleteLiveTunnel(tunnel.Config) {
 		encodeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": fmt.Sprintf("tunnel is currently in state %s/%s; only stopped/idle or running/error tunnels can be deleted", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
+			"error": "请先停止隧道后再删除",
 		})
 		return
 	}
