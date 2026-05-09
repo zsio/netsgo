@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -183,29 +182,6 @@ func TestBuildChecksumsURL(t *testing.T) {
 	want := "https://github.com/zsio/netsgo/releases/download/v1.2.3/checksums.txt"
 	if got != want {
 		t.Fatalf("buildChecksumsURL = %q, want %q", got, want)
-	}
-}
-
-func TestCurrentGOARMFallsBackToEnvironment(t *testing.T) {
-	origReadBuildInfo := readBuildInfoFunc
-	origGetenv := getenvFunc
-	t.Cleanup(func() {
-		readBuildInfoFunc = origReadBuildInfo
-		getenvFunc = origGetenv
-	})
-
-	readBuildInfoFunc = func() (*debug.BuildInfo, bool) {
-		return nil, false
-	}
-	getenvFunc = func(key string) string {
-		if key == "GOARM" {
-			return "7"
-		}
-		return ""
-	}
-
-	if got := currentGOARM(); got != "7" {
-		t.Fatalf("currentGOARM() = %q, want %q", got, "7")
 	}
 }
 

@@ -6,10 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
-	"runtime"
-	"runtime/debug"
 	"strings"
 	"time"
 
@@ -48,11 +45,7 @@ var defaultHTTPClient = &http.Client{
 	},
 }
 
-var downloadHTTPClient = &http.Client{Timeout: 60 * time.Second}
-
 var fetchLatestVersionFunc = fetchLatestVersion
-var readBuildInfoFunc = debug.ReadBuildInfo
-var getenvFunc = os.Getenv
 
 var releaseTagLinkRe = regexp.MustCompile(releaseTagMarker + `[^"'<>\s]+`)
 var releaseTagLinkMaxReadBytes int64 = 1 << 20
@@ -240,27 +233,4 @@ func buildChecksumsURL(channel DownloadChannel, version string) string {
 		releasePath = "-/releases/download"
 	}
 	return fmt.Sprintf("%s/%s/%s/%s", base, releasePath, version, checksumsAsset)
-}
-
-func platformAssetURL(channel DownloadChannel, version string) string {
-	arch := runtime.GOARCH
-	if runtime.GOARCH == "arm" {
-		if goarm := currentGOARM(); goarm != "" {
-			arch = "armv" + goarm
-		}
-	}
-	return buildDownloadURL(channel, version, runtime.GOOS, arch)
-}
-
-func currentGOARM() string {
-	info, ok := readBuildInfoFunc()
-	if !ok {
-		return getenvFunc("GOARM")
-	}
-	for _, setting := range info.Settings {
-		if setting.Key == "GOARM" {
-			return setting.Value
-		}
-	}
-	return getenvFunc("GOARM")
 }
