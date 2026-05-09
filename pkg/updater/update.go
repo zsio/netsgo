@@ -43,7 +43,7 @@ func releaseTrackForCurrentVersion(currentVersion string) releaseTrack {
 	if current.Prerelease == "" {
 		return releaseTrackStable
 	}
-	if strings.HasPrefix(current.Prerelease, "beta.") {
+	if isBetaPrerelease(current.Prerelease) {
 		return releaseTrackBeta
 	}
 	return releaseTrackAny

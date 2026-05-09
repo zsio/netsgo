@@ -194,10 +194,14 @@ func semverMatchesReleaseTrack(parsed buildversion.Semver, track releaseTrack) b
 	case releaseTrackStable:
 		return parsed.Prerelease == ""
 	case releaseTrackBeta:
-		return strings.HasPrefix(parsed.Prerelease, "beta.")
+		return isBetaPrerelease(parsed.Prerelease)
 	default:
 		return true
 	}
+}
+
+func isBetaPrerelease(prerelease string) bool {
+	return strings.HasPrefix(prerelease, "beta.")
 }
 
 func extractVersionFromReleaseTagPath(path string) (string, error) {
