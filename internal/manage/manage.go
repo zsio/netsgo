@@ -176,8 +176,8 @@ func RunWith(deps Deps) error {
 
 func runDualInstalledMenu(deps Deps) (bool, error) {
 	role, err := selectWithOptions(deps.UI, "选择要管理的角色", []tui.SelectOption{
-		{Label: "管理 server", Description: "检查、重启、更新或卸载 server 服务。"},
-		{Label: "管理 client", Description: "检查、重启、更新或卸载 client 服务。"},
+		{Label: "管理 server", Description: "检查、重启或卸载 server 服务。"},
+		{Label: "管理 client", Description: "检查、重启或卸载 client 服务。"},
 		{Label: "卸载全部托管服务", Description: "通过一个引导流程移除两个托管角色。"},
 		{Label: "退出", Description: "离开服务管理，不做任何修改。"},
 	})

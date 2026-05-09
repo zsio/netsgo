@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +129,32 @@ func TestFetchLatestVersionStableTrackReportsNoCompatibleRelease(t *testing.T) {
 	}
 }
 
+func TestFetchLatestVersionBetaTrackOnlySelectsBeta(t *testing.T) {
+	releaseBody := strings.Join([]string{
+		`<a href="/releases/tag/v0.3.0">v0.3.0</a>`,
+		`<a href="/releases/tag/v0.3.0-rc.1">v0.3.0-rc.1</a>`,
+		`<a href="/releases/tag/v0.2.0-beta.2">v0.2.0-beta.2</a>`,
+		`<a href="/releases/tag/v0.2.0-beta.1">v0.2.0-beta.1</a>`,
+	}, "")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/releases" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(releaseBody))
+	}))
+	defer server.Close()
+
+	version, err := fetchLatestVersionWithClient(server.URL+"/releases", &http.Client{Timeout: 5 * time.Second}, releaseTrackBeta)
+	if err != nil {
+		t.Fatalf("fetch beta latest: %v", err)
+	}
+	if version != "v0.2.0-beta.2" {
+		t.Fatalf("expected latest beta v0.2.0-beta.2, got %q", version)
+	}
+}
+
 func TestBuildDownloadURL(t *testing.T) {
 	got := buildDownloadURL(ChannelGitHub, "v1.2.3", "linux", "amd64")
 	want := "https://github.com/zsio/netsgo/releases/download/v1.2.3/netsgo_1.2.3_linux_amd64.tar.gz"
@@ -137,10 +162,10 @@ func TestBuildDownloadURL(t *testing.T) {
 		t.Fatalf("buildDownloadURL = %q, want %q", got, want)
 	}
 
-	got2 := buildDownloadURL(ChannelGhproxy, "v1.2.3", "linux", "amd64")
-	want2 := "https://ghproxy.com/https://github.com/zsio/netsgo/releases/download/v1.2.3/netsgo_1.2.3_linux_amd64.tar.gz"
+	got2 := buildDownloadURL(ChannelCNB, "v1.2.3", "linux", "amd64")
+	want2 := "https://cnb.cool/zsio/netsgo/-/releases/download/v1.2.3/netsgo_1.2.3_linux_amd64.tar.gz"
 	if got2 != want2 {
-		t.Fatalf("buildDownloadURL ghproxy = %q, want %q", got2, want2)
+		t.Fatalf("buildDownloadURL cnb = %q, want %q", got2, want2)
 	}
 }
 
@@ -157,29 +182,6 @@ func TestBuildChecksumsURL(t *testing.T) {
 	want := "https://github.com/zsio/netsgo/releases/download/v1.2.3/checksums.txt"
 	if got != want {
 		t.Fatalf("buildChecksumsURL = %q, want %q", got, want)
-	}
-}
-
-func TestCurrentGOARMFallsBackToEnvironment(t *testing.T) {
-	origReadBuildInfo := readBuildInfoFunc
-	origGetenv := getenvFunc
-	t.Cleanup(func() {
-		readBuildInfoFunc = origReadBuildInfo
-		getenvFunc = origGetenv
-	})
-
-	readBuildInfoFunc = func() (*debug.BuildInfo, bool) {
-		return nil, false
-	}
-	getenvFunc = func(key string) string {
-		if key == "GOARM" {
-			return "7"
-		}
-		return ""
-	}
-
-	if got := currentGOARM(); got != "7" {
-		t.Fatalf("currentGOARM() = %q, want %q", got, "7")
 	}
 }
 
@@ -474,19 +476,19 @@ func TestCheckForUpdateUsesSelectedChannelForLatestLookup(t *testing.T) {
 		return "v1.0.0", nil
 	}
 
-	_, _, err := CheckForUpdate(ChannelGhproxy, "1.0.0")
+	_, _, err := CheckForUpdate(ChannelCNB, "1.0.0")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotChannel != ChannelGhproxy {
-		t.Fatalf("expected fetch latest to use %q, got %q", ChannelGhproxy, gotChannel)
+	if gotChannel != ChannelCNB {
+		t.Fatalf("expected fetch latest to use %q, got %q", ChannelCNB, gotChannel)
 	}
 	if gotTrack != releaseTrackStable {
 		t.Fatalf("expected stable current version to use stable release track, got %v", gotTrack)
 	}
 }
 
-func TestCheckForUpdateUsesAnyReleaseTrackForPrereleaseCurrent(t *testing.T) {
+func TestCheckForUpdateUsesBetaReleaseTrackForBetaCurrent(t *testing.T) {
 	origFetchLatestVersion := fetchLatestVersionFunc
 	t.Cleanup(func() {
 		fetchLatestVersionFunc = origFetchLatestVersion
@@ -502,8 +504,8 @@ func TestCheckForUpdateUsesAnyReleaseTrackForPrereleaseCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotTrack != releaseTrackAny {
-		t.Fatalf("expected prerelease current version to use any release track, got %v", gotTrack)
+	if gotTrack != releaseTrackBeta {
+		t.Fatalf("expected beta current version to use beta release track, got %v", gotTrack)
 	}
 	if !needed || result.NewVersion != "v0.1.0-beta.6" {
 		t.Fatalf("expected snapshot beta to update to latest beta, needed=%v result=%+v", needed, result)
@@ -533,356 +535,6 @@ func TestCheckForUpdateTreatsMissingStableReleaseAsNoUpdate(t *testing.T) {
 	if result.NewVersion != "1.0.0" {
 		t.Fatalf("expected current version to be kept as latest compatible version, got %+v", result)
 	}
-}
-
-func TestApplyConfirmedUpdateUsesConfirmedVersionWithoutRefetch(t *testing.T) {
-	origFetchLatestVersion := fetchLatestVersionFunc
-	origDisableAndStop := disableAndStopFunc
-	origEnableAndStart := enableAndStartFunc
-	origDetectInstalledUnits := detectInstalledUnitsFunc
-	origDownloadAndExtract := downloadAndExtractFunc
-	origBinaryPath := installedBinaryPath
-	t.Cleanup(func() {
-		fetchLatestVersionFunc = origFetchLatestVersion
-		disableAndStopFunc = origDisableAndStop
-		enableAndStartFunc = origEnableAndStart
-		detectInstalledUnitsFunc = origDetectInstalledUnits
-		downloadAndExtractFunc = origDownloadAndExtract
-		installedBinaryPath = origBinaryPath
-	})
-
-	fetchLatestVersionFunc = func(channel DownloadChannel, track releaseTrack) (string, error) {
-		t.Fatal("ApplyConfirmedUpdate should not refetch latest version")
-		return "", nil
-	}
-	tmpDir := t.TempDir()
-	installedPath := filepath.Join(tmpDir, "installed-netsgo")
-	if err := os.WriteFile(installedPath, []byte("old binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	installedBinaryPath = installedPath
-	detectInstalledUnitsFunc = func() []string { return []string{"netsgo-server.service"} }
-	disableAndStopFunc = func(unit string) error { return nil }
-	enableAndStartFunc = func(unit string) error { return nil }
-	var gotURL string
-	downloadAndExtractFunc = func(url, destPath string, client *http.Client) error {
-		gotURL = url
-		return os.WriteFile(destPath, []byte("new binary"), 0o755)
-	}
-
-	result, err := ApplyConfirmedUpdate(ChannelGitHub, "v1.0.0", "v1.1.0")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.NewVersion != "v1.1.0" {
-		t.Fatalf("unexpected result: %+v", result)
-	}
-	wantURL := platformAssetURL(ChannelGitHub, "v1.1.0")
-	if gotURL != wantURL {
-		t.Fatalf("expected confirmed asset url %q, got %q", wantURL, gotURL)
-	}
-}
-
-func TestApplyConfirmedUpdateRestartsStoppedServicesWhenStopFailsPartially(t *testing.T) {
-	origDisableAndStop := disableAndStopFunc
-	origEnableAndStart := enableAndStartFunc
-	origDetectInstalledUnits := detectInstalledUnitsFunc
-	t.Cleanup(func() {
-		disableAndStopFunc = origDisableAndStop
-		enableAndStartFunc = origEnableAndStart
-		detectInstalledUnitsFunc = origDetectInstalledUnits
-	})
-
-	var restarted []string
-	detectInstalledUnitsFunc = func() []string {
-		return []string{"netsgo-server.service", "netsgo-client.service"}
-	}
-	disableAndStopFunc = func(unit string) error {
-		if unit == "netsgo-client.service" {
-			return fmt.Errorf("boom")
-		}
-		return nil
-	}
-	enableAndStartFunc = func(unit string) error {
-		restarted = append(restarted, unit)
-		return nil
-	}
-
-	_, err := ApplyConfirmedUpdate(ChannelGitHub, "1.0.0", "v1.1.0")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if len(restarted) != 1 || restarted[0] != "netsgo-server.service" {
-		t.Fatalf("expected restarted stopped units, got %v", restarted)
-	}
-}
-
-func TestApplyConfirmedUpdateRestoresOldBinaryWhenStartFails(t *testing.T) {
-	origDisableAndStop := disableAndStopFunc
-	origEnableAndStart := enableAndStartFunc
-	origDetectInstalledUnits := detectInstalledUnitsFunc
-	origDownloadAndExtract := downloadAndExtractFunc
-	origBinaryPath := installedBinaryPath
-	t.Cleanup(func() {
-		disableAndStopFunc = origDisableAndStop
-		enableAndStartFunc = origEnableAndStart
-		detectInstalledUnitsFunc = origDetectInstalledUnits
-		downloadAndExtractFunc = origDownloadAndExtract
-		installedBinaryPath = origBinaryPath
-	})
-
-	tmpDir := t.TempDir()
-	installedPath := filepath.Join(tmpDir, "installed-netsgo")
-	if err := os.WriteFile(installedPath, []byte("old binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	installedBinaryPath = installedPath
-
-	detectInstalledUnitsFunc = func() []string { return []string{"netsgo-server.service"} }
-	disableAndStopFunc = func(unit string) error { return nil }
-	enableAndStartFunc = func(unit string) error { return fmt.Errorf("start failed") }
-	downloadAndExtractFunc = func(url, destPath string, client *http.Client) error {
-		return os.WriteFile(destPath, []byte("new binary"), 0o755)
-	}
-
-	_, err := ApplyConfirmedUpdate(ChannelGitHub, "1.0.0", "v1.1.0")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-
-	data, err := os.ReadFile(installedPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "old binary" {
-		t.Fatalf("expected old binary restored, got %q", string(data))
-	}
-}
-
-func TestApplyConfirmedUpdateStopsAlreadyStartedServicesBeforeRollback(t *testing.T) {
-	origDisableAndStop := disableAndStopFunc
-	origEnableAndStart := enableAndStartFunc
-	origDetectInstalledUnits := detectInstalledUnitsFunc
-	origDownloadAndExtract := downloadAndExtractFunc
-	origBinaryPath := installedBinaryPath
-	t.Cleanup(func() {
-		disableAndStopFunc = origDisableAndStop
-		enableAndStartFunc = origEnableAndStart
-		detectInstalledUnitsFunc = origDetectInstalledUnits
-		downloadAndExtractFunc = origDownloadAndExtract
-		installedBinaryPath = origBinaryPath
-	})
-
-	tmpDir := t.TempDir()
-	installedPath := filepath.Join(tmpDir, "installed-netsgo")
-	if err := os.WriteFile(installedPath, []byte("old binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	installedBinaryPath = installedPath
-
-	var stoppedAgain []string
-	var startCalls []string
-	detectInstalledUnitsFunc = func() []string { return []string{"netsgo-server.service", "netsgo-client.service"} }
-	disableAndStopFunc = func(unit string) error {
-		stoppedAgain = append(stoppedAgain, unit)
-		return nil
-	}
-	enableAndStartFunc = func(unit string) error {
-		startCalls = append(startCalls, unit)
-		if unit == "netsgo-client.service" {
-			return fmt.Errorf("start failed")
-		}
-		return nil
-	}
-	downloadAndExtractFunc = func(url, destPath string, client *http.Client) error {
-		return os.WriteFile(destPath, []byte("new binary"), 0o755)
-	}
-
-	_, err := ApplyConfirmedUpdate(ChannelGitHub, "1.0.0", "v1.1.0")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if len(startCalls) < 2 || startCalls[0] != "netsgo-server.service" || startCalls[1] != "netsgo-client.service" {
-		t.Fatalf("unexpected start order: %v", startCalls)
-	}
-	if len(stoppedAgain) != 3 {
-		t.Fatalf("expected original stop plus rollback stop, got %v", stoppedAgain)
-	}
-	if stoppedAgain[2] != "netsgo-server.service" {
-		t.Fatalf("expected already-started service to be stopped during rollback, got %v", stoppedAgain)
-	}
-}
-
-func TestApplyConfirmedUpdateRestartsStoppedServicesWhenPanicOccurs(t *testing.T) {
-	origDisableAndStop := disableAndStopFunc
-	origEnableAndStart := enableAndStartFunc
-	origDetectInstalledUnits := detectInstalledUnitsFunc
-	origDownloadAndExtract := downloadAndExtractFunc
-	t.Cleanup(func() {
-		disableAndStopFunc = origDisableAndStop
-		enableAndStartFunc = origEnableAndStart
-		detectInstalledUnitsFunc = origDetectInstalledUnits
-		downloadAndExtractFunc = origDownloadAndExtract
-	})
-
-	var restarted []string
-	detectInstalledUnitsFunc = func() []string { return []string{"netsgo-server.service", "netsgo-client.service"} }
-	disableAndStopFunc = func(unit string) error { return nil }
-	enableAndStartFunc = func(unit string) error {
-		restarted = append(restarted, unit)
-		return nil
-	}
-	downloadAndExtractFunc = func(url, destPath string, client *http.Client) error {
-		panic("download panic")
-	}
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic")
-		}
-		if len(restarted) != 2 || restarted[0] != "netsgo-server.service" || restarted[1] != "netsgo-client.service" {
-			t.Fatalf("expected stopped services to be restarted in rollback order, got %v", restarted)
-		}
-	}()
-
-	_, _ = ApplyConfirmedUpdate(ChannelGitHub, "1.0.0", "v1.1.0")
-}
-
-func TestApplyConfirmedUpdateRestartsOnlyPartiallyStoppedServicesWhenStopPanics(t *testing.T) {
-	origDisableAndStop := disableAndStopFunc
-	origEnableAndStart := enableAndStartFunc
-	origDetectInstalledUnits := detectInstalledUnitsFunc
-	t.Cleanup(func() {
-		disableAndStopFunc = origDisableAndStop
-		enableAndStartFunc = origEnableAndStart
-		detectInstalledUnitsFunc = origDetectInstalledUnits
-	})
-
-	var restarted []string
-	detectInstalledUnitsFunc = func() []string { return []string{"netsgo-server.service", "netsgo-client.service"} }
-	disableAndStopFunc = func(unit string) error {
-		if unit == "netsgo-client.service" {
-			panic("stop panic")
-		}
-		return nil
-	}
-	enableAndStartFunc = func(unit string) error {
-		restarted = append(restarted, unit)
-		return nil
-	}
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic")
-		}
-		if len(restarted) != 1 || restarted[0] != "netsgo-server.service" {
-			t.Fatalf("expected only fully stopped service to be restarted, got %v", restarted)
-		}
-	}()
-
-	_, _ = ApplyConfirmedUpdate(ChannelGitHub, "1.0.0", "v1.1.0")
-}
-
-func TestApplyConfirmedUpdateRollsBackWhenStartPanics(t *testing.T) {
-	origDisableAndStop := disableAndStopFunc
-	origEnableAndStart := enableAndStartFunc
-	origDetectInstalledUnits := detectInstalledUnitsFunc
-	origDownloadAndExtract := downloadAndExtractFunc
-	origBinaryPath := installedBinaryPath
-	t.Cleanup(func() {
-		disableAndStopFunc = origDisableAndStop
-		enableAndStartFunc = origEnableAndStart
-		detectInstalledUnitsFunc = origDetectInstalledUnits
-		downloadAndExtractFunc = origDownloadAndExtract
-		installedBinaryPath = origBinaryPath
-	})
-
-	tmpDir := t.TempDir()
-	installedPath := filepath.Join(tmpDir, "installed-netsgo")
-	if err := os.WriteFile(installedPath, []byte("old binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	installedBinaryPath = installedPath
-
-	var stopCalls []string
-	var startCalls []string
-	var startCallCount int
-	detectInstalledUnitsFunc = func() []string { return []string{"netsgo-server.service", "netsgo-client.service"} }
-	disableAndStopFunc = func(unit string) error {
-		stopCalls = append(stopCalls, unit)
-		return nil
-	}
-	enableAndStartFunc = func(unit string) error {
-		startCallCount++
-		startCalls = append(startCalls, unit)
-		if startCallCount == 2 {
-			panic("start panic")
-		}
-		return nil
-	}
-	downloadAndExtractFunc = func(url, destPath string, client *http.Client) error {
-		return os.WriteFile(destPath, []byte("new binary"), 0o755)
-	}
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic")
-		}
-		if len(stopCalls) != 3 || stopCalls[2] != "netsgo-server.service" {
-			t.Fatalf("expected rollback to stop already-started service, got %v", stopCalls)
-		}
-		if len(startCalls) != 4 || startCalls[0] != "netsgo-server.service" || startCalls[1] != "netsgo-client.service" || startCalls[2] != "netsgo-server.service" || startCalls[3] != "netsgo-client.service" {
-			t.Fatalf("expected restart sequence after panic rollback, got %v", startCalls)
-		}
-		data, err := os.ReadFile(installedPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(data) != "old binary" {
-			t.Fatalf("expected old binary restored after panic, got %q", string(data))
-		}
-	}()
-
-	_, _ = ApplyConfirmedUpdate(ChannelGitHub, "1.0.0", "v1.1.0")
-}
-
-func TestApplyConfirmedUpdateRestartsStoppedServicesWhenPanicOccursInProtectionGap(t *testing.T) {
-	origDisableAndStop := disableAndStopFunc
-	origEnableAndStart := enableAndStartFunc
-	origDetectInstalledUnits := detectInstalledUnitsFunc
-	origMkdirTemp := osMkdirTempFunc
-	t.Cleanup(func() {
-		disableAndStopFunc = origDisableAndStop
-		enableAndStartFunc = origEnableAndStart
-		detectInstalledUnitsFunc = origDetectInstalledUnits
-		osMkdirTempFunc = origMkdirTemp
-	})
-
-	var restarted []string
-	detectInstalledUnitsFunc = func() []string { return []string{"netsgo-server.service", "netsgo-client.service"} }
-	disableAndStopFunc = func(unit string) error { return nil }
-	enableAndStartFunc = func(unit string) error {
-		restarted = append(restarted, unit)
-		return nil
-	}
-	osMkdirTempFunc = func(dir, pattern string) (string, error) {
-		panic("gap panic")
-	}
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic")
-		}
-		if len(restarted) != 2 || restarted[0] != "netsgo-server.service" || restarted[1] != "netsgo-client.service" {
-			t.Fatalf("expected stopped services to be restarted from protection gap, got %v", restarted)
-		}
-	}()
-
-	_, _ = ApplyConfirmedUpdate(ChannelGitHub, "1.0.0", "v1.1.0")
 }
 
 func TestUpgradeRestartsStoppedServicesWhenReplaceFails(t *testing.T) {

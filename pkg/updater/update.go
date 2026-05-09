@@ -5,13 +5,8 @@ import (
 	"fmt"
 	"netsgo/internal/svcmgr"
 	"netsgo/pkg/version"
-	"os"
-	"path/filepath"
 	"strings"
 )
-
-var downloadAndExtractFunc = downloadAndExtract
-var osMkdirTempFunc = os.MkdirTemp
 
 func checkUpdateNeeded(currentVersion, latestVersion string) (bool, error) {
 	latestNormalized, err := version.NormalizeVersionString(latestVersion)
@@ -48,6 +43,9 @@ func releaseTrackForCurrentVersion(currentVersion string) releaseTrack {
 	if current.Prerelease == "" {
 		return releaseTrackStable
 	}
+	if isBetaPrerelease(current.Prerelease) {
+		return releaseTrackBeta
+	}
 	return releaseTrackAny
 }
 
@@ -82,11 +80,6 @@ type Result struct {
 	Started    []string
 }
 
-type updatePlan struct {
-	Result  *Result
-	Channel DownloadChannel
-}
-
 func CheckForUpdate(channel DownloadChannel, currentVersion string) (*Result, bool, error) {
 	result := &Result{OldVersion: currentVersion}
 
@@ -107,87 +100,6 @@ func CheckForUpdate(channel DownloadChannel, currentVersion string) (*Result, bo
 	}
 
 	return result, needed, nil
-}
-
-func ApplyConfirmedUpdate(channel DownloadChannel, currentVersion, targetVersion string) (*Result, error) {
-	result := &Result{OldVersion: currentVersion, NewVersion: targetVersion}
-	return applyUpdate(&updatePlan{Result: result, Channel: channel})
-}
-
-func applyUpdate(plan *updatePlan) (*Result, error) {
-	result := plan.Result
-
-	units := detectInstalledUnitsFunc()
-	if len(units) == 0 {
-		return result, fmt.Errorf("no installed services")
-	}
-
-	orch := &Orchestrator{
-		DisableAndStop: disableAndStopFunc,
-		EnableAndStart: enableAndStartFunc,
-	}
-
-	stopped := make([]string, 0, len(units))
-	stopPhaseArmed := true
-	defer recoverStoppedServicesOnPanic(orch, &stopped, &stopPhaseArmed)
-	err := orch.StopServices(units, &stopped)
-	if err != nil {
-		if rollbackErr := orch.RestartStoppedServices(stopped); rollbackErr != nil {
-			return result, fmt.Errorf("%w; %v", err, rollbackErr)
-		}
-		return result, err
-	}
-	result.Stopped = stopped
-	tmpDir, err := osMkdirTempFunc("", "netsgo-update-*")
-	if err != nil {
-		if rollbackErr := orch.RestartStoppedServices(stopped); rollbackErr != nil {
-			return result, errors.Join(fmt.Errorf("temp dir: %w", err), rollbackErr)
-		}
-		return result, fmt.Errorf("temp dir: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	started := make([]string, 0, len(units))
-	originalBinary := filepath.Join(tmpDir, filepath.Base(installedBinaryPath)+".backup")
-	backupAvailable := false
-	defer recoverUpdateOrUpgradeOnPanic(orch, &started, &stopped, &originalBinary, &backupAvailable)
-	stopPhaseArmed = false
-
-	url := platformAssetURL(plan.Channel, result.NewVersion)
-	newBinary := filepath.Join(tmpDir, "netsgo")
-	if err := downloadAndExtractFunc(url, newBinary, downloadHTTPClient); err != nil {
-		if rollbackErr := orch.RestartStoppedServices(stopped); rollbackErr != nil {
-			return result, errors.Join(fmt.Errorf("download: %w", err), rollbackErr)
-		}
-		return result, fmt.Errorf("download: %w", err)
-	}
-
-	if err := replaceBinaryFunc(installedBinaryPath, originalBinary); err != nil {
-		if rollbackErr := orch.RestartStoppedServices(stopped); rollbackErr != nil {
-			return result, errors.Join(fmt.Errorf("backup: %w", err), rollbackErr)
-		}
-		return result, fmt.Errorf("backup: %w", err)
-	}
-	backupAvailable = true
-
-	if err := replaceBinaryFunc(newBinary, installedBinaryPath); err != nil {
-		rollbackErr := rollbackUpdateOrUpgrade(orch, nil, stopped, originalBinary, true)
-		if rollbackErr != nil {
-			return result, errors.Join(fmt.Errorf("replace: %w", err), rollbackErr)
-		}
-		return result, fmt.Errorf("replace: %w", err)
-	}
-
-	err = orch.StartServices(units, &started)
-	if err != nil {
-		rollbackErr := rollbackUpdateOrUpgrade(orch, started, stopped, originalBinary, true)
-		if rollbackErr != nil {
-			return result, errors.Join(err, rollbackErr)
-		}
-		return result, err
-	}
-	result.Started = started
-	return result, nil
 }
 
 func rollbackUpdateOrUpgrade(orch *Orchestrator, started, stopped []string, backupPath string, restoreBinary bool) error {
