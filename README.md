@@ -44,13 +44,13 @@
 ## 界面预览
 
 <p align="center">
-  <img src=".github/assets/dashboard.webp" alt="NetsGo Web 控制台总览" width="92%" />
+  <img src="https://cnb.cool/zsio/netsgo/-/git/raw/main/.github/assets/dashboard.webp" alt="NetsGo Web 控制台总览" width="92%" />
   <br/>
   <sub><strong>Web 控制台总览</strong></sub>
 </p>
 
 <p align="center">
-  <img src=".github/assets/client.webp" alt="NetsGo 客户端详情与隧道管理" width="92%" />
+  <img src="https://cnb.cool/zsio/netsgo/-/git/raw/main/.github/assets/client.webp" alt="NetsGo 客户端详情与隧道管理" width="92%" />
   <br/>
   <sub><strong>客户端详情与隧道管理</strong></sub>
 </p>
