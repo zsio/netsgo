@@ -52,7 +52,15 @@ function githubDownloadURL(repo, tag, name) {
 
 function cnbDownloadURL(repoSlug, tag, name) {
   const encodedRepo = repoSlug.split('/').map(encodeURIComponent).join('/');
-  return `https://api.cnb.cool/${encodedRepo}/-/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
+  return `https://cnb.cool/${encodedRepo}/-/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
+}
+
+function parseUploadedAssetSet(value) {
+  return new Set(value.split(',').map((name) => name.trim()).filter(Boolean));
+}
+
+function hasUploadedAssetFilter() {
+  return Object.hasOwn(process.env, 'CNB_UPLOADED_ASSETS');
 }
 
 async function buildIndex() {
@@ -62,6 +70,7 @@ async function buildIndex() {
   const distDir = env('DIST_DIR', 'dist');
   const outDir = env('OUT_DIR', 'release-index');
   const cnbRepoSlug = env('CNB_REPO_SLUG');
+  const cnbUploadedAssets = hasUploadedAssetFilter() ? parseUploadedAssetSet(env('CNB_UPLOADED_ASSETS')) : null;
   const generatedAt = new Date().toISOString();
 
   const checksumsPath = path.join(distDir, 'checksums.txt');
@@ -91,11 +100,11 @@ async function buildIndex() {
         requires_auth: false,
       },
     ];
-    if (cnbRepoSlug) {
+    if (cnbRepoSlug && (!cnbUploadedAssets || cnbUploadedAssets.has(name))) {
       urls.unshift({
         provider: 'cnb',
         url: cnbDownloadURL(cnbRepoSlug, tag, name),
-        requires_auth: true,
+        requires_auth: false,
       });
     }
 
@@ -110,6 +119,21 @@ async function buildIndex() {
   }
 
   assets.sort((a, b) => `${a.os}/${a.arch}`.localeCompare(`${b.os}/${b.arch}`));
+
+  const checksumURLs = [
+    {
+      provider: 'github',
+      url: githubDownloadURL(repo, tag, 'checksums.txt'),
+      requires_auth: false,
+    },
+  ];
+  if (cnbRepoSlug && (!cnbUploadedAssets || cnbUploadedAssets.has('checksums.txt'))) {
+    checksumURLs.unshift({
+      provider: 'cnb',
+      url: cnbDownloadURL(cnbRepoSlug, tag, 'checksums.txt'),
+      requires_auth: false,
+    });
+  }
 
   const release = {
     schema: 1,
@@ -127,13 +151,7 @@ async function buildIndex() {
     checksum_asset: {
       name: 'checksums.txt',
       sha256: await sha256File(checksumsPath),
-      urls: [
-        {
-          provider: 'github',
-          url: githubDownloadURL(repo, tag, 'checksums.txt'),
-          requires_auth: false,
-        },
-      ],
+      urls: checksumURLs,
     },
     assets,
   };
