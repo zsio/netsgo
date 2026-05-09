@@ -2,6 +2,7 @@ import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { useQueryClient } from '@tanstack/react-query';
 
+import type { ReactNode } from 'react';
 import type { Client, ClientBandwidthSettingsResponse } from '@/types';
 import { api } from '@/lib/api';
 import { bpsToMbpsInput, parseMbpsInputToBps } from '@/lib/format';
@@ -20,9 +21,10 @@ import { FoldVertical } from 'lucide-react';
 
 interface ClientBandwidthDialogProps {
   client: Client;
+  trigger?: ReactNode;
 }
 
-export function ClientBandwidthDialog({ client }: ClientBandwidthDialogProps) {
+export function ClientBandwidthDialog({ client, trigger }: ClientBandwidthDialogProps) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -76,10 +78,12 @@ export function ClientBandwidthDialog({ client }: ClientBandwidthDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
-        <Button variant="outline">
-          <FoldVertical className="h-4 w-4 mr-1.5" />
-          限速
-        </Button>
+        {trigger || (
+          <Button variant="outline">
+            <FoldVertical className="h-4 w-4 mr-1.5" />
+            限速
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>

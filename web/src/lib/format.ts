@@ -43,6 +43,11 @@ export function formatNetSpeed(bytesPerSec: number): string {
   return `${(bytesPerSec / Math.pow(1024, idx)).toFixed(1)} ${NET_SPEED_UNITS[idx]}/s`;
 }
 
+export function formatBandwidthLimit(bytesPerSec?: number | null): string {
+  if (!bytesPerSec || bytesPerSec <= 0) return '∞';
+  return formatNetSpeed(bytesPerSec);
+}
+
 function trimTrailingZeros(value: string): string {
   return value.replace(/(?:\.0+|(\.\d+?)0+)$/, '$1');
 }

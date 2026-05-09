@@ -3,6 +3,7 @@ import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Dat
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
+import { VersionUpdateIndicator } from '@/components/custom/common/VersionUpdateIndicator';
 import { formatUptime, formatBytes } from '@/lib/format';
 import {
   HoverCard,
@@ -94,7 +95,10 @@ export function ServerInfoCard() {
         <div className="p-4 sm:p-5 flex flex-col gap-1.5">
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Box className="w-4 h-4" />运行状态</span>
           <span className="font-medium text-sm truncate" title={status?.go_version}>{status?.go_version || '-'}</span>
-          <span className="text-xs text-muted-foreground">v{status?.version || '-'}</span>
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="truncate">v{status?.version || '-'}</span>
+            <VersionUpdateIndicator version={status?.version} label="服务端版本" />
+          </span>
         </div>
       </div>
 

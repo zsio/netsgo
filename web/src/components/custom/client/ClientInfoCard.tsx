@@ -2,14 +2,18 @@ import { useState } from 'react';
 import {
   Monitor, Network, Clock, Cpu, HardDrive, Database,
   Box, CircleHelp, Globe, Wifi, ArrowDownCircle, ArrowUpCircle,
+  Pencil,
 } from 'lucide-react';
-import { formatBytes, formatUptime, formatNetSpeed } from '@/lib/format';
+import { formatBytes, formatUptime, formatNetSpeed, formatBandwidthLimit } from '@/lib/format';
 import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
 } from '@/components/ui/hover-card';
 import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
+import { VersionUpdateIndicator } from '@/components/custom/common/VersionUpdateIndicator';
+import { ClientBandwidthDialog } from '@/components/custom/client/ClientBandwidthDialog';
+import { Button } from '@/components/ui/button';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 
@@ -109,11 +113,32 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
           <span className="text-xs text-muted-foreground">启动于 {startTimeText}</span>
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5">
-          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Box className="w-4 h-4" />隧道状态</span>
-          <span className="font-medium text-sm">{client.proxies?.length ?? 0} 条隧道</span>
-          {client.last_seen && !isOnline && (
-            <span className="text-xs text-muted-foreground">最后在线: {new Date(client.last_seen).toLocaleString()}</span>
-          )}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Box className="w-4 h-4" />限速状态</span>
+            <ClientBandwidthDialog
+              client={client}
+              trigger={
+                <Button variant="ghost" size="icon-xs" title="修改客户端限速">
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              }
+            />
+          </div>
+          <span className="flex min-w-0 items-center gap-2 font-medium text-sm">
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <ArrowDownCircle className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+              <span className="truncate">{formatBandwidthLimit(client.ingress_bps)}</span>
+            </span>
+            <span className="text-muted-foreground">/</span>
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <ArrowUpCircle className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+              <span className="truncate">{formatBandwidthLimit(client.egress_bps)}</span>
+            </span>
+          </span>
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="truncate">v{info.version || '-'}</span>
+            <VersionUpdateIndicator version={info.version} label="客户端版本" />
+          </span>
         </div>
       </div>
 

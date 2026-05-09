@@ -232,6 +232,13 @@ export interface ServerStatus {
   fresh_until: string;
 }
 
+export interface VersionCheckResult {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  checked_at: string;
+}
+
 // --- Admin System ---
 
 export interface APIKey {

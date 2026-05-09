@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
-import { ClientBandwidthDialog } from '@/components/custom/client/ClientBandwidthDialog';
 import { Pencil, Check, X, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
@@ -197,12 +196,6 @@ export function ClientHeader({ client }: ClientHeaderProps) {
                 )}
               </AnimatePresence>
               <span>{osLabels[client.info.os] ?? client.info.os} / {client.info.arch}</span>
-              {client.info.version && (
-                <>
-                  <span>•</span>
-                  <span>v{client.info.version}</span>
-                </>
-              )}
               <span>•</span>
               <span>{client.info.ip}</span>
               {client.stats?.process_uptime != null && client.stats.process_uptime > 0 ? (
@@ -221,9 +214,7 @@ export function ClientHeader({ client }: ClientHeaderProps) {
         </div>
       </div>
 
-      <div className="flex gap-2">
-        <ClientBandwidthDialog client={client} />
-      </div>
+      <div />
     </div>
   );
 }
