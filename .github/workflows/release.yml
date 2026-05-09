@@ -24,6 +24,12 @@ jobs:
             exit 1
           }
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('web/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
       - name: Install web dependencies
         working-directory: web
         run: bun install --frozen-lockfile
@@ -46,6 +52,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
       - uses: actions/download-artifact@v4
         with:
           name: web-dist
@@ -69,6 +76,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
       - uses: actions/download-artifact@v4
         with:
           name: web-dist
@@ -179,16 +187,21 @@ jobs:
           fi
           jq -r '.id' /tmp/cnb-release.json | sed 's/^/release_id=/' >> "$GITHUB_OUTPUT"
       - name: Upload CNB release attachments
+        id: cnb-assets
         if: ${{ steps.cnb-release.outputs.release_id != '' }}
         shell: bash
         run: |
           set -euo pipefail
           base="https://api.cnb.cool/${{ steps.cnb-vars.outputs.slug }}/-/releases/${{ steps.cnb-release.outputs.release_id }}"
           upload_failed=0
-          shopt -s nullglob
-          for file in dist/*.tar.gz dist/checksums.txt; do
-            name="$(basename "$file")"
-            size="$(stat -c%s "$file")"
+          uploaded_assets=()
+
+          upload_cnb_asset_once() {
+            local file="$1"
+            local name="$2"
+            local size="$3"
+            local body status upload_url verify_url
+
             body="$(jq -n --arg name "$name" --argjson size "$size" '{asset_name: $name, overwrite: true, size: $size, ttl: 0}')"
             if ! status="$(curl -sS -o /tmp/cnb-upload.json -w '%{http_code}' \
               -H "Authorization: Bearer $CNB_PASSWORD" \
@@ -197,15 +210,14 @@ jobs:
               -d "$body" \
               "$base/asset-upload-url")"; then
               echo "::warning::Failed to request CNB release attachment upload URL: ${name}"
-              upload_failed=1
-              continue
+              return 1
             fi
             if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
               echo "::warning::Failed to create CNB release attachment upload URL: ${name}"
               cat /tmp/cnb-upload.json >&2
-              upload_failed=1
-              continue
+              return 1
             fi
+
             upload_url="$(jq -r '.upload_url' /tmp/cnb-upload.json)"
             verify_url="$(jq -r '.verify_url' /tmp/cnb-upload.json)"
             if [[ "$verify_url" != http://* && "$verify_url" != https://* ]]; then
@@ -213,25 +225,50 @@ jobs:
             fi
             if ! curl -fsS -X PUT --data-binary @"$file" "$upload_url" >/dev/null; then
               echo "::warning::Failed to upload CNB release attachment: ${name}"
-              upload_failed=1
-              continue
+              return 1
             fi
+
             if ! status="$(curl -sS -o /tmp/cnb-confirm.json -w '%{http_code}' \
               -X POST \
               -H "Authorization: Bearer $CNB_PASSWORD" \
               -H "Accept: application/vnd.cnb.api+json" \
               "${verify_url}?ttl=0")"; then
               echo "::warning::Failed to request CNB release attachment confirmation: ${name}"
-              upload_failed=1
-              continue
+              return 1
             fi
             if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
               echo "::warning::Failed to confirm CNB release attachment: ${name}"
               cat /tmp/cnb-confirm.json >&2
+              return 1
+            fi
+          }
+
+          upload_cnb_asset() {
+            local file="$1"
+            local name="$2"
+            local size="$3"
+            if upload_cnb_asset_once "$file" "$name" "$size"; then
+              return 0
+            fi
+            echo "::warning::Retrying CNB release attachment upload once: ${name}"
+            sleep 2
+            upload_cnb_asset_once "$file" "$name" "$size"
+          }
+
+          shopt -s nullglob
+          for file in dist/*.tar.gz dist/checksums.txt; do
+            name="$(basename "$file")"
+            size="$(stat -c%s "$file")"
+            if ! upload_cnb_asset "$file" "$name" "$size"; then
               upload_failed=1
               continue
             fi
+            uploaded_assets+=("$name")
           done
+          if [ "${#uploaded_assets[@]}" -gt 0 ]; then
+            uploaded_assets_csv="$(IFS=,; echo "${uploaded_assets[*]}")"
+            echo "uploaded_assets=${uploaded_assets_csv}" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$upload_failed" -ne 0 ]; then
             echo "::warning::One or more CNB release attachments failed. The release index will still be published."
           fi
@@ -239,7 +276,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CNB_REPO_SLUG="${{ steps.cnb-vars.outputs.slug }}" node scripts/release-index.mjs build
+          CNB_REPO_SLUG="${{ steps.cnb-vars.outputs.slug }}" CNB_UPLOADED_ASSETS="${{ steps.cnb-assets.outputs.uploaded_assets }}" node scripts/release-index.mjs build
       - name: Push release-index branch to CNB
         if: ${{ steps.cnb-vars.outputs.slug != '' }}
         shell: bash

@@ -77,6 +77,19 @@
 - CI 也不是直接跑 Go 测试，而是先执行 `bun run lint`，接着构建 `web/dist`，再恢复产物后执行 `go vet ./...` 和多系统（Linux, macOS, Windows）的 `go test ./...`；本地排查时要有相同心智模型。
 - 前端包管理器是 `bun`；不要擅自切换到 npm/yarn/pnpm。
 
+## 发布与版本规则
+
+- 发布必须通过 Git tag 触发 Release workflow；只推 `main` 或合并 PR 不会发布版本。
+- NetsGo 使用发布通道管理自动升级；当前只定义 `stable` 与 `beta` 两个通道。
+- Tag 是版本号和发布通道的唯一来源，必须带 `v` 前缀：
+  - `stable`：`vMAJOR.MINOR.PATCH`，例如 `v0.1.0`。
+  - `beta`：`vMAJOR.MINOR.PATCH-beta.N`，例如 `v0.1.0-beta.15`。
+- `beta.N` 中的 `N` 必须是递增的正整数；同一 `MAJOR.MINOR.PATCH` 下按 `beta.1`、`beta.2`、`beta.3` 递增发布。
+- 自动升级必须先按当前安装版本所属通道筛选候选版本，再比较 SemVer：
+  - 当前为正式版时，只检查 `stable` 通道。
+  - 当前为 beta 版时，只检查 `beta` 通道。
+  - dev/snapshot/dirty 构建不代表真实发布轨道，调整其升级行为前必须先明确设计。
+
 ## 前端约束
 
 - 前端路由使用 TanStack Router 的 Hash 模式，不是 BrowserRouter。
