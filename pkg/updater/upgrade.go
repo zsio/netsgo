@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 )
 
+var osMkdirTempFunc = os.MkdirTemp
+
 func Upgrade(srcPath, oldVersion, newVersion string) (*Result, error) {
 	result := &Result{OldVersion: oldVersion, NewVersion: newVersion}
 	var err error

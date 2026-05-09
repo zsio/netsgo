@@ -24,7 +24,6 @@ type serviceMenuDeps struct {
 	Logs      func() error
 	Start     func() error
 	Stop      func() error
-	Update    func() error
 	Uninstall func() (bool, error)
 }
 
@@ -59,10 +58,6 @@ func runServiceMenu(deps serviceMenuDeps) error {
 				return err
 			}
 		case 6:
-			if err := deps.Update(); err != nil {
-				return err
-			}
-		case 7:
 			exitMenu, err := deps.Uninstall()
 			if err != nil {
 				return err
@@ -70,7 +65,7 @@ func runServiceMenu(deps serviceMenuDeps) error {
 			if exitMenu {
 				return errReturnToSelection
 			}
-		case 8:
+		case 7:
 			return errReturnToSelection
 		default:
 			return errReturnToSelection
@@ -97,7 +92,6 @@ func manageActionOptions() []tui.SelectOption {
 		{Label: "启动", Description: "启用并启动 systemd 服务。"},
 		{Label: "停止", Description: "停止并禁用 systemd 服务。"},
 		{Label: "重启", Description: "停止后重新启动服务，以重新加载当前配置。"},
-		{Label: "更新", Description: "检查 release 更新，或显示本地替换指引。"},
 		{Label: "卸载", Description: "通过输入确认短语移除此托管服务。"},
 		{Label: "返回", Description: "返回上一级角色或恢复菜单。"},
 	}

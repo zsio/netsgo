@@ -58,12 +58,6 @@ export function ServerInfoCard() {
           <ServerIcon className="h-5 w-5 text-primary" />
           <h3 className="font-semibold text-foreground">服务端信息</h3>
         </div>
-        <div className="flex items-center gap-2 text-sm">
-          <div className={`w-2 h-2 rounded-full ${status?.status === 'running' ? 'bg-emerald-500' : 'bg-destructive'}`} />
-          <div className="flex flex-col items-end leading-tight">
-            <span className="font-medium text-muted-foreground">{status?.status === 'running' ? '正常运行' : '异常'}</span>
-          </div>
-        </div>
       </div>
 
       {/* 基础网络与软件信息 */}

@@ -12,7 +12,7 @@ var manageCmd = &cobra.Command{
 	SilenceUsage: true,
 	Long: `Manage installed NetsGo server and client systemd services.
 
-	Supports status inspection, start/stop/restart, update checks and installation,
+	Supports status inspection, start/stop/restart, installation,
 	log streaming, and uninstallation.
 	Requires Linux with systemd, an interactive TTY, and root privileges.
 	The manager will auto-elevate via sudo if not already running as root.`,

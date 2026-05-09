@@ -18,7 +18,7 @@ import (
 
 const (
 	githubBaseURL    = "https://github.com/zsio/netsgo"
-	ghproxyBaseURL   = "https://ghproxy.com/https://github.com/zsio/netsgo"
+	cnbBaseURL       = "https://cnb.cool/zsio/netsgo"
 	releaseAssetTpl  = "netsgo_%s_%s_%s.tar.gz"
 	checksumsAsset   = "checksums.txt"
 	releaseTagMarker = "/releases/tag/"
@@ -29,13 +29,14 @@ type DownloadChannel string
 type releaseTrack int
 
 const (
-	ChannelGitHub  DownloadChannel = "github"
-	ChannelGhproxy DownloadChannel = "ghproxy"
+	ChannelGitHub DownloadChannel = "github"
+	ChannelCNB    DownloadChannel = "cnb"
 )
 
 const (
 	releaseTrackAny releaseTrack = iota
 	releaseTrackStable
+	releaseTrackBeta
 )
 
 var errNoCompatibleRelease = errors.New("no compatible release found")
@@ -58,8 +59,8 @@ var releaseTagLinkMaxReadBytes int64 = 1 << 20
 
 func fetchLatestVersion(channel DownloadChannel, track releaseTrack) (string, error) {
 	base := githubBaseURL
-	if channel == ChannelGhproxy {
-		base = ghproxyBaseURL
+	if channel == ChannelCNB {
+		base = cnbBaseURL + "/-"
 	}
 	return fetchLatestVersionWithClient(base+"/releases", defaultHTTPClient, track)
 }
@@ -166,7 +167,7 @@ func selectLatestReleaseTag(matches []string, track releaseTrack) (string, error
 		if err != nil {
 			continue
 		}
-		if track == releaseTrackStable && parsed.Prerelease != "" {
+		if !semverMatchesReleaseTrack(parsed, track) {
 			continue
 		}
 
@@ -192,7 +193,18 @@ func releaseVersionMatchesTrack(tag string, track releaseTrack) bool {
 	if err != nil {
 		return false
 	}
-	return track != releaseTrackStable || parsed.Prerelease == ""
+	return semverMatchesReleaseTrack(parsed, track)
+}
+
+func semverMatchesReleaseTrack(parsed buildversion.Semver, track releaseTrack) bool {
+	switch track {
+	case releaseTrackStable:
+		return parsed.Prerelease == ""
+	case releaseTrackBeta:
+		return strings.HasPrefix(parsed.Prerelease, "beta.")
+	default:
+		return true
+	}
 }
 
 func extractVersionFromReleaseTagPath(path string) (string, error) {
@@ -211,19 +223,23 @@ func extractVersionFromReleaseTagPath(path string) (string, error) {
 
 func buildDownloadURL(channel DownloadChannel, version, goos, goarch string) string {
 	base := githubBaseURL
-	if channel == ChannelGhproxy {
-		base = ghproxyBaseURL
+	releasePath := "releases/download"
+	if channel == ChannelCNB {
+		base = cnbBaseURL
+		releasePath = "-/releases/download"
 	}
 	assetName := fmt.Sprintf(releaseAssetTpl, strings.TrimPrefix(version, "v"), goos, goarch)
-	return fmt.Sprintf("%s/releases/download/%s/%s", base, version, assetName)
+	return fmt.Sprintf("%s/%s/%s/%s", base, releasePath, version, assetName)
 }
 
 func buildChecksumsURL(channel DownloadChannel, version string) string {
 	base := githubBaseURL
-	if channel == ChannelGhproxy {
-		base = ghproxyBaseURL
+	releasePath := "releases/download"
+	if channel == ChannelCNB {
+		base = cnbBaseURL
+		releasePath = "-/releases/download"
 	}
-	return fmt.Sprintf("%s/releases/download/%s/%s", base, version, checksumsAsset)
+	return fmt.Sprintf("%s/%s/%s/%s", base, releasePath, version, checksumsAsset)
 }
 
 func platformAssetURL(channel DownloadChannel, version string) string {

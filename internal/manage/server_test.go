@@ -38,7 +38,7 @@ func newInstalledServerDeps(t *testing.T, ui *fakeUI) (serverDeps, svcmgr.Servic
 }
 
 func TestManageServerInspectRedactsSensitiveData(t *testing.T) {
-	ui := &fakeUI{selects: []int{1, 8}}
+	ui := &fakeUI{selects: []int{1, 7}}
 	deps, _ := newInstalledServerDeps(t, ui)
 
 	err := ManageServerWith(deps)
@@ -56,7 +56,7 @@ func TestManageServerInspectRedactsSensitiveData(t *testing.T) {
 }
 
 func TestManageServerUninstallKeepData(t *testing.T) {
-	ui := &fakeUI{selects: []int{7, 0}, confirms: []bool{true}}
+	ui := &fakeUI{selects: []int{6, 0}, confirms: []bool{true}}
 	removed := []string{}
 	binaryRemoved := false
 	deps, spec := newInstalledServerDeps(t, ui)
@@ -88,7 +88,7 @@ func TestManageServerUninstallKeepData(t *testing.T) {
 }
 
 func TestManageServerRestart(t *testing.T) {
-	ui := &fakeUI{selects: []int{5, 8}}
+	ui := &fakeUI{selects: []int{5, 7}}
 	stopped := false
 	started := false
 	deps, _ := newInstalledServerDeps(t, ui)
@@ -125,7 +125,7 @@ func TestManageServerLogs(t *testing.T) {
 }
 
 func TestManageServerStartPrintsSuccess(t *testing.T) {
-	ui := &fakeUI{selects: []int{3, 8}}
+	ui := &fakeUI{selects: []int{3, 7}}
 	deps, _ := newInstalledServerDeps(t, ui)
 
 	err := ManageServerWith(deps)
@@ -137,7 +137,7 @@ func TestManageServerStartPrintsSuccess(t *testing.T) {
 }
 
 func TestManageServerUninstallCancelPrintsCancelled(t *testing.T) {
-	ui := &fakeUI{selects: []int{7, 0, 8}, confirms: []bool{false}}
+	ui := &fakeUI{selects: []int{6, 0, 7}, confirms: []bool{false}}
 	deps, _ := newInstalledServerDeps(t, ui)
 
 	err := ManageServerWith(deps)
@@ -150,7 +150,7 @@ func TestManageServerUninstallCancelPrintsCancelled(t *testing.T) {
 }
 
 func TestManageServerUninstallLastRoleCanRemoveSharedBinary(t *testing.T) {
-	ui := &fakeUI{selects: []int{7, 0}, confirms: []bool{true, true}}
+	ui := &fakeUI{selects: []int{6, 0}, confirms: []bool{true, true}}
 	binaryRemoved := false
 	deps, _ := newInstalledServerDeps(t, ui)
 	deps.DetectClient = func() svcmgr.InstallState { return svcmgr.StateNotInstalled }
