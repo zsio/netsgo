@@ -18,7 +18,7 @@ jobs:
   web-dist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Reject npm lockfiles in Bun-managed web app
         run: |
           ! find web -maxdepth 1 \( -name 'package-lock.json' -o -name 'npm-shrinkwrap.json' \) | grep -q . || {
@@ -37,7 +37,7 @@ jobs:
         run: bun run build
       - name: Pack web dist
         run: tar -czf /tmp/web-dist.tgz -C web dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: web-dist
           path: /tmp/web-dist.tgz
@@ -47,18 +47,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: web-dist
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: web-dist
           path: web-dist-archive
       - name: Restore web dist
         shell: bash
         run: tar -xzf web-dist-archive/web-dist.tgz -C web
-      - uses: golangci/golangci-lint-action@v7
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.11
 
@@ -66,11 +66,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: web-dist
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: web-dist
           path: web-dist-archive
@@ -84,11 +84,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: web-dist
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: web-dist
           path: web-dist-archive
@@ -104,11 +104,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: web-dist
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: web-dist
           path: web-dist-archive
@@ -122,11 +122,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: web-dist
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: web-dist
           path: /tmp/web-dist
@@ -157,11 +157,11 @@ jobs:
             goarm: "7"
             ext: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: web-dist
           path: /tmp/web-dist
