@@ -9,14 +9,10 @@ NETSGO_LATEST_GITHUB="https://raw.githubusercontent.com/zsio/netsgo/release-inde
 # NETSGO_RELEASE_SIGNING_KEY_PEM. Commit public keys here so install/upgrade
 # scripts can verify release checksums without trusting HTTPS alone.
 # BEGIN NETSGO RELEASE PUBLIC KEYS
-if [ -z "${NETSGO_RELEASE_PUBLIC_KEY_PEM:-}" ]; then
-  NETSGO_RELEASE_PUBLIC_KEY_PEM='-----BEGIN PUBLIC KEY-----
+NETSGO_RELEASE_PUBLIC_KEY_PEM='-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAH4VWaTpLBw8/WXELyluQChFm5Fi1qI2E8DSOwYKpRCc=
 -----END PUBLIC KEY-----'
-fi
-if [ -z "${NETSGO_RELEASE_ALLOWED_SIGNERS:-}" ]; then
-  NETSGO_RELEASE_ALLOWED_SIGNERS='netsgo-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB+FVmk6SwcPP1lxC8pbkAoRZuRYtaiNhPA0jsGCqUQn'
-fi
+NETSGO_RELEASE_ALLOWED_SIGNERS='netsgo-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB+FVmk6SwcPP1lxC8pbkAoRZuRYtaiNhPA0jsGCqUQn'
 # END NETSGO RELEASE PUBLIC KEYS
 
 die() {

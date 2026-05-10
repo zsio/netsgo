@@ -293,16 +293,12 @@ func extractEmbeddedKeys(script []byte) ([]byte, []byte, error) {
 func embeddedKeyBlock(publicPEM, allowed []byte) string {
 	var b strings.Builder
 	b.WriteString("# BEGIN NETSGO RELEASE PUBLIC KEYS\n")
-	b.WriteString("if [ -z \"${NETSGO_RELEASE_PUBLIC_KEY_PEM:-}\" ]; then\n")
-	b.WriteString("  NETSGO_RELEASE_PUBLIC_KEY_PEM=")
+	b.WriteString("NETSGO_RELEASE_PUBLIC_KEY_PEM=")
 	b.WriteString(shellSingleQuote(strings.TrimSpace(string(publicPEM))))
 	b.WriteString("\n")
-	b.WriteString("fi\n")
-	b.WriteString("if [ -z \"${NETSGO_RELEASE_ALLOWED_SIGNERS:-}\" ]; then\n")
-	b.WriteString("  NETSGO_RELEASE_ALLOWED_SIGNERS=")
+	b.WriteString("NETSGO_RELEASE_ALLOWED_SIGNERS=")
 	b.WriteString(shellSingleQuote(strings.TrimSpace(string(allowed))))
 	b.WriteString("\n")
-	b.WriteString("fi\n")
 	b.WriteString("# END NETSGO RELEASE PUBLIC KEYS\n")
 	return b.String()
 }

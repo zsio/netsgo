@@ -80,12 +80,8 @@ func TestExtractEmbeddedKeysAndVerifyEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := []byte(`if [ -z "${NETSGO_RELEASE_PUBLIC_KEY_PEM:-}" ]; then
-  NETSGO_RELEASE_PUBLIC_KEY_PEM='` + string(bytes.TrimSpace(publicPEM)) + `'
-fi
-if [ -z "${NETSGO_RELEASE_ALLOWED_SIGNERS:-}" ]; then
-  NETSGO_RELEASE_ALLOWED_SIGNERS='` + string(bytes.TrimSpace(allowed)) + `'
-fi
+	script := []byte(`NETSGO_RELEASE_PUBLIC_KEY_PEM='` + string(bytes.TrimSpace(publicPEM)) + `'
+NETSGO_RELEASE_ALLOWED_SIGNERS='` + string(bytes.TrimSpace(allowed)) + `'
 `)
 	gotPEM, gotAllowed, err := extractEmbeddedKeys(script)
 	if err != nil {

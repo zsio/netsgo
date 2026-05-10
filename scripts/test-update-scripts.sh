@@ -366,7 +366,6 @@ exec_log="$tmp/exec.log"
 touch "$curl_log" "$exec_log"
 
 PATH="$bin:$PATH" \
-NETSGO_RELEASE_PUBLIC_KEY_PEM=dummy \
 NETSGO_FAKE_CURL_LOG="$curl_log" \
 NETSGO_FAKE_EXEC_LOG="$exec_log" \
   "$ROOT/scripts/install.sh" --source github --channel stable
@@ -388,7 +387,6 @@ for name in checksums.txt checksums.txt.sig netsgo_0.1.0_linux_amd64.tar.gz; do
 done
 
 PATH="$bin:$PATH" \
-NETSGO_RELEASE_PUBLIC_KEY_PEM=dummy \
 NETSGO_FAKE_CURL_LOG="$curl_log" \
 NETSGO_FAKE_EXEC_LOG="$exec_log" \
   "$ROOT/scripts/install.sh" --source github --channel beta
@@ -410,7 +408,6 @@ chmod +x "$bin/netsgo"
 PATH="$bin:$PATH" \
 NETSGO_FAKE_SYSTEMD_UNITS=1 \
 NETSGO_INSTALLED_BIN="$bin/netsgo" \
-NETSGO_RELEASE_PUBLIC_KEY_PEM=dummy \
 NETSGO_FAKE_CURL_LOG="$curl_log" \
 NETSGO_FAKE_EXEC_LOG="$exec_log" \
   "$ROOT/scripts/upgrade.sh" --source github --channel stable -y
@@ -432,7 +429,6 @@ chmod +x "$bin/netsgo"
 PATH="$bin:$PATH" \
 NETSGO_FAKE_SYSTEMD_UNITS=1 \
 NETSGO_INSTALLED_BIN="$bin/netsgo" \
-NETSGO_RELEASE_PUBLIC_KEY_PEM=dummy \
 NETSGO_FAKE_STABLE_HIGHER=1 \
 NETSGO_FAKE_CURL_LOG="$curl_log" \
 NETSGO_FAKE_EXEC_LOG="$exec_log" \
@@ -446,7 +442,6 @@ fi
 PATH="$bin:$PATH" \
 NETSGO_FAKE_SYSTEMD_UNITS=1 \
 NETSGO_INSTALLED_BIN="$bin/netsgo" \
-NETSGO_RELEASE_PUBLIC_KEY_PEM=dummy \
 NETSGO_FAKE_CURL_LOG="$curl_log" \
 NETSGO_FAKE_EXEC_LOG="$exec_log" \
   "$ROOT/scripts/upgrade.sh" --source github --channel auto -f -y
@@ -468,7 +463,6 @@ chmod +x "$bin/netsgo"
 PATH="$bin:$PATH" \
 NETSGO_FAKE_SYSTEMD_UNITS=1 \
 NETSGO_INSTALLED_BIN="$bin/netsgo" \
-NETSGO_RELEASE_PUBLIC_KEY_PEM=dummy \
 NETSGO_FAKE_CNB_INDEX_FAIL=1 \
 NETSGO_FAKE_CNB_DETAIL_FAIL=1 \
 NETSGO_FAKE_CURL_LOG="$curl_log" \
@@ -487,8 +481,7 @@ fi
 if PATH="$bin:$PATH" \
   NETSGO_FAKE_SYSTEMD_UNITS=1 \
   NETSGO_INSTALLED_BIN="$bin/netsgo" \
-  NETSGO_RELEASE_PUBLIC_KEY_PEM=dummy \
-  NETSGO_FAKE_BAD_CHECKSUM=1 \
+    NETSGO_FAKE_BAD_CHECKSUM=1 \
   NETSGO_FAKE_CURL_LOG="$curl_log" \
   NETSGO_FAKE_EXEC_LOG="$exec_log" \
   "$ROOT/scripts/upgrade.sh" --source github --channel stable -f -y >/dev/null 2>&1; then
@@ -497,8 +490,7 @@ if PATH="$bin:$PATH" \
 fi
 
 if PATH="$bin:$PATH" \
-  NETSGO_RELEASE_PUBLIC_KEY_PEM=dummy \
-  NETSGO_FAKE_VERSION_MISMATCH=1 \
+    NETSGO_FAKE_VERSION_MISMATCH=1 \
   NETSGO_FAKE_CURL_LOG="$curl_log" \
   NETSGO_FAKE_EXEC_LOG="$exec_log" \
   "$ROOT/scripts/install.sh" --source github --channel stable >/dev/null 2>&1; then
@@ -508,8 +500,7 @@ fi
 
 before_lines="$(wc -l < "$curl_log" | tr -d ' ')"
 if PATH="$bin:$PATH" \
-  NETSGO_RELEASE_PUBLIC_KEY_PEM=dummy \
-  NETSGO_FAKE_CURL_LOG="$curl_log" \
+    NETSGO_FAKE_CURL_LOG="$curl_log" \
   NETSGO_FAKE_EXEC_LOG="$exec_log" \
   "$ROOT/scripts/upgrade.sh" --source github --channel stable >/dev/null 2>&1; then
   printf 'FAIL upgrade.sh succeeded without managed units\n' >&2
