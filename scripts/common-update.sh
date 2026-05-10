@@ -7,12 +7,18 @@ NETSGO_LATEST_GITHUB="https://raw.githubusercontent.com/zsio/netsgo/release-inde
 NETSGO_COMMON_CNB="https://cnb.cool/zsio/netsgo/-/raw/main/scripts/common-update.sh"
 NETSGO_COMMON_GITHUB="https://raw.githubusercontent.com/zsio/netsgo/main/scripts/common-update.sh"
 
-# Release public keys must be generated from the private release signing key
-# and committed before the first public release. Leaving them empty is
-# intentional: install/upgrade scripts fail closed instead of trusting HTTPS.
+# Release public keys are derived from the private release signing key stored in
+# NETSGO_RELEASE_SIGNING_KEY_PEM. Commit public keys here so install/upgrade
+# scripts can verify release checksums without trusting HTTPS alone.
 # BEGIN NETSGO RELEASE PUBLIC KEYS
-NETSGO_RELEASE_PUBLIC_KEY_PEM="${NETSGO_RELEASE_PUBLIC_KEY_PEM:-}"
-NETSGO_RELEASE_ALLOWED_SIGNERS="${NETSGO_RELEASE_ALLOWED_SIGNERS:-}"
+if [ -z "${NETSGO_RELEASE_PUBLIC_KEY_PEM:-}" ]; then
+  NETSGO_RELEASE_PUBLIC_KEY_PEM='-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAH4VWaTpLBw8/WXELyluQChFm5Fi1qI2E8DSOwYKpRCc=
+-----END PUBLIC KEY-----'
+fi
+if [ -z "${NETSGO_RELEASE_ALLOWED_SIGNERS:-}" ]; then
+  NETSGO_RELEASE_ALLOWED_SIGNERS='netsgo-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB+FVmk6SwcPP1lxC8pbkAoRZuRYtaiNhPA0jsGCqUQn'
+fi
 # END NETSGO RELEASE PUBLIC KEYS
 
 die() {
