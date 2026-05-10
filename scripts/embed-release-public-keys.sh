@@ -13,6 +13,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
+script_mode="$(stat -f %Lp "$SCRIPT" 2>/dev/null || stat -c %a "$SCRIPT")"
+
 go run ./cmd/netsgo-release-sign public --shell > "$block"
 
 awk -v block="$block" '
@@ -35,4 +37,5 @@ awk -v block="$block" '
 ' "$SCRIPT" > "$tmp"
 
 mv "$tmp" "$SCRIPT"
+chmod "$script_mode" "$SCRIPT"
 go run ./cmd/netsgo-release-sign verify-embedded "$SCRIPT"

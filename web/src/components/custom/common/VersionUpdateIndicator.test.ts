@@ -3,7 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { versionCheckQueryKey, type VersionCheckResult, type VersionCheckTarget } from '@/hooks/use-version-check';
+import { versionCheckQueryKey, type VersionCheckTarget } from '@/hooks/use-version-check';
+import type { VersionCheckResult } from '@/types';
 
 import { VersionUpdateContent, VersionUpdateIndicator } from './VersionUpdateIndicator';
 import { manualVersionCheckToast } from './version-update-toast';

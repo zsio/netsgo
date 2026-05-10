@@ -1,4 +1,4 @@
-import type { VersionCheckResult } from '@/hooks/use-version-check';
+import type { VersionCheckResult } from '@/types';
 
 export function manualVersionCheckToast(result: VersionCheckResult | null, errored = false): 'error' | 'success' | null {
   if (errored) return 'error';

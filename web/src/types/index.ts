@@ -19,6 +19,13 @@ export interface UpdateCapability {
   install_method: "service" | "docker" | "binary";
 }
 
+export type VersionInstallMethod = "service" | "docker" | "binary";
+export interface VersionCheckCommands {
+  domestic: string;
+  global: string;
+}
+
+export type VersionTargetKind = "server" | "client";
 /** 对齐 protocol.SystemStats */
 export interface SystemStats {
   cpu_usage: number;      // 0-100
@@ -239,16 +246,16 @@ export interface ServerStatus {
 }
 
 export interface VersionCheckResult {
-  target: "server" | "client";
+  target: VersionTargetKind;
   target_id: string;
   current_version: string;
   latest_version: string;
   update_available: boolean;
   checked_at: string;
-  install_method: "service" | "docker" | "binary";
+  install_method: VersionInstallMethod;
   recommended_channel: "stable" | "beta" | "";
   recommended_action: "none" | "run_script" | "github_release" | "docker_docs";
-  commands: { domestic: string; global: string } | null;
+  commands: VersionCheckCommands | null;
   release_url: string;
   check_failed: boolean;
   refresh_failed: boolean;

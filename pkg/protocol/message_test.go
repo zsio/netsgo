@@ -390,6 +390,20 @@ func TestUnicodeFields(t *testing.T) {
 }
 
 func TestOmitemptyBehavior(t *testing.T) {
+	clientInfo := ClientInfo{Hostname: "h", OS: "linux", Arch: "amd64", Version: "v0.1.0"}
+	clientInfoData, _ := json.Marshal(clientInfo)
+	clientInfoJSON := string(clientInfoData)
+	if strings.Contains(clientInfoJSON, `"update_capability"`) {
+		t.Errorf("空 UpdateCapability 不应出现在 JSON 中: %s", clientInfoJSON)
+	}
+
+	clientInfo.UpdateCapability = &UpdateCapability{InstallMethod: "service"}
+	clientInfoData, _ = json.Marshal(clientInfo)
+	clientInfoJSON = string(clientInfoData)
+	if !strings.Contains(clientInfoJSON, `"update_capability"`) {
+		t.Errorf("非空 UpdateCapability 应出现在 JSON 中: %s", clientInfoJSON)
+	}
+
 	// AuthResponse 中可选字段都有 omitempty
 	resp := AuthResponse{Success: true}
 	data, _ := json.Marshal(resp)

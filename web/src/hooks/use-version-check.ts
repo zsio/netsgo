@@ -1,31 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-
-export type VersionInstallMethod = 'service' | 'docker' | 'binary';
-export type VersionTargetKind = 'server' | 'client';
-
-export interface VersionCheckCommands {
-  domestic: string;
-  global: string;
-}
-
-export interface VersionCheckResult {
-  target: VersionTargetKind;
-  target_id: string;
-  current_version: string;
-  latest_version: string;
-  update_available: boolean;
-  checked_at: string;
-  install_method: VersionInstallMethod;
-  recommended_channel: 'stable' | 'beta' | '';
-  recommended_action: 'none' | 'run_script' | 'github_release' | 'docker_docs';
-  commands: VersionCheckCommands | null;
-  release_url: string;
-  check_failed: boolean;
-  refresh_failed: boolean;
-  cache_source: 'fresh' | 'cache' | 'stale_cache' | 'none';
-  reason: string;
-}
+import type { VersionCheckResult, VersionInstallMethod, VersionTargetKind } from '@/types';
 
 export interface VersionCheckTarget {
   kind: VersionTargetKind;

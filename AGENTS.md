@@ -87,7 +87,7 @@
 - `beta.N` 中的 `N` 必须是递增的正整数；同一 `MAJOR.MINOR.PATCH` 下按 `beta.1`、`beta.2`、`beta.3` 递增发布。
 - 自动升级必须先按当前安装版本所属通道筛选候选版本，再比较 SemVer：
   - 当前为正式版时，只检查 `stable` 通道。
-  - 当前为 beta 版时，只检查 `beta` 通道。
+  - 当前为 beta 版时，检查 `stable` 与 `beta` 通道，并推荐 SemVer 最高者。
   - dev/snapshot/dirty 构建不代表真实发布轨道，调整其升级行为前必须先明确设计。
 
 ## 前端约束

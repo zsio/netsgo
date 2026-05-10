@@ -16,7 +16,7 @@ const root = process.cwd();
 const tmp = await mkdtemp(path.join(tmpdir(), 'netsgo-index-test-'));
 const out = path.join(tmp, 'out');
 
-async function build(tag, assetName, cnbUploadedAssets = undefined) {
+async function build(tag, assetName, cnbUploadedAssets = undefined, useRefFallback = false) {
   const dist = path.join(tmp, `dist-${tag}`);
   await mkdir(dist, { recursive: true });
   const asset = Buffer.from(`fake archive ${tag}`);
@@ -28,7 +28,8 @@ async function build(tag, assetName, cnbUploadedAssets = undefined) {
 
   const env = {
     ...process.env,
-    GITHUB_REF_NAME: tag,
+    GITHUB_REF_NAME: useRefFallback ? '' : tag,
+    GITHUB_REF: useRefFallback ? `refs/tags/${tag}` : '',
     GITHUB_REPOSITORY: 'zsio/netsgo',
     DIST_DIR: dist,
     OUT_DIR: out,
@@ -49,7 +50,7 @@ async function build(tag, assetName, cnbUploadedAssets = undefined) {
 }
 
 await build('v0.1.0', 'netsgo_0.1.0_linux_amd64.tar.gz', 'checksums.txt,checksums.txt.sig,checksums.txt.sshsig,netsgo_0.1.0_linux_amd64.tar.gz');
-await build('v0.1.1-beta.1', 'netsgo_0.1.1-beta.1_linux_armv7.tar.gz', 'checksums.txt,checksums.txt.sig');
+await build('v0.1.1-beta.1', 'netsgo_0.1.1-beta.1_linux_armv7.tar.gz', 'checksums.txt,checksums.txt.sig', true);
 
 const latest = JSON.parse(await readFile(path.join(out, 'updates/index-v1/latest.json'), 'utf8'));
 const detailRaw = await readFile(path.join(out, 'updates/index-v1/releases/v0.1.0.json'), 'utf8');

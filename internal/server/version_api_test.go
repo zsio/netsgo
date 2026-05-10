@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"netsgo/internal/svcmgr"
 	"netsgo/pkg/protocol"
 	"netsgo/pkg/updater"
 	buildversion "netsgo/pkg/version"
@@ -304,6 +305,29 @@ func TestInstallMethodFromClientInfoDefaultsToBinary(t *testing.T) {
 	got := installMethodFromClientInfo(protocol.ClientInfo{})
 	if got != updater.InstallMethodBinary {
 		t.Fatalf("expected missing client capability to default to binary, got %q", got)
+	}
+}
+
+func TestServerUpdateCapabilityUsesCachedValue(t *testing.T) {
+	detectCalls := 0
+	s := New(8080)
+	s.updateCapabilityCache = newUpdateCapabilityCache(func(svcmgr.Role) string {
+		detectCalls++
+		return updater.InstallMethodService
+	})
+
+	got := s.serverUpdateCapability(time.Unix(100, 0))
+	if got == nil || got.InstallMethod != updater.InstallMethodService {
+		t.Fatalf("expected detected service install method, got %+v", got)
+	}
+
+	got.InstallMethod = updater.InstallMethodDocker
+	again := s.serverUpdateCapability(time.Unix(101, 0))
+	if again == nil || again.InstallMethod != updater.InstallMethodService {
+		t.Fatalf("cached capability should be returned as a defensive copy, got %+v", again)
+	}
+	if detectCalls != 1 {
+		t.Fatalf("expected cached call to avoid repeating detection, got %d calls", detectCalls)
 	}
 }
 

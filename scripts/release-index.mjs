@@ -87,7 +87,7 @@ async function readExistingLatest(outDir) {
 }
 
 async function buildIndex() {
-  const tag = normalizeTag(requiredEnv('GITHUB_REF_NAME') || requiredEnv('GITHUB_REF'));
+  const tag = normalizeTag(env('GITHUB_REF_NAME') || requiredEnv('GITHUB_REF'));
   const channel = releaseChannel(tag);
   const version = artifactVersion(tag);
   const repo = requiredEnv('GITHUB_REPOSITORY');

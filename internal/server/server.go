@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 
+	"netsgo/internal/installmethod"
 	"netsgo/pkg/protocol"
 )
 
@@ -46,6 +47,7 @@ type Server struct {
 	publicIPMu                  sync.RWMutex    // protects public IP cache
 	tunnels                     *TunnelRegistry // tunnel provision wait and timeout
 	releaseIndexCache           *releaseIndexCache
+	updateCapabilityCache       *updateCapabilityCache // cached server install capability for status API
 }
 
 // ClientConn represents a connected client.
@@ -88,6 +90,7 @@ func New(port int) *Server {
 		done:               make(chan struct{}),
 	}
 	s.releaseIndexCache = newReleaseIndexCache(fetchDefaultReleaseIndex)
+	s.updateCapabilityCache = newUpdateCapabilityCache(installmethod.Detect)
 	return s
 }
 

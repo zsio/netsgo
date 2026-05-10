@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"netsgo/internal/installmethod"
-	"netsgo/internal/svcmgr"
 	"netsgo/pkg/protocol"
 	"netsgo/pkg/updater"
 	buildversion "netsgo/pkg/version"
@@ -37,7 +36,7 @@ func fetchDefaultReleaseIndex() (*updater.ReleaseIndex, error) {
 
 func (s *Server) handleAPIVersionCheck(w http.ResponseWriter, r *http.Request) {
 	force := parseForce(r)
-	result := s.computeVersionCheck(force, "server", "server", buildversion.Current, installmethod.Detect(svcmgr.RoleServer))
+	result := s.computeVersionCheck(force, "server", "server", buildversion.Current, s.serverUpdateCapability(time.Now()).InstallMethod)
 	encodeJSON(w, http.StatusOK, result)
 }
 
@@ -79,6 +78,14 @@ func (s *Server) handleAPIClientVersionCheck(w http.ResponseWriter, r *http.Requ
 	encodeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) serverUpdateCapability(now time.Time) *protocol.UpdateCapability {
+	cache := s.updateCapabilityCache
+	if cache == nil {
+		cache = newUpdateCapabilityCache(installmethod.Detect)
+	}
+	return cache.Get(now)
+}
+
 func (s *Server) computeVersionCheck(force bool, target, targetID, currentVersion, installMethod string) versionCheckResponse {
 	now := time.Now()
 	snap := s.releaseIndexCache.Get(force, now)
@@ -107,7 +114,13 @@ func versionCheckFromUpdater(target, targetID string, result updater.CheckResult
 }
 
 func installMethodFromClientInfo(info protocol.ClientInfo) string {
-	method := strings.TrimSpace(info.UpdateCapability.InstallMethod)
+	if info.UpdateCapability == nil {
+		return updater.InstallMethodBinary
+	}
+	return normalizeInstallMethod(strings.TrimSpace(info.UpdateCapability.InstallMethod))
+}
+
+func normalizeInstallMethod(method string) string {
 	switch method {
 	case updater.InstallMethodService, updater.InstallMethodDocker, updater.InstallMethodBinary:
 		return method

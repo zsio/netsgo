@@ -3,9 +3,9 @@ import toast from 'react-hot-toast';
 import {
   useForceVersionCheck,
   useVersionCheck,
-  type VersionCheckResult,
   type VersionCheckTarget,
 } from '@/hooks/use-version-check';
+import type { VersionCheckResult } from '@/types';
 import { Button } from '@/components/ui/button';
 import { manualVersionCheckToast } from './version-update-toast';
 import {

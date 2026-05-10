@@ -54,6 +54,24 @@ func TestComputeCheckResultBetaCanUseStableWhenBetaMissing(t *testing.T) {
 	}
 }
 
+func TestComputeCheckResultBetaCanUseBetaWhenStableMissing(t *testing.T) {
+	idx := testIndex("", "v0.2.0-beta.6")
+	got := ComputeCheckResult(idx, "v0.1.0-beta.5", InstallMethodService, "cache", false, time.Unix(1, 0))
+
+	if !got.UpdateAvailable || got.LatestVersion != "v0.2.0-beta.6" || got.RecommendedChannel != "beta" {
+		t.Fatalf("beta current should use beta candidate when stable is missing: %+v", got)
+	}
+}
+
+func TestComputeCheckResultBetaFailsWhenBothChannelsMissing(t *testing.T) {
+	idx := testIndex("", "")
+	got := ComputeCheckResult(idx, "v0.1.0-beta.5", InstallMethodService, "cache", false, time.Unix(1, 0))
+
+	if !got.CheckFailed || got.Reason != ReasonNoMatchingCandidate || got.UpdateAvailable {
+		t.Fatalf("expected no matching candidate for empty beta candidates: %+v", got)
+	}
+}
+
 func TestComputeCheckResultUncomparableCurrent(t *testing.T) {
 	got := ComputeCheckResult(testIndex("v0.1.0", ""), "dev", InstallMethodService, "fresh", false, time.Unix(1, 0))
 

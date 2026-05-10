@@ -595,7 +595,7 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 			Arch:     runtime.GOARCH,
 			IP:       localIP,
 			Version:  buildversion.Current,
-			UpdateCapability: protocol.UpdateCapability{
+			UpdateCapability: &protocol.UpdateCapability{
 				InstallMethod: installmethod.Detect(svcmgr.RoleClient),
 			},
 		},
