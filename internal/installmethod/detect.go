@@ -1,0 +1,89 @@
+package installmethod
+
+import (
+	"os"
+	"runtime"
+	"strings"
+
+	"netsgo/internal/svcmgr"
+	"netsgo/pkg/updater"
+)
+
+type Detector struct {
+	GOOS          string
+	CurrentPID    int
+	CurrentBinary func() (string, error)
+	IsContainer   func() bool
+	SystemdUsable func() bool
+	UnitInstalled func(svcmgr.Role) bool
+	UnitMainPID   func(svcmgr.Role) (int, error)
+}
+
+func DefaultDetector() Detector {
+	return Detector{
+		GOOS:          runtime.GOOS,
+		CurrentPID:    os.Getpid(),
+		CurrentBinary: svcmgr.CurrentBinaryPath,
+		IsContainer:   isContainerEnvironment,
+		SystemdUsable: systemdUsable,
+		UnitInstalled: func(role svcmgr.Role) bool {
+			return svcmgr.Detect(role) == svcmgr.StateInstalled
+		},
+		UnitMainPID: systemdMainPID,
+	}
+}
+
+func Detect(role svcmgr.Role) string {
+	return DefaultDetector().Detect(role)
+}
+
+func (d Detector) Detect(role svcmgr.Role) string {
+	if d.IsContainer != nil && d.IsContainer() {
+		return updater.InstallMethodDocker
+	}
+	if d.GOOS == "" {
+		d.GOOS = runtime.GOOS
+	}
+	if d.CurrentPID == 0 {
+		d.CurrentPID = os.Getpid()
+	}
+	if d.GOOS != "linux" || d.SystemdUsable == nil || !d.SystemdUsable() {
+		return updater.InstallMethodBinary
+	}
+	if d.UnitInstalled == nil || !d.UnitInstalled(role) {
+		return updater.InstallMethodBinary
+	}
+	if d.CurrentBinary == nil {
+		return updater.InstallMethodBinary
+	}
+	path, err := d.CurrentBinary()
+	if err != nil || path != svcmgr.BinaryPath {
+		return updater.InstallMethodBinary
+	}
+	if d.UnitMainPID == nil {
+		return updater.InstallMethodBinary
+	}
+	mainPID, err := d.UnitMainPID(role)
+	if err != nil || mainPID != d.CurrentPID {
+		return updater.InstallMethodBinary
+	}
+	return updater.InstallMethodService
+}
+
+func isContainerEnvironment() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		return true
+	}
+	data, err := os.ReadFile("/proc/1/cgroup")
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(data))
+	return strings.Contains(lower, "docker") ||
+		strings.Contains(lower, "kubepods") ||
+		strings.Contains(lower, "containerd") ||
+		strings.Contains(lower, "podman")
+}

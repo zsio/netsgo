@@ -23,6 +23,8 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"netsgo/internal/clientaddr"
+	"netsgo/internal/installmethod"
+	"netsgo/internal/svcmgr"
 	"netsgo/pkg/mux"
 	"netsgo/pkg/netutil"
 	"netsgo/pkg/protocol"
@@ -593,6 +595,9 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 			Arch:     runtime.GOARCH,
 			IP:       localIP,
 			Version:  buildversion.Current,
+			UpdateCapability: protocol.UpdateCapability{
+				InstallMethod: installmethod.Detect(svcmgr.RoleClient),
+			},
 		},
 	}
 

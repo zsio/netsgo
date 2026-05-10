@@ -21,7 +21,7 @@ builds:
       - -trimpath
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
-      - -s -w -X netsgo/pkg/version.Current={{ .Version }} -X netsgo/pkg/version.Commit={{ .FullCommit }} -X netsgo/pkg/version.Date={{ .Date }}
+      - -s -w -X netsgo/pkg/version.Current={{ .Tag }} -X netsgo/pkg/version.Commit={{ .FullCommit }} -X netsgo/pkg/version.Date={{ .Date }}
   - id: netsgo-linux-armv7
     main: ./cmd/netsgo
     binary: netsgo
@@ -37,7 +37,7 @@ builds:
       - -trimpath
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
-      - -s -w -X netsgo/pkg/version.Current={{ .Version }} -X netsgo/pkg/version.Commit={{ .FullCommit }} -X netsgo/pkg/version.Date={{ .Date }}
+      - -s -w -X netsgo/pkg/version.Current={{ .Tag }} -X netsgo/pkg/version.Commit={{ .FullCommit }} -X netsgo/pkg/version.Date={{ .Date }}
 
 archives:
   - id: release-bundles
@@ -47,7 +47,7 @@ archives:
     formats:
       - tar.gz
     name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if and (eq .Arch "arm") .Arm }}v{{ .Arm }}{{ end }}
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ if and (eq .Arch "arm") (eq .Arm "7") }}armv7{{ else }}{{ .Arch }}{{ end }}
 
 checksum:
   name_template: checksums.txt

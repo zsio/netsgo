@@ -17,6 +17,8 @@ import (
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
 
+	"netsgo/internal/installmethod"
+	"netsgo/internal/svcmgr"
 	"netsgo/pkg/netutil"
 	"netsgo/pkg/protocol"
 	"netsgo/pkg/sysinfo"
@@ -37,36 +39,37 @@ type clientView struct {
 }
 
 type serverStatusView struct {
-	Status         string                   `json:"status"`
-	ClientCount    int                      `json:"client_count"`
-	Summary        consoleSummaryView       `json:"summary"`
-	Version        string                   `json:"version"`
-	ListenPort     int                      `json:"listen_port"`
-	Uptime         int64                    `json:"uptime"`
-	SystemUptime   int64                    `json:"system_uptime"`
-	OSInstallTime  int64                    `json:"os_install_time,omitempty"`
-	TunnelActive   int                      `json:"tunnel_active"`
-	TunnelStopped  int                      `json:"tunnel_stopped"`
-	ServerAddr     string                   `json:"server_addr"`
-	AllowedPorts   []PortRange              `json:"allowed_ports"`
-	OSArch         string                   `json:"os_arch"`
-	GoVersion      string                   `json:"go_version"`
-	Hostname       string                   `json:"hostname"`
-	IPAddress      string                   `json:"ip_address"`
-	CPUUsage       float64                  `json:"cpu_usage"`
-	CPUCores       int                      `json:"cpu_cores"`
-	MemUsed        uint64                   `json:"mem_used"`
-	MemTotal       uint64                   `json:"mem_total"`
-	AppMemUsed     uint64                   `json:"app_mem_used"`
-	AppMemSys      uint64                   `json:"app_mem_sys"`
-	DiskUsed       uint64                   `json:"disk_used"`
-	DiskTotal      uint64                   `json:"disk_total"`
-	DiskPartitions []protocol.DiskPartition `json:"disk_partitions"`
-	GoroutineCount int                      `json:"goroutine_count"`
-	PublicIPv4     string                   `json:"public_ipv4,omitempty"`
-	PublicIPv6     string                   `json:"public_ipv6,omitempty"`
-	GeneratedAt    time.Time                `json:"generated_at"`
-	FreshUntil     time.Time                `json:"fresh_until"`
+	Status           string                    `json:"status"`
+	ClientCount      int                       `json:"client_count"`
+	Summary          consoleSummaryView        `json:"summary"`
+	Version          string                    `json:"version"`
+	UpdateCapability protocol.UpdateCapability `json:"update_capability"`
+	ListenPort       int                       `json:"listen_port"`
+	Uptime           int64                     `json:"uptime"`
+	SystemUptime     int64                     `json:"system_uptime"`
+	OSInstallTime    int64                     `json:"os_install_time,omitempty"`
+	TunnelActive     int                       `json:"tunnel_active"`
+	TunnelStopped    int                       `json:"tunnel_stopped"`
+	ServerAddr       string                    `json:"server_addr"`
+	AllowedPorts     []PortRange               `json:"allowed_ports"`
+	OSArch           string                    `json:"os_arch"`
+	GoVersion        string                    `json:"go_version"`
+	Hostname         string                    `json:"hostname"`
+	IPAddress        string                    `json:"ip_address"`
+	CPUUsage         float64                   `json:"cpu_usage"`
+	CPUCores         int                       `json:"cpu_cores"`
+	MemUsed          uint64                    `json:"mem_used"`
+	MemTotal         uint64                    `json:"mem_total"`
+	AppMemUsed       uint64                    `json:"app_mem_used"`
+	AppMemSys        uint64                    `json:"app_mem_sys"`
+	DiskUsed         uint64                    `json:"disk_used"`
+	DiskTotal        uint64                    `json:"disk_total"`
+	DiskPartitions   []protocol.DiskPartition  `json:"disk_partitions"`
+	GoroutineCount   int                       `json:"goroutine_count"`
+	PublicIPv4       string                    `json:"public_ipv4,omitempty"`
+	PublicIPv6       string                    `json:"public_ipv6,omitempty"`
+	GeneratedAt      time.Time                 `json:"generated_at"`
+	FreshUntil       time.Time                 `json:"fresh_until"`
 }
 
 type consoleSnapshot struct {
@@ -387,9 +390,12 @@ func (s *Server) collectServerStatus() serverStatusView {
 	osInstallTime := int64(sysinfo.GetOSInstallTime())
 
 	return serverStatusView{
-		Status:         "running",
-		ClientCount:    clientCount,
-		Version:        buildversion.Current,
+		Status:      "running",
+		ClientCount: clientCount,
+		Version:     buildversion.Current,
+		UpdateCapability: protocol.UpdateCapability{
+			InstallMethod: installmethod.Detect(svcmgr.RoleServer),
+		},
 		ListenPort:     s.Port,
 		Uptime:         int64(time.Since(s.startTime).Seconds()),
 		SystemUptime:   int64(sysUptime),

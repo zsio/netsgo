@@ -273,8 +273,8 @@ func TestAPI_Status_NoClients(t *testing.T) {
 	if result["status"] != "running" {
 		t.Errorf("status: want 'running', got %v", result["status"])
 	}
-	if result["version"] != "0.1.0" {
-		t.Errorf("version: want '0.1.0', got %v", result["version"])
+	if result["version"] != "v0.1.0" {
+		t.Errorf("version: want 'v0.1.0', got %v", result["version"])
 	}
 	if result["client_count"] != float64(0) {
 		t.Errorf("client_count: want 0, got %v", result["client_count"])

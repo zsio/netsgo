@@ -45,6 +45,7 @@ type Server struct {
 	publicIPv6                  string          // cached public IPv6
 	publicIPMu                  sync.RWMutex    // protects public IP cache
 	tunnels                     *TunnelRegistry // tunnel provision wait and timeout
+	releaseIndexCache           *releaseIndexCache
 }
 
 // ClientConn represents a connected client.
@@ -76,7 +77,7 @@ type ClientConn struct {
 
 // New creates a new Server instance.
 func New(port int) *Server {
-	return &Server{
+	s := &Server{
 		Port:               port,
 		events:             NewEventBus(),
 		trafficAccumulator: newTrafficAccumulator(),
@@ -86,6 +87,8 @@ func New(port int) *Server {
 		startTime:          time.Now(),
 		done:               make(chan struct{}),
 	}
+	s.releaseIndexCache = newReleaseIndexCache(fetchDefaultReleaseIndex)
+	return s
 }
 
 // RangeClients iterates over all connected clients.

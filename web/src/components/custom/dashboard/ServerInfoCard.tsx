@@ -96,8 +96,15 @@ export function ServerInfoCard() {
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Box className="w-4 h-4" />运行状态</span>
           <span className="font-medium text-sm truncate" title={status?.go_version}>{status?.go_version || '-'}</span>
           <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="truncate">v{status?.version || '-'}</span>
-            <VersionUpdateIndicator version={status?.version} label="服务端版本" />
+            <span className="truncate">{status?.version || '-'}</span>
+            <VersionUpdateIndicator
+              target={{
+                kind: 'server',
+                version: status?.version,
+                installMethod: status?.update_capability?.install_method,
+              }}
+              label="服务端版本"
+            />
           </span>
         </div>
       </div>

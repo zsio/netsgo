@@ -2,151 +2,81 @@ package version
 
 import (
 	"fmt"
-	"strconv"
+	"regexp"
 	"strings"
-	"unicode"
+
+	"golang.org/x/mod/semver"
 )
 
-type Semver struct {
-	Major         int
-	Minor         int
-	Patch         int
-	Prerelease    string
-	BuildMetadata string
+const (
+	ChannelStable = "stable"
+	ChannelBeta   = "beta"
+)
+
+var (
+	stableTagRe      = regexp.MustCompile(`^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$`)
+	betaTagRe        = regexp.MustCompile(`^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.([1-9]\d*)$`)
+	describeStableRe = regexp.MustCompile(`^(v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))-\d+-g[0-9A-Fa-f]+(?:-dirty)?$`)
+	describeBetaRe   = regexp.MustCompile(`^(v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.([1-9]\d*))-\d+-g[0-9A-Fa-f]+(?:-dirty)?$`)
+)
+
+func IsStableTag(v string) bool {
+	return stableTagRe.MatchString(strings.TrimSpace(v))
 }
 
-func ParseSemver(s string) (Semver, error) {
-	s = strings.TrimPrefix(s, "v")
-	parts := strings.SplitN(s, "+", 2)
-	coreAndPrerelease := parts[0]
-	buildMetadata := ""
-	if len(parts) == 2 {
-		buildMetadata = parts[1]
-		if err := validateSemverIdentifiers(buildMetadata, "build metadata", s); err != nil {
-			return Semver{}, err
-		}
-	}
-
-	parts = strings.SplitN(coreAndPrerelease, "-", 2)
-	core := parts[0]
-	prerelease := ""
-	if len(parts) == 2 {
-		prerelease = parts[1]
-		if err := validateSemverIdentifiers(prerelease, "prerelease", s); err != nil {
-			return Semver{}, err
-		}
-	}
-	parts = strings.Split(core, ".")
-	if len(parts) != 3 {
-		return Semver{}, fmt.Errorf("invalid semver: %q", s)
-	}
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return Semver{}, fmt.Errorf("invalid major: %w", err)
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return Semver{}, fmt.Errorf("invalid minor: %w", err)
-	}
-	patch, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return Semver{}, fmt.Errorf("invalid patch: %w", err)
-	}
-	return Semver{Major: major, Minor: minor, Patch: patch, Prerelease: prerelease, BuildMetadata: buildMetadata}, nil
+func IsBetaTag(v string) bool {
+	return betaTagRe.MatchString(strings.TrimSpace(v))
 }
 
-func (s Semver) Compare(other Semver) int {
-	if s.Major != other.Major {
-		if s.Major > other.Major {
-			return 1
-		}
-		return -1
+func IsReleaseTag(v string) bool {
+	v = strings.TrimSpace(v)
+	return IsStableTag(v) || IsBetaTag(v)
+}
+
+func ChannelForReleaseTag(v string) (string, bool) {
+	switch {
+	case IsStableTag(v):
+		return ChannelStable, true
+	case IsBetaTag(v):
+		return ChannelBeta, true
+	default:
+		return "", false
 	}
-	if s.Minor != other.Minor {
-		if s.Minor > other.Minor {
-			return 1
-		}
-		return -1
+}
+
+// ComparableBase returns the strict release tag used for comparisons.
+// The returned value may be extracted from a git describe string, but the
+// original version should still be used in public API responses.
+func ComparableBase(v string) (string, bool) {
+	v = strings.TrimSpace(v)
+	if IsReleaseTag(v) && semver.IsValid(v) {
+		return v, true
 	}
-	if s.Patch != other.Patch {
-		if s.Patch > other.Patch {
-			return 1
-		}
-		return -1
+	if matches := describeBetaRe.FindStringSubmatch(v); len(matches) > 1 && semver.IsValid(matches[1]) {
+		return matches[1], true
 	}
-	if s.Prerelease == other.Prerelease {
-		return 0
+	if matches := describeStableRe.FindStringSubmatch(v); len(matches) > 1 && semver.IsValid(matches[1]) {
+		return matches[1], true
 	}
-	if s.Prerelease == "" {
-		return 1
+	return "", false
+}
+
+func Compare(a, b string) (int, error) {
+	if !IsReleaseTag(a) || !semver.IsValid(a) {
+		return 0, fmt.Errorf("invalid release tag: %q", a)
 	}
-	if other.Prerelease == "" {
-		return -1
+	if !IsReleaseTag(b) || !semver.IsValid(b) {
+		return 0, fmt.Errorf("invalid release tag: %q", b)
 	}
-	return comparePrerelease(s.Prerelease, other.Prerelease)
+	return semver.Compare(a, b), nil
 }
 
 func NormalizeVersionString(s string) (string, error) {
 	for _, field := range strings.Fields(s) {
-		normalized := strings.TrimPrefix(field, "v")
-		if _, err := ParseSemver(normalized); err == nil {
-			return normalized, nil
+		field = strings.Trim(field, "(),")
+		if IsReleaseTag(field) && semver.IsValid(field) {
+			return field, nil
 		}
 	}
-	return "", fmt.Errorf("no semver found in %q", s)
-}
-
-func comparePrerelease(a, b string) int {
-	aParts := strings.Split(a, ".")
-	bParts := strings.Split(b, ".")
-	for i := 0; i < len(aParts) && i < len(bParts); i++ {
-		if aParts[i] == bParts[i] {
-			continue
-		}
-		aNum, aErr := strconv.Atoi(aParts[i])
-		bNum, bErr := strconv.Atoi(bParts[i])
-		switch {
-		case aErr == nil && bErr == nil:
-			if aNum > bNum {
-				return 1
-			}
-			if aNum < bNum {
-				return -1
-			}
-		case aErr == nil:
-			return -1
-		case bErr == nil:
-			return 1
-		case aParts[i] > bParts[i]:
-			return 1
-		default:
-			return -1
-		}
-	}
-	if len(aParts) > len(bParts) {
-		return 1
-	}
-	if len(aParts) < len(bParts) {
-		return -1
-	}
-	return 0
-}
-
-func validateSemverIdentifiers(value, field, input string) error {
-	if value == "" {
-		return fmt.Errorf("invalid %s: %q", field, input)
-	}
-
-	for _, identifier := range strings.Split(value, ".") {
-		if identifier == "" {
-			return fmt.Errorf("invalid %s: %q", field, input)
-		}
-		for _, r := range identifier {
-			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
-				return fmt.Errorf("invalid %s: %q", field, input)
-			}
-		}
-	}
-
-	return nil
+	return "", fmt.Errorf("no release semver tag found in %q", s)
 }

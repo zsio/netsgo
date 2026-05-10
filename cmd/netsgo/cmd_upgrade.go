@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,13 +19,14 @@ import (
 )
 
 var forceUpgrade bool
+var yesUpgrade bool
 var getInstalledVersionFunc = getInstalledVersion
 
 type upgradeCommandDeps struct {
 	installedUnits    func() []string
 	currentBinaryPath func() (string, error)
 	installedVersion  func() (string, error)
-	confirm           func(prompt, confirmText string) (bool, error)
+	confirm           func(prompt string) (bool, error)
 	applyUpgrade      func(currentPath, installedVersion, targetVersion string) (*updater.Result, error)
 	currentVersion    string
 	stdout            io.Writer
@@ -44,7 +46,7 @@ func defaultUpgradeCommandDeps() upgradeCommandDeps {
 	}
 }
 
-func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
+func runUpgradeCommand(force, yes bool, deps upgradeCommandDeps) error {
 	units := deps.installedUnits()
 	if len(units) == 0 {
 		_, _ = fmt.Fprintln(deps.stderr, "未发现已安装的托管服务。")
@@ -66,26 +68,20 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 
 	installedVersion, installedVersionErr := deps.installedVersion()
 	currentVersion := deps.currentVersion
-	normalizedCurrentVersion, currentErr := buildversion.NormalizeVersionString(currentVersion)
+	targetVersion, targetComparable := buildversion.ComparableBase(currentVersion)
 
-	if installedVersionErr == nil && currentErr == nil && installedVersion == normalizedCurrentVersion {
-		_, _ = fmt.Fprintf(deps.stdout, "当前版本 %s 与已安装版本相同。\n", normalizedCurrentVersion)
-		_, _ = fmt.Fprintln(deps.stdout, "无需替换。")
+	rule := evaluateUpgradeVersionRule(installedVersion, installedVersionErr, currentVersion, targetVersion, targetComparable)
+	if !force && rule.Skip {
+		_, _ = fmt.Fprintln(deps.stdout, rule.Message)
 		return nil
 	}
-
-	risks := upgradeRiskRows(currentVersion, currentErr, installedVersionErr)
-	if installedVersionErr == nil {
-		cmp, err1 := buildversion.ParseSemver(normalizedCurrentVersion)
-		inst, err2 := buildversion.ParseSemver(installedVersion)
-		if err1 == nil && err2 == nil && cmp.Compare(inst) < 0 {
-			risks = append(risks, fmt.Sprintf("目标版本 %s 低于已安装版本 %s", normalizedCurrentVersion, installedVersion))
-		}
+	if !force && rule.Block {
+		return errors.New(rule.Message)
 	}
 
-	targetVersion := currentVersion
-	if currentErr == nil {
-		targetVersion = normalizedCurrentVersion
+	displayTargetVersion := currentVersion
+	if targetComparable {
+		displayTargetVersion = targetVersion
 	}
 	fromVersion := installedVersion
 	if installedVersionErr != nil {
@@ -95,13 +91,13 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 		SourceBinary:  currentPath,
 		TargetBinary:  svcmgr.BinaryPath,
 		FromVersion:   fromVersion,
-		ToVersion:     targetVersion,
+		ToVersion:     displayTargetVersion,
 		RestartUnits:  units,
-		RiskSummaries: risks,
+		RiskSummaries: rule.Risks,
 	})
 
-	if !force {
-		confirmed, err := deps.confirm("用本次运行的 netsgo 文件替换已安装版本？", "upgrade binary")
+	if !yes {
+		confirmed, err := deps.confirm("用本次运行的 netsgo 文件替换已安装版本？")
 		if err != nil {
 			if tui.IsCancelled(err) {
 				_, _ = fmt.Fprintln(deps.stdout, "替换已取消，未进行任何修改。")
@@ -114,10 +110,10 @@ func runUpgradeCommand(force bool, deps upgradeCommandDeps) error {
 			return nil
 		}
 	} else {
-		_, _ = fmt.Fprintln(deps.stdout, "已通过 --force 跳过输入确认。")
+		_, _ = fmt.Fprintln(deps.stdout, "已通过 --yes 跳过输入确认。")
 	}
 
-	result, err := deps.applyUpgrade(currentPath, installedVersion, targetVersion)
+	result, err := deps.applyUpgrade(currentPath, installedVersion, displayTargetVersion)
 	if err != nil {
 		return fmt.Errorf("upgrade failed: %w", err)
 	}
@@ -156,15 +152,46 @@ func formatRestartUnits(units []string) string {
 	return strings.Join(units, ", ")
 }
 
-func upgradeRiskRows(currentVersion string, currentErr error, installedVersionErr error) []string {
-	risks := []string{}
-	if currentErr != nil {
-		risks = append(risks, fmt.Sprintf("目标二进制是开发构建（%s）", currentVersion))
+type upgradeVersionRule struct {
+	Skip    bool
+	Block   bool
+	Message string
+	Risks   []string
+}
+
+func evaluateUpgradeVersionRule(installedVersion string, installedVersionErr error, currentVersion, targetVersion string, targetComparable bool) upgradeVersionRule {
+	var rule upgradeVersionRule
+	if !targetComparable {
+		rule.Risks = append(rule.Risks, fmt.Sprintf("目标二进制是不可比较版本（%s）", currentVersion))
+		rule.Block = true
+		rule.Message = "目标二进制版本不可比较；如需强制替换，请使用 -f。"
+		return rule
 	}
 	if installedVersionErr != nil {
-		risks = append(risks, "无法确定已安装版本；无法完成版本安全检查")
+		rule.Risks = append(rule.Risks, "无法确定已安装版本；无法完成版本安全检查")
+		rule.Block = true
+		rule.Message = "无法确定已安装版本；如需强制替换，请使用 -f。"
+		return rule
 	}
-	return risks
+	cmp, err := buildversion.Compare(targetVersion, installedVersion)
+	if err != nil {
+		rule.Risks = append(rule.Risks, "已安装版本不可比较；无法完成版本安全检查")
+		rule.Block = true
+		rule.Message = "已安装版本不可比较；如需强制替换，请使用 -f。"
+		return rule
+	}
+	if cmp == 0 {
+		rule.Skip = true
+		rule.Message = fmt.Sprintf("当前版本 %s 与已安装版本相同，无需替换。", targetVersion)
+		return rule
+	}
+	if cmp < 0 {
+		rule.Risks = append(rule.Risks, fmt.Sprintf("目标版本 %s 低于已安装版本 %s", targetVersion, installedVersion))
+		rule.Block = true
+		rule.Message = "目标版本低于已安装版本；如需强制降级，请使用 -f。"
+		return rule
+	}
+	return rule
 }
 
 var upgradeCmd = &cobra.Command{
@@ -177,13 +204,14 @@ var upgradeCmd = &cobra.Command{
 仅适用于通过 'netsgo install' 安装的托管服务。
 如果当前二进制已经是已安装版本，将不做修改。
 
-	使用 --force 可跳过输入确认。`,
+	使用 -f/--force 可强制允许不可比较、等版本或降级替换。
+	使用 -y/--yes 可跳过最终确认。`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := rerunUpgradeWithSudoIfNeeded(os.Getuid(), exec.LookPath, syscall.Exec); err != nil {
 			return err
 		}
 
-		return runUpgradeCommand(forceUpgrade, defaultUpgradeCommandDeps())
+		return runUpgradeCommand(forceUpgrade, yesUpgrade, defaultUpgradeCommandDeps())
 	},
 }
 
@@ -201,15 +229,16 @@ func rerunUpgradeWithSudoIfNeeded(uid int, lookPath func(file string) (string, e
 }
 
 func init() {
-	upgradeCmd.Flags().BoolVar(&forceUpgrade, "force", false, "跳过输入确认")
+	upgradeCmd.Flags().BoolVarP(&forceUpgrade, "force", "f", false, "强制允许替换")
+	upgradeCmd.Flags().BoolVarP(&yesUpgrade, "yes", "y", false, "跳过最终确认")
 	rootCmd.AddCommand(upgradeCmd)
 }
 
-func readUpgradeConfirmation(prompt, confirmText string) (bool, error) {
+func readUpgradeConfirmation(prompt string) (bool, error) {
 	if !isInteractive() {
-		return readConfirmationFrom(bufio.NewReader(os.Stdin), confirmText), nil
+		return readConfirmationFrom(bufio.NewReader(os.Stdin)), nil
 	}
-	return tui.ConfirmWithOptions(prompt, tui.ConfirmOptions{ConfirmText: confirmText})
+	return tui.Confirm(prompt)
 }
 
 func isInteractive() bool {
@@ -220,13 +249,13 @@ func isInteractive() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
-func readConfirmationFrom(reader *bufio.Reader, confirmText string) bool {
+func readConfirmationFrom(reader *bufio.Reader) bool {
 	input, err := reader.ReadString('\n')
 	if err != nil && len(input) == 0 {
 		return false
 	}
 	input = strings.TrimSpace(input)
-	return strings.EqualFold(input, confirmText)
+	return strings.EqualFold(input, "yes") || strings.EqualFold(input, "y")
 }
 
 func installedUnits() []string {

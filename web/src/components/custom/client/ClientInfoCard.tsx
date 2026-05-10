@@ -136,8 +136,19 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
             </span>
           </span>
           <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="truncate">v{info.version || '-'}</span>
-            <VersionUpdateIndicator version={info.version} label="客户端版本" />
+            <span className="truncate">{info.version || '-'}</span>
+            <VersionUpdateIndicator
+              target={{
+                kind: 'client',
+                id: client.id,
+                version: info.version,
+                installMethod: info.update_capability?.install_method,
+                os: info.os,
+                arch: info.arch,
+                enabled: client.online,
+              }}
+              label="客户端版本"
+            />
           </span>
         </div>
       </div>

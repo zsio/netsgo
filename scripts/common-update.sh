@@ -1,0 +1,354 @@
+#!/bin/sh
+
+set -eu
+
+NETSGO_LATEST_CNB="https://cnb.cool/zsio/netsgo/-/raw/release-index/updates/index-v1/latest.json"
+NETSGO_LATEST_GITHUB="https://raw.githubusercontent.com/zsio/netsgo/release-index/updates/index-v1/latest.json"
+NETSGO_COMMON_CNB="https://cnb.cool/zsio/netsgo/-/raw/main/scripts/common-update.sh"
+NETSGO_COMMON_GITHUB="https://raw.githubusercontent.com/zsio/netsgo/main/scripts/common-update.sh"
+
+# Release public keys must be generated from the private release signing key
+# and committed before the first public release. Leaving them empty is
+# intentional: install/upgrade scripts fail closed instead of trusting HTTPS.
+# BEGIN NETSGO RELEASE PUBLIC KEYS
+NETSGO_RELEASE_PUBLIC_KEY_PEM="${NETSGO_RELEASE_PUBLIC_KEY_PEM:-}"
+NETSGO_RELEASE_ALLOWED_SIGNERS="${NETSGO_RELEASE_ALLOWED_SIGNERS:-}"
+# END NETSGO RELEASE PUBLIC KEYS
+
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+require_linux_systemd() {
+  [ "$(uname -s)" = "Linux" ] || die "此脚本只支持 Linux + systemd。请前往 GitHub Releases 手动下载。"
+  command -v systemctl >/dev/null 2>&1 || die "未找到 systemctl。请前往 GitHub Releases 手动下载。"
+  systemctl --version >/dev/null 2>&1 || die "systemd 不可用。请前往 GitHub Releases 手动下载。"
+}
+
+require_tools() {
+  for tool in curl tar sha256sum jq awk sed sort grep; do
+    command -v "$tool" >/dev/null 2>&1 || die "缺少依赖: $tool"
+  done
+}
+
+source_order() {
+  case "$1" in
+    cnb) printf '%s\n' cnb github ;;
+    github) printf '%s\n' github cnb ;;
+    auto) printf '%s\n' cnb github ;;
+    *) die "--source 仅支持 auto|cnb|github" ;;
+  esac
+}
+
+latest_url_for_provider() {
+  case "$1" in
+    cnb) printf '%s\n' "$NETSGO_LATEST_CNB" ;;
+    github) printf '%s\n' "$NETSGO_LATEST_GITHUB" ;;
+    *) return 1 ;;
+  esac
+}
+
+fetch_latest_index() {
+  source="$1"
+  out="$2"
+  for provider in $(source_order "$source"); do
+    url="$(latest_url_for_provider "$provider")"
+    if curl -fsSL "$url" -o "$out"; then
+      printf '%s\n' "$provider"
+      return 0
+    fi
+  done
+  return 1
+}
+
+release_detail_url() {
+  provider="$1"
+  tag="$2"
+  case "$provider" in
+    cnb) printf 'https://cnb.cool/zsio/netsgo/-/raw/release-index/updates/index-v1/releases/%s.json\n' "$tag" ;;
+    github) printf 'https://raw.githubusercontent.com/zsio/netsgo/release-index/updates/index-v1/releases/%s.json\n' "$tag" ;;
+    *) return 1 ;;
+  esac
+}
+
+fetch_release_detail() {
+  source="$1"
+  tag="$2"
+  out="$3"
+  for provider in $(source_order "$source"); do
+    url="$(release_detail_url "$provider" "$tag")"
+    if download_official "$url" "$out"; then
+      printf '%s\n' "$provider"
+      return 0
+    fi
+  done
+  return 1
+}
+
+json_get_channel_latest() {
+  file="$1"
+  channel="$2"
+  jq -r --arg channel "$channel" '.channels[$channel].latest // empty' "$file"
+}
+
+valid_release_tag() {
+  printf '%s\n' "$1" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.[1-9][0-9]*)?$'
+}
+
+extract_comparable_version() {
+  text="$1"
+  for word in $text; do
+    word="${word%,}"
+    word="${word#(}"
+    word="${word%)}"
+    case "$word" in
+      v*-*-g*)
+        base="${word%%-[0-9]*-g*}"
+        if valid_release_tag "$base"; then
+          printf '%s\n' "$base"
+          return 0
+        fi
+        ;;
+      v*)
+        if valid_release_tag "$word"; then
+          printf '%s\n' "$word"
+          return 0
+        fi
+        ;;
+    esac
+  done
+  return 1
+}
+
+extract_exact_release_version() {
+  text="$1"
+  for word in $text; do
+    word="${word%,}"
+    word="${word#(}"
+    word="${word%)}"
+    if valid_release_tag "$word"; then
+      printf '%s\n' "$word"
+      return 0
+    fi
+  done
+  return 1
+}
+
+canonical_platform() {
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    armv7l|armv7*) arch="armv7" ;;
+    *) die "不支持的架构: $arch" ;;
+  esac
+  [ "$os" = "linux" ] || die "脚本只支持 Linux"
+  printf '%s_%s\n' "$os" "$arch"
+}
+
+asset_name_for() {
+  tag="$1"
+  platform="$2"
+  printf 'netsgo_%s_%s.tar.gz\n' "${tag#v}" "$platform"
+}
+
+official_url_allowed() {
+  case "$1" in
+    https://github.com/zsio/netsgo/releases/download/*) return 0 ;;
+    https://raw.githubusercontent.com/zsio/netsgo/release-index/*) return 0 ;;
+    https://raw.githubusercontent.com/zsio/netsgo/main/scripts/common-update.sh) return 0 ;;
+    https://cnb.cool/zsio/netsgo/-/releases/download/*) return 0 ;;
+    https://cnb.cool/zsio/netsgo/-/raw/release-index/*) return 0 ;;
+    https://cnb.cool/zsio/netsgo/-/raw/main/scripts/common-update.sh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+download_official() {
+  url="$1"
+  out="$2"
+  official_url_allowed "$url" || die "拒绝非官方下载 URL: $url"
+  curl -fsSL "$url" -o "$out"
+}
+
+json_url_for_name_provider() {
+  file="$1"
+  name="$2"
+  provider="$3"
+  jq -r --arg name "$name" --arg provider "$provider" '
+    [
+      .checksum_asset?,
+      .signature_assets.ed25519?,
+      .signature_assets.sshsig?,
+      (.assets[]?)
+    ]
+    | map(select(.name == $name) | .urls[]? | select(.provider == $provider) | .url)
+    | .[0] // empty
+  ' "$file"
+}
+
+download_release_detail_file() {
+  detail="$1"
+  source="$2"
+  name="$3"
+  out="$4"
+  for provider in $(source_order "$source"); do
+    url="$(json_url_for_name_provider "$detail" "$name" "$provider")"
+    [ -n "$url" ] || continue
+    if download_official "$url" "$out"; then
+      printf '%s\n' "$provider"
+      return 0
+    fi
+  done
+  return 1
+}
+
+validate_release_detail() {
+	detail="$1"
+	tag="$2"
+	asset="$3"
+	jq -e --arg tag "$tag" --arg asset "$asset" '
+	  .schema == 1 and
+	  .project == "netsgo" and
+	  .version == $tag and
+	  .checksum_asset.name == "checksums.txt" and
+	  (.checksum_asset.urls | type == "array" and length > 0) and
+	  .signature_assets.ed25519.name == "checksums.txt.sig" and
+	  (.signature_assets.ed25519.urls | type == "array" and length > 0) and
+	  .signature_assets.sshsig.name == "checksums.txt.sshsig" and
+	  (.signature_assets.sshsig.urls | type == "array" and length > 0) and
+	  any(.assets[]?; .name == $asset and .os == "linux" and (.urls | type == "array" and length > 0))
+	' "$detail" >/dev/null || die "release detail 无效或缺少当前平台资产: $asset"
+}
+
+verify_checksum() {
+  checksums="$1"
+  archive="$2"
+  name="$3"
+  expected="$(awk -v n="$name" '$2 == n {print $1}' "$checksums" | head -1)"
+  [ -n "$expected" ] || die "checksums.txt 中找不到 $name"
+  actual="$(sha256sum "$archive" | awk '{print $1}')"
+  [ "$actual" = "$expected" ] || die "checksum mismatch: $name"
+}
+
+verify_signature_openssl() {
+  checksums="$1"
+  sig="$2"
+  [ -n "$NETSGO_RELEASE_PUBLIC_KEY_PEM" ] || return 1
+  command -v openssl >/dev/null 2>&1 || return 1
+  pub="$(mktemp)"
+  printf '%s\n' "$NETSGO_RELEASE_PUBLIC_KEY_PEM" > "$pub"
+  if openssl pkeyutl -verify -pubin -inkey "$pub" -rawin -in "$checksums" -sigfile "$sig" >/dev/null 2>&1; then
+    rm -f "$pub"
+    return 0
+  fi
+  rm -f "$pub"
+  return 1
+}
+
+verify_signature_sshsig() {
+  checksums="$1"
+  sshsig="$2"
+  [ -n "$NETSGO_RELEASE_ALLOWED_SIGNERS" ] || return 1
+  command -v ssh-keygen >/dev/null 2>&1 || return 1
+  allowed="$(mktemp)"
+  printf '%s\n' "$NETSGO_RELEASE_ALLOWED_SIGNERS" > "$allowed"
+  if ssh-keygen -Y verify -f "$allowed" -I netsgo-release -n file -s "$sshsig" < "$checksums" >/dev/null 2>&1; then
+    rm -f "$allowed"
+    return 0
+  fi
+  rm -f "$allowed"
+  return 1
+}
+
+verify_signature() {
+  checksums="$1"
+  sig="$2"
+  sshsig="$3"
+  if verify_signature_openssl "$checksums" "$sig"; then
+    return 0
+  fi
+  if verify_signature_sshsig "$checksums" "$sshsig"; then
+    return 0
+  fi
+  die "无法验证 checksums.txt 签名，已终止。"
+}
+
+download_available_signatures() {
+  detail="$1"
+  source="$2"
+  sig="$3"
+  sshsig="$4"
+  downloaded=0
+  if command -v openssl >/dev/null 2>&1; then
+    if download_release_detail_file "$detail" "$source" checksums.txt.sig "$sig" >/dev/null; then
+      downloaded=1
+    fi
+  fi
+  if command -v ssh-keygen >/dev/null 2>&1; then
+    if download_release_detail_file "$detail" "$source" checksums.txt.sshsig "$sshsig" >/dev/null; then
+      downloaded=1
+    fi
+  fi
+  [ "$downloaded" -eq 1 ] || die "无法下载可用的 checksums.txt 签名，已终止。"
+}
+
+extract_netsgo() {
+  archive="$1"
+  dest="$2"
+  mkdir -p "$(dirname "$dest")"
+  tar -xzf "$archive" -C "$(dirname "$dest")" --strip-components=1 --wildcards '*/netsgo' 2>/dev/null ||
+    tar -xzf "$archive" -C "$(dirname "$dest")" netsgo
+  chmod +x "$dest"
+}
+
+version_sort_key() {
+  v="${1#v}"
+  core="${v%%-*}"
+  pre=""
+  [ "$core" = "$v" ] || pre="${v#*-}"
+  major="$(printf '%s' "$core" | awk -F. '{print $1}')"
+  minor="$(printf '%s' "$core" | awk -F. '{print $2}')"
+  patch="$(printf '%s' "$core" | awk -F. '{print $3}')"
+  if [ -z "$pre" ]; then
+    pre_rank=1
+    beta_num=999999999
+  else
+    pre_rank=0
+    beta_num="$(printf '%s' "$pre" | sed -n 's/^beta\.\([1-9][0-9]*\)$/\1/p')"
+    [ -n "$beta_num" ] || beta_num=0
+  fi
+  printf '%09d.%09d.%09d.%d.%09d\n' "$major" "$minor" "$patch" "$pre_rank" "$beta_num"
+}
+
+semver_gt() {
+  a="$1"
+  b="$2"
+  [ "$(printf '%s %s\n%s %s\n' "$(version_sort_key "$a")" "$a" "$(version_sort_key "$b")" "$b" | sort | tail -1 | awk '{print $2}')" = "$a" ] && [ "$a" != "$b" ]
+}
+
+semver_eq() {
+  [ "$1" = "$2" ]
+}
+
+select_highest_version() {
+  best=""
+  for candidate in "$@"; do
+    [ -n "$candidate" ] || continue
+    valid_release_tag "$candidate" || continue
+    if [ -z "$best" ] || semver_gt "$candidate" "$best"; then
+      best="$candidate"
+    fi
+  done
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
+}
+
+channel_for_target() {
+  case "$1" in
+    *-beta.*) printf '%s\n' beta ;;
+    *) printf '%s\n' stable ;;
+  esac
+}

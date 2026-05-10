@@ -21,10 +21,10 @@ func TestExtractInstalledVersion(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "plain version", input: "netsgo version 1.2.3\n", want: "1.2.3"},
-		{name: "version with metadata", input: "netsgo version 1.2.3 (abcdef1, 2026-04-25)\n", want: "1.2.3"},
-		{name: "prerelease", input: "netsgo version v1.2.3-beta.1\n", want: "1.2.3-beta.1"},
-		{name: "build metadata", input: "netsgo version 1.2.3+build.5 (abcdef1, 2026-04-25)\n", want: "1.2.3+build.5"},
+		{name: "plain version", input: "netsgo version v1.2.3\n", want: "v1.2.3"},
+		{name: "version with metadata", input: "netsgo version v1.2.3 (abcdef1, 2026-04-25)\n", want: "v1.2.3"},
+		{name: "prerelease", input: "netsgo version v1.2.3-beta.1\n", want: "v1.2.3-beta.1"},
+		{name: "missing v", input: "netsgo version 1.2.3\n", wantErr: true},
 		{name: "invalid", input: "netsgo version dev\n", wantErr: true},
 	}
 
@@ -117,9 +117,9 @@ func TestIsDevVersion(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{name: "plain version", input: "1.2.3", want: false},
+		{name: "plain version", input: "v1.2.3", want: false},
 		{name: "prerelease", input: "v1.2.3-beta.1", want: false},
-		{name: "version summary", input: "netsgo version 1.2.3", want: false},
+		{name: "version summary", input: "netsgo version v1.2.3", want: false},
 		{name: "dev", input: "dev", want: true},
 	}
 
@@ -138,16 +138,17 @@ func TestReadConfirmation(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{name: "phrase with newline", input: "upgrade binary\n", want: true},
-		{name: "plain yes rejected", input: "yes\n", want: false},
+		{name: "yes with newline", input: "yes\n", want: true},
+		{name: "short yes", input: "y\n", want: true},
+		{name: "phrase rejected", input: "upgrade binary\n", want: false},
 		{name: "empty eof", input: "", want: false},
-		{name: "phrase on eof", input: "upgrade binary", want: true},
+		{name: "yes on eof", input: "yes", want: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := bufio.NewReader(strings.NewReader(tt.input))
-			if got := readConfirmationFrom(reader, "upgrade binary"); got != tt.want {
+			if got := readConfirmationFrom(reader); got != tt.want {
 				t.Fatalf("readConfirmationFrom(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
@@ -156,20 +157,18 @@ func TestReadConfirmation(t *testing.T) {
 
 func TestReadConfirmationReadErrorReturnsFalse(t *testing.T) {
 	reader := bufio.NewReader(errReader{})
-	if got := readConfirmationFrom(reader, "upgrade binary"); got {
+	if got := readConfirmationFrom(reader); got {
 		t.Fatal("expected readConfirmationFrom to return false on read error")
 	}
 }
 
-func TestRunUpgradeCommand_UnknownInstalledVersionRequiresConfirmation(t *testing.T) {
+func TestRunUpgradeCommand_UnknownInstalledVersionRequiresForce(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	confirmationCalls := 0
 	upgradeCalls := 0
-	var gotPrompt string
-	var gotConfirmText string
 
-	err := runUpgradeCommand(false, upgradeCommandDeps{
+	err := runUpgradeCommand(false, false, upgradeCommandDeps{
 		installedUnits: func() []string {
 			return []string{"netsgo-server.service", "netsgo-client.service"}
 		},
@@ -179,69 +178,39 @@ func TestRunUpgradeCommand_UnknownInstalledVersionRequiresConfirmation(t *testin
 		installedVersion: func() (string, error) {
 			return "", errors.New("parse installed version: no semver found in \"netsgo version ae06485-dirty\"")
 		},
-		confirm: func(prompt, confirmText string) (bool, error) {
+		confirm: func(prompt string) (bool, error) {
 			confirmationCalls++
-			gotPrompt = prompt
-			gotConfirmText = confirmText
 			return false, nil
 		},
 		applyUpgrade: func(currentPath, installedVersion, targetVersion string) (*updater.Result, error) {
 			upgradeCalls++
 			return nil, nil
 		},
-		currentVersion: "0.1.0",
+		currentVersion: "v0.1.0",
 		stdout:         &stdout,
 		stderr:         &stderr,
 	})
-	if err != nil {
-		t.Fatalf("runUpgradeCommand returned error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "无法确定已安装版本") {
+		t.Fatalf("expected unknown version force error, got %v", err)
 	}
-	if confirmationCalls != 1 {
-		t.Fatalf("expected confirmation to be requested once, got %d", confirmationCalls)
-	}
-	if gotPrompt != "用本次运行的 netsgo 文件替换已安装版本？" || gotConfirmText != "upgrade binary" {
-		t.Fatalf("unexpected confirmation prompt=%q confirmText=%q", gotPrompt, gotConfirmText)
+	if confirmationCalls != 0 {
+		t.Fatalf("confirmation should not be requested for blocked upgrade, got %d", confirmationCalls)
 	}
 	if upgradeCalls != 0 {
 		t.Fatalf("expected upgrade not to be called, got %d calls", upgradeCalls)
 	}
-	output := stdout.String()
-	for _, want := range []string{
-		"替换计划",
-		"源二进制:       /tmp/current-netsgo",
-		"目标二进制:     /usr/local/bin/netsgo",
-		"版本变化:       未知 -> 0.1.0",
-		"将重启服务:     netsgo-server.service, netsgo-client.service",
-		"风险:           无法确定已安装版本；无法完成版本安全检查",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("expected %q in output, got %q", want, output)
-		}
-	}
-	for _, notWant := range []string{
-		"将重启服务:     [netsgo-server.service",
-		"parse installed version",
-		"no semver found",
-		"ae06485-dirty",
-	} {
-		if strings.Contains(output, notWant) {
-			t.Fatalf("did not expect %q in output, got %q", notWant, output)
-		}
-	}
-	if !strings.Contains(output, "替换已取消，未进行任何修改。") {
-		t.Fatalf("expected cancellation message in output, got %q", output)
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no plan output for blocked upgrade, got %q", stdout.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("expected no stderr output, got %q", stderr.String())
 	}
 }
 
-func TestRunUpgradeCommand_DevelopmentBuildRequiresTypedConfirmation(t *testing.T) {
-	var stdout bytes.Buffer
+func TestRunUpgradeCommand_DevelopmentBuildRequiresForce(t *testing.T) {
 	confirmationCalls := 0
-	var gotConfirmText string
 
-	err := runUpgradeCommand(false, upgradeCommandDeps{
+	err := runUpgradeCommand(false, false, upgradeCommandDeps{
 		installedUnits: func() []string {
 			return []string{"netsgo-client.service"}
 		},
@@ -249,11 +218,10 @@ func TestRunUpgradeCommand_DevelopmentBuildRequiresTypedConfirmation(t *testing.
 			return "/tmp/netsgo-dev", nil
 		},
 		installedVersion: func() (string, error) {
-			return "0.1.0", nil
+			return "v0.1.0", nil
 		},
-		confirm: func(prompt, confirmText string) (bool, error) {
+		confirm: func(prompt string) (bool, error) {
 			confirmationCalls++
-			gotConfirmText = confirmText
 			return false, nil
 		},
 		applyUpgrade: func(currentPath, installedVersion, targetVersion string) (*updater.Result, error) {
@@ -261,32 +229,21 @@ func TestRunUpgradeCommand_DevelopmentBuildRequiresTypedConfirmation(t *testing.
 			return nil, nil
 		},
 		currentVersion: "ae06485-dirty",
-		stdout:         &stdout,
+		stdout:         io.Discard,
 		stderr:         io.Discard,
 	})
-	if err != nil {
-		t.Fatalf("runUpgradeCommand returned error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "版本不可比较") {
+		t.Fatalf("expected uncomparable force error, got %v", err)
 	}
-	if confirmationCalls != 1 || gotConfirmText != "upgrade binary" {
-		t.Fatalf("expected typed confirmation once, calls=%d confirmText=%q", confirmationCalls, gotConfirmText)
-	}
-	output := stdout.String()
-	for _, want := range []string{
-		"版本变化:       0.1.0 -> ae06485-dirty",
-		"风险:           目标二进制是开发构建（ae06485-dirty）",
-		"替换已取消，未进行任何修改。",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("expected %q in output, got %q", want, output)
-		}
+	if confirmationCalls != 0 {
+		t.Fatalf("confirmation should not be requested, got %d", confirmationCalls)
 	}
 }
 
-func TestRunUpgradeCommand_DowngradeRequiresTypedConfirmation(t *testing.T) {
-	var stdout bytes.Buffer
+func TestRunUpgradeCommand_DowngradeRequiresForce(t *testing.T) {
 	confirmationCalls := 0
 
-	err := runUpgradeCommand(false, upgradeCommandDeps{
+	err := runUpgradeCommand(false, false, upgradeCommandDeps{
 		installedUnits: func() []string {
 			return []string{"netsgo-server.service"}
 		},
@@ -294,45 +251,32 @@ func TestRunUpgradeCommand_DowngradeRequiresTypedConfirmation(t *testing.T) {
 			return "/tmp/netsgo-old", nil
 		},
 		installedVersion: func() (string, error) {
-			return "1.2.0", nil
+			return "v1.2.0", nil
 		},
-		confirm: func(prompt, confirmText string) (bool, error) {
+		confirm: func(prompt string) (bool, error) {
 			confirmationCalls++
-			if confirmText != "upgrade binary" {
-				t.Fatalf("confirmation phrase = %q, want upgrade binary", confirmText)
-			}
 			return false, nil
 		},
 		applyUpgrade: func(currentPath, installedVersion, targetVersion string) (*updater.Result, error) {
 			t.Fatal("applyUpgrade should not be called when confirmation is declined")
 			return nil, nil
 		},
-		currentVersion: "1.1.0",
-		stdout:         &stdout,
+		currentVersion: "v1.1.0",
+		stdout:         io.Discard,
 		stderr:         io.Discard,
 	})
-	if err != nil {
-		t.Fatalf("runUpgradeCommand returned error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "低于已安装版本") {
+		t.Fatalf("expected downgrade force error, got %v", err)
 	}
-	if confirmationCalls != 1 {
-		t.Fatalf("expected confirmation once, got %d", confirmationCalls)
-	}
-	output := stdout.String()
-	for _, want := range []string{
-		"版本变化:       1.2.0 -> 1.1.0",
-		"风险:           目标版本 1.1.0 低于已安装版本 1.2.0",
-		"替换已取消，未进行任何修改。",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("expected %q in output, got %q", want, output)
-		}
+	if confirmationCalls != 0 {
+		t.Fatalf("confirmation should not be requested, got %d", confirmationCalls)
 	}
 }
 
 func TestRunUpgradeCommand_ConfirmationAbortCancels(t *testing.T) {
 	var stdout bytes.Buffer
 
-	err := runUpgradeCommand(false, upgradeCommandDeps{
+	err := runUpgradeCommand(false, false, upgradeCommandDeps{
 		installedUnits: func() []string {
 			return []string{"netsgo-server.service"}
 		},
@@ -340,16 +284,16 @@ func TestRunUpgradeCommand_ConfirmationAbortCancels(t *testing.T) {
 			return "/tmp/current-netsgo", nil
 		},
 		installedVersion: func() (string, error) {
-			return "0.1.0", nil
+			return "v0.1.0", nil
 		},
-		confirm: func(prompt, confirmText string) (bool, error) {
+		confirm: func(prompt string) (bool, error) {
 			return false, tui.ErrCancelled
 		},
 		applyUpgrade: func(currentPath, installedVersion, targetVersion string) (*updater.Result, error) {
 			t.Fatal("applyUpgrade should not be called after confirmation abort")
 			return nil, nil
 		},
-		currentVersion: "0.2.0",
+		currentVersion: "v0.2.0",
 		stdout:         &stdout,
 		stderr:         io.Discard,
 	})
@@ -361,7 +305,7 @@ func TestRunUpgradeCommand_ConfirmationAbortCancels(t *testing.T) {
 	}
 }
 
-func TestRunUpgradeCommand_ForceSkipsUnknownInstalledVersionConfirmation(t *testing.T) {
+func TestRunUpgradeCommand_ForceYesSkipsUnknownInstalledVersionConfirmation(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	confirmationCalls := 0
@@ -370,7 +314,7 @@ func TestRunUpgradeCommand_ForceSkipsUnknownInstalledVersionConfirmation(t *test
 	var gotInstalledVersion string
 	var gotTargetVersion string
 
-	err := runUpgradeCommand(true, upgradeCommandDeps{
+	err := runUpgradeCommand(true, true, upgradeCommandDeps{
 		installedUnits: func() []string {
 			return []string{"netsgo-server.service"}
 		},
@@ -380,7 +324,7 @@ func TestRunUpgradeCommand_ForceSkipsUnknownInstalledVersionConfirmation(t *test
 		installedVersion: func() (string, error) {
 			return "", errors.New("version lookup failed")
 		},
-		confirm: func(prompt, confirmText string) (bool, error) {
+		confirm: func(prompt string) (bool, error) {
 			confirmationCalls++
 			return false, nil
 		},
@@ -394,7 +338,7 @@ func TestRunUpgradeCommand_ForceSkipsUnknownInstalledVersionConfirmation(t *test
 				Started: []string{"netsgo-server.service"},
 			}, nil
 		},
-		currentVersion: "0.1.0",
+		currentVersion: "v0.1.0",
 		stdout:         &stdout,
 		stderr:         &stderr,
 	})
@@ -407,14 +351,14 @@ func TestRunUpgradeCommand_ForceSkipsUnknownInstalledVersionConfirmation(t *test
 	if upgradeCalls != 1 {
 		t.Fatalf("expected upgrade to be called once, got %d calls", upgradeCalls)
 	}
-	if gotCurrentPath != "/tmp/current-netsgo" || gotInstalledVersion != "" || gotTargetVersion != "0.1.0" {
+	if gotCurrentPath != "/tmp/current-netsgo" || gotInstalledVersion != "" || gotTargetVersion != "v0.1.0" {
 		t.Fatalf("unexpected upgrade args: currentPath=%q installedVersion=%q targetVersion=%q", gotCurrentPath, gotInstalledVersion, gotTargetVersion)
 	}
 	output := stdout.String()
 	for _, want := range []string{
 		"替换计划",
-		"版本变化:       未知 -> 0.1.0",
-		"已通过 --force 跳过输入确认。",
+		"版本变化:       未知 -> v0.1.0",
+		"已通过 --yes 跳过输入确认。",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected %q in output, got %q", want, output)

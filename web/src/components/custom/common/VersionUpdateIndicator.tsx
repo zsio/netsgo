@@ -1,6 +1,13 @@
-import { CircleAlert } from 'lucide-react';
-import { useVersionCheck } from '@/hooks/use-version-check';
+import { CircleAlert, Copy, RefreshCw } from 'lucide-react';
+import toast from 'react-hot-toast';
+import {
+  useForceVersionCheck,
+  useVersionCheck,
+  type VersionCheckResult,
+  type VersionCheckTarget,
+} from '@/hooks/use-version-check';
 import { Button } from '@/components/ui/button';
+import { manualVersionCheckToast } from './version-update-toast';
 import {
   Dialog,
   DialogContent,
@@ -12,20 +19,125 @@ import {
 } from '@/components/ui/dialog';
 
 interface VersionUpdateIndicatorProps {
-  version?: string;
+  target: VersionCheckTarget;
   label?: string;
 }
 
-export function VersionUpdateIndicator({ version, label = '运行版本' }: VersionUpdateIndicatorProps) {
-  const { data } = useVersionCheck(version);
-  const latestVersion = data?.latest_version;
-  const installMethod = data?.install_method || 'cli';
+function displayVersion(version?: string) {
+  return version || '-';
+}
 
-  if (!version || !data?.update_available) return null;
+function targetInstruction(kind: 'server' | 'client') {
+  if (kind === 'client') {
+    return '请在该 client 所在机器上执行以下命令。不要在 server 机器上执行，除非 server 与该 client 本来就在同一台机器。该命令会下载并验证可信的 NetsGo release，然后升级并重启本机所有 NetsGo 托管服务。';
+  }
+  return '请在运行 NetsGo server 的机器上执行以下命令。该命令会下载并验证可信的 NetsGo release，然后升级并重启本机所有 NetsGo 托管服务。';
+}
 
-  const isDocker = installMethod === 'docker';
-  const isService = installMethod === 'service';
-  const releaseHref = 'https://github.com/zsio/netsgo/releases';
+function copy(text: string) {
+  void navigator.clipboard?.writeText(text);
+}
+
+export function VersionUpdateContent({
+  data,
+  target,
+}: {
+  data: VersionCheckResult;
+  target: VersionCheckTarget;
+}) {
+  const releaseHref = data.release_url || 'https://github.com/zsio/netsgo/releases';
+  const isDocker = data.install_method === 'docker';
+  const isService = data.install_method === 'service';
+
+  return (
+    <>
+      <div className="grid gap-2 rounded-md border bg-muted/30 p-3 text-sm">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-muted-foreground">当前版本</span>
+          <span className="font-mono text-foreground">{displayVersion(data.current_version || target.version)}</span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-muted-foreground">最新版本</span>
+          <span className="font-mono text-foreground">{data.latest_version}</span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-muted-foreground">推荐通道</span>
+          <span className="text-foreground">{data.recommended_channel || '-'}</span>
+        </div>
+      </div>
+      {isService && data.commands ? (
+        <div className="grid gap-3 text-sm">
+          <p className="text-muted-foreground">{targetInstruction(target.kind)}</p>
+          {[
+            ['国内源', data.commands.domestic],
+            ['国外源', data.commands.global],
+          ].map(([name, command]) => (
+            <div key={name} className="grid gap-1.5">
+              <div className="text-xs text-muted-foreground">{name}</div>
+              <div className="flex items-start gap-2 rounded-md bg-muted p-2">
+                <code className="min-w-0 flex-1 break-all text-xs text-foreground">{command}</code>
+                <Button type="button" variant="ghost" size="icon-xs" onClick={() => copy(command)}>
+                  <Copy className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : isDocker ? (
+        <p className="text-sm text-muted-foreground">当前目标以容器方式运行，请使用镜像发布页或部署文档手动更新。</p>
+      ) : (
+        <p className="text-sm text-muted-foreground">当前目标以二进制方式运行，请前往 GitHub Releases 手动下载更新。</p>
+      )}
+      <DialogFooter>
+        <Button type="button" variant="outline" asChild>
+          <a href={releaseHref} target="_blank" rel="noreferrer">
+            GitHub Releases
+          </a>
+        </Button>
+      </DialogFooter>
+    </>
+  );
+}
+
+export function VersionUpdateIndicator({ target, label = '运行版本' }: VersionUpdateIndicatorProps) {
+  const check = useVersionCheck(target);
+  const forceCheck = useForceVersionCheck(target);
+  const data = forceCheck.data || check.data;
+  const hasUpdate = Boolean(data?.update_available);
+  const manualFailed = Boolean(forceCheck.data?.check_failed || forceCheck.error);
+
+  if (!target.version || target.enabled === false) return null;
+
+  const handleManualCheck = () => {
+    forceCheck.mutate(undefined, {
+      onSuccess: (result) => {
+        const toastKind = manualVersionCheckToast(result);
+        if (toastKind === 'error') {
+          toast.error('检查更新失败，请前往 GitHub Releases 手动确认');
+          return;
+        }
+        if (toastKind === 'success') toast.success('已是最新版本');
+      },
+      onError: () => {
+        if (manualVersionCheckToast(null, true) === 'error') toast.error('检查更新失败，请前往 GitHub Releases 手动确认');
+      },
+    });
+  };
+
+  if (!hasUpdate) {
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        title={manualFailed ? '检查失败' : '检查更新'}
+        disabled={forceCheck.isPending}
+        onClick={handleManualCheck}
+      >
+        <RefreshCw className={`size-3.5 ${forceCheck.isPending ? 'animate-spin' : ''}`} />
+      </Button>
+    );
+  }
 
   return (
     <Dialog>
@@ -33,73 +145,23 @@ export function VersionUpdateIndicator({ version, label = '运行版本' }: Vers
         <button
           type="button"
           className="inline-flex shrink-0 items-center justify-center text-amber-500 transition-colors hover:text-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          aria-label={`${label}可更新到 ${latestVersion}`}
+          aria-label={`${label}可更新到 ${data?.latest_version}`}
         >
           <CircleAlert className="size-4" />
         </button>
       </DialogTrigger>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>发现可用更新</DialogTitle>
-          <DialogDescription>
-            {label}可以从 v{version} 更新到 {latestVersion}。
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-2 rounded-lg border bg-muted/30 p-3 text-sm">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-muted-foreground">当前版本</span>
-            <span className="font-mono text-foreground">v{version}</span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-muted-foreground">最新版本</span>
-            <span className="font-mono text-foreground">{latestVersion}</span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-muted-foreground">运行方式</span>
-            <span className="text-foreground">{isDocker ? 'Docker 镜像' : isService ? '系统服务' : 'CLI / 二进制'}</span>
-          </div>
-        </div>
-        {isDocker ? (
-          <div className="grid gap-2 text-sm text-muted-foreground">
-            <p>您当前使用 Docker 镜像运行，请前往以下制品页面查看最新镜像。</p>
-            <div className="grid gap-2">
-              <a
-                className="rounded-md bg-muted px-3 py-2 text-sm text-foreground underline-offset-4 hover:underline"
-                href="https://cnb.cool/zsio/netsgo/-/packages/docker/netsgo"
-                target="_blank"
-                rel="noreferrer"
-              >
-                CNB 制品库
-              </a>
-              <a
-                className="rounded-md bg-muted px-3 py-2 text-sm text-foreground underline-offset-4 hover:underline"
-                href="https://hub.docker.com/r/zsio/netsgo"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Docker Hub
-              </a>
-            </div>
-          </div>
-        ) : isService ? (
-          null
-        ) : (
-          <div className="grid gap-2 text-sm text-muted-foreground">
-            <p>您当前使用二进制直接运行，请您前往 GitHub 下载最新二进制文件进行更新。</p>
-          </div>
+        {data && (
+          <>
+            <DialogHeader>
+              <DialogTitle>发现可用更新</DialogTitle>
+              <DialogDescription>
+                {label}可以从 {displayVersion(data.current_version || target.version)} 更新到 {data.latest_version}。
+              </DialogDescription>
+            </DialogHeader>
+            <VersionUpdateContent data={data} target={target} />
+          </>
         )}
-        <DialogFooter>
-          {isService && (
-            <Button type="button">
-              开始更新
-            </Button>
-          )}
-          <Button type="button" variant="outline" asChild>
-            <a href={releaseHref} target="_blank" rel="noreferrer">
-              查看 Release
-            </a>
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
