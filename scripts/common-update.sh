@@ -4,8 +4,6 @@ set -eu
 
 NETSGO_LATEST_CNB="https://cnb.cool/zsio/netsgo/-/raw/release-index/updates/index-v1/latest.json"
 NETSGO_LATEST_GITHUB="https://raw.githubusercontent.com/zsio/netsgo/release-index/updates/index-v1/latest.json"
-NETSGO_COMMON_CNB="https://cnb.cool/zsio/netsgo/-/raw/main/scripts/common-update.sh"
-NETSGO_COMMON_GITHUB="https://raw.githubusercontent.com/zsio/netsgo/main/scripts/common-update.sh"
 
 # Release public keys are derived from the private release signing key stored in
 # NETSGO_RELEASE_SIGNING_KEY_PEM. Commit public keys here so install/upgrade
@@ -164,10 +162,8 @@ official_url_allowed() {
   case "$1" in
     https://github.com/zsio/netsgo/releases/download/*) return 0 ;;
     https://raw.githubusercontent.com/zsio/netsgo/release-index/*) return 0 ;;
-    https://raw.githubusercontent.com/zsio/netsgo/main/scripts/common-update.sh) return 0 ;;
     https://cnb.cool/zsio/netsgo/-/releases/download/*) return 0 ;;
     https://cnb.cool/zsio/netsgo/-/raw/release-index/*) return 0 ;;
-    https://cnb.cool/zsio/netsgo/-/raw/main/scripts/common-update.sh) return 0 ;;
     *) return 1 ;;
   esac
 }
