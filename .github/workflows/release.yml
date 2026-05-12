@@ -32,10 +32,10 @@ jobs:
     needs: release-gate
     steps:
       - uses: actions/checkout@v6
-      - name: Reject npm lockfiles in Bun-managed web app
+      - name: Reject non-Bun lockfiles in frontend workspaces
         run: |
-          ! find web -maxdepth 1 \( -name 'package-lock.json' -o -name 'npm-shrinkwrap.json' \) | grep -q . || {
-            echo "npm lockfiles must not exist in web/; use Bun and web/bun.lock instead."
+          ! find web desktop -maxdepth 1 \( -name 'package-lock.json' -o -name 'npm-shrinkwrap.json' -o -name 'pnpm-lock.yaml' -o -name 'yarn.lock' \) | grep -q . || {
+            echo "Non-Bun lockfiles must not exist in web/ or desktop/; use Bun and bun.lock instead."
             exit 1
           }
       - uses: oven-sh/setup-bun@v2
@@ -177,6 +177,7 @@ jobs:
         with:
           name: release-dist
           path: dist
+      - uses: oven-sh/setup-bun@v2
       - name: Restore current release index
         shell: bash
         run: |
@@ -329,7 +330,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CNB_REPO_SLUG="${{ steps.cnb-vars.outputs.slug }}" CNB_UPLOADED_ASSETS="${{ steps.cnb-assets.outputs.uploaded_assets }}" node scripts/release-index.mjs build
+          CNB_REPO_SLUG="${{ steps.cnb-vars.outputs.slug }}" CNB_UPLOADED_ASSETS="${{ steps.cnb-assets.outputs.uploaded_assets }}" bun scripts/release-index.mjs build
       - name: Push release-index branch to GitHub
         shell: bash
         env:

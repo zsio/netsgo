@@ -19,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Reject npm lockfiles in Bun-managed web app
+      - name: Reject non-Bun lockfiles in frontend workspaces
         run: |
-          ! find web -maxdepth 1 \( -name 'package-lock.json' -o -name 'npm-shrinkwrap.json' \) | grep -q . || {
-            echo "npm lockfiles must not exist in web/; use Bun and web/bun.lock instead."
+          ! find web desktop -maxdepth 1 \( -name 'package-lock.json' -o -name 'npm-shrinkwrap.json' -o -name 'pnpm-lock.yaml' -o -name 'yarn.lock' \) | grep -q . || {
+            echo "Non-Bun lockfiles must not exist in web/ or desktop/; use Bun and bun.lock instead."
             exit 1
           }
       - uses: oven-sh/setup-bun@v2

@@ -20,6 +20,8 @@ coverage_func.txt
 .idea/
 .vscode/
 !.vscode/extensions.json
+!desktop/.vscode/
+!desktop/.vscode/extensions.json
 *.swp
 *.swo
 *~
@@ -54,6 +56,22 @@ web/dist-ssr/
 web/npm-shrinkwrap.json
 web/package-lock.json
 !web/dist/placeholder.md
+
+# 桌面客户端 (desktop/)
+desktop/node_modules/
+desktop/dist/
+desktop/dist-ssr/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/schemas/
+desktop/src-tauri/binaries/*
+!desktop/src-tauri/binaries/.gitkeep
+desktop/src-tauri/*.p12
+desktop/src-tauri/*.pfx
+desktop/src-tauri/*.cer
+desktop/src-tauri/*.crt
+desktop/src-tauri/*.key
+desktop/src-tauri/*.pem
+desktop/src-tauri/*.mobileprovision
 *.local
 logs/
 *.log
