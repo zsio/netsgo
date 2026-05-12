@@ -36,7 +36,8 @@ func fetchDefaultReleaseIndex() (*updater.ReleaseIndex, error) {
 
 func (s *Server) handleAPIVersionCheck(w http.ResponseWriter, r *http.Request) {
 	force := parseForce(r)
-	result := s.computeVersionCheck(force, "server", "server", buildversion.Current, s.serverUpdateCapability(time.Now()).InstallMethod)
+	capability := s.serverUpdateCapability(time.Now(), force)
+	result := s.computeVersionCheck(force, "server", "server", buildversion.Current, capability.InstallMethod)
 	encodeJSON(w, http.StatusOK, result)
 }
 
@@ -78,10 +79,13 @@ func (s *Server) handleAPIClientVersionCheck(w http.ResponseWriter, r *http.Requ
 	encodeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) serverUpdateCapability(now time.Time) *protocol.UpdateCapability {
+func (s *Server) serverUpdateCapability(now time.Time, force ...bool) *protocol.UpdateCapability {
 	cache := s.updateCapabilityCache
 	if cache == nil {
 		cache = newUpdateCapabilityCache(installmethod.Detect)
+	}
+	if len(force) > 0 && force[0] {
+		return cache.Refresh(now)
 	}
 	return cache.Get(now)
 }

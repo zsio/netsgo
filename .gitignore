@@ -61,6 +61,7 @@ web/package-lock.json
 desktop/node_modules/
 desktop/dist/
 desktop/dist-ssr/
+desktop/package-lock.json
 desktop/src-tauri/target/
 desktop/src-tauri/gen/schemas/
 desktop/src-tauri/binaries/*

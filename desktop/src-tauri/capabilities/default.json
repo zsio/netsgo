@@ -5,14 +5,31 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:path:allow-resolve-directory",
     "opener:default",
     "shell:allow-execute",
+    "shell:allow-kill",
     {
       "identifier": "shell:allow-spawn",
       "allow": [
         {
           "name": "binaries/netsgo",
-          "sidecar": true
+          "sidecar": true,
+          "args": [
+            "client",
+            "--server",
+            {
+              "validator": "https?://.+"
+            },
+            "--key",
+            {
+              "validator": ".+"
+            },
+            "--data-dir",
+            {
+              "validator": ".+"
+            }
+          ]
         }
       ]
     }

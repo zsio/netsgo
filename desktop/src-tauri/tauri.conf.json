@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "desktop",
+  "productName": "NetsGo",
   "version": "0.1.0",
-  "identifier": "zs",
+  "identifier": "com.netsgo.app",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,10 @@
   "app": {
     "windows": [
       {
-        "title": "desktop",
-        "width": 800,
-        "height": 600
+        "title": "NetsGo",
+        "width": 310,
+        "height": 400,
+        "resizable": true
       }
     ],
     "security": {

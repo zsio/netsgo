@@ -216,27 +216,22 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 				s.auth.clientLimiter.ResetFailures(ip)
 			}
 		} else {
-			record, err := s.auth.adminStore.GetOrCreateClient(authReq.InstallID, authReq.Client, ip)
-			if err != nil {
-				return nil, fmt.Errorf("failed to register client: %w", err)
-			}
-			clientID = record.ID
-			bandwidthSettings = registeredClientBandwidthSettings(*record)
-
-			if current, loaded := s.clients.Load(clientID); loaded {
-				currentClient := current.(*ClientConn)
-				if currentClient.getState() != clientStateClosing {
-					_ = writeAuthResult(conn, protocol.AuthResponse{
-						Success:   false,
-						Message:   "authentication failed",
-						Code:      protocol.AuthCodeConcurrentSession,
-						Retryable: true,
-					})
-					return nil, fmt.Errorf("authentication failed")
+			if registered, ok := s.auth.adminStore.GetRegisteredClientByInstallID(authReq.InstallID); ok {
+				if current, loaded := s.clients.Load(registered.ID); loaded {
+					currentClient := current.(*ClientConn)
+					if currentClient.getState() != clientStateClosing {
+						_ = writeAuthResult(conn, protocol.AuthResponse{
+							Success:   false,
+							Message:   "authentication failed",
+							Code:      protocol.AuthCodeConcurrentSession,
+							Retryable: true,
+						})
+						return nil, fmt.Errorf("authentication failed")
+					}
 				}
 			}
 
-			tokenStr, _, err := s.auth.adminStore.ExchangeToken(authReq.Key, authReq.InstallID, clientID, ip)
+			exchange, err := s.auth.adminStore.RegisterClientAndExchangeToken(authReq.Key, authReq.InstallID, authReq.Client, ip)
 			if err != nil {
 				log.Printf("❌ Failed to exchange client key for token [%s]: %v", remoteAddr, err)
 				if s.auth.clientLimiter != nil {
@@ -249,7 +244,10 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 				})
 				return nil, fmt.Errorf("authentication failed")
 			}
-			newToken = tokenStr
+			clientID = exchange.Client.ID
+			bandwidthSettings = registeredClientBandwidthSettings(exchange.Client)
+
+			newToken = exchange.Token
 			log.Printf("🔑 Client key exchanged for token successfully [install_id=%s]", authReq.InstallID)
 			if s.auth.clientLimiter != nil {
 				s.auth.clientLimiter.ResetFailures(ip)

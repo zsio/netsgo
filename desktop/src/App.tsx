@@ -1,151 +1,205 @@
 import { useMemo, useRef, useState } from "react";
+import { appLocalDataDir } from "@tauri-apps/api/path";
 import { Command } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { ShieldCheck, Globe, KeyRound } from "lucide-react";
+import toast, { Toaster } from "react-hot-toast";
 import "./App.css";
 
-type ConnectionState = "idle" | "connecting" | "connected" | "stopped" | "error";
-
-function stateLabel(state: ConnectionState) {
-  switch (state) {
-    case "connecting":
-      return "连接中";
-    case "connected":
-      return "已连接";
-    case "stopped":
-      return "已停止";
-    case "error":
-      return "连接失败";
-    default:
-      return "未连接";
-  }
-}
+type ConnectionState = "idle" | "connecting" | "connected" | "error";
 
 function App() {
-  const [server, setServer] = useState("https://");
+  const [server, setServer] = useState("");
   const [key, setKey] = useState("");
   const [state, setState] = useState<ConnectionState>("idle");
-  const [lastMessage, setLastMessage] = useState("填写服务地址和 Key 后启动客户端。");
-  const [logs, setLogs] = useState<string[]>([]);
+  
   const childRef = useRef<{ kill: () => Promise<void> } | null>(null);
+  const intentionalDisconnectRef = useRef<boolean>(false);
+  const lastErrorMsg = useRef<string>("");
 
   const canConnect = useMemo(
-    () => server.trim().length > "https://".length && key.trim().length > 0 && !childRef.current,
-    [server, key],
+    () => server.trim().length > 0 && key.trim().length > 0 && state !== "connecting",
+    [server, key, state]
   );
-
-  const appendLog = (line: string) => {
-    setLogs((current) => [line, ...current].slice(0, 80));
-  };
 
   async function connect() {
     if (!canConnect) return;
     setState("connecting");
-    setLastMessage("正在启动 NetsGo client...");
-    setLogs([]);
+    intentionalDisconnectRef.current = false;
+    lastErrorMsg.current = "";
 
     try {
+      const dataDir = await appLocalDataDir();
       const command = Command.sidecar("binaries/netsgo", [
         "client",
         "--server",
         server.trim(),
         "--key",
         key.trim(),
+        "--data-dir",
+        dataDir,
       ]);
 
-      command.stdout.on("data", (line) => appendLog(line));
-      command.stderr.on("data", (line) => {
-        appendLog(line);
-        if (line.includes("connecting") || line.includes("Client connecting")) {
-          setState("connecting");
-        }
-        if (line.includes("authenticated") || line.includes("data channel")) {
+      const handleLog = (line: string) => {
+        const text = line.toLowerCase();
+        // ONLY set to connected when the entire connection flow (including auth and data channel) is complete
+        if (text.includes("data channel established")) {
           setState("connected");
-          setLastMessage("客户端正在运行。");
         }
-      });
+        
+        // Try to capture meaningful error messages
+        if (text.includes("error") || text.includes("fail") || text.includes("invalid") || text.includes("fatal")) {
+            lastErrorMsg.current = line.trim();
+        }
+      };
+
+      command.stdout.on("data", handleLog);
+      command.stderr.on("data", handleLog);
 
       command.on("close", ({ code }) => {
         childRef.current = null;
-        setState(code === 0 ? "stopped" : "error");
-        setLastMessage(code === 0 ? "客户端已停止。" : `客户端退出，代码 ${code}。`);
+        
+        // If we intentionally disconnected, just reset state implicitly.
+        if (intentionalDisconnectRef.current) {
+          setState("idle");
+          return;
+        }
+
+        // It crashed or exited unexpectedly
+        if (code !== 0) {
+          setState("idle"); // reset form state properly so they can edit right away
+          
+          let cause = lastErrorMsg.current || "请检查服务器地址和凭证是否正确";
+          // Simplify very long error logs to be more readable in a tiny toast
+          if (cause.length > 50) {
+              cause = cause.substring(0, 50) + "...";
+          }
+          
+          toast.error(`连接失败: ${cause}`, {
+            style: {
+              borderRadius: '6px',
+              background: 'var(--input-bg)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              fontSize: '13px'
+            },
+          });
+        } else {
+          setState("idle");
+        }
       });
 
       childRef.current = await command.spawn();
-      setState("connected");
-      setLastMessage("客户端进程已启动，正在保持连接。");
     } catch (error) {
       childRef.current = null;
-      setState("error");
-      setLastMessage(error instanceof Error ? error.message : String(error));
+      setState("idle");
+      toast.error(error instanceof Error ? error.message : String(error), {
+        style: {
+          borderRadius: '6px',
+          background: 'var(--input-bg)',
+          color: 'var(--text-primary)',
+          border: '1px solid var(--border-color)',
+          fontSize: '13px'
+        },
+      });
     }
   }
 
   async function disconnect() {
-    if (!childRef.current) return;
-    setLastMessage("正在停止客户端...");
-    await childRef.current.kill();
+    intentionalDisconnectRef.current = true;
+    if (!childRef.current) {
+        setState("idle");
+        return;
+    }
+    try {
+      await childRef.current.kill();
+    } catch (e) {
+      console.error("Failed to kill process:", e);
+    }
+    setState("idle");
   }
 
   return (
-    <main className="shell">
-      <section className="connection-panel">
-        <div className="masthead">
-          <div>
-            <p className="eyebrow">NetsGo Client</p>
-            <h1>连接到 NetsGo Server</h1>
+    <div className="app-wrapper">
+      <Toaster position="top-right" toastOptions={{ duration: 1000 }} />
+      
+      <header className="brand-header">
+        <div className="brand-icon-wrapper">
+          <img src="/logo.svg" className="brand-logo" alt="NetsGo Logo" />
+        </div>
+        <h1 className="brand-title">NetsGo</h1>
+      </header>
+
+      <main className="content-area">
+        {state === "connected" ? (
+          <div className="status-view">
+            <div className="connection-pulse">
+              <div className="pulse-core">
+                <ShieldCheck size={28} />
+              </div>
+            </div>
+            <h2>已连接</h2>
+            <div 
+              className="server-badge" 
+              style={{ cursor: 'pointer' }}
+              onClick={() => openUrl(server.trim())}
+              title="在浏览器中打开"
+            >
+              <Globe size={14} />
+              <span>{server}</span>
+            </div>
           </div>
-          <div className={`status status-${state}`}>
-            <span />
-            {stateLabel(state)}
+        ) : (
+          <div className="form-view">
+            <div className="input-group">
+              <label>服务器节点</label>
+              <label className={`input-wrapper ${state === 'connecting' ? 'disabled' : ''}`}>
+                <Globe className="input-icon" size={14} />
+                <input
+                  className="input-field"
+                  value={server}
+                  onChange={(e) => setServer(e.target.value)}
+                  placeholder="https://example.com:9527"
+                  disabled={state === "connecting"}
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+
+            <div className="input-group">
+              <label>访问凭证</label>
+              <label className={`input-wrapper ${state === 'connecting' ? 'disabled' : ''}`}>
+                <KeyRound className="input-icon" size={14} />
+                <input
+                  className="input-field"
+                  type="password"
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  placeholder="请输入您的 Client Key"
+                  disabled={state === "connecting"}
+                />
+              </label>
+            </div>
           </div>
-        </div>
+        )}
+      </main>
 
-        <div className="form-grid">
-          <label>
-            <span>服务地址</span>
-            <input
-              value={server}
-              onChange={(event) => setServer(event.currentTarget.value)}
-              placeholder="https://example.com:9527"
-              disabled={Boolean(childRef.current)}
-            />
-          </label>
-          <label>
-            <span>Client Key</span>
-            <input
-              value={key}
-              onChange={(event) => setKey(event.currentTarget.value)}
-              placeholder="sk-..."
-              type="password"
-              disabled={Boolean(childRef.current)}
-            />
-          </label>
-        </div>
-
-        <div className="actions">
-          {!childRef.current ? (
-            <button className="primary" disabled={!canConnect} onClick={connect}>
-              连接
-            </button>
-          ) : (
-            <button className="danger" onClick={disconnect}>
-              断开
-            </button>
-          )}
-          <p>{lastMessage}</p>
-        </div>
-      </section>
-
-      <section className="log-panel">
-        <div className="log-title">运行日志</div>
-        <div className="log-list">
-          {logs.length === 0 ? (
-            <p className="empty-log">暂无日志</p>
-          ) : (
-            logs.map((line, index) => <pre key={`${index}-${line}`}>{line}</pre>)
-          )}
-        </div>
-      </section>
-    </main>
+      <footer className="action-area">
+        {state === "connected" ? (
+          <button className="btn btn-danger" onClick={disconnect}>
+            断开连接
+          </button>
+        ) : (
+          <button 
+            className="btn btn-primary" 
+            disabled={!canConnect} 
+            onClick={connect}
+          >
+            {state === "connecting" ? "连接中..." : "连接"}
+          </button>
+        )}
+      </footer>
+    </div>
   );
 }
 

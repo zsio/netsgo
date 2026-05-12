@@ -43,7 +43,20 @@ func (c *updateCapabilityCache) Get(now time.Time) *protocol.UpdateCapability {
 	if cached := c.freshLocked(now); cached != nil {
 		return cached
 	}
+	return c.refreshLocked(now)
+}
 
+func (c *updateCapabilityCache) Refresh(now time.Time) *protocol.UpdateCapability {
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refreshLocked(now)
+}
+
+func (c *updateCapabilityCache) refreshLocked(now time.Time) *protocol.UpdateCapability {
 	capability := &protocol.UpdateCapability{InstallMethod: normalizeInstallMethod(c.detect(svcmgr.RoleServer))}
 	c.value = capability
 	c.cachedAt = now

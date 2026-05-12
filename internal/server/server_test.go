@@ -1165,6 +1165,26 @@ func TestAuth_EmptyKey(t *testing.T) {
 	}
 }
 
+func TestAuth_InvalidKeyDoesNotRegisterClient(t *testing.T) {
+	s, conn, _, cleanup := setupWSTest(t)
+	defer cleanup()
+
+	installID := "install-invalid-key"
+	authResp := doAuthWithInstallID(t, conn, "aaa", installID, "wrong-key")
+	if authResp.Success {
+		t.Fatal("server should reject authentication when API key is invalid")
+	}
+	if authResp.Code != protocol.AuthCodeInvalidKey {
+		t.Fatalf("want invalid_key, got %q", authResp.Code)
+	}
+
+	for _, registered := range s.auth.adminStore.GetRegisteredClients() {
+		if registered.InstallID == installID {
+			t.Fatalf("invalid key auth should not register client, got %#v", registered)
+		}
+	}
+}
+
 func TestAuth_UninitializedServerRejected(t *testing.T) {
 	s := New(0)
 	s.auth.adminStore = newTestAdminStore(t)

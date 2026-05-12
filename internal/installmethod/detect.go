@@ -2,6 +2,7 @@ package installmethod
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -13,6 +14,8 @@ type Detector struct {
 	GOOS          string
 	CurrentPID    int
 	CurrentBinary func() (string, error)
+	InstalledPath string
+	BinaryMatches func(currentPath, installedPath string) bool
 	IsContainer   func() bool
 	SystemdUsable func() bool
 	UnitInstalled func(svcmgr.Role) bool
@@ -24,6 +27,8 @@ func DefaultDetector() Detector {
 		GOOS:          runtime.GOOS,
 		CurrentPID:    os.Getpid(),
 		CurrentBinary: svcmgr.CurrentBinaryPath,
+		InstalledPath: svcmgr.BinaryPath,
+		BinaryMatches: binaryPathsMatch,
 		IsContainer:   isContainerEnvironment,
 		SystemdUsable: systemdUsable,
 		UnitInstalled: func(role svcmgr.Role) bool {
@@ -57,7 +62,18 @@ func (d Detector) Detect(role svcmgr.Role) string {
 		return updater.InstallMethodBinary
 	}
 	path, err := d.CurrentBinary()
-	if err != nil || path != svcmgr.BinaryPath {
+	if err != nil {
+		return updater.InstallMethodBinary
+	}
+	installedPath := d.InstalledPath
+	if installedPath == "" {
+		installedPath = svcmgr.BinaryPath
+	}
+	binaryMatches := d.BinaryMatches
+	if binaryMatches == nil {
+		binaryMatches = binaryPathsMatch
+	}
+	if !binaryMatches(path, installedPath) {
 		return updater.InstallMethodBinary
 	}
 	if d.UnitMainPID == nil {
@@ -68,6 +84,26 @@ func (d Detector) Detect(role svcmgr.Role) string {
 		return updater.InstallMethodBinary
 	}
 	return updater.InstallMethodService
+}
+
+func binaryPathsMatch(currentPath, installedPath string) bool {
+	if strings.TrimSpace(currentPath) == "" || strings.TrimSpace(installedPath) == "" {
+		return false
+	}
+
+	currentInfo, currentErr := os.Stat(currentPath)
+	installedInfo, installedErr := os.Stat(installedPath)
+	if currentErr == nil && installedErr == nil && os.SameFile(currentInfo, installedInfo) {
+		return true
+	}
+
+	currentResolved, currentErr := filepath.EvalSymlinks(currentPath)
+	installedResolved, installedErr := filepath.EvalSymlinks(installedPath)
+	if currentErr == nil && installedErr == nil {
+		return filepath.Clean(currentResolved) == filepath.Clean(installedResolved)
+	}
+
+	return filepath.Clean(currentPath) == filepath.Clean(installedPath)
 }
 
 func isContainerEnvironment() bool {

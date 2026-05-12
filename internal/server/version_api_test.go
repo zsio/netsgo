@@ -331,6 +331,26 @@ func TestServerUpdateCapabilityUsesCachedValue(t *testing.T) {
 	}
 }
 
+func TestServerUpdateCapabilityForceRefreshesCachedValue(t *testing.T) {
+	methods := []string{updater.InstallMethodBinary, updater.InstallMethodService}
+	s := New(8080)
+	s.updateCapabilityCache = newUpdateCapabilityCache(func(svcmgr.Role) string {
+		method := methods[0]
+		methods = methods[1:]
+		return method
+	})
+
+	first := s.serverUpdateCapability(time.Unix(100, 0))
+	if first == nil || first.InstallMethod != updater.InstallMethodBinary {
+		t.Fatalf("expected initial binary install method, got %+v", first)
+	}
+
+	refreshed := s.serverUpdateCapability(time.Unix(101, 0), true)
+	if refreshed == nil || refreshed.InstallMethod != updater.InstallMethodService {
+		t.Fatalf("expected force refresh to redetect service install method, got %+v", refreshed)
+	}
+}
+
 func apiTestIndex(stable, beta string) *updater.ReleaseIndex {
 	channels := map[string]updater.ReleaseChannel{}
 	if stable != "" {

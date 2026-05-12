@@ -670,6 +670,39 @@ func upsertClientInfo(exec dbExecer, clientID string, info protocol.ClientInfo, 
 	return nil
 }
 
+func getOrCreateClientInTx(tx *sql.Tx, installID string, info protocol.ClientInfo, lastIP string, now time.Time) (RegisteredClient, error) {
+	client, err := loadRegisteredClient(tx, `WHERE install_id = ?`, installID)
+	if err == nil {
+		client.Info = info
+		client.LastSeen = now
+		client.LastIP = lastIP
+		if err := upsertClientInfo(tx, client.ID, info, now, lastIP); err != nil {
+			return RegisteredClient{}, err
+		}
+		client.Stats = cloneSystemStats(client.Stats)
+		return client, nil
+	}
+	if err != sql.ErrNoRows {
+		return RegisteredClient{}, err
+	}
+
+	client = RegisteredClient{
+		ID:        generateUUID(),
+		InstallID: installID,
+		Info:      info,
+		CreatedAt: now,
+		LastSeen:  now,
+		LastIP:    lastIP,
+	}
+	if _, err := tx.Exec(`INSERT INTO registered_clients
+		(id, install_id, display_name, hostname, os, arch, ip, version, public_ipv4, public_ipv6, ingress_bps, egress_bps, created_at, last_seen, last_ip)
+		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`,
+		client.ID, client.InstallID, info.Hostname, info.OS, info.Arch, info.IP, info.Version, info.PublicIPv4, info.PublicIPv6, formatTime(now), formatTime(now), lastIP); err != nil {
+		return RegisteredClient{}, err
+	}
+	return client, nil
+}
+
 func (s *AdminStore) GetOrCreateClient(installID string, info protocol.ClientInfo, remoteAddr string) (*RegisteredClient, error) {
 	if installID == "" {
 		return nil, fmt.Errorf("install_id must not be empty")
@@ -688,39 +721,8 @@ func (s *AdminStore) GetOrCreateClient(installID string, info protocol.ClientInf
 	committed := false
 	defer rollbackUnlessCommitted(tx, &committed)
 
-	client, err := loadRegisteredClient(tx, `WHERE install_id = ?`, installID)
-	if err == nil {
-		client.Info = info
-		client.LastSeen = now
-		client.LastIP = lastIP
-		if err := upsertClientInfo(tx, client.ID, info, now, lastIP); err != nil {
-			return nil, err
-		}
-		if err := s.maybeFailSave(); err != nil {
-			return nil, err
-		}
-		if err := commitTx(tx, &committed); err != nil {
-			return nil, err
-		}
-		client.Stats = cloneSystemStats(client.Stats)
-		return &client, nil
-	}
-	if err != sql.ErrNoRows {
-		return nil, err
-	}
-
-	client = RegisteredClient{
-		ID:        generateUUID(),
-		InstallID: installID,
-		Info:      info,
-		CreatedAt: now,
-		LastSeen:  now,
-		LastIP:    lastIP,
-	}
-	if _, err := tx.Exec(`INSERT INTO registered_clients
-		(id, install_id, display_name, hostname, os, arch, ip, version, public_ipv4, public_ipv6, ingress_bps, egress_bps, created_at, last_seen, last_ip)
-		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`,
-		client.ID, client.InstallID, info.Hostname, info.OS, info.Arch, info.IP, info.Version, info.PublicIPv4, info.PublicIPv6, formatTime(now), formatTime(now), lastIP); err != nil {
+	client, err := getOrCreateClientInTx(tx, installID, info, lastIP, now)
+	if err != nil {
 		return nil, err
 	}
 	if err := s.maybeFailSave(); err != nil {
@@ -1090,6 +1092,22 @@ func (s *AdminStore) GetRegisteredClient(clientID string) (RegisteredClient, boo
 	}
 	if err != nil {
 		log.Printf("failed to get registered client %q: %v", clientID, err)
+		return RegisteredClient{}, false
+	}
+	client.Stats = cloneSystemStats(client.Stats)
+	return client, true
+}
+
+func (s *AdminStore) GetRegisteredClientByInstallID(installID string) (RegisteredClient, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	client, err := loadRegisteredClient(s.db, `WHERE install_id = ?`, installID)
+	if err == sql.ErrNoRows {
+		return RegisteredClient{}, false
+	}
+	if err != nil {
+		log.Printf("failed to get registered client by install_id %q: %v", installID, err)
 		return RegisteredClient{}, false
 	}
 	client.Stats = cloneSystemStats(client.Stats)
@@ -1518,6 +1536,10 @@ func (s *AdminStore) validateClientKeyLocked(q dbQuerier, key string) (bool, err
 
 // findKeyByRaw returns the matching key, if found. Caller must hold mu.
 func (s *AdminStore) findKeyByRaw(q dbQuerier, key string) (*APIKey, error) {
+	return findKeyByRawLocked(q, key)
+}
+
+func findKeyByRawLocked(q dbQuerier, key string) (*APIKey, error) {
 	keys, err := loadAPIKeys(q)
 	if err != nil {
 		return nil, err
@@ -1532,6 +1554,58 @@ func (s *AdminStore) findKeyByRaw(q dbQuerier, key string) (*APIKey, error) {
 }
 
 // ========== Client Tokens ==========
+
+type ClientRegistrationTokenExchange struct {
+	Client    RegisteredClient
+	Token    string
+	TokenRow *ClientToken
+}
+
+func (s *AdminStore) RegisterClientAndExchangeToken(key, installID string, info protocol.ClientInfo, remoteAddr string) (*ClientRegistrationTokenExchange, error) {
+	if installID == "" {
+		return nil, fmt.Errorf("install_id must not be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ip := remoteIP(remoteAddr)
+	now := time.Now()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	valid, err := s.validateClientKeyLocked(tx, key)
+	if !valid {
+		return nil, fmt.Errorf("key validation failed: %w", err)
+	}
+
+	client, err := getOrCreateClientInTx(tx, installID, info, ip, now)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenStr, tokenRow, err := exchangeTokenInTx(tx, key, installID, client.ID, ip, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return nil, err
+	}
+	if err := commitTx(tx, &committed); err != nil {
+		return nil, err
+	}
+
+	return &ClientRegistrationTokenExchange{
+		Client:    client,
+		Token:     tokenStr,
+		TokenRow:  tokenRow,
+	}, nil
+}
 
 // hashToken computes a SHA-256 hash of the given token.
 func hashToken(token string) string {
@@ -1620,6 +1694,21 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 		return "", nil, fmt.Errorf("key validation failed: %w", err)
 	}
 
+	tokenStr, tokenRow, err := exchangeTokenInTx(tx, key, installID, clientID, ip, now)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return "", nil, err
+	}
+	if err := commitTx(tx, &committed); err != nil {
+		return "", nil, err
+	}
+
+	return tokenStr, tokenRow, nil
+}
+
+func exchangeTokenInTx(tx *sql.Tx, key, installID, clientID, ip string, now time.Time) (string, *ClientToken, error) {
 	tokens, err := loadClientTokens(tx, `WHERE install_id = ? AND is_revoked = 0 ORDER BY created_at, id`, installID)
 	if err != nil {
 		return "", nil, err
@@ -1638,18 +1727,12 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 				t.TokenHash, formatTime(t.LastActiveAt), t.LastIP, t.ClientID, t.ID); err != nil {
 				return "", nil, err
 			}
-			if err := s.maybeFailSave(); err != nil {
-				return "", nil, err
-			}
-			if err := commitTx(tx, &committed); err != nil {
-				return "", nil, err
-			}
 			log.Printf("🔑 Token refreshed [install_id=%s]: reused existing valid token without consuming key", installID)
 			return newToken, &t, nil
 		}
 	}
 
-	apiKey, err := s.findKeyByRaw(tx, key)
+	apiKey, err := findKeyByRawLocked(tx, key)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1685,12 +1768,6 @@ func (s *AdminStore) ExchangeToken(key, installID, clientID, remoteAddr string) 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		clientToken.ID, clientToken.TokenHash, clientToken.InstallID, clientToken.KeyID, clientToken.ClientID,
 		formatTime(clientToken.CreatedAt), formatTime(clientToken.LastActiveAt), clientToken.LastIP); err != nil {
-		return "", nil, err
-	}
-	if err := s.maybeFailSave(); err != nil {
-		return "", nil, err
-	}
-	if err := commitTx(tx, &committed); err != nil {
 		return "", nil, err
 	}
 

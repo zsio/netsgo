@@ -2,7 +2,9 @@ package svcmgr
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -58,6 +60,8 @@ func TestWriteReadClientEnvRoundTrip(t *testing.T) {
 }
 
 func TestWriteServerEnvSparseAndPermissions(t *testing.T) {
+	stubLookupSystemUser(t, strconv.Itoa(os.Getgid()))
+
 	layout := NewLayout(RoleServer)
 	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
 
@@ -77,9 +81,10 @@ func TestWriteServerEnvSparseAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to stat env file: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("env file permissions = %v, want 0600", info.Mode().Perm())
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("env file permissions = %v, want 0640", info.Mode().Perm())
 	}
+	assertEnvFileGroup(t, layout.EnvPath, os.Getgid())
 }
 
 func TestWriteRawEnvRejectsForbiddenKeys(t *testing.T) {
@@ -90,4 +95,15 @@ func TestWriteRawEnvRejectsForbiddenKeys(t *testing.T) {
 	if err == nil {
 		t.Fatal("writing env with NETSGO_INIT_* entries should fail")
 	}
+}
+
+func stubLookupSystemUser(t *testing.T, gid string) {
+	t.Helper()
+	original := lookupSystemUser
+	lookupSystemUser = func(string) (*user.User, error) {
+		return &user.User{Uid: strconv.Itoa(os.Getuid()), Gid: gid}, nil
+	}
+	t.Cleanup(func() {
+		lookupSystemUser = original
+	})
 }
