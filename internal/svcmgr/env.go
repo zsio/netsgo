@@ -135,7 +135,11 @@ func writeEnvFile(path string, values map[string]string) error {
 	if err := fileutil.AtomicWriteFile(path, []byte(builder.String()), 0o640); err != nil {
 		return err
 	}
-	return chownEnvFileForServiceUser(path)
+	return repairEnvFileOwnership(path)
+}
+
+func RepairEnvFileOwnership(layout ServiceLayout) error {
+	return repairEnvFileOwnership(layout.EnvPath)
 }
 
 func readEnvFile(path string) (map[string]string, error) {

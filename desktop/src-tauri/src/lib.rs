@@ -129,7 +129,8 @@ fn append_desktop_log(app: tauri::AppHandle, entry: Value) -> Result<(), String>
         .open(&path)
         .map_err(|err| format!("open app log file: {err}"))?;
 
-    let line = serde_json::to_string(&entry).map_err(|err| format!("encode app log entry: {err}"))?;
+    let line =
+        serde_json::to_string(&entry).map_err(|err| format!("encode app log entry: {err}"))?;
     file.write_all(line.as_bytes())
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.flush())
@@ -195,12 +196,12 @@ fn start_client_sidecar(
         }
     }
 
-    let mut args = vec![
-        "client".to_string(),
-        "--server".to_string(),
-        server.clone(),
-    ];
-    if let Some(key) = request.key.as_ref().filter(|value| !value.trim().is_empty()) {
+    let mut args = vec!["client".to_string(), "--server".to_string(), server.clone()];
+    if let Some(key) = request
+        .key
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         args.push("--key".to_string());
         args.push(key.trim().to_string());
     }
@@ -249,25 +250,41 @@ fn resolve_sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, St
         .or_else(|| env::var("TARGET").ok())
         .unwrap_or_else(current_target_triple);
 
-    let relative = format!("{SIDECAR_BASE_PATH}-{target_triple}");
-    let resource_path = app
-        .path()
-        .resolve(&relative, tauri::path::BaseDirectory::Resource)
-        .map_err(|err| format!("resolve sidecar resource path: {err}"))?;
-    if resource_path.exists() {
-        return Ok(resource_path);
-    }
+    let mut tried = Vec::new();
+    for relative in sidecar_relative_candidates(&target_triple) {
+        let resource_path = app
+            .path()
+            .resolve(&relative, tauri::path::BaseDirectory::Resource)
+            .map_err(|err| format!("resolve sidecar resource path: {err}"))?;
+        tried.push(resource_path.display().to_string());
+        if resource_path.exists() {
+            return Ok(resource_path);
+        }
 
-    let dev_path = std::path::PathBuf::from(&relative);
-    if dev_path.exists() {
-        return Ok(dev_path);
+        let dev_path = std::path::PathBuf::from(&relative);
+        tried.push(dev_path.display().to_string());
+        if dev_path.exists() {
+            return Ok(dev_path);
+        }
     }
 
     Err(format!(
-        "sidecar binary not found: {} or {}",
-        resource_path.display(),
-        dev_path.display()
+        "sidecar binary not found; tried: {}",
+        tried.join(", ")
     ))
+}
+
+fn sidecar_relative_candidates(target_triple: &str) -> Vec<String> {
+    let base = format!("{SIDECAR_BASE_PATH}-{target_triple}");
+    if is_windows_target(target_triple) {
+        vec![format!("{base}.exe"), base]
+    } else {
+        vec![base]
+    }
+}
+
+fn is_windows_target(target_triple: &str) -> bool {
+    target_triple.contains("-windows-")
 }
 
 fn current_target_triple() -> String {
@@ -302,7 +319,9 @@ fn current_target_triple() -> String {
 }
 
 #[tauri::command]
-fn stop_client_sidecar(manager: tauri::State<ClientSidecarManager>) -> Result<ClientSidecarStatus, String> {
+fn stop_client_sidecar(
+    manager: tauri::State<ClientSidecarManager>,
+) -> Result<ClientSidecarStatus, String> {
     manager.kill_running_child()?;
     Ok(manager.status())
 }
@@ -421,5 +440,30 @@ fn process_sidecar_event(
             signal: None,
             error: None,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_sidecar_candidates_try_exe_first() {
+        let candidates = sidecar_relative_candidates("x86_64-pc-windows-msvc");
+
+        assert_eq!(
+            candidates,
+            vec![
+                "binaries/netsgo-x86_64-pc-windows-msvc.exe",
+                "binaries/netsgo-x86_64-pc-windows-msvc",
+            ]
+        );
+    }
+
+    #[test]
+    fn unix_sidecar_candidates_do_not_add_exe() {
+        let candidates = sidecar_relative_candidates("aarch64-apple-darwin");
+
+        assert_eq!(candidates, vec!["binaries/netsgo-aarch64-apple-darwin"]);
     }
 }

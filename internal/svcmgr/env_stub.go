@@ -2,6 +2,6 @@
 
 package svcmgr
 
-func chownEnvFileForServiceUser(string) error {
+func repairEnvFileOwnership(string) error {
 	return nil
 }

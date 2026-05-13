@@ -3,18 +3,30 @@ package updater
 import (
 	"errors"
 	"fmt"
+	"os"
+
 	"netsgo/internal/svcmgr"
 )
 
 func installedUnits() []string {
 	var units []string
-	if svcmgr.Detect(svcmgr.RoleServer) == svcmgr.StateInstalled {
+	if serviceFilesExist(svcmgr.NewLayout(svcmgr.RoleServer)) {
 		units = append(units, svcmgr.UnitName(svcmgr.RoleServer))
 	}
-	if svcmgr.Detect(svcmgr.RoleClient) == svcmgr.StateInstalled {
+	if serviceFilesExist(svcmgr.NewLayout(svcmgr.RoleClient)) {
 		units = append(units, svcmgr.UnitName(svcmgr.RoleClient))
 	}
 	return units
+}
+
+func serviceFilesExist(layout svcmgr.ServiceLayout) bool {
+	if _, err := os.Stat(layout.UnitPath); err != nil {
+		return false
+	}
+	if _, err := os.Stat(layout.EnvPath); err != nil {
+		return false
+	}
+	return true
 }
 
 type Result struct {

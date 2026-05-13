@@ -5,10 +5,15 @@ package svcmgr
 import (
 	"os"
 	"strconv"
-	"syscall"
 )
 
-func chownEnvFileForServiceUser(path string) error {
+func repairEnvFileOwnership(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
 	account, err := lookupSystemUser(SystemUser)
 	if err != nil {
 		if isUnknownUser(err) {
@@ -21,11 +26,8 @@ func chownEnvFileForServiceUser(path string) error {
 		return err
 	}
 
-	uid := os.Getuid()
-	if info, err := os.Stat(path); err == nil {
-		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-			uid = int(stat.Uid)
-		}
+	if err := os.Chown(path, os.Getuid(), gid); err != nil {
+		return err
 	}
-	return os.Chown(path, uid, gid)
+	return os.Chmod(path, 0o640)
 }

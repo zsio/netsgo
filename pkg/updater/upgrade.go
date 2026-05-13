@@ -66,6 +66,14 @@ func Upgrade(srcPath, oldVersion, newVersion string) (*Result, error) {
 		return result, fmt.Errorf("replace: %w", err)
 	}
 
+	if err := repairServiceEnvFilesFunc(units); err != nil {
+		rollbackErr := rollbackUpdateOrUpgrade(orch, nil, stopped, originalBinary, true)
+		if rollbackErr != nil {
+			return result, errors.Join(err, rollbackErr)
+		}
+		return result, err
+	}
+
 	err = orch.StartServices(units, &started)
 	if err != nil {
 		rollbackErr := rollbackUpdateOrUpgrade(orch, started, stopped, originalBinary, true)

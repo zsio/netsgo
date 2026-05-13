@@ -89,11 +89,13 @@ func TestUpgradeReturnsProvidedVersionFields(t *testing.T) {
 	origEnableAndStart := enableAndStartFunc
 	origDetectInstalledUnits := detectInstalledUnitsFunc
 	origBinaryPath := installedBinaryPath
+	origRepairServiceEnvFiles := repairServiceEnvFilesFunc
 	t.Cleanup(func() {
 		disableAndStopFunc = origDisableAndStop
 		enableAndStartFunc = origEnableAndStart
 		detectInstalledUnitsFunc = origDetectInstalledUnits
 		installedBinaryPath = origBinaryPath
+		repairServiceEnvFilesFunc = origRepairServiceEnvFiles
 	})
 
 	tmpDir := t.TempDir()
@@ -110,6 +112,7 @@ func TestUpgradeReturnsProvidedVersionFields(t *testing.T) {
 	detectInstalledUnitsFunc = func() []string { return []string{"netsgo-server.service"} }
 	disableAndStopFunc = func(unit string) error { return nil }
 	enableAndStartFunc = func(unit string) error { return nil }
+	repairServiceEnvFilesFunc = func(units []string) error { return nil }
 
 	result, err := Upgrade(newPath, "1.0.0", "1.1.0")
 	if err != nil {
@@ -123,6 +126,116 @@ func TestUpgradeReturnsProvidedVersionFields(t *testing.T) {
 	}
 	if len(result.Started) != 1 || result.Started[0] != "netsgo-server.service" {
 		t.Fatalf("unexpected started services: %v", result.Started)
+	}
+}
+
+func TestUpgradeRepairsServiceEnvFilesBeforeRestart(t *testing.T) {
+	origDisableAndStop := disableAndStopFunc
+	origEnableAndStart := enableAndStartFunc
+	origDetectInstalledUnits := detectInstalledUnitsFunc
+	origBinaryPath := installedBinaryPath
+	origRepairServiceEnvFiles := repairServiceEnvFilesFunc
+	t.Cleanup(func() {
+		disableAndStopFunc = origDisableAndStop
+		enableAndStartFunc = origEnableAndStart
+		detectInstalledUnitsFunc = origDetectInstalledUnits
+		installedBinaryPath = origBinaryPath
+		repairServiceEnvFilesFunc = origRepairServiceEnvFiles
+	})
+
+	tmpDir := t.TempDir()
+	installedPath := filepath.Join(tmpDir, "installed-netsgo")
+	newPath := filepath.Join(tmpDir, "new-netsgo")
+	if err := os.WriteFile(installedPath, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPath, []byte("new binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installedBinaryPath = installedPath
+
+	units := []string{"netsgo-server.service", "netsgo-client.service"}
+	var events []string
+	detectInstalledUnitsFunc = func() []string { return units }
+	disableAndStopFunc = func(unit string) error {
+		events = append(events, "stop:"+unit)
+		return nil
+	}
+	repairServiceEnvFilesFunc = func(got []string) error {
+		if fmt.Sprint(got) != fmt.Sprint(units) {
+			t.Fatalf("repair units = %v, want %v", got, units)
+		}
+		events = append(events, "repair")
+		return nil
+	}
+	enableAndStartFunc = func(unit string) error {
+		events = append(events, "start:"+unit)
+		return nil
+	}
+
+	if _, err := Upgrade(newPath, "1.0.0", "1.1.0"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []string{
+		"stop:netsgo-server.service",
+		"stop:netsgo-client.service",
+		"repair",
+		"start:netsgo-server.service",
+		"start:netsgo-client.service",
+	}
+	if fmt.Sprint(events) != fmt.Sprint(want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestUpgradeRollsBackWhenServiceEnvRepairFails(t *testing.T) {
+	origDisableAndStop := disableAndStopFunc
+	origEnableAndStart := enableAndStartFunc
+	origDetectInstalledUnits := detectInstalledUnitsFunc
+	origBinaryPath := installedBinaryPath
+	origRepairServiceEnvFiles := repairServiceEnvFilesFunc
+	t.Cleanup(func() {
+		disableAndStopFunc = origDisableAndStop
+		enableAndStartFunc = origEnableAndStart
+		detectInstalledUnitsFunc = origDetectInstalledUnits
+		installedBinaryPath = origBinaryPath
+		repairServiceEnvFilesFunc = origRepairServiceEnvFiles
+	})
+
+	tmpDir := t.TempDir()
+	installedPath := filepath.Join(tmpDir, "installed-netsgo")
+	newPath := filepath.Join(tmpDir, "new-netsgo")
+	if err := os.WriteFile(installedPath, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPath, []byte("new binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installedBinaryPath = installedPath
+
+	var restarted []string
+	detectInstalledUnitsFunc = func() []string { return []string{"netsgo-server.service"} }
+	disableAndStopFunc = func(unit string) error { return nil }
+	enableAndStartFunc = func(unit string) error {
+		restarted = append(restarted, unit)
+		return nil
+	}
+	repairServiceEnvFilesFunc = func([]string) error { return fmt.Errorf("repair failed") }
+
+	_, err := Upgrade(newPath, "1.0.0", "1.1.0")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	data, err := os.ReadFile(installedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old binary" {
+		t.Fatalf("expected old binary restored after repair failure, got %q", string(data))
+	}
+	if len(restarted) != 1 || restarted[0] != "netsgo-server.service" {
+		t.Fatalf("expected stopped service to restart after repair failure, got %v", restarted)
 	}
 }
 

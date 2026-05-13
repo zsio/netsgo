@@ -99,6 +99,21 @@ jobs:
         run: go vet ./...
       - name: Run Go tests
         run: go test ./...
+      - name: Verify Linux service env permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo groupadd --system netsgo 2>/dev/null || true
+          if ! id -u netsgo >/dev/null 2>&1; then
+            sudo useradd --system --no-create-home --shell /usr/sbin/nologin -g netsgo netsgo
+          fi
+          sudo env \
+            "PATH=${PATH}" \
+            "HOME=${HOME}" \
+            "GOCACHE=$(go env GOCACHE)" \
+            "GOMODCACHE=$(go env GOMODCACHE)" \
+            NETSGO_PRIVILEGED_ENV_TEST=1 \
+            go test ./internal/svcmgr -run '^TestRepairEnvFileOwnershipPrivileged$' -count=1 -v
 
   test-race:
     runs-on: ubuntu-latest
