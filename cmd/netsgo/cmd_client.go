@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"netsgo/internal/client"
@@ -109,16 +108,6 @@ func fatalClient(logger *client.EventLogger, err error) {
 		log.Printf("❌ %v", err)
 	}
 	os.Exit(1)
-}
-
-func maskKey(key string) string {
-	if key == "" {
-		return "(empty)"
-	}
-	if len(key) <= 4 {
-		return strings.Repeat("*", len(key))
-	}
-	return strings.Repeat("*", len(key)-4) + key[len(key)-4:]
 }
 
 func resolveClientDataDir(flagValue string, flagChanged bool) string {

@@ -1534,11 +1534,6 @@ func (s *AdminStore) validateClientKeyLocked(q dbQuerier, key string) (bool, err
 	return false, fmt.Errorf("API key is invalid")
 }
 
-// findKeyByRaw returns the matching key, if found. Caller must hold mu.
-func (s *AdminStore) findKeyByRaw(q dbQuerier, key string) (*APIKey, error) {
-	return findKeyByRawLocked(q, key)
-}
-
 func findKeyByRawLocked(q dbQuerier, key string) (*APIKey, error) {
 	keys, err := loadAPIKeys(q)
 	if err != nil {
@@ -1556,7 +1551,7 @@ func findKeyByRawLocked(q dbQuerier, key string) (*APIKey, error) {
 // ========== Client Tokens ==========
 
 type ClientRegistrationTokenExchange struct {
-	Client    RegisteredClient
+	Client   RegisteredClient
 	Token    string
 	TokenRow *ClientToken
 }
@@ -1601,9 +1596,9 @@ func (s *AdminStore) RegisterClientAndExchangeToken(key, installID string, info 
 	}
 
 	return &ClientRegistrationTokenExchange{
-		Client:    client,
-		Token:     tokenStr,
-		TokenRow:  tokenRow,
+		Client:   client,
+		Token:    tokenStr,
+		TokenRow: tokenRow,
 	}, nil
 }
 
