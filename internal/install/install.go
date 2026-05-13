@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"syscall"
 
 	"golang.org/x/term"
 	"netsgo/internal/svcmgr"
@@ -72,7 +71,7 @@ func Run() error {
 			return InstallClient()
 		},
 		LookPath: exec.LookPath,
-		Exec:     syscall.Exec,
+		Exec:     execAsRoot,
 	})
 }
 

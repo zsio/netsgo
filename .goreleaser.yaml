@@ -6,14 +6,13 @@ release:
   prerelease: auto
 
 builds:
-  - id: netsgo
+  - id: netsgo-linux
     main: ./cmd/netsgo
     binary: netsgo
     env:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
       - arm64

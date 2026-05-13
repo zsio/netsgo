@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 
 	"netsgo/internal/svcmgr"
 	"netsgo/internal/tui"
@@ -207,7 +206,7 @@ var upgradeCmd = &cobra.Command{
 	使用 -f/--force 可强制允许不可比较、等版本或降级替换。
 	使用 -y/--yes 可跳过最终确认。`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := rerunUpgradeWithSudoIfNeeded(os.Getuid(), exec.LookPath, syscall.Exec); err != nil {
+		if err := rerunUpgradeWithSudoIfNeeded(os.Getuid(), exec.LookPath, execAsRoot); err != nil {
 			return err
 		}
 

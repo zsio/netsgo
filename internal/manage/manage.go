@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"golang.org/x/term"
 	"netsgo/internal/install"
@@ -72,7 +71,7 @@ func Run() error {
 			return UninstallAll()
 		},
 		LookPath: exec.LookPath,
-		Exec:     syscall.Exec,
+		Exec:     execAsRoot,
 	})
 }
 

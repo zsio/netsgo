@@ -35,27 +35,12 @@ build-go:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/netsgo ./cmd/netsgo/
 	@echo "✅ 编译完成: $(BIN_DIR)/netsgo"
 
-DESKTOP_TARGET_TRIPLE ?= $(shell rustc -vV 2>/dev/null | sed -n 's/^host: //p')
-DESKTOP_SIDECAR_EXT := $(if $(findstring windows,$(DESKTOP_TARGET_TRIPLE)),.exe,)
-DESKTOP_SIDECAR := desktop/src-tauri/binaries/netsgo-$(DESKTOP_TARGET_TRIPLE)$(DESKTOP_SIDECAR_EXT)
+DESKTOP_TARGET_TRIPLE ?= $(shell rustc --print host-tuple 2>/dev/null || rustc -vV 2>/dev/null | sed -n 's/^host: //p')
 DESKTOP_BUNDLE_ARGS ?= --no-bundle
-DESKTOP_GOOS := $(if $(findstring apple-darwin,$(DESKTOP_TARGET_TRIPLE)),darwin,$(if $(findstring pc-windows-msvc,$(DESKTOP_TARGET_TRIPLE)),windows,$(if $(findstring linux,$(DESKTOP_TARGET_TRIPLE)),linux,unsupported)))
-DESKTOP_GOARCH := $(if $(filter x86_64-%,$(DESKTOP_TARGET_TRIPLE)),amd64,$(if $(filter aarch64-%,$(DESKTOP_TARGET_TRIPLE)),arm64,$(if $(filter armv7-%,$(DESKTOP_TARGET_TRIPLE)),arm,unsupported)))
 
 # 构建当前 Rust target 对应的 desktop client sidecar。使用 dev tag 跳过 server Web 面板嵌入。
 build-desktop-sidecar:
-	@if [ -z "$(DESKTOP_TARGET_TRIPLE)" ]; then \
-		echo "无法检测 Rust target triple。请安装 rustc，或显式指定 DESKTOP_TARGET_TRIPLE。"; \
-		exit 1; \
-	fi
-	@if [ "$(DESKTOP_GOOS)" = "unsupported" ] || [ "$(DESKTOP_GOARCH)" = "unsupported" ]; then \
-		echo "不支持的 DESKTOP_TARGET_TRIPLE: $(DESKTOP_TARGET_TRIPLE)"; \
-		exit 1; \
-	fi
-	@echo "🔨 编译 desktop sidecar: $(DESKTOP_TARGET_TRIPLE)"
-	@mkdir -p desktop/src-tauri/binaries
-	CGO_ENABLED=0 GOOS=$(DESKTOP_GOOS) GOARCH=$(DESKTOP_GOARCH) go build -tags dev -trimpath -ldflags "$(LDFLAGS)" -o "$(DESKTOP_SIDECAR)" ./cmd/netsgo/
-	@echo "✅ sidecar 已生成: $(DESKTOP_SIDECAR)"
+	@VERSION="$(VERSION)" COMMIT="$(COMMIT)" DATE="$(DATE)" scripts/build-desktop-sidecar.sh "$(DESKTOP_TARGET_TRIPLE)"
 
 # 本地验证 desktop 能消费上一步生成的 netsgo sidecar。默认只编译不打包安装器。
 build-desktop: build-desktop-sidecar

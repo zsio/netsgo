@@ -147,15 +147,12 @@ jobs:
           - goos: linux
             goarch: amd64
             goarm: ""
-            ext: ""
           - goos: linux
             goarch: arm64
             goarm: ""
-            ext: ""
           - goos: linux
             goarch: arm
             goarm: "7"
-            ext: ""
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -167,21 +164,51 @@ jobs:
           path: /tmp/web-dist
       - name: Restore web dist
         run: tar -xzf /tmp/web-dist/web-dist.tgz -C web
-      - name: Cross-compile ${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.goarm != '' && format('/v{0}', matrix.goarm) || '' }}
+      - name: Cross-compile Linux CLI ${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.goarm != '' && format('/v{0}', matrix.goarm) || '' }}
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
-          OUTPUT_EXT: ${{ matrix.ext }}
         run: |
           set -euo pipefail
           export CGO_ENABLED=0
           if [ -n "${GOARM}" ]; then
             export GOARM
           fi
-          output="${RUNNER_TEMP}/netsgo${OUTPUT_EXT}"
+          output="${RUNNER_TEMP}/netsgo"
           go build -trimpath -ldflags "-s -w" -o "${output}" ./cmd/netsgo
           test -f "${output}"
+
+  desktop-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: oven-sh/setup-bun@v2
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+      - name: Build desktop sidecar
+        shell: bash
+        run: scripts/build-desktop-sidecar.sh "${{ matrix.target }}"
+      - name: Build desktop app
+        working-directory: desktop
+        run: bun run tauri build --target "${{ matrix.target }}" --no-bundle
 
   ci-required:
     runs-on: ubuntu-latest
@@ -193,6 +220,7 @@ jobs:
       - test-race
       - test-e2e
       - cross-build
+      - desktop-build
     if: ${{ always() }}
     steps:
       - name: Check required CI jobs
@@ -216,5 +244,6 @@ jobs:
           check_result test-race "${{ needs['test-race'].result }}"
           check_result test-e2e "${{ needs['test-e2e'].result }}"
           check_result cross-build "${{ needs['cross-build'].result }}"
+          check_result desktop-build "${{ needs['desktop-build'].result }}"
 
           exit "${failed}"
