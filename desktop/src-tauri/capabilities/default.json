@@ -28,7 +28,9 @@
             "--data-dir",
             {
               "validator": ".+"
-            }
+            },
+            "--log-format",
+            "json"
           ]
         }
       ]

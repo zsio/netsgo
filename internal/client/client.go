@@ -69,6 +69,7 @@ type Client struct {
 	ProxyConfigs []protocol.ProxyNewRequest
 	// DisableReconnect disables automatic reconnect (used in tests and similar scenarios).
 	DisableReconnect bool
+	Logger           *EventLogger
 
 	dataHandshakeTimeout time.Duration
 	currentRuntime       *sessionRuntime
@@ -143,6 +144,13 @@ func New(serverAddr, key string) *Client {
 		startTime:            time.Now(),
 		dataHandshakeTimeout: 10 * time.Second,
 	}
+}
+
+func (c *Client) logger() *EventLogger {
+	if c.Logger == nil {
+		c.Logger = NewEventLogger(LogFormatText, nil)
+	}
+	return c.Logger
 }
 
 func (c *Client) beginRuntime() *sessionRuntime {
@@ -372,7 +380,7 @@ func (c *Client) Start() error {
 				return err
 			}
 
-			log.Printf("⚠️ Connection lost: %v", err)
+			c.logger().Warn("client.connection_lost", "Connection lost", map[string]any{"error": err.Error()})
 		}
 
 		if c.DisableReconnect {
@@ -386,11 +394,11 @@ func (c *Client) Start() error {
 		disconnectTime := time.Now()
 		for {
 			interval := retryInterval(disconnectTime)
-			log.Printf("🔄 Reconnecting in %v...", interval)
+			c.logger().Info("client.reconnecting", "Reconnecting", map[string]any{"delay_ms": interval.Milliseconds()})
 			time.Sleep(interval)
 
 			serverAddr, _ := c.currentServerState()
-			log.Printf("🔄 Attempting to reconnect to %s ...", serverAddr)
+			c.logger().Info("client.reconnect_attempt", "Attempting to reconnect", map[string]any{"server": serverAddr})
 			err := c.connectAndRun()
 			if err == nil {
 				// connectAndRun returned normally (the connection dropped again), so start a new reconnect cycle.
@@ -399,7 +407,7 @@ func (c *Client) Start() error {
 			if isFatalError(err) {
 				return err
 			}
-			log.Printf("⚠️ Reconnect failed: %v", err)
+			c.logger().Warn("client.reconnect_failed", "Reconnect failed", map[string]any{"error": err.Error()})
 			c.cleanup()
 		}
 
@@ -423,7 +431,7 @@ func isFatalError(err error) bool {
 // Shutdown gracefully closes the client connection.
 // It sends a normal WebSocket close frame so the server knows the disconnect was intentional.
 func (c *Client) Shutdown() {
-	log.Printf("🛑 Starting graceful client shutdown...")
+	c.logger().Info("client.shutdown_started", "Starting graceful client shutdown", nil)
 
 	if rt := c.getCurrentRuntime(); rt != nil {
 		_ = rt.writeMessage(
@@ -436,7 +444,7 @@ func (c *Client) Shutdown() {
 
 	c.cleanup()
 
-	log.Printf("✅ Graceful client shutdown complete")
+	c.logger().Info("client.shutdown_complete", "Graceful client shutdown complete", nil)
 }
 
 func (c *Client) stopRuntime(rt *sessionRuntime, reason string) {
@@ -504,7 +512,7 @@ func (c *Client) connectAndRun() error {
 
 	// 1. Connect the control channel.
 	controlURL := c.deriveControlURL()
-	log.Printf("🔌 Connecting to server: %s", controlURL)
+	c.logger().Info("client.connecting", "Connecting to server", map[string]any{"control_url": controlURL})
 
 	serverAddr, useTLS := c.currentServerState()
 	u, err := url.Parse(serverAddr)
@@ -531,7 +539,7 @@ func (c *Client) connectAndRun() error {
 
 	c.setRuntimeConn(rt, conn)
 
-	log.Printf("✅ Connected to server")
+	c.logger().Info("client.connected", "Connected to server", nil)
 
 	// 2. Send authentication.
 	if err := c.authenticateRuntime(rt); err != nil {
@@ -539,15 +547,15 @@ func (c *Client) connectAndRun() error {
 		c.clearCurrentRuntime(rt)
 		return err
 	}
-	log.Printf("✅ Authentication succeeded, Client ID: %s", c.CurrentClientID())
+	c.logger().Info("client.authenticated", "Authentication succeeded", map[string]any{"client_id": c.CurrentClientID()})
 
 	// 3. Establish the data channel.
 	if err := c.connectDataChannelRuntime(rt); err != nil {
-		log.Printf("⚠️ Failed to establish data channel, rebuilding the current logical session: %v", err)
+		c.logger().Warn("client.data_channel_failed", "Failed to establish data channel", map[string]any{"error": err.Error()})
 		c.failRuntime(rt, "data_channel_start_failed")
 		return fmt.Errorf("failed to establish data channel: %w", err)
 	}
-	log.Printf("✅ Data channel established")
+	c.logger().Info("client.data_channel_established", "Data channel established", nil)
 
 	rt.wg.Add(1)
 	go func() {
@@ -612,7 +620,7 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 		}
 		if authResp.Success {
 			c.applyAuthSuccess(authResp)
-			log.Printf("✅ Token authentication succeeded")
+			c.logger().Info("client.token_auth_succeeded", "Token authentication succeeded", nil)
 			return nil
 		}
 
@@ -675,9 +683,9 @@ func (c *Client) applyAuthSuccess(authResp protocol.AuthResponse) {
 
 	if authResp.Token != "" {
 		if err := c.saveToken(authResp.Token); err != nil {
-			log.Printf("⚠️ Failed to save token: %v", err)
+			c.logger().Warn("client.token_save_failed", "Failed to save token", map[string]any{"error": err.Error()})
 		} else {
-			log.Printf("🔑 Token saved and will be reused for future reconnects")
+			c.logger().Info("client.token_saved", "Token saved and will be reused for future reconnects", nil)
 		}
 	}
 }
@@ -689,10 +697,10 @@ func (c *Client) handleAuthFailure(authResp protocol.AuthResponse, attemptedWith
 	}
 
 	if authResp.ClearToken {
-		log.Printf("⚠️ Server requested local token cleanup: code=%s", authResp.Code)
+		c.logger().Warn("client.token_clear_requested", "Server requested local token cleanup", map[string]any{"code": authResp.Code})
 		c.setToken("")
 		if err := c.clearToken(); err != nil {
-			log.Printf("⚠️ Failed to clear local token: %v", err)
+			c.logger().Warn("client.token_clear_failed", "Failed to clear local token", map[string]any{"error": err.Error()})
 		}
 		if c.Key != "" {
 			return &clientRunError{
@@ -707,6 +715,7 @@ func (c *Client) handleAuthFailure(authResp protocol.AuthResponse, attemptedWith
 	}
 
 	if authResp.Retryable {
+		c.logger().Warn("client.auth_failed", "Authentication failed", map[string]any{"code": authResp.Code, "message": message, "retryable": true})
 		return &clientRunError{
 			message: fmt.Sprintf("authentication failed (%s): %s", authResp.Code, message),
 			fatal:   true,
@@ -714,12 +723,14 @@ func (c *Client) handleAuthFailure(authResp protocol.AuthResponse, attemptedWith
 	}
 
 	if attemptedWithToken && c.Key != "" && (authResp.Code == protocol.AuthCodeInvalidToken || authResp.Code == protocol.AuthCodeRevokedToken) {
+		c.logger().Warn("client.auth_failed", "Authentication failed", map[string]any{"code": authResp.Code, "message": message, "attempted_with_token": true})
 		return &clientRunError{
 			message: fmt.Sprintf("authentication failed (%s), retrying with key", authResp.Code),
 			fatal:   false,
 		}
 	}
 
+	c.logger().Warn("client.auth_failed", "Authentication failed", map[string]any{"code": authResp.Code, "message": message, "attempted_with_token": attemptedWithToken})
 	return &clientRunError{
 		message: fmt.Sprintf("authentication failed: %s", message),
 		fatal:   true,
@@ -837,11 +848,10 @@ func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
 		// TOFU: first connection, record the fingerprint.
 		c.TLSFingerprint = serverFP
 		c.mu.Unlock()
-		log.Printf("🔒 TOFU: first connection, recording server certificate fingerprint")
-		log.Printf("🔒 Fingerprint: %s", serverFP)
+		c.logger().Info("client.tls_fingerprint_recorded", "TLS fingerprint recorded", map[string]any{"fingerprint": serverFP})
 		// Persist the fingerprint.
 		if err := c.saveTLSFingerprint(serverFP); err != nil {
-			log.Printf("⚠️ Failed to save TLS fingerprint: %v", err)
+			c.logger().Warn("client.tls_fingerprint_save_failed", "Failed to save TLS fingerprint", map[string]any{"error": err.Error()})
 		}
 		return nil
 	}
@@ -857,7 +867,7 @@ func (c *Client) checkTLSFingerprint(conn *websocket.Conn) error {
 		)
 	}
 
-	log.Printf("🔒 TLS certificate fingerprint verified")
+	c.logger().Info("client.tls_fingerprint_verified", "TLS certificate fingerprint verified", nil)
 	return nil
 }
 

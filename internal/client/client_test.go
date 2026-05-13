@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -597,6 +598,74 @@ func TestClient_ClearTokenWithKeyCanRetryOnce(t *testing.T) {
 	if isFatalError(err) {
 		t.Fatal("clear-token auth failure with a configured key should allow one retry using the key")
 	}
+}
+
+func TestClient_JSONLoggerEmitsLifecycleEvents(t *testing.T) {
+	ms := newMockServer(true)
+	ts := newMockHTTPServer(ms)
+	defer ts.Close()
+
+	var buf lockedBuffer
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	c := newIsolatedTestClient(t, wsURL, "test-key")
+	c.DisableReconnect = true
+	c.Logger = NewEventLogger(LogFormatJSON, &buf)
+
+	go func() { _ = c.Start() }()
+	_ = ms.waitForConn(t, 2*time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		events := parseClientEvents(t, buf.String())
+		if hasClientEvent(events, "client.data_channel_established") {
+			c.Shutdown()
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected data channel event, got logs:\n%s", buf.String())
+}
+
+func parseClientEvents(t *testing.T, raw string) []ClientEvent {
+	t.Helper()
+	var events []ClientEvent
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		if line == "" {
+			continue
+		}
+		var event ClientEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("invalid JSON event line %q: %v", line, err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func hasClientEvent(events []ClientEvent, name string) bool {
+	for _, event := range events {
+		if event.Event == name {
+			return true
+		}
+	}
+	return false
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
 }
 
 func TestClient_Cleanup(t *testing.T) {

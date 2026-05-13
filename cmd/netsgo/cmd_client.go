@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"os"
@@ -54,19 +56,28 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 
 		serverAddr := viper.GetString("server")
 		key := viper.GetString("key")
+		logFormat := viper.GetString("log-format")
+		logger := client.NewEventLogger(logFormat, os.Stderr)
+		if logger.Format() == client.LogFormatJSON {
+			log.SetOutput(io.Discard)
+		}
 
-		log.Printf("🔗 NetsGo Client connecting to %s (key: %s)...", serverAddr, maskKey(key))
+		logger.Info("client.starting", "NetsGo client starting", map[string]any{
+			"server":  serverAddr,
+			"has_key": key != "",
+		})
 		if key == "" {
-			log.Printf("⚠️  No --key flag provided; client will likely fail authentication")
+			logger.Warn("client.key_missing", "No --key flag provided; client will likely fail authentication", nil)
 		}
 
 		c := client.New(serverAddr, key)
+		c.Logger = logger
 		dataDirFlag := cmd.Flag("data-dir")
 		c.DataDir = resolveClientDataDir(dataDirFlag.Value.String(), dataDirFlag.Changed)
 
 		unlock, err := flock.TryLock(filepath.Join(c.DataDir, "locks", "client.lock"))
 		if err != nil {
-			log.Fatalf("❌ Failed to acquire client singleton lock: %v", err)
+			fatalClient(logger, fmt.Errorf("failed to acquire client singleton lock: %w", err))
 		}
 		defer unlock()
 
@@ -80,15 +91,24 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 
 		go func() {
 			sig := <-sigCh
-			log.Printf("📩 Received signal %v, starting graceful shutdown...", sig)
+			logger.Info("client.signal_received", "Received signal, starting graceful shutdown", map[string]any{"signal": sig.String()})
 			c.Shutdown()
 			os.Exit(0)
 		}()
 
 		if err := c.Start(); err != nil {
-			log.Fatalf("❌ Client startup failed: %v", err)
+			fatalClient(logger, fmt.Errorf("client startup failed: %w", err))
 		}
 	},
+}
+
+func fatalClient(logger *client.EventLogger, err error) {
+	if logger != nil {
+		logger.Error("client.fatal", "Client exited with a fatal error", map[string]any{"error": err.Error()})
+	} else {
+		log.Printf("❌ %v", err)
+	}
+	os.Exit(1)
 }
 
 func maskKey(key string) string {
@@ -115,6 +135,7 @@ func init() {
 	clientCmd.Flags().StringP("server", "s", "http://localhost:9527", "Service address (http/https recommended; ws/wss accepted)")
 	clientCmd.Flags().StringP("key", "k", "", "Authentication key")
 	clientCmd.Flags().String("data-dir", datadir.DefaultDataDir(), "Data root directory")
+	clientCmd.Flags().String("log-format", client.LogFormatText, "Client log format: text or json")
 
 	clientCmd.Flags().Bool("tls-skip-verify", false, "Skip TLS certificate verification (dev/test only)")
 	clientCmd.Flags().String("tls-fingerprint", "", "Pin server certificate SHA-256 fingerprint (AA:BB:CC:... format)")
@@ -126,6 +147,9 @@ func init() {
 		panic(err)
 	}
 	if err := viper.BindPFlag("data-dir", clientCmd.Flags().Lookup("data-dir")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("log-format", clientCmd.Flags().Lookup("log-format")); err != nil {
 		panic(err)
 	}
 	if err := viper.BindPFlag("tls-skip-verify", clientCmd.Flags().Lookup("tls-skip-verify")); err != nil {
