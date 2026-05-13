@@ -26,6 +26,11 @@ func repairEnvFileOwnership(path string) error {
 		return err
 	}
 
+	// Keep service env files owned by the installer (normally root) and
+	// readable by the netsgo service group. Runtime service processes need
+	// read access to detect service-mode installs for upgrade guidance, while
+	// the service user must not be able to rewrite credentials such as
+	// NETSGO_KEY.
 	if err := os.Chown(path, os.Getuid(), gid); err != nil {
 		return err
 	}
