@@ -87,6 +87,29 @@ func TestWriteServerEnvSparseAndPermissions(t *testing.T) {
 	assertEnvFileGroup(t, layout.EnvPath, os.Getgid())
 }
 
+func TestWriteServerEnvCreatesTraversableParentDir(t *testing.T) {
+	stubLookupSystemUser(t, strconv.Itoa(os.Getgid()))
+
+	root := t.TempDir()
+	layout := NewLayout(RoleServer)
+	layout.EnvPath = filepath.Join(root, "services", "server.env")
+
+	if err := WriteServerEnv(layout, ServerEnv{Port: 9527}); err != nil {
+		t.Fatalf("WriteServerEnv() failed: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Dir(layout.EnvPath))
+	if err != nil {
+		t.Fatalf("stat env parent dir: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("env parent path is not a directory: %s", filepath.Dir(layout.EnvPath))
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("env parent dir permissions = %v, want 0755", info.Mode().Perm())
+	}
+}
+
 func TestWriteRawEnvRejectsForbiddenKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.env")
 	err := writeEnvFile(path, map[string]string{

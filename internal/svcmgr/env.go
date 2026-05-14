@@ -108,7 +108,11 @@ func ReadClientEnv(layout ServiceLayout) (ClientEnv, error) {
 }
 
 func writeEnvFile(path string, values map[string]string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
 		return err
 	}
 

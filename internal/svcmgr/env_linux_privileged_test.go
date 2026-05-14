@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -28,11 +30,17 @@ func TestRepairEnvFileOwnershipPrivileged(t *testing.T) {
 		t.Fatalf("parse %s gid %q: %v", SystemUser, account.Gid, err)
 	}
 
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("/tmp", "netsgo-env-perm-*")
+	if err != nil {
+		t.Fatalf("create traversable temp dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatalf("chmod temp dir: %v", err)
 	}
-	path := dir + "/server.env"
+	path := filepath.Join(dir, "server.env")
 	if err := os.WriteFile(path, []byte("NETSGO_PORT=9527\n"), 0o600); err != nil {
 		t.Fatalf("write legacy env file: %v", err)
 	}
@@ -65,9 +73,31 @@ func TestRepairEnvFileOwnershipPrivileged(t *testing.T) {
 	}
 
 	if output, err := exec.Command("sudo", "-u", SystemUser, "test", "-r", path).CombinedOutput(); err != nil {
-		t.Fatalf("%s user should read env file: %v: %s", SystemUser, err, output)
+		t.Fatalf("%s user should read env file %s: %v: %s%s", SystemUser, path, err, output, pathAccessDiagnostics(path))
 	}
 	if err := exec.Command("sudo", "-u", SystemUser, "test", "-w", path).Run(); err == nil {
 		t.Fatalf("%s user should not write env file", SystemUser)
 	}
+}
+
+func pathAccessDiagnostics(path string) string {
+	var builder strings.Builder
+	if info, err := os.Stat(path); err == nil {
+		builder.WriteString("\nstat: ")
+		builder.WriteString(info.Mode().String())
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			builder.WriteString(" uid=")
+			builder.WriteString(strconv.FormatUint(uint64(stat.Uid), 10))
+			builder.WriteString(" gid=")
+			builder.WriteString(strconv.FormatUint(uint64(stat.Gid), 10))
+		}
+	} else {
+		builder.WriteString("\nstat failed: ")
+		builder.WriteString(err.Error())
+	}
+	if output, err := exec.Command("namei", "-l", path).CombinedOutput(); err == nil {
+		builder.WriteString("\nnamei -l:\n")
+		builder.Write(output)
+	}
+	return builder.String()
 }
