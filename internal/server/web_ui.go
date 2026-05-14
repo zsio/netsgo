@@ -62,10 +62,14 @@ type readSeeker interface {
 }
 
 const devModeHTML = `<!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0f0c29">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="NetsGo">
     <title>NetsGo — Dev Mode</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }

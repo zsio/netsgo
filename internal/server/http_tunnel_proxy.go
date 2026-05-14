@@ -97,6 +97,11 @@ func (s *Server) hostDispatchHandler(management http.Handler) http.Handler {
 			return
 		}
 
+		if s.devMode {
+			management.ServeHTTP(w, r)
+			return
+		}
+
 		isManagement, err := s.isManagementHost(r.Host)
 		if err != nil {
 			http.Error(w, `{"error":"temporary storage failure"}`, http.StatusServiceUnavailable)

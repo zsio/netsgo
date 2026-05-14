@@ -19,13 +19,13 @@ function DashboardLayout() {
   }
 
   return (
-    <SidebarProvider className="flex-1 overflow-hidden !min-h-0">
+    <SidebarProvider className="flex-1 overflow-hidden !min-h-0 min-w-0">
       <ClientSidebar clients={clients ?? []} isLoading={isLoading} />
-      <SidebarInset className="flex flex-col overflow-hidden">
+      <SidebarInset className="flex min-w-0 flex-col overflow-hidden">
         <TopBar />
-        <div className="flex-1 overflow-y-auto relative">
+        <div className="relative min-w-0 flex-1 overflow-y-auto overflow-x-hidden pb-safe-bottom">
           {/* Subtle background glow */}
-          <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-primary/10 rounded-full blur-3xl pointer-events-none" />
+          <div className="pointer-events-none absolute top-0 left-1/4 h-[260px] w-[260px] rounded-full bg-primary/10 blur-3xl sm:h-[500px] sm:w-[500px]" />
           <Outlet />
         </div>
       </SidebarInset>

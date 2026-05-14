@@ -34,6 +34,7 @@ type Server struct {
 	auth                        *AuthService      // auth and access control (adminStore, rate limiting)
 	webFS                       fs.FS             // embedded frontend static assets (nil in dev mode)
 	webHandler                  http.Handler      // cached FileServer (nil in dev mode)
+	devMode                     bool              // built with the dev tag; unknown non-tunnel hosts may enter the admin console
 	cachedStatus                *serverStatusView // latest server status collected in background
 	cachedStatusMu              sync.RWMutex      // protects cachedStatus
 	sessions                    *SessionManager   // connection lifecycle (managedConns, longLivedHandlers, generations, data timeout)

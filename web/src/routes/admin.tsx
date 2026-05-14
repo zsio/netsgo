@@ -11,7 +11,7 @@ export const adminRoute = createRoute({
 function AdminLayout() {
   return (
     <motion.div
-      className="p-8 max-w-6xl mx-auto w-full flex flex-col gap-6 z-10"
+      className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' as const }}

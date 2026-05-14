@@ -108,7 +108,7 @@ function TopBarInner() {
 
   return (
     <>
-      <header className="h-14 flex items-center justify-between px-4 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50 shrink-0 relative">
+      <header className="relative z-50 flex h-[calc(3.5rem+var(--safe-area-top))] shrink-0 items-center justify-between border-b border-border/40 bg-background/95 px-4 pl-[calc(1rem+var(--safe-area-left))] pr-[calc(1rem+var(--safe-area-right))] pt-safe-top backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex items-center gap-2">
           {/* Sidebar trigger */}
           <SidebarTrigger className="text-muted-foreground hover:text-foreground" />

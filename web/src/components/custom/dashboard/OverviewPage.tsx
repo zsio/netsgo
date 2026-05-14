@@ -17,7 +17,7 @@ const fadeUp = {
 export function OverviewPage() {
   return (
     <motion.div
-      className="p-8 max-w-6xl mx-auto w-full flex flex-col gap-8 z-10"
+      className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:gap-8 lg:p-8"
       variants={stagger}
       initial="hidden"
       animate="show"

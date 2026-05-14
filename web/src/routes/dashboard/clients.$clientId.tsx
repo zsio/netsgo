@@ -34,7 +34,7 @@ function ClientDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-8 p-8">
+      <div className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:gap-8 lg:p-8">
         <Skeleton className="h-20 w-full rounded-xl" />
         <Skeleton className="h-[200px] w-full rounded-xl" />
         <Skeleton className="h-64 w-full rounded-xl" />
@@ -49,7 +49,7 @@ function ClientDetailPage() {
   return (
     <motion.div
       key={clientId}
-      className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-8 p-8"
+      className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:gap-8 lg:p-8"
       variants={stagger}
       initial="hidden"
       animate="show"

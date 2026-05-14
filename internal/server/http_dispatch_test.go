@@ -479,6 +479,46 @@ func TestDispatch_AllowLoopbackManagementHostFallbackFlag(t *testing.T) {
 	}
 }
 
+func TestDispatch_DevModeUnknownHost_FallsBackToManagementConsole(t *testing.T) {
+	s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
+	s.devMode = true
+
+	req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", "192.168.100.153:5173", nil)
+	w := httptest.NewRecorder()
+
+	s.StartHTTPOnly().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Dev mode should allow unknown non-tunnel Host to enter admin API, got %d", w.Code)
+	}
+}
+
+func TestDispatch_DevModeHTTPTunnelStillWins(t *testing.T) {
+	s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
+	s.devMode = true
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Backend", "hit")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer backend.Close()
+
+	cleanupTunnel := addLiveHTTPDispatchTunnel(t, s, "client-http", "app-http", "app.example.com", backend.Listener.Addr())
+	defer cleanupTunnel()
+
+	req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", "app.example.com", nil)
+	w := httptest.NewRecorder()
+
+	s.StartHTTPOnly().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("Dev mode should still route matching HTTP tunnel before admin fallback, got %d", w.Code)
+	}
+	if got := w.Header().Get("X-Backend"); got != "hit" {
+		t.Fatalf("Matching HTTP tunnel should receive the request, got backend header %q", got)
+	}
+}
+
 func TestDispatch_NonManagementHost_NoTunnel_Returns404(t *testing.T) {
 	s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
 

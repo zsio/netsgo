@@ -190,8 +190,8 @@ export function TunnelListTable({
     <TooltipProvider delayDuration={200}>
       <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-border/40 bg-muted/20 flex items-center justify-between">
-          <h3 className="font-semibold text-foreground flex items-center gap-2">
+        <div className="flex items-center justify-between gap-3 border-b border-border/40 bg-muted/20 px-4 py-3 sm:px-6 sm:py-4">
+          <h3 className="flex min-w-0 items-center gap-2 font-semibold text-foreground">
             {icon || <ArrowRightLeft className="h-5 w-5 text-primary" />}
             {title}
             <span className="bg-muted text-muted-foreground px-2 py-0.5 rounded-full text-xs font-normal">
@@ -217,18 +217,18 @@ export function TunnelListTable({
         {/* Table */}
         {tunnels.length > 0 ? (
           filteredTunnels.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
+            <div className="overflow-x-auto [scrollbar-width:thin]">
+              <table className="min-w-[44rem] w-full table-fixed text-left text-sm">
                 <thead className="text-xs text-muted-foreground bg-muted/30 uppercase">
                   <tr>
-                    <th className="px-6 py-3 font-medium">隧道名称</th>
-                    <th className="px-6 py-3 font-medium">映射</th>
-                    <th className="px-6 py-3 font-medium">限速</th>
-                    {showTraffic24h && <th className="px-6 py-3 font-medium">24 小时流量</th>}
-                    <th className="px-6 py-3 font-medium">状态</th>
-                    {showClient && <th className="px-6 py-3 font-medium">归属节点</th>}
+                    <th className="w-36 whitespace-nowrap px-4 py-3 font-medium sm:px-6">隧道名称</th>
+                    <th className="w-60 whitespace-nowrap px-4 py-3 font-medium sm:px-6">映射</th>
+                    <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">限速</th>
+                    {showTraffic24h && <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">24 小时流量</th>}
+                    <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">状态</th>
+                    {showClient && <th className="w-36 whitespace-nowrap px-4 py-3 font-medium sm:px-6">归属节点</th>}
                     {(showActions || renderRowAction) && (
-                      <th className="px-6 py-3 font-medium text-right">操作</th>
+                      <th className="w-28 whitespace-nowrap px-4 py-3 text-right font-medium sm:px-6">操作</th>
                     )}
                   </tr>
                 </thead>
@@ -324,19 +324,19 @@ function TunnelTableRow({
 
   return (
     <tr className="hover:bg-muted/30 transition-colors">
-      <td className="px-6 py-3 font-medium text-foreground">{tunnel.name}</td>
+      <td className="px-4 py-3 font-medium text-foreground sm:px-6"><span className="block truncate" title={tunnel.name}>{tunnel.name}</span></td>
 
-      <td className="px-6 py-3 font-mono text-xs min-w-[15rem]">
+      <td className="px-4 py-3 font-mono text-xs sm:px-6">
         <TunnelMapping tunnel={tunnel} view={view} />
       </td>
 
-      <td className="px-6 py-3">
+      <td className="px-4 py-3 sm:px-6">
         <TunnelSpeedLimit tunnel={tunnel} />
       </td>
 
       {showTraffic24h && (
-        <td className="px-6 py-3">
-          <span className="font-mono text-xs text-muted-foreground">
+        <td className="px-4 py-3 sm:px-6">
+          <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">
             {traffic24hState === 'error'
               ? '加载失败'
               : traffic24hState === 'loading'
@@ -346,12 +346,12 @@ function TunnelTableRow({
         </td>
       )}
 
-      <td className="px-6 py-3">
+      <td className="px-4 py-3 sm:px-6">
         <TunnelStatusBadge status={view.status} error={tunnel.error} />
       </td>
 
       {showClient && (
-        <td className="px-6 py-3 text-muted-foreground">
+        <td className="px-4 py-3 text-muted-foreground sm:px-6">
           {onClientClick ? (
             <button
               type="button"
@@ -367,7 +367,7 @@ function TunnelTableRow({
       )}
 
       {(showActions || renderRowAction) && (
-        <td className="px-6 py-3 text-right">
+        <td className="px-4 py-3 text-right sm:px-6">
           {renderRowAction ? (
             renderRowAction(tunnel)
           ) : showActions ? (

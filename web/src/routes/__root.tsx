@@ -8,7 +8,7 @@ function RootLayout() {
 
   return (
     <TooltipProvider>
-      <div className="flex flex-col h-screen w-full bg-background text-foreground font-sans selection:bg-primary/30 overflow-hidden">
+      <div className="flex h-dvh min-h-dvh w-full min-w-0 flex-col overflow-hidden bg-background text-foreground font-sans selection:bg-primary/30">
         <Outlet />
       </div>
     </TooltipProvider>

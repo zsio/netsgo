@@ -202,7 +202,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
       </SidebarContent>
 
       {/* 底部 — 系统设置 */}
-      <SidebarFooter className="pb-4">
+      <SidebarFooter className="pb-[calc(1rem+var(--safe-area-bottom))]">
         <SidebarGroup>
           <SidebarGroupLabel className="text-[11px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em] px-2 mb-1">
             系统设置

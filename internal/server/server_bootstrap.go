@@ -84,6 +84,8 @@ func (s *Server) Start() error {
 		}
 	}()
 
+	s.devMode = web.IsDevMode()
+
 	webFS, err := web.DistFS()
 	if err != nil {
 		return fmt.Errorf("failed to load frontend assets: %w", err)
@@ -93,7 +95,7 @@ func (s *Server) Start() error {
 		s.webHandler = http.FileServerFS(s.webFS)
 	}
 
-	if web.IsDevMode() {
+	if s.devMode {
 		log.Printf("🔧 Dev mode: frontend assets are not embedded; start the frontend separately with cd web && bun run dev")
 	} else if s.webFS != nil {
 		log.Printf("📦 Frontend assets are embedded in the binary")
