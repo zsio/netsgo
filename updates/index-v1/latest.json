@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "project": "netsgo",
+  "channels": {
+    "beta": {
+      "latest": "v0.1.0-beta.24",
+      "release_urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/git/raw/release-index/updates/index-v1/releases/v0.1.0-beta.24.json"
+        },
+        {
+          "provider": "github",
+          "url": "https://raw.githubusercontent.com/zsio/netsgo/release-index/updates/index-v1/releases/v0.1.0-beta.24.json"
+        }
+      ]
+    }
+  },
+  "generated_at": "2026-05-15T11:07:25.307Z"
+}
