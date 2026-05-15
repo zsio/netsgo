@@ -6,12 +6,9 @@ import { Button } from '@/components/ui/button';
 import { formatPercent } from '@/lib/format';
 import { TableActionIconButton } from '@/components/custom/common/TableActionIconButton';
 import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
-import { CompactTrafficChart } from '@/components/custom/chart/CompactTrafficChart';
 import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
-import { useRowVisibility, type RowVisibilityHook } from '@/hooks/use-row-visibility';
-import { canRenderDashboardTrafficSparkline } from '@/lib/dashboard-traffic-visibility';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
@@ -151,41 +148,17 @@ function ClientMobileCard({
   );
 }
 
-interface DashboardClientTableContentProps {
-  clients?: Client[];
-  onNavigate: (clientId: string) => void;
-  onDelete?: (client: Client) => void;
-  onAddClient?: () => void;
-  rowVisibilityHook?: RowVisibilityHook;
-  renderSparkline?: (clientId: string) => ReactNode;
-}
-
-function defaultRenderSparkline(clientId: string) {
-  return <CompactTrafficChart clientId={clientId} />;
-}
-
 function DashboardClientDesktopRow({
   client,
   onNavigate,
   onDelete,
-  rowVisibilityHook,
-  renderSparkline,
 }: {
   client: Client;
   onNavigate: (clientId: string) => void;
   onDelete?: (client: Client) => void;
-  rowVisibilityHook: RowVisibilityHook;
-  renderSparkline: (clientId: string) => ReactNode;
 }) {
-  const { ref, hasVisibilitySupport, isDesktop, isVisible } = rowVisibilityHook();
-  const showSparkline = canRenderDashboardTrafficSparkline({
-    hasVisibilitySupport,
-    isDesktop,
-    isVisible,
-  });
-
   return (
-    <tr ref={ref} className="hover:bg-muted/30 transition-colors">
+    <tr className="hover:bg-muted/30 transition-colors">
       <td className="px-6 py-3 font-medium text-foreground">{getClientDisplayName(client)}</td>
       <td className="px-6 py-3">
         {client.online ? (
@@ -211,9 +184,6 @@ function DashboardClientDesktopRow({
           <span className="text-muted-foreground">-</span>
         )}
       </td>
-      <td className="px-6 py-3">
-        {showSparkline ? renderSparkline(client.id) : <span className="text-muted-foreground">-</span>}
-      </td>
       <td className="px-6 py-3 text-right">
         <div className="flex items-center justify-end gap-1">
           <IconActionButton label="查看详情" onClick={() => onNavigate(client.id)}>
@@ -230,13 +200,18 @@ function DashboardClientDesktopRow({
   );
 }
 
+interface DashboardClientTableContentProps {
+  clients?: Client[];
+  onNavigate: (clientId: string) => void;
+  onDelete?: (client: Client) => void;
+  onAddClient?: () => void;
+}
+
 export function DashboardClientTableContent({
   clients,
   onNavigate,
   onDelete,
   onAddClient,
-  rowVisibilityHook = useRowVisibility,
-  renderSparkline = defaultRenderSparkline,
 }: DashboardClientTableContentProps) {
   const sortedClients = useMemo(() => sortClientsForDashboard(clients), [clients]);
 
@@ -283,14 +258,13 @@ export function DashboardClientTableContent({
               <th className="px-6 py-3 font-medium">状态</th>
               <th className="px-6 py-3 font-medium">系统/架构</th>
               <th className="px-6 py-3 font-medium">CPU / 内存</th>
-              <th className="px-6 py-3 font-medium">流量</th>
               <th className="px-6 py-3 font-medium text-right">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/40">
             {sortedClients.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
+                <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
                   暂无 Client 连接
                 </td>
               </tr>
@@ -301,8 +275,6 @@ export function DashboardClientTableContent({
                   client={client}
                   onNavigate={navigateToClient}
                   onDelete={onDelete}
-                  rowVisibilityHook={rowVisibilityHook}
-                  renderSparkline={renderSparkline}
                 />
               ))
             )}

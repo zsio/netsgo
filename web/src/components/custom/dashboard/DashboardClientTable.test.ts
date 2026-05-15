@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import type { RowVisibilityHook } from '@/hooks/use-row-visibility';
 import type { Client } from '@/types';
 
 import { DashboardClientTableContent } from './DashboardClientTable';
@@ -25,38 +24,6 @@ function createClient(overrides: Partial<Client> = {}): Client {
   };
 }
 
-function createRowVisibilityHook(
-  states: Array<{ hasVisibilitySupport: boolean; isDesktop: boolean; isVisible: boolean }>,
-): RowVisibilityHook {
-  let index = 0;
-
-  return () => {
-    const state = states[index] ?? states.at(-1) ?? {
-      hasVisibilitySupport: false,
-      isDesktop: false,
-      isVisible: false,
-    };
-
-    index += 1;
-
-    return {
-      ref: () => {},
-      ...state,
-    };
-  };
-}
-
-function renderTable(clients: Client[], rowVisibilityHook: RowVisibilityHook) {
-  return renderToStaticMarkup(
-    createElement(DashboardClientTableContent, {
-      clients,
-      onNavigate: () => {},
-      rowVisibilityHook,
-      renderSparkline: (clientId: string) => createElement('span', { 'data-chart-client': clientId }, 'chart'),
-    }),
-  );
-}
-
 describe('DashboardClientTableContent', () => {
   test('orders online clients before offline clients and renders icon actions', () => {
     const markup = renderToStaticMarkup(
@@ -75,11 +42,6 @@ describe('DashboardClientTableContent', () => {
         ],
         onNavigate: () => {},
         onDelete: () => {},
-        rowVisibilityHook: createRowVisibilityHook([
-          { hasVisibilitySupport: false, isDesktop: true, isVisible: true },
-          { hasVisibilitySupport: false, isDesktop: true, isVisible: true },
-        ]),
-        renderSparkline: (clientId: string) => createElement('span', { 'data-chart-client': clientId }, 'chart'),
       }),
     );
 
@@ -88,59 +50,16 @@ describe('DashboardClientTableContent', () => {
     expect(markup).toContain('title="删除离线节点"');
   });
 
-  test('only mounts sparklines for visible desktop rows', () => {
-    const markup = renderTable(
-      [
-        createClient({
-          id: 'client-visible',
-          info: { hostname: 'a-visible', os: 'linux', arch: 'amd64', ip: '10.0.0.1', version: '1.0.0' },
-        }),
-        createClient({
-          id: 'client-hidden',
-          info: { hostname: 'z-hidden', os: 'linux', arch: 'amd64', ip: '10.0.0.2', version: '1.0.0' },
-        }),
-      ],
-      createRowVisibilityHook([
-        { hasVisibilitySupport: true, isDesktop: true, isVisible: true },
-        { hasVisibilitySupport: true, isDesktop: true, isVisible: false },
-      ]),
-    );
-
-    expect(markup).toContain('data-chart-client="client-visible"');
-    expect(markup).not.toContain('data-chart-client="client-hidden"');
-  });
-
   test('renders the dashboard add-client header action when provided', () => {
     const markup = renderToStaticMarkup(
       createElement(DashboardClientTableContent, {
         clients: [],
         onNavigate: () => {},
         onAddClient: () => {},
-        rowVisibilityHook: createRowVisibilityHook([]),
-        renderSparkline: (clientId: string) => createElement('span', { 'data-chart-client': clientId }, 'chart'),
       }),
     );
 
     expect(markup).toContain('在线端点 (Clients)');
     expect(markup).toContain('添加客户端');
-  });
-
-  test('does not mount sparklines in fallback or non-desktop environments', () => {
-    const fallbackMarkup = renderTable(
-      [createClient({ id: 'client-fallback' })],
-      createRowVisibilityHook([
-        { hasVisibilitySupport: false, isDesktop: true, isVisible: true },
-      ]),
-    );
-
-    const mobileMarkup = renderTable(
-      [createClient({ id: 'client-mobile' })],
-      createRowVisibilityHook([
-        { hasVisibilitySupport: true, isDesktop: false, isVisible: true },
-      ]),
-    );
-
-    expect(fallbackMarkup).not.toContain('data-chart-client=');
-    expect(mobileMarkup).not.toContain('data-chart-client=');
   });
 });
