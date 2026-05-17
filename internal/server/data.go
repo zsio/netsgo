@@ -2,7 +2,6 @@ package server
 
 import (
 	"crypto/subtle"
-	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
@@ -188,17 +187,21 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 		return nil, fmt.Errorf("OpenStream failed: %w", err)
 	}
 
-	// Write StreamHeader: [2B name length] [NB proxy_name]
-	nameBytes := []byte(proxyName)
-	var lenBuf [2]byte
-	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
-	if _, err := stream.Write(lenBuf[:]); err != nil {
+	client.proxyMu.RLock()
+	tunnel, ok := client.proxies[proxyName]
+	client.proxyMu.RUnlock()
+	if !ok {
 		_ = stream.Close()
-		return nil, fmt.Errorf("write StreamHeader length failed: %w", err)
+		return nil, fmt.Errorf("proxy tunnel %q not found", proxyName)
 	}
-	if _, err := stream.Write(nameBytes); err != nil {
+
+	if err := protocol.WriteStreamHeader(stream, protocol.StreamHeader{
+		ProxyName:      proxyName,
+		TransportPolicy: tunnel.Config.TransportPolicy,
+		ActualTransport: tunnel.Config.RuntimeState,
+	}); err != nil {
 		_ = stream.Close()
-		return nil, fmt.Errorf("write StreamHeader name failed: %w", err)
+		return nil, fmt.Errorf("write StreamHeader failed: %w", err)
 	}
 
 	return stream, nil

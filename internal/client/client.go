@@ -3,7 +3,6 @@ package client
 import (
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -912,24 +911,12 @@ func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
 func (c *Client) handleStream(stream *yamux.Stream) {
 	defer func() { _ = stream.Close() }()
 
-	// Read StreamHeader: [2B name length] [NB proxy_name]
-	var lenBuf [2]byte
-	if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
+	header, err := protocol.ReadStreamHeader(stream)
+	if err != nil {
 		log.Printf("⚠️ Failed to read StreamHeader: %v", err)
 		return
 	}
-	nameLen := binary.BigEndian.Uint16(lenBuf[:])
-	if nameLen == 0 || nameLen > 1024 {
-		log.Printf("⚠️ Invalid StreamHeader name length: %d", nameLen)
-		return
-	}
-
-	nameBuf := make([]byte, nameLen)
-	if _, err := io.ReadFull(stream, nameBuf); err != nil {
-		log.Printf("⚠️ Failed to read StreamHeader name: %v", err)
-		return
-	}
-	proxyName := string(nameBuf)
+	proxyName := header.ProxyName
 
 	// Look up the proxy configuration.
 	val, ok := c.proxies.Load(proxyName)
@@ -938,6 +925,14 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 		return
 	}
 	cfg := val.(protocol.ProxyNewRequest)
+	if header.TransportPolicy != "" && cfg.TransportPolicy != "" && header.TransportPolicy != cfg.TransportPolicy {
+		log.Printf("⚠️ StreamHeader transport policy mismatch for %s: header=%s cfg=%s", proxyName, header.TransportPolicy, cfg.TransportPolicy)
+		return
+	}
+	if header.ActualTransport != "" && cfg.ActualTransport != "" && header.ActualTransport != cfg.ActualTransport {
+		log.Printf("⚠️ StreamHeader actual transport mismatch for %s: header=%s cfg=%s", proxyName, header.ActualTransport, cfg.ActualTransport)
+		return
+	}
 
 	// Dispatch by proxy type.
 	if cfg.Type == protocol.ProxyTypeUDP {
