@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -316,6 +315,14 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 		proxies:    make(map[string]*ProxyTunnel),
 		generation: 1,
 		state:      clientStateLive,
+	}
+	cc.proxies["test-tunnel"] = &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:            "test-tunnel",
+			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
+			ActualTransport: protocol.ActualTransportServerRelay,
+		},
+		done: make(chan struct{}),
 	}
 	s.clients.Store(clientID, cc)
 
