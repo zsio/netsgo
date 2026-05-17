@@ -183,6 +183,31 @@ func markTunnelRuntimeError(tunnel *ProxyTunnel, clientID, message string, now t
 	tunnel.runtime.UpdatedAt = now
 }
 
+func updateTunnelRuntimeFromConfig(tunnel *ProxyTunnel, clientID, message string, now time.Time) {
+	if tunnel == nil {
+		return
+	}
+	switch tunnel.Config.RuntimeState {
+	case protocol.ProxyRuntimeStatePending:
+		markTunnelProvisionPending(tunnel, clientID, tunnel.runtime.Revision, now)
+	case protocol.ProxyRuntimeStateExposed:
+		markTunnelServerRelayActive(tunnel, clientID, now)
+	case protocol.ProxyRuntimeStateOffline:
+		markTunnelRuntimeOffline(tunnel, clientID, now)
+	case protocol.ProxyRuntimeStateError:
+		markTunnelRuntimeError(tunnel, clientID, message, now)
+	case protocol.ProxyRuntimeStateIdle:
+		revision := ensureTunnelRuntimeRevision(tunnel)
+		tunnel.runtime.RuntimeState = protocol.ProxyRuntimeStateIdle
+		tunnel.runtime.Ingress = participantRuntimeSnapshot{Role: tunnelParticipantRoleIngress, State: tunnelParticipantStateIdle, Revision: revision, UpdatedAt: now}
+		tunnel.runtime.Target = participantRuntimeSnapshot{Role: tunnelParticipantRoleTarget, ClientID: clientID, State: tunnelParticipantStateIdle, Revision: revision, UpdatedAt: now}
+		tunnel.runtime.Transport = transportRuntimeSnapshot{State: tunnelTransportStateIdle, Revision: revision, UpdatedAt: now}
+		tunnel.runtime.UpdatedAt = now
+	default:
+		markTunnelRuntimeError(tunnel, clientID, "unknown runtime state", now)
+	}
+}
+
 func aggregateTunnelRuntimeState(rt tunnelRuntimeSnapshot) string {
 	if rt.RuntimeState != "" {
 		return rt.RuntimeState

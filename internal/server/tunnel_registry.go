@@ -30,12 +30,14 @@ type pendingTunnelProvisionAckKey struct {
 	clientID   string
 	generation uint64
 	name       string
+	revision   uint64
 }
 
 type provisionAckResult struct {
 	name     string
 	accepted bool
 	message  string
+	revision uint64
 }
 
 // TunnelRegistry holds tunnel provisioning wait state and timeout configuration:
@@ -57,11 +59,12 @@ func newTunnelRegistry() *TunnelRegistry {
 	}
 }
 
-func (tr *TunnelRegistry) registerProvisionAckWaiter(client *ClientConn, name string) (<-chan provisionAckResult, error) {
+func (tr *TunnelRegistry) registerProvisionAckWaiter(client *ClientConn, name string, revision uint64) (<-chan provisionAckResult, error) {
 	key := pendingTunnelProvisionAckKey{
 		clientID:   client.ID,
 		generation: client.generation,
 		name:       name,
+		revision:   revision,
 	}
 
 	tr.pendingProvisionAckMu.Lock()
@@ -76,11 +79,12 @@ func (tr *TunnelRegistry) registerProvisionAckWaiter(client *ClientConn, name st
 	return ch, nil
 }
 
-func (tr *TunnelRegistry) unregisterProvisionAckWaiter(client *ClientConn, name string) {
+func (tr *TunnelRegistry) unregisterProvisionAckWaiter(client *ClientConn, name string, revision uint64) {
 	key := pendingTunnelProvisionAckKey{
 		clientID:   client.ID,
 		generation: client.generation,
 		name:       name,
+		revision:   revision,
 	}
 
 	tr.pendingProvisionAckMu.Lock()
@@ -97,6 +101,7 @@ func (tr *TunnelRegistry) resolveProvisionAckWaiter(clientID string, generation 
 		clientID:   clientID,
 		generation: generation,
 		name:       resp.name,
+		revision:   resp.revision,
 	}
 
 	tr.pendingProvisionAckMu.Lock()
@@ -127,13 +132,16 @@ func (tr *TunnelRegistry) cancelProvisionAckWaiters(clientID string, generation 
 }
 
 func (tr *TunnelRegistry) waitForProvisionAck(s *Server, client *ClientConn, req protocol.ProxyNewRequest) (provisionAckResult, error) {
-	ch, err := tr.registerProvisionAckWaiter(client, req.Name)
+	if req.ProvisionRevision == 0 {
+		return provisionAckResult{}, fmt.Errorf("tunnel %q missing provisioning revision", req.Name)
+	}
+	ch, err := tr.registerProvisionAckWaiter(client, req.Name, req.ProvisionRevision)
 	if err != nil {
 		return provisionAckResult{}, err
 	}
 
 	if err := s.notifyClientProxyProvision(client, req); err != nil {
-		tr.unregisterProvisionAckWaiter(client, req.Name)
+		tr.unregisterProvisionAckWaiter(client, req.Name, req.ProvisionRevision)
 		return provisionAckResult{}, err
 	}
 
@@ -154,7 +162,7 @@ func (tr *TunnelRegistry) waitForProvisionAck(s *Server, client *ClientConn, req
 		}
 		return resp, nil
 	case <-timer.C:
-		tr.unregisterProvisionAckWaiter(client, req.Name)
+		tr.unregisterProvisionAckWaiter(client, req.Name, req.ProvisionRevision)
 		return provisionAckResult{}, errTunnelProvisionAckTimeout
 	}
 }
