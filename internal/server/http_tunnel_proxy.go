@@ -312,7 +312,7 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 
 	if cc != nil {
 		ingressBytes, egressBytes := cc.ingressEgressBytes()
-		s.recordTraffic(route.client.ID, route.config.Name, route.config.Type, ingressBytes, egressBytes)
+		s.recordTunnelTraffic(route.client.ID, route.config, ingressBytes, egressBytes)
 	}
 }
 

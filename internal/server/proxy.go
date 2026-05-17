@@ -456,7 +456,7 @@ func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listen
 	var recordTraffic tunnelTrafficObserver
 	if s.trafficStore != nil {
 		recordTraffic = func(ingressBytes, egressBytes uint64) {
-			s.recordTraffic(client.ID, tunnel.Config.Name, tunnel.Config.Type, ingressBytes, egressBytes)
+			s.recordTunnelTraffic(client.ID, tunnel.Config, ingressBytes, egressBytes)
 		}
 	}
 	_, _ = relayTunnelPayload(stream, extConn, client.BandwidthRuntime(), tunnel.limits, recordTraffic)
