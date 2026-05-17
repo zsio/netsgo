@@ -67,8 +67,137 @@ export interface Client {
 // --- Tunnel / Proxy ---
 
 export type ProxyType = "tcp" | "udp" | "http";
+export type TunnelTopology = "server_expose" | "client_to_client";
+export type EndpointLocation = "server" | "client";
+export type IngressEndpointType = "tcp_listen" | "udp_listen" | "http_host";
+export type TargetEndpointType = "tcp_service" | "udp_service";
+export type EndpointType = IngressEndpointType | TargetEndpointType;
+export type TransportPolicy = "server_relay_only" | "direct_preferred" | "direct_only";
+export type ActualTransport = "unknown" | "server_relay" | "peer_direct" | "turn_relay";
+export type P2PStateValue = "idle" | "gathering" | "checking" | "connected" | "failed" | "fallback" | "closed";
+export type ParticipantRole = "ingress" | "target";
+export type ParticipantState =
+  | "pending"
+  | "provisioning"
+  | "listening"
+  | "target_ready"
+  | "offline"
+  | "error"
+  | "unprovisioning"
+  | "unprovisioned";
+export type TunnelClientRole = "owner" | "ingress" | "target" | "related";
 export type ProxyDesiredState = "running" | "stopped";
-export type ProxyRuntimeState = "pending" | "exposed" | "offline" | "idle" | "error";
+export type ProxyRuntimeState = "pending" | "exposed" | "active" | "offline" | "idle" | "error";
+
+export interface BandwidthSettings {
+  ingress_bps: number;
+  egress_bps: number;
+}
+
+export interface TcpListenConfig {
+  bind_ip: string;
+  port: number;
+}
+
+export type UdpListenConfig = TcpListenConfig;
+
+export interface HttpHostConfig {
+  domain: string;
+}
+
+export interface TcpServiceConfig {
+  ip: string;
+  port: number;
+}
+
+export type UdpServiceConfig = TcpServiceConfig;
+
+export type TunnelIngress =
+  | {
+    location: "server" | "client";
+    client_id?: string;
+    type: "tcp_listen";
+    config: TcpListenConfig;
+  }
+  | {
+    location: "server" | "client";
+    client_id?: string;
+    type: "udp_listen";
+    config: UdpListenConfig;
+  }
+  | {
+    location: "server";
+    client_id?: string;
+    type: "http_host";
+    config: HttpHostConfig;
+  };
+
+export type TunnelTarget =
+  | {
+    location: "client";
+    client_id: string;
+    type: "tcp_service";
+    config: TcpServiceConfig;
+  }
+  | {
+    location: "client";
+    client_id: string;
+    type: "udp_service";
+    config: UdpServiceConfig;
+  };
+
+export interface P2PState {
+  state: P2PStateValue;
+  error?: string;
+  session_id?: string;
+}
+
+export interface ParticipantRuntime {
+  client_id: string;
+  role: ParticipantRole;
+  state: ParticipantState;
+  revision: number;
+  error?: string;
+}
+
+export interface TunnelParticipants {
+  ingress?: ParticipantRuntime;
+  target?: ParticipantRuntime;
+}
+
+export interface TransportRuntime {
+  policy: TransportPolicy;
+  actual: ActualTransport;
+  p2p_state?: P2PStateValue;
+  p2p_error?: string;
+  fallback_since?: string;
+  last_direct_ok?: string;
+  last_direct_error?: string;
+}
+
+/** TunnelSpec = Ingress + Target + Transport. Current endpoint scope excludes future-only target types. */
+export interface TunnelSpec {
+  id: string;
+  name: string;
+  revision: number;
+  topology: TunnelTopology;
+  owner_client_id: string;
+  ingress: TunnelIngress;
+  target: TunnelTarget;
+  transport_policy: TransportPolicy;
+  actual_transport: ActualTransport;
+  p2p: P2PState;
+  desired_state: ProxyDesiredState;
+  runtime_state: ProxyRuntimeState;
+  error?: string;
+  participants?: TunnelParticipants;
+  transport?: TransportRuntime;
+  bandwidth_settings: BandwidthSettings;
+  created_by_user_id?: string;
+  created_at: string;
+  updated_at?: string;
+  metadata_missing?: boolean;
+}
 
 export interface TunnelCapabilities {
   can_resume: boolean;
@@ -81,6 +210,18 @@ export interface TunnelCapabilities {
 export interface ProxyConfig {
   id: string;
   name: string;
+  revision?: number;
+  topology?: TunnelTopology;
+  owner_client_id?: string;
+  ingress?: TunnelIngress;
+  target?: TunnelTarget;
+  transport_policy?: TransportPolicy;
+  actual_transport?: ActualTransport;
+  p2p?: P2PState;
+  participants?: TunnelParticipants;
+  transport?: TransportRuntime;
+  bandwidth_settings?: BandwidthSettings;
+  metadata_missing?: boolean;
   type: ProxyType;
   local_ip: string;
   local_port: number;
@@ -112,6 +253,7 @@ export interface CreateTunnelInput {
 export interface UpdateTunnelInput {
   clientId: string;
   tunnelId: string;
+  expected_revision?: number;
   name: string;
   type: ProxyType;
   local_ip: string;
@@ -133,8 +275,10 @@ export interface TrafficPoint {
 }
 
 export interface TunnelTrafficSeries {
-  tunnel_name: string;
-  tunnel_type: ProxyType;
+  tunnel_id?: string;
+  tunnel_name?: string;
+  tunnel_type?: ProxyType;
+  metadata_missing?: boolean;
   points: TrafficPoint[];
 }
 
@@ -180,6 +324,27 @@ export interface TunnelChangedEvent {
   client_id: string;
   action?: string;
   tunnel: ProxyConfig;
+}
+
+export interface TunnelCreateRequest {
+  name: string;
+  topology: TunnelTopology;
+  ingress: TunnelIngress;
+  target: TunnelTarget;
+  transport_policy: TransportPolicy;
+  bandwidth_settings: BandwidthSettings;
+}
+
+export interface TunnelUpdateRequest {
+  expected_revision?: number;
+  spec: TunnelCreateRequest;
+}
+
+export interface TunnelMutationResponse {
+  success: boolean;
+  message?: string;
+  tunnel?: TunnelSpec;
+  tunnel_id?: string;
 }
 
 export interface ConsoleSummary {
