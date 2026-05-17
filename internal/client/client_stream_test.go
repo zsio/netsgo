@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"net"
 	"net/http"
@@ -57,11 +56,11 @@ func TestClient_HandleStream_Success(t *testing.T) {
 			return
 		}
 
-		nameBytes := []byte(proxyName)
-		var lenBuf [2]byte
-		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
-		mustWriteAll(t, serverStream, lenBuf[:])
-		mustWriteAll(t, serverStream, nameBytes)
+		mustWriteAll(t, serverStream, mustMarshalStreamHeader(t, protocol.StreamHeader{
+			ProxyName:      proxyName,
+			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
+			ActualTransport: protocol.ActualTransportServerRelay,
+		}))
 		mustWriteAll(t, serverStream, []byte("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
 	}()
 
@@ -145,11 +144,11 @@ func TestClient_HandleStream_HTTPProxy_ReusesTCPPath(t *testing.T) {
 			return
 		}
 
-		nameBytes := []byte(proxyName)
-		var lenBuf [2]byte
-		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
-		mustWriteAll(t, serverStream, lenBuf[:])
-		mustWriteAll(t, serverStream, nameBytes)
+		mustWriteAll(t, serverStream, mustMarshalStreamHeader(t, protocol.StreamHeader{
+			ProxyName:      proxyName,
+			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
+			ActualTransport: protocol.ActualTransportServerRelay,
+		}))
 		mustWriteAll(t, serverStream, []byte("GET / HTTP/1.1\r\nHost: app.example.com\r\n\r\n"))
 	}()
 
@@ -210,7 +209,7 @@ func TestClient_HandleStream_InvalidHeader(t *testing.T) {
 			errCh <- err
 			return
 		}
-		if _, err := stream.Write([]byte{0x00, 0x00}); err != nil {
+		if _, err := stream.Write([]byte("BAD!")); err != nil {
 			_ = stream.Close()
 			errCh <- err
 			return
@@ -227,6 +226,15 @@ func TestClient_HandleStream_InvalidHeader(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Fatalf("server stream write failed: %v", err)
 	}
+}
+
+func mustMarshalStreamHeader(t *testing.T, header protocol.StreamHeader) []byte {
+	t.Helper()
+	payload, err := protocol.WriteStreamHeaderToBytes(header)
+	if err != nil {
+		t.Fatalf("marshal stream header failed: %v", err)
+	}
+	return payload
 }
 
 func TestClient_HandleStream_DialFail(t *testing.T) {

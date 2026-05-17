@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -49,6 +50,14 @@ func WriteStreamHeader(w io.Writer, header StreamHeader) error {
 		return fmt.Errorf("write stream header payload: %w", err)
 	}
 	return nil
+}
+
+func WriteStreamHeaderToBytes(header StreamHeader) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := WriteStreamHeader(&buf, header); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func ReadStreamHeader(r io.Reader) (StreamHeader, error) {
