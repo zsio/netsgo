@@ -14,13 +14,28 @@ import (
 	"netsgo/pkg/protocol"
 )
 
-func encodeStreamHeader(t *testing.T, header protocol.StreamHeader) []byte {
+func encodeDataStreamHeader(t *testing.T, header protocol.DataStreamHeader) []byte {
 	t.Helper()
-	payload, err := protocol.WriteStreamHeaderToBytes(header)
+	payload, err := protocol.WriteDataStreamHeaderToBytes(header)
 	if err != nil {
-		t.Fatalf("failed to encode stream header: %v", err)
+		t.Fatalf("failed to encode data stream header: %v", err)
 	}
 	return payload
+}
+
+func testDataStreamHeader(tunnelID string) protocol.DataStreamHeader {
+	return protocol.DataStreamHeader{
+		Kind:             protocol.DataStreamHeaderKindTunnelStream,
+		TunnelID:         tunnelID,
+		Revision:         1,
+		StreamID:         "stream-" + tunnelID,
+		OpenClientID:     "server",
+		SourceRole:       protocol.DataStreamRoleServer,
+		TargetRole:       protocol.DataStreamRoleTarget,
+		Direction:        protocol.DataStreamDirectionIngressToTarget,
+		Transport:        protocol.ActualTransportServerRelay,
+		ServerAuthorized: true,
+	}
 }
 
 func TestClient_HandleStream_Success(t *testing.T) {
@@ -38,6 +53,7 @@ func TestClient_HandleStream_Success(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	proxyName := "test-backend"
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:        proxyName,
 		Name:      proxyName,
 		LocalIP:   "127.0.0.1",
 		LocalPort: localPort,
@@ -65,11 +81,7 @@ func TestClient_HandleStream_Success(t *testing.T) {
 			return
 		}
 
-		mustWriteAll(t, serverStream, encodeStreamHeader(t, protocol.StreamHeader{
-			ProxyName:       proxyName,
-			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
-			ActualTransport: protocol.ActualTransportServerRelay,
-		}))
+		mustWriteAll(t, serverStream, encodeDataStreamHeader(t, testDataStreamHeader(proxyName)))
 		mustWriteAll(t, serverStream, []byte("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
 	}()
 
@@ -124,6 +136,7 @@ func TestClient_HandleStream_HTTPProxy_ReusesTCPPath(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	proxyName := "http-backend"
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:        proxyName,
 		Name:      proxyName,
 		Type:      protocol.ProxyTypeHTTP,
 		LocalIP:   "127.0.0.1",
@@ -153,11 +166,7 @@ func TestClient_HandleStream_HTTPProxy_ReusesTCPPath(t *testing.T) {
 			return
 		}
 
-		mustWriteAll(t, serverStream, encodeStreamHeader(t, protocol.StreamHeader{
-			ProxyName:       proxyName,
-			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
-			ActualTransport: protocol.ActualTransportServerRelay,
-		}))
+		mustWriteAll(t, serverStream, encodeDataStreamHeader(t, testDataStreamHeader(proxyName)))
 		mustWriteAll(t, serverStream, []byte("GET / HTTP/1.1\r\nHost: app.example.com\r\n\r\n"))
 	}()
 
@@ -241,6 +250,7 @@ func TestClient_HandleStream_DialFail(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	proxyName := "fail-proxy"
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:        proxyName,
 		Name:      proxyName,
 		LocalIP:   "127.0.0.1",
 		LocalPort: 99999,
@@ -262,11 +272,7 @@ func TestClient_HandleStream_DialFail(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		stream, _ := serverSession.Open()
-		mustWriteAll(t, stream, encodeStreamHeader(t, protocol.StreamHeader{
-			ProxyName:       proxyName,
-			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
-			ActualTransport: protocol.ActualTransportServerRelay,
-		}))
+		mustWriteAll(t, stream, encodeDataStreamHeader(t, testDataStreamHeader(proxyName)))
 
 		buf := make([]byte, 10)
 		_, err := stream.Read(buf)
