@@ -230,7 +230,7 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 			}(stream)
 		}
 	}()
-	req := protocol.ProxyNewRequest{Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
+	req := protocol.ProxyNewRequest{ID: tunnelName, Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
 	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("Failed to start UDP proxy: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 			}(stream)
 		}
 	}()
-	req := protocol.ProxyNewRequest{Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
+	req := protocol.ProxyNewRequest{ID: tunnelName, Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
 	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("Failed to start UDP proxy: %v", err)
 	}
