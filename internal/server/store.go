@@ -2,8 +2,12 @@ package server
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,21 +20,63 @@ const (
 
 var ErrTunnelNotFound = errors.New("tunnel not found")
 
+const (
+	TunnelTopologyServerExpose       = "server_expose"
+	TunnelTopologyClientToClient     = "client_to_client"
+	TunnelIngressTypeTCPListen       = "tcp_listen"
+	TunnelIngressTypeUDPListen       = "udp_listen"
+	TunnelIngressTypeHTTPHost        = "http_host"
+	TunnelTargetTypeTCPService       = "tcp_service"
+	TunnelTargetTypeUDPService       = "udp_service"
+	TunnelTransportServerRelayOnly   = "server_relay_only"
+	TunnelTransportDirectPreferred   = "direct_preferred"
+	TunnelTransportDirectOnly        = "direct_only"
+	TunnelActualTransportUnknown     = "unknown"
+	TunnelActualTransportServerRelay = "server_relay"
+	TunnelP2PStateIdle               = "idle"
+)
+
 // StoredTunnel is a tunnel configuration persisted to storage.
+type EndpointSpec struct {
+	Location string          `json:"location"`
+	ClientID string          `json:"client_id,omitempty"`
+	Type     string          `json:"type"`
+	Config   json.RawMessage `json:"config"`
+}
+
+type P2PState struct {
+	State     string `json:"state"`
+	Error     string `json:"error,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
 type StoredTunnel struct {
 	protocol.ProxyNewRequest
-	DesiredState string    `json:"desired_state,omitempty"` // User's desired state
-	RuntimeState string    `json:"runtime_state,omitempty"` // Actual runtime state
-	Error        string    `json:"error,omitempty"`         // Reason when in error state
-	ClientID     string    `json:"client_id,omitempty"`     // Owning stable Client ID
-	Hostname     string    `json:"hostname,omitempty"`      // Current hostname (for display)
-	Binding      string    `json:"binding,omitempty"`       // Only client_id is allowed
-	CreatedAt    time.Time `json:"created_at,omitempty"`    // Creation time
+	DesiredState    string       `json:"desired_state,omitempty"` // User's desired state
+	RuntimeState    string       `json:"runtime_state,omitempty"` // Actual runtime state
+	Error           string       `json:"error,omitempty"`         // Reason when in error state
+	ClientID        string       `json:"client_id,omitempty"`     // Owning stable Client ID
+	Hostname        string       `json:"hostname,omitempty"`      // Current hostname (for display)
+	Binding         string       `json:"binding,omitempty"`       // Only client_id is allowed
+	CreatedAt       time.Time    `json:"created_at,omitempty"`    // Creation time
+	Revision        int64        `json:"revision,omitempty"`
+	Topology        string       `json:"topology,omitempty"`
+	OwnerClientID   string       `json:"owner_client_id,omitempty"`
+	Ingress         EndpointSpec `json:"ingress,omitempty"`
+	Target          EndpointSpec `json:"target,omitempty"`
+	TransportPolicy string       `json:"transport_policy,omitempty"`
+	ActualTransport string       `json:"actual_transport,omitempty"`
+	P2P             P2PState     `json:"p2p,omitempty"`
+	CreatedByUserID string       `json:"created_by_user_id,omitempty"`
+	UpdatedAt       time.Time    `json:"updated_at,omitempty"`
 }
 
 func (t *StoredTunnel) normalize() error {
 	if t.ID == "" {
 		return fmt.Errorf("tunnel %q is missing a stable id", t.Name)
+	}
+	if t.Binding == "" {
+		t.Binding = TunnelBindingClientID
 	}
 	if t.Binding != TunnelBindingClientID {
 		return fmt.Errorf("tunnel %q must use %q binding", t.Name, TunnelBindingClientID)
@@ -41,12 +87,19 @@ func (t *StoredTunnel) normalize() error {
 	if t.CreatedAt.IsZero() {
 		t.CreatedAt = time.Now().UTC()
 	}
+	if t.UpdatedAt.IsZero() {
+		t.UpdatedAt = t.CreatedAt
+	}
+	if t.Revision == 0 {
+		t.Revision = 1
+	}
 	if err := validateTunnelStates(t.DesiredState, t.RuntimeState, t.Error); err != nil {
 		return err
 	}
 	t.DesiredState = canonicalDesiredState(t.DesiredState)
 	t.Error = tunnelErrorForRuntimeState(t.RuntimeState, t.Error)
-	return nil
+	normalizeUnifiedTunnelSpec(t)
+	return validateUnifiedTunnelSpec(*t)
 }
 
 // TunnelStore is a SQLite-backed persistent store for tunnel configurations.
@@ -112,11 +165,14 @@ func (s *TunnelStore) maybeFailSave() error {
 	return nil
 }
 
-const tunnelSelectColumns = `id, client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, created_at, desired_state, runtime_state, error, hostname, binding`
+const tunnelSelectColumns = `id, client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, created_at, desired_state, runtime_state, error, hostname, binding, revision, topology, owner_client_id, ingress_location, ingress_client_id, ingress_type, ingress_config, target_location, target_client_id, target_type, target_config, transport_policy, actual_transport, p2p_state, p2p_error, p2p_session_id, created_by_user_id, updated_at`
 
 func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 	var tunnel StoredTunnel
-	var createdAt string
+	var createdAt, updatedAt string
+	var ingressLocation, ingressClientID, ingressType, ingressConfig string
+	var targetLocation, targetClientID, targetType, targetConfig string
+	var p2pState, p2pError, p2pSessionID string
 	err := row.Scan(
 		&tunnel.ID,
 		&tunnel.ClientID,
@@ -134,6 +190,24 @@ func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 		&tunnel.Error,
 		&tunnel.Hostname,
 		&tunnel.Binding,
+		&tunnel.Revision,
+		&tunnel.Topology,
+		&tunnel.OwnerClientID,
+		&ingressLocation,
+		&ingressClientID,
+		&ingressType,
+		&ingressConfig,
+		&targetLocation,
+		&targetClientID,
+		&targetType,
+		&targetConfig,
+		&tunnel.TransportPolicy,
+		&tunnel.ActualTransport,
+		&p2pState,
+		&p2pError,
+		&p2pSessionID,
+		&tunnel.CreatedByUserID,
+		&updatedAt,
 	)
 	if err != nil {
 		return StoredTunnel{}, err
@@ -145,6 +219,16 @@ func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 		}
 		tunnel.CreatedAt = parsed
 	}
+	if updatedAt != "" {
+		parsed, err := parseTime(updatedAt)
+		if err != nil {
+			return StoredTunnel{}, err
+		}
+		tunnel.UpdatedAt = parsed
+	}
+	tunnel.Ingress = EndpointSpec{Location: ingressLocation, ClientID: ingressClientID, Type: ingressType, Config: json.RawMessage(ingressConfig)}
+	tunnel.Target = EndpointSpec{Location: targetLocation, ClientID: targetClientID, Type: targetType, Config: json.RawMessage(targetConfig)}
+	tunnel.P2P = P2PState{State: p2pState, Error: p2pError, SessionID: p2pSessionID}
 	if err := tunnel.normalize(); err != nil {
 		return StoredTunnel{}, err
 	}
@@ -231,29 +315,20 @@ func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
 		return err
 	}
 
-	_, err = s.db.Exec(`INSERT INTO tunnels (id, client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, created_at, desired_state, runtime_state, error, hostname, binding)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		tunnel.ID,
-		tunnel.ClientID,
-		tunnel.Name,
-		tunnel.Type,
-		tunnel.LocalIP,
-		tunnel.LocalPort,
-		tunnel.RemotePort,
-		tunnel.Domain,
-		tunnel.IngressBPS,
-		tunnel.EgressBPS,
-		formatTime(tunnel.CreatedAt),
-		tunnel.DesiredState,
-		tunnel.RuntimeState,
-		tunnel.Error,
-		tunnel.Hostname,
-		tunnel.Binding,
-	)
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	return nil
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	if err := insertTunnelTx(tx, tunnel); err != nil {
+		return err
+	}
+	if err := replaceTunnelResourceLocksTx(tx, tunnel); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
 }
 
 // RemoveTunnel deletes a tunnel configuration and persists the change.
@@ -272,7 +347,19 @@ func (s *TunnelStore) RemoveTunnel(clientID, name string) error {
 		return err
 	}
 
-	result, err := s.db.Exec(`DELETE FROM tunnels WHERE client_id = ? AND name = ?`, clientID, name)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	result, err := tx.Exec(`DELETE FROM tunnel_resource_locks WHERE tunnel_id IN (SELECT id FROM tunnels WHERE client_id = ? AND name = ?)`, clientID, name)
+	_ = result
+	if err != nil {
+		return err
+	}
+	result, err = tx.Exec(`DELETE FROM tunnels WHERE client_id = ? AND name = ?`, clientID, name)
 	if err != nil {
 		return err
 	}
@@ -283,7 +370,7 @@ func (s *TunnelStore) RemoveTunnel(clientID, name string) error {
 	if rowsAffected == 0 {
 		return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
 	}
-	return nil
+	return commitTx(tx, &committed)
 }
 
 func (s *TunnelStore) RemoveTunnelByID(clientID, id string) error {
@@ -301,7 +388,17 @@ func (s *TunnelStore) RemoveTunnelByID(clientID, id string) error {
 		return err
 	}
 
-	result, err := s.db.Exec(`DELETE FROM tunnels WHERE client_id = ? AND id = ?`, clientID, id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	if _, err := tx.Exec(`DELETE FROM tunnel_resource_locks WHERE tunnel_id = ?`, id); err != nil {
+		return err
+	}
+	result, err := tx.Exec(`DELETE FROM tunnels WHERE client_id = ? AND id = ?`, clientID, id)
 	if err != nil {
 		return err
 	}
@@ -312,7 +409,7 @@ func (s *TunnelStore) RemoveTunnelByID(clientID, id string) error {
 	if rowsAffected == 0 {
 		return fmt.Errorf("tunnel id %q does not exist (client_id: %s)", id, clientID)
 	}
-	return nil
+	return commitTx(tx, &committed)
 }
 
 // UpdateStates directly updates both state fields and persists the change.
@@ -333,8 +430,13 @@ func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, e
 		return err
 	}
 
-	result, err := s.db.Exec(`UPDATE tunnels SET desired_state = ?, runtime_state = ?, error = ? WHERE client_id = ? AND name = ?`,
-		normalized.DesiredState, normalized.RuntimeState, normalized.Error, clientID, name)
+	storageRuntimeState := storageRuntimeStateFromProtocol(normalized.RuntimeState)
+	actualTransport := TunnelActualTransportUnknown
+	if storageRuntimeState == "active" {
+		actualTransport = TunnelActualTransportServerRelay
+	}
+	result, err := s.db.Exec(`UPDATE tunnels SET desired_state = ?, runtime_state = ?, error = ?, actual_transport = ?, updated_at = ? WHERE client_id = ? AND name = ?`,
+		normalized.DesiredState, storageRuntimeState, normalized.Error, actualTransport, formatTime(time.Now().UTC()), clientID, name)
 	if err != nil {
 		return err
 	}
@@ -345,7 +447,10 @@ func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, e
 	if rowsAffected == 0 {
 		return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
 	}
-	return nil
+	if err := replaceTunnelResourceLocksTx(tx, stored); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
 }
 
 // UpdateTunnel updates the mutable tunnel configuration and persists it.
@@ -364,8 +469,28 @@ func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localP
 		return err
 	}
 
-	result, err := s.db.Exec(`UPDATE tunnels SET local_ip = ?, local_port = ?, remote_port = ?, domain = ?, ingress_bps = ?, egress_bps = ? WHERE client_id = ? AND name = ?`,
-		localIP, localPort, remotePort, domain, ingressBPS, egressBPS, clientID, name)
+	stored, err := scanStoredTunnel(s.db.QueryRow(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE client_id = ? AND name = ?`, clientID, name))
+	if err != nil {
+		return err
+	}
+	stored.LocalIP = localIP
+	stored.LocalPort = localPort
+	stored.RemotePort = remotePort
+	stored.Domain = domain
+	stored.IngressBPS = ingressBPS
+	stored.EgressBPS = egressBPS
+	stored.UpdatedAt = time.Now().UTC()
+	if err := stored.normalize(); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+	result, err := tx.Exec(`UPDATE tunnels SET local_ip = ?, local_port = ?, remote_port = ?, domain = ?, ingress_bps = ?, egress_bps = ?, ingress_config = ?, ingress_bind_ip = ?, ingress_port = ?, ingress_domain = ?, target_config = ?, target_host = ?, target_port = ?, target_resource_key = ?, updated_at = ? WHERE client_id = ? AND name = ?`,
+		stored.LocalIP, stored.LocalPort, stored.RemotePort, stored.Domain, stored.IngressBPS, stored.EgressBPS, string(stored.Ingress.Config), tunnelIngressBindIP(stored), tunnelIngressPort(stored), tunnelIngressDomain(stored), string(stored.Target.Config), stored.LocalIP, stored.LocalPort, tunnelTargetResourceKey(stored), formatTime(stored.UpdatedAt), clientID, name)
 	if err != nil {
 		return err
 	}
@@ -395,8 +520,29 @@ func (s *TunnelStore) UpdateTunnelByID(clientID, id, name string, localIP string
 		return err
 	}
 
-	result, err := s.db.Exec(`UPDATE tunnels SET name = ?, local_ip = ?, local_port = ?, remote_port = ?, domain = ?, ingress_bps = ?, egress_bps = ? WHERE client_id = ? AND id = ?`,
-		name, localIP, localPort, remotePort, domain, ingressBPS, egressBPS, clientID, id)
+	stored, err := scanStoredTunnel(s.db.QueryRow(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE client_id = ? AND id = ?`, clientID, id))
+	if err != nil {
+		return err
+	}
+	stored.Name = name
+	stored.LocalIP = localIP
+	stored.LocalPort = localPort
+	stored.RemotePort = remotePort
+	stored.Domain = domain
+	stored.IngressBPS = ingressBPS
+	stored.EgressBPS = egressBPS
+	stored.UpdatedAt = time.Now().UTC()
+	if err := stored.normalize(); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+	result, err := tx.Exec(`UPDATE tunnels SET name = ?, local_ip = ?, local_port = ?, remote_port = ?, domain = ?, ingress_bps = ?, egress_bps = ?, ingress_config = ?, ingress_bind_ip = ?, ingress_port = ?, ingress_domain = ?, target_config = ?, target_host = ?, target_port = ?, target_resource_key = ?, updated_at = ? WHERE client_id = ? AND id = ?`,
+		stored.Name, stored.LocalIP, stored.LocalPort, stored.RemotePort, stored.Domain, stored.IngressBPS, stored.EgressBPS, string(stored.Ingress.Config), tunnelIngressBindIP(stored), tunnelIngressPort(stored), tunnelIngressDomain(stored), string(stored.Target.Config), stored.LocalIP, stored.LocalPort, tunnelTargetResourceKey(stored), formatTime(stored.UpdatedAt), clientID, id)
 	if err != nil {
 		return err
 	}
@@ -407,7 +553,10 @@ func (s *TunnelStore) UpdateTunnelByID(clientID, id, name string, localIP string
 	if rowsAffected == 0 {
 		return fmt.Errorf("tunnel id %q does not exist (client_id: %s)", id, clientID)
 	}
-	return nil
+	if err := replaceTunnelResourceLocksTx(tx, stored); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
 }
 
 // UpdateHostname updates the display hostname for a given Client.
@@ -426,7 +575,7 @@ func (s *TunnelStore) UpdateHostname(clientID, hostname string) error {
 		return err
 	}
 
-	_, err := s.db.Exec(`UPDATE tunnels SET hostname = ? WHERE client_id = ? AND hostname <> ?`, hostname, clientID, hostname)
+	_, err := s.db.Exec(`UPDATE tunnels SET hostname = ?, updated_at = ? WHERE client_id = ? AND hostname <> ?`, hostname, formatTime(time.Now().UTC()), clientID, hostname)
 	if err != nil {
 		return err
 	}
@@ -456,8 +605,19 @@ func (s *TunnelStore) DeleteTunnelsByClientID(clientID string) error {
 	if err := s.maybeFailSave(); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`DELETE FROM tunnels WHERE client_id = ?`, clientID)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+	if _, err := tx.Exec(`DELETE FROM tunnel_resource_locks WHERE tunnel_id IN (SELECT id FROM tunnels WHERE client_id = ?)`, clientID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM tunnels WHERE client_id = ?`, clientID); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
 }
 
 // GetTunnelsByHostname returns all tunnels matching the given hostname (for display/query purposes).
