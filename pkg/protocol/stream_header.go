@@ -51,7 +51,7 @@ func NewDataStreamID() string {
 }
 
 func EncodeDataStreamHeader(w io.Writer, header DataStreamHeader) error {
-	if err := validateDataStreamHeader(header); err != nil {
+	if err := ValidateDataStreamHeader(header); err != nil {
 		return err
 	}
 	payload, err := json.Marshal(header)
@@ -112,6 +112,16 @@ func DecodeDataStreamHeader(r io.Reader) (DataStreamHeader, error) {
 		return DataStreamHeader{}, err
 	}
 	return header, nil
+}
+
+// WriteDataStreamHeaderToBytes serializes a data stream header to the on-wire
+// format, useful in tests.
+func WriteDataStreamHeaderToBytes(header DataStreamHeader) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := EncodeDataStreamHeader(&buf, header); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func ValidateDataStreamHeader(header DataStreamHeader) error {
