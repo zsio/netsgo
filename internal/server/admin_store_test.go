@@ -1105,7 +1105,6 @@ func TestAdminStore_Token_ReuseExistingToken(t *testing.T) {
 	}
 }
 
-
 func TestAdminStore_Token_ReuseRequiresValidKey(t *testing.T) {
 	store := newTestAdminStore(t)
 	rawKey := "sk-reuse-key-guard"
