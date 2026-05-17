@@ -318,7 +318,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			} else {
 				val = sess
 				// Start the reverse read loop: stream → reply to srcAddr.
-				go s.udpSessionReverse(state, sess, client.ID, tunnel.Config.Name, client.BandwidthRuntime(), tunnel.limits)
+				go s.udpSessionReverse(state, sess, client.ID, tunnel.Config, client.BandwidthRuntime(), tunnel.limits)
 			}
 		}
 
@@ -346,7 +346,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 // external client via packetConn.
 // Exit mechanism: the goroutine blocks on ReadUDPFrame and exits when sess.Close()→stream.Close()
 // is called — this is intentional and no separate ReadDeadline is needed for ReadUDPFrame.
-func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clientID, proxyName string, clientRuntime, tunnelRuntime *directionalBandwidthRuntime) {
+func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clientID string, tunnelConfig protocol.ProxyConfig, clientRuntime, tunnelRuntime *directionalBandwidthRuntime) {
 	defer func() {
 		sess.Close()
 		state.removeSession(sess.srcAddr.String())
@@ -377,10 +377,10 @@ func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clien
 
 		if _, err := state.packetConn.WriteTo(payload, sess.srcAddr); err != nil {
 			log.Printf("⚠️ UDP proxy [%s] WriteTo failed [%s]: %v",
-				proxyName, sess.srcAddr.String(), err)
+				tunnelConfig.Name, sess.srcAddr.String(), err)
 			return
 		}
-		s.recordTraffic(clientID, proxyName, protocol.ProxyTypeUDP, 0, uint64(len(payload)))
+		s.recordTunnelTraffic(clientID, tunnelConfig, 0, uint64(len(payload)))
 	}
 }
 
