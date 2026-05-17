@@ -165,10 +165,14 @@ type ProxyProvisionRequest = ProxyNewRequest
 
 // ProxyCreateResponse 表示 client 主动创建 tunnel 时 server 返回的结果。
 type ProxyCreateResponse struct {
-	Name       string `json:"name,omitempty"`
-	Success    bool   `json:"success"`
-	Message    string `json:"message,omitempty"`
-	RemotePort int    `json:"remote_port,omitempty"` // 实际分配的公网端口
+	ID                string `json:"id,omitempty"`
+	Name              string `json:"name,omitempty"`
+	Success           bool   `json:"success"`
+	Message           string `json:"message,omitempty"`
+	RemotePort        int    `json:"remote_port,omitempty"` // 实际分配的公网端口
+	TransportPolicy   string `json:"transport_policy,omitempty"`
+	ActualTransport   string `json:"actual_transport,omitempty"`
+	ProvisionRevision uint64 `json:"provision_revision,omitempty"`
 }
 
 // ProxyProvisionAck 表示 client 接收 provisioning 配置后的 ACK。

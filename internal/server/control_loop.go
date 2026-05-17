@@ -168,10 +168,13 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 		client.proxyMu.RUnlock()
 
 		resp, _ = protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
-			Name:       req.Name,
-			Success:    true,
-			Message:    "proxy tunnel created successfully",
-			RemotePort: actualPort,
+			ID:              config.ID,
+			Name:            config.Name,
+			Success:         true,
+			Message:         "proxy tunnel created successfully",
+			RemotePort:      actualPort,
+			TransportPolicy: config.TransportPolicy,
+			ActualTransport: config.ActualTransport,
 		})
 
 		s.emitTunnelChanged(client.ID, config, "created_by_client")

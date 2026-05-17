@@ -800,22 +800,46 @@ func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	c := newIsolatedTestClient(t, wsURL, "test-key")
 	c.DisableReconnect = true
+	c.proxies.Store("client-created", protocol.ProxyNewRequest{
+		Name:       "client-created",
+		Type:       protocol.ProxyTypeTCP,
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8080,
+		RemotePort: 18080,
+	})
 
 	go func() { _ = c.Start() }()
 	conn := ms.waitForConn(t, 2*time.Second)
 
 	// The server proactively sends proxy_create_resp (success)
 	resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
-		Success:    true,
-		Message:    "tunnel created",
-		RemotePort: 19090,
+		ID:              "stable-client-created",
+		Name:            "client-created",
+		Success:         true,
+		Message:         "tunnel created",
+		RemotePort:      19090,
+		TransportPolicy: protocol.TransportPolicyServerRelayOnly,
+		ActualTransport: protocol.ActualTransportServerRelay,
 	})
 	if err := ms.writeControlJSON(conn, resp); err != nil {
 		t.Fatalf("server failed to send proxy_create_resp: %v", err)
 	}
 
-	// Wait for the client to handle it; not crashing is enough
+	// Wait for the client to handle it.
 	time.Sleep(200 * time.Millisecond)
+
+	name, cfg, ok := c.proxyForDataStreamHeader(protocol.DataStreamHeader{
+		TunnelID: "stable-client-created",
+	})
+	if !ok {
+		t.Fatal("client should resolve server-assigned tunnel id after successful create response")
+	}
+	if name != "client-created" || cfg.ID != "stable-client-created" || cfg.RemotePort != 19090 {
+		t.Fatalf("unexpected proxy config after create response: name=%q cfg=%+v", name, cfg)
+	}
+	if cfg.ActualTransport != protocol.ActualTransportServerRelay || cfg.TransportPolicy != protocol.TransportPolicyServerRelayOnly {
+		t.Fatalf("expected transport metadata to be applied, got %+v", cfg)
+	}
 }
 
 func TestClient_ControlLoop_ProxyCreateResp_Failure(t *testing.T) {

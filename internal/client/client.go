@@ -1138,6 +1138,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				continue
 			}
 			if resp.Success {
+				c.applyProxyCreateResponse(resp)
 				log.Printf("✅ Proxy tunnel created successfully [%s], public port: %d", resp.Name, resp.RemotePort)
 			} else {
 				log.Printf("❌ Failed to create proxy tunnel [%s]: %s", resp.Name, resp.Message)
@@ -1157,4 +1158,34 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			log.Printf("📩 Received control message: %s", msg.Type)
 		}
 	}
+}
+
+func (c *Client) applyProxyCreateResponse(resp protocol.ProxyCreateResponse) {
+	if resp.Name == "" {
+		return
+	}
+	val, ok := c.proxies.Load(resp.Name)
+	if !ok {
+		return
+	}
+	cfg, ok := val.(protocol.ProxyNewRequest)
+	if !ok {
+		return
+	}
+	if resp.ID != "" {
+		cfg.ID = resp.ID
+	}
+	if resp.RemotePort != 0 {
+		cfg.RemotePort = resp.RemotePort
+	}
+	if resp.TransportPolicy != "" {
+		cfg.TransportPolicy = resp.TransportPolicy
+	}
+	if resp.ActualTransport != "" {
+		cfg.ActualTransport = resp.ActualTransport
+	}
+	if resp.ProvisionRevision != 0 {
+		cfg.ProvisionRevision = resp.ProvisionRevision
+	}
+	c.proxies.Store(resp.Name, cfg)
 }
