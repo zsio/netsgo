@@ -53,6 +53,7 @@ type TrafficBucket struct {
 	Transport       string            `json:"transport,omitempty"`
 	TunnelName      string            `json:"tunnel_name"`
 	TunnelType      string            `json:"tunnel_type"`
+	MetadataMissing bool              `json:"metadata_missing,omitempty"`
 	Resolution      TrafficResolution `json:"resolution"`
 	BucketStart     int64             `json:"bucket_start"`
 	IngressBytes    uint64            `json:"ingress_bytes"`
@@ -419,21 +420,22 @@ func (s *TrafficStore) flushLocked() error {
 }
 
 func (s *TrafficStore) queryBucketsLocked(clientID, tunnelName string, resolution TrafficResolution, fromUnix, toUnix int64) ([]TrafficBucket, error) {
-	query := `SELECT tunnel_id, owner_client_id, ingress_client_id, target_client_id, topology, transport, client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes
-FROM traffic_buckets
-WHERE client_id = ? AND resolution = ? AND bucket_start >= ? AND bucket_start <= ?`
+	query := `SELECT b.tunnel_id, b.owner_client_id, b.ingress_client_id, b.target_client_id, b.topology, b.transport, b.client_id, b.tunnel_name, b.tunnel_type, b.resolution, b.bucket_start, b.ingress_bytes, b.egress_bytes, CASE WHEN t.id IS NULL THEN 1 ELSE 0 END
+FROM traffic_buckets b
+LEFT JOIN tunnels t ON t.id = b.tunnel_id
+WHERE b.client_id = ? AND b.resolution = ? AND b.bucket_start >= ? AND b.bucket_start <= ?`
 	args := []any{clientID, string(resolution), fromUnix, toUnix}
 	if tunnelName != "" {
-		query += ` AND tunnel_name = ?`
-		args = append(args, tunnelName)
+		query += ` AND (b.tunnel_name = ? OR b.tunnel_id = ?)`
+		args = append(args, tunnelName, tunnelName)
 	}
-	query += ` ORDER BY tunnel_name, tunnel_type, bucket_start`
+	query += ` ORDER BY b.tunnel_name, b.tunnel_type, b.bucket_start`
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
-	return scanTrafficBucketRows(rows)
+	return scanTrafficBucketRowsWithMetadata(rows)
 }
 
 func scanTrafficBucketRows(rows *sql.Rows) ([]TrafficBucket, error) {
@@ -453,10 +455,41 @@ func scanTrafficBucketRows(rows *sql.Rows) ([]TrafficBucket, error) {
 	return buckets, nil
 }
 
+func scanTrafficBucketRowsWithMetadata(rows *sql.Rows) ([]TrafficBucket, error) {
+	defer func() { _ = rows.Close() }()
+
+	buckets := []TrafficBucket{}
+	for rows.Next() {
+		bucket, err := scanTrafficBucketWithMetadata(rows)
+		if err != nil {
+			return nil, err
+		}
+		buckets = append(buckets, bucket)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return buckets, nil
+}
+
+func scanTrafficBucketWithMetadata(row dbScanner) (TrafficBucket, error) {
+	var metadataMissing int
+	bucket, err := scanTrafficBucketFields(row, &metadataMissing)
+	if err != nil {
+		return TrafficBucket{}, err
+	}
+	bucket.MetadataMissing = metadataMissing != 0
+	return bucket, nil
+}
+
 func scanTrafficBucket(row dbScanner) (TrafficBucket, error) {
+	return scanTrafficBucketFields(row)
+}
+
+func scanTrafficBucketFields(row dbScanner, extra ...any) (TrafficBucket, error) {
 	var bucket TrafficBucket
 	var ingressBytes, egressBytes int64
-	err := row.Scan(
+	dest := []any{
 		&bucket.TunnelID,
 		&bucket.OwnerClientID,
 		&bucket.IngressClientID,
@@ -470,7 +503,9 @@ func scanTrafficBucket(row dbScanner) (TrafficBucket, error) {
 		&bucket.BucketStart,
 		&ingressBytes,
 		&egressBytes,
-	)
+	}
+	dest = append(dest, extra...)
+	err := row.Scan(dest...)
 	if err != nil {
 		return TrafficBucket{}, err
 	}
@@ -812,7 +847,7 @@ func trafficSeriesKeyFromBucket(bucket TrafficBucket) trafficSeriesKey {
 }
 
 func trafficBucketMetadataMissing(bucket TrafficBucket) bool {
-	return bucket.TunnelID != "" && (bucket.TunnelName == "" || bucket.TunnelType == "")
+	return bucket.MetadataMissing || (bucket.TunnelID != "" && (bucket.TunnelName == "" || bucket.TunnelType == ""))
 }
 
 func sortTrafficSeries(items []TunnelTrafficSeries) {
