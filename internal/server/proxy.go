@@ -18,6 +18,7 @@ type ProxyTunnel struct {
 	Config   protocol.ProxyConfig
 	Listener net.Listener   // public listener on RemotePort (TCP tunnels only)
 	UDPState *UDPProxyState // UDP proxy runtime state (nil for TCP tunnels)
+	runtime  tunnelRuntimeSnapshot
 	limits   *directionalBandwidthRuntime
 	done     chan struct{}
 	once     sync.Once
@@ -244,6 +245,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 		done:   make(chan struct{}),
 	}
 	setProxyConfigStates(&tunnel.Config, desiredState, runtimeState, "")
+	initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
 
 	client.proxies[req.Name] = tunnel
 	client.proxyMu.Unlock()
@@ -268,6 +270,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 			return fmt.Errorf("proxy tunnel %q not found", name)
 		}
 		setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+		markTunnelServerRelayActive(current, client.ID, time.Now())
 		client.proxyMu.Unlock()
 		return nil
 	}
@@ -309,6 +312,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	tunnel.once = sync.Once{}
 	tunnel.Config.RemotePort = actualPort
 	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+	markTunnelServerRelayActive(tunnel, client.ID, time.Now())
 	listener := tunnel.Listener
 	done := tunnel.done
 	proxyName := tunnel.Config.Name
@@ -367,6 +371,7 @@ func (s *Server) stageTunnelPending(client *ClientConn, name string) (protocol.P
 		return protocol.ProxyConfig{}, fmt.Errorf("proxy tunnel %q not found", name)
 	}
 	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, "")
+	markTunnelProvisionPending(tunnel, client.ID, tunnel.runtime.Revision, time.Now())
 	return tunnel.Config, nil
 }
 
@@ -549,6 +554,7 @@ func (s *Server) CloseExposedProxyRuntime(client *ClientConn) {
 		if isTunnelExposed(tunnel.Config) {
 			closeTunnelRuntimeResources(tunnel)
 			setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateOffline, "")
+			markTunnelRuntimeOffline(tunnel, client.ID, time.Now())
 		}
 	}
 }

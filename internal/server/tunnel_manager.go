@@ -490,6 +490,7 @@ func (s *Server) setTunnelStates(client *ClientConn, name, desiredState, runtime
 		return protocol.ProxyConfig{}, false
 	}
 	setProxyConfigStates(&tunnel.Config, desiredState, runtimeState, errMsg)
+	updateTunnelRuntimeFromConfig(tunnel, client.ID, errMsg, time.Now())
 	return tunnel.Config, true
 }
 
@@ -550,11 +551,13 @@ func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyN
 	if client.proxies == nil {
 		client.proxies = make(map[string]*ProxyTunnel)
 	}
-	client.proxies[req.Name] = &ProxyTunnel{
+	tunnel := &ProxyTunnel{
 		Config: config,
 		limits: newDirectionalBandwidthRuntime(req.BandwidthSettings, realBandwidthClock{}),
 		done:   make(chan struct{}),
 	}
+	initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
+	client.proxies[req.Name] = tunnel
 	client.proxyMu.Unlock()
 	return config
 }
