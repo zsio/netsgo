@@ -333,5 +333,7 @@ const (
 // StreamHeader 每个 yamux stream 开头发送的头部
 // Server 打开 stream 后写入此头部，告诉 Client 这个 stream 属于哪条代理隧道
 type StreamHeader struct {
-	ProxyName string `json:"proxy_name"`
+	ProxyName      string `json:"proxy_name"`
+	TransportPolicy string `json:"transport_policy,omitempty"`
+	ActualTransport string `json:"actual_transport,omitempty"`
 }
