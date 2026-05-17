@@ -182,6 +182,9 @@ func (s *Server) recordTrafficObservationAt(now time.Time, tunnelID, clientID, t
 	if ingressBytes == 0 && egressBytes == 0 {
 		return
 	}
+	if tunnelID == "" {
+		tunnelID = s.resolveTrafficTunnelID(clientID, tunnelName, tunnelType)
+	}
 
 	acc := s.trafficAccumulator
 	if acc == nil {
@@ -200,6 +203,30 @@ func (s *Server) recordTrafficObservationAt(now time.Time, tunnelID, clientID, t
 		log.Printf("⚠️ Failed to aggregate traffic bytes for client %s tunnel %s: %v", clientID, tunnelName, err)
 		s.trafficStore.recordTunnelBytesAt(now, tunnelID, clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
 	}
+}
+
+func (s *Server) resolveTrafficTunnelID(clientID, tunnelName, tunnelType string) string {
+	if s == nil || clientID == "" || tunnelName == "" {
+		return ""
+	}
+	if value, ok := s.clients.Load(clientID); ok {
+		if client, ok := value.(*ClientConn); ok {
+			client.proxyMu.RLock()
+			tunnel, ok := client.proxies[tunnelName]
+			if ok && tunnel != nil && tunnel.Config.ID != "" && (tunnelType == "" || tunnel.Config.Type == tunnelType) {
+				tunnelID := tunnel.Config.ID
+				client.proxyMu.RUnlock()
+				return tunnelID
+			}
+			client.proxyMu.RUnlock()
+		}
+	}
+	if s.store != nil {
+		if stored, ok := s.store.GetTunnel(clientID, tunnelName); ok && stored.ID != "" && (tunnelType == "" || stored.Type == tunnelType) {
+			return stored.ID
+		}
+	}
+	return ""
 }
 
 func (s *Server) flushTrafficObservations() {
