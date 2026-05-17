@@ -360,7 +360,7 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 	}
 
 	s.flushTrafficObservations()
-	result := mustQueryTraffic(t, trafficStore, clientID, tunnelName, time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
+	result := mustQueryWithResolution(t, trafficStore, clientID, tunnelName, time.Now().Add(-time.Minute), time.Now().Add(time.Minute), TrafficResolutionMinute)
 	if len(result.Items) != 1 {
 		t.Fatalf("traffic items: want 1, got %d", len(result.Items))
 	}
