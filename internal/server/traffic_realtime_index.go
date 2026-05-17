@@ -25,7 +25,7 @@ func (idx *realtimeSecondIndex) Add(bucket TrafficBucket) error {
 		idx.byClient[bucket.ClientID] = seriesByClient
 	}
 
-	seriesKey := trafficSeriesKey{TunnelName: bucket.TunnelName, TunnelType: bucket.TunnelType}
+	seriesKey := trafficSeriesKeyFromBucket(bucket)
 	bucketsBySecond := seriesByClient[seriesKey]
 	if bucketsBySecond == nil {
 		bucketsBySecond = make(map[int64]TrafficBucket)

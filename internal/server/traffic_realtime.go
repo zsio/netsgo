@@ -134,7 +134,7 @@ func (s *Server) knownTrafficTunnels(clientID, tunnelName string) []trafficSerie
 			log.Printf("⚠️ failed to load tunnels for realtime traffic client %s: %v", clientID, err)
 		} else {
 			for _, tunnel := range stored {
-				add(trafficSeriesKey{TunnelName: tunnel.Name, TunnelType: tunnel.Type})
+				add(trafficSeriesKey{TunnelID: tunnel.ID, TunnelName: tunnel.Name, TunnelType: tunnel.Type})
 			}
 		}
 	}
@@ -156,7 +156,7 @@ func trafficSeriesKeysFromProxyConfigs(configs []protocol.ProxyConfig, tunnelNam
 		if tunnelName != "" && config.Name != tunnelName {
 			continue
 		}
-		keys = append(keys, trafficSeriesKey{TunnelName: config.Name, TunnelType: config.Type})
+		keys = append(keys, trafficSeriesKey{TunnelID: config.ID, TunnelName: config.Name, TunnelType: config.Type})
 	}
 	sortTrafficSeriesKeys(keys)
 	return keys
@@ -187,7 +187,7 @@ func fillRealtimeTrafficResult(result TrafficQueryResult, knownTunnels []traffic
 	}
 
 	for _, item := range result.Items {
-		key := trafficSeriesKey{TunnelName: item.TunnelName, TunnelType: item.TunnelType}
+		key := trafficSeriesKey{TunnelID: item.TunnelID, TunnelName: item.TunnelName, TunnelType: item.TunnelType}
 		if key.TunnelName == "" || key.TunnelType == "" {
 			continue
 		}
@@ -224,6 +224,7 @@ func fillRealtimeTrafficResult(result TrafficQueryResult, knownTunnels []traffic
 			points = append(points, TrafficPoint{BucketStart: time.Unix(timestamp, 0).UTC()})
 		}
 		items = append(items, TunnelTrafficSeries{
+			TunnelID:   key.TunnelID,
 			TunnelName: key.TunnelName,
 			TunnelType: key.TunnelType,
 			Points:     points,
@@ -238,6 +239,9 @@ func sortTrafficSeriesKeys(keys []trafficSeriesKey) {
 		if keys[i].TunnelName != keys[j].TunnelName {
 			return keys[i].TunnelName < keys[j].TunnelName
 		}
-		return keys[i].TunnelType < keys[j].TunnelType
+		if keys[i].TunnelType != keys[j].TunnelType {
+			return keys[i].TunnelType < keys[j].TunnelType
+		}
+		return keys[i].TunnelID < keys[j].TunnelID
 	})
 }
