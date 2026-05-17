@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sort"
@@ -121,6 +122,12 @@ type tcpListenConfigAPI struct {
 	Port   int    `json:"port"`
 }
 
+type ingressEndpointConfigAPI struct {
+	BindIP string
+	Port   int
+	Domain string
+}
+
 type httpHostConfigAPI struct {
 	Domain string `json:"domain"`
 }
@@ -155,14 +162,75 @@ func (s *Server) handleUnifiedTunnelItem(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleUnifiedTunnelAction(w http.ResponseWriter, r *http.Request) {
+	current, ok, err := s.findUnifiedTunnelSpecByID(r.PathValue("tunnel_id"))
+	if err != nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !ok {
+		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+		return
+	}
+
 	switch r.PathValue("action") {
 	case "resume":
-		s.handleResumeTunnel(w, r)
+		s.resumeUnifiedTunnel(w, current)
 	case "stop":
-		s.handleStopTunnel(w, r)
+		s.stopUnifiedTunnel(w, current)
 	default:
 		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown tunnel action"})
 	}
+}
+
+func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI) {
+	if client, ok := s.loadLiveClient(current.OwnerClientID); ok {
+		tunnelName, tunnel, exists := findTunnelBySelector(client, current.ID)
+		if !exists {
+			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+			return
+		}
+		if !canResumeTunnel(tunnel.Config) {
+			encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "only stopped/idle or running/error tunnels can be resumed"})
+			return
+		}
+		if err := s.resumeManagedTunnel(client, tunnelName); err != nil {
+			status, payload := tunnelMutationErrorStatusAndBody(err)
+			encodeJSON(w, status, payload)
+			return
+		}
+		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed"})
+		return
+	}
+
+	if _, err := s.resumeOfflineManagedTunnel(current.OwnerClientID, current.ID); err != nil {
+		status, payload := tunnelMutationErrorStatusAndBody(err)
+		encodeJSON(w, status, payload)
+		return
+	}
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed"})
+}
+
+func (s *Server) stopUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI) {
+	if client, ok := s.loadLiveClient(current.OwnerClientID); ok {
+		tunnelName, _, exists := findTunnelBySelector(client, current.ID)
+		if !exists {
+			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+			return
+		}
+		if err := s.stopManagedTunnel(client, tunnelName); err != nil {
+			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel stopped"})
+		return
+	}
+
+	if _, err := s.stopOfflineManagedTunnel(current.OwnerClientID, current.ID); err != nil {
+		status, payload := tunnelMutationErrorStatusAndBody(err)
+		encodeJSON(w, status, payload)
+		return
+	}
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel stopped"})
 }
 
 func (s *Server) handleListUnifiedTunnels(w http.ResponseWriter, _ *http.Request) {
@@ -332,7 +400,7 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 	}
 
 	if client, ok := s.loadLiveClient(current.OwnerClientID); ok {
-		_, tunnel, exists := findTunnelBySelector(client, current.ID)
+		tunnelName, tunnel, exists := findTunnelBySelector(client, current.ID)
 		if !exists {
 			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
 			return
@@ -341,7 +409,7 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 			encodeJSON(w, http.StatusBadRequest, tunnelDeleteBlockedErrorBody(tunnel.Config))
 			return
 		}
-		if err := s.deleteManagedTunnel(client, current.ID); err != nil {
+		if err := s.deleteManagedTunnel(client, tunnelName); err != nil {
 			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
@@ -379,6 +447,9 @@ func (s *Server) proxyRequestFromUnifiedCreate(req tunnelCreateRequestAPI, exist
 	}
 	if req.TransportPolicy != tunnelTransportPolicyServerRelayOnly {
 		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("transport policy %q requires direct transport support, which is not available in this build", req.TransportPolicy), "transport_policy", "direct_transport_unavailable", http.StatusBadRequest)
+	}
+	if req.Topology == tunnelTopologyClientToClient {
+		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("client_to_client tunnels require unified storage/runtime support that is not available in this API slice"), "topology", "client_to_client_unavailable", http.StatusNotImplemented)
 	}
 
 	ownerClientID, err := deriveUnifiedTunnelOwner(req.Topology, req.Ingress, req.Target)
@@ -501,22 +572,22 @@ func validateUnifiedEndpointCombination(topology string, ingress, target endpoin
 	return nil
 }
 
-func decodeListenEndpointConfig(endpoint endpointSpecAPI, topology string) (tcpListenConfigAPI, error) {
+func decodeListenEndpointConfig(endpoint endpointSpecAPI, topology string) (ingressEndpointConfigAPI, error) {
 	switch endpoint.Type {
 	case tunnelIngressTypeHTTPHost:
 		var cfg httpHostConfigAPI
 		if err := decodeStrictEndpointConfig(endpoint.Config, &cfg); err != nil {
-			return tcpListenConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("invalid http_host config: %w", err), "ingress.config", "invalid_endpoint_config", http.StatusBadRequest)
+			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("invalid http_host config: %w", err), "ingress.config", "invalid_endpoint_config", http.StatusBadRequest)
 		}
 		cfg.Domain = strings.TrimSpace(cfg.Domain)
 		if err := validateDomain(cfg.Domain); err != nil {
-			return tcpListenConfigAPI{}, newProxyRequestValidationError(err, protocol.TunnelMutationFieldDomain, protocol.TunnelMutationErrorCodeDomainInvalid, http.StatusBadRequest)
+			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(err, protocol.TunnelMutationFieldDomain, protocol.TunnelMutationErrorCodeDomainInvalid, http.StatusBadRequest)
 		}
-		return tcpListenConfigAPI{Domain: cfg.Domain}, nil
+		return ingressEndpointConfigAPI{Domain: cfg.Domain}, nil
 	case tunnelIngressTypeTCPListen, tunnelIngressTypeUDPListen:
 		var cfg tcpListenConfigAPI
 		if err := decodeStrictEndpointConfig(endpoint.Config, &cfg); err != nil {
-			return tcpListenConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("invalid listen config: %w", err), "ingress.config", "invalid_endpoint_config", http.StatusBadRequest)
+			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("invalid listen config: %w", err), "ingress.config", "invalid_endpoint_config", http.StatusBadRequest)
 		}
 		if cfg.BindIP == "" {
 			if topology == tunnelTopologyServerExpose {
@@ -526,14 +597,14 @@ func decodeListenEndpointConfig(endpoint endpointSpecAPI, topology string) (tcpL
 			}
 		}
 		if net.ParseIP(cfg.BindIP) == nil {
-			return tcpListenConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("bind_ip must be a valid IP address"), "ingress.config.bind_ip", "invalid_endpoint_config", http.StatusBadRequest)
+			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("bind_ip must be a valid IP address"), "ingress.config.bind_ip", "invalid_endpoint_config", http.StatusBadRequest)
 		}
 		if cfg.Port < 1 || cfg.Port > 65535 {
-			return tcpListenConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("port must be in range 1-65535"), "ingress.config.port", "invalid_endpoint_config", http.StatusBadRequest)
+			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("port must be in range 1-65535"), "ingress.config.port", "invalid_endpoint_config", http.StatusBadRequest)
 		}
-		return cfg, nil
+		return ingressEndpointConfigAPI{BindIP: cfg.BindIP, Port: cfg.Port}, nil
 	default:
-		return tcpListenConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("unsupported ingress type %q", endpoint.Type), "ingress.type", "unsupported_ingress_type", http.StatusBadRequest)
+		return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("unsupported ingress type %q", endpoint.Type), "ingress.type", "unsupported_ingress_type", http.StatusBadRequest)
 	}
 }
 
@@ -563,7 +634,8 @@ func decodeStrictEndpointConfig(raw json.RawMessage, target any) error {
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
-	if decoder.More() {
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
 		return fmt.Errorf("config must contain a single JSON object")
 	}
 	return nil
