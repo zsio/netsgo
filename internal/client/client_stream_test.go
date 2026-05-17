@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"net"
 	"net/http"
@@ -263,11 +262,11 @@ func TestClient_HandleStream_DialFail(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		stream, _ := serverSession.Open()
-		nameBytes := []byte(proxyName)
-		var lenBuf [2]byte
-		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
-		mustWriteAll(t, stream, lenBuf[:])
-		mustWriteAll(t, stream, nameBytes)
+		mustWriteAll(t, stream, encodeStreamHeader(t, protocol.StreamHeader{
+			ProxyName:       proxyName,
+			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
+			ActualTransport: protocol.ActualTransportServerRelay,
+		}))
 
 		buf := make([]byte, 10)
 		_, err := stream.Read(buf)
