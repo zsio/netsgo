@@ -86,6 +86,7 @@ type ProxyNewRequest struct {
 	LocalPort         int    `json:"local_port"`   // 内网目标端口
 	RemotePort        int    `json:"remote_port"`  // 公网暴露端口（TCP/UDP 类型时使用）
 	Domain            string `json:"domain"`       // 域名（HTTP 类型时使用）
+	ProvisionRevision uint64 `json:"provision_revision,omitempty"` // Server 生成的 provisioning 修订号；ACK 必须原样返回
 	BandwidthSettings        // payload bytes/sec; 0 = unlimited
 }
 
@@ -105,9 +106,10 @@ type ProxyCreateResponse struct {
 
 // ProxyProvisionAck 表示 client 接收 provisioning 配置后的 ACK。
 type ProxyProvisionAck struct {
-	Name     string `json:"name,omitempty"`
-	Accepted bool   `json:"accepted"`
-	Message  string `json:"message,omitempty"`
+	Name              string `json:"name,omitempty"`
+	ProvisionRevision uint64 `json:"provision_revision,omitempty"`
+	Accepted          bool   `json:"accepted"`
+	Message           string `json:"message,omitempty"`
 }
 
 // ProxyCloseRequest 关闭某条代理隧道
