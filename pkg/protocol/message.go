@@ -142,6 +142,21 @@ type TunnelRuntimeReport struct {
 	Message     string             `json:"message,omitempty"`
 }
 
+// ProxyNewRequest 请求创建一条新的代理隧道
+type ProxyNewRequest struct {
+	ID                string `json:"id,omitempty"`                 // 隧道稳定 ID（管理面唯一标识）
+	Name              string `json:"name"`                         // 隧道名称
+	Type              string `json:"type"`                         // tcp / udp / http
+	LocalIP           string `json:"local_ip"`                     // 内网目标 IP
+	LocalPort         int    `json:"local_port"`                   // 内网目标端口
+	RemotePort        int    `json:"remote_port"`                  // 公网暴露端口（TCP/UDP 类型时使用）
+	Domain            string `json:"domain"`                       // 域名（HTTP 类型时使用）
+	TransportPolicy   string `json:"transport_policy,omitempty"`
+	ActualTransport   string `json:"actual_transport,omitempty"`
+	ProvisionRevision uint64 `json:"provision_revision,omitempty"` // Server 生成的 provisioning 修订号；ACK 必须原样返回
+	BandwidthSettings        // payload bytes/sec; 0 = unlimited
+}
+
 // ProxyCreateRequest 表示 client 主动请求 server 创建 tunnel 的消息体。
 type ProxyCreateRequest = ProxyNewRequest
 
