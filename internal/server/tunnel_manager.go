@@ -61,7 +61,7 @@ func (s *Server) createManagedTunnel(client *ClientConn, req protocol.ProxyNewRe
 	}
 	s.emitTunnelChanged(client.ID, tunnel.Config, "pending")
 
-	if _, err := s.waitForTunnelProvisionAck(client, tunnel.Config.ToProxyNewRequest()); err != nil {
+	if _, err := s.waitForTunnelProvisionAck(client, s.prepareTunnelProvisionRequest(client, tunnel)); err != nil {
 		if s.isCurrentGeneration(client.ID, client.generation) {
 			if !errors.Is(err, errTunnelProvisionAckCancelled) {
 				s.emitTunnelFailure(client, tunnel.Config, tunnelProvisionErrorMessage(err))
@@ -161,7 +161,7 @@ func (s *Server) resumeManagedTunnel(client *ClientConn, name string) error {
 	}
 	s.emitTunnelChanged(client.ID, pendingConfig, "pending")
 
-	if _, err := s.waitForTunnelProvisionAck(client, pendingConfig.ToProxyNewRequest()); err != nil {
+	if _, err := s.waitForTunnelProvisionAck(client, s.prepareTunnelProvisionRequest(client, tunnel)); err != nil {
 		if errors.Is(err, errTunnelProvisionAckCancelled) {
 			return err
 		}
@@ -379,7 +379,7 @@ func (s *Server) updateManagedTunnel(client *ClientConn, selector, newName strin
 		return protocol.ProxyConfig{}, err
 	}
 
-	if _, err := s.waitForTunnelProvisionAck(client, req); err != nil {
+	if _, err := s.waitForTunnelProvisionAck(client, s.prepareTunnelProvisionRequest(client, tunnel)); err != nil {
 		if errors.Is(err, errTunnelProvisionAckCancelled) {
 			return protocol.ProxyConfig{}, err
 		}
@@ -426,7 +426,7 @@ func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) e
 	}
 	s.emitTunnelChanged(client.ID, tunnel.Config, "pending")
 
-	if _, err := s.waitForTunnelProvisionAck(client, tunnel.Config.ToProxyNewRequest()); err != nil {
+	if _, err := s.waitForTunnelProvisionAck(client, s.prepareTunnelProvisionRequest(client, tunnel)); err != nil {
 		if errors.Is(err, errTunnelProvisionAckCancelled) {
 			return err
 		}

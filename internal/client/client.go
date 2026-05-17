@@ -1098,9 +1098,10 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 
 			c.proxies.Store(req.Name, protocol.ProxyNewRequest(req))
 			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-				Name:     req.Name,
-				Accepted: true,
-				Message:  "provision accepted",
+				Name:              req.Name,
+				ProvisionRevision: req.ProvisionRevision,
+				Accepted:          true,
+				Message:           "provision accepted",
 			})
 			log.Printf("✅ Accepted tunnel provisioning config from server [%s]", req.Name)
 

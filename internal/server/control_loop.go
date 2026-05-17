@@ -193,6 +193,7 @@ func (s *Server) handleProxyProvisionAckMessage(client *ClientConn, msg protocol
 		name:     ack.Name,
 		accepted: ack.Accepted,
 		message:  ack.Message,
+		revision: ack.ProvisionRevision,
 	}
 	if s.resolveTunnelProvisionAckWaiter(client.ID, client.generation, resp) {
 		return
