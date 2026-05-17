@@ -67,12 +67,15 @@ type TrafficPoint struct {
 }
 
 type TunnelTrafficSeries struct {
-	TunnelName string         `json:"tunnel_name"`
-	TunnelType string         `json:"tunnel_type"`
-	Points     []TrafficPoint `json:"points"`
+	TunnelID        string         `json:"tunnel_id,omitempty"`
+	TunnelName      string         `json:"tunnel_name,omitempty"`
+	TunnelType      string         `json:"tunnel_type,omitempty"`
+	MetadataMissing bool           `json:"metadata_missing,omitempty"`
+	Points          []TrafficPoint `json:"points"`
 }
 
 type trafficSeriesKey struct {
+	TunnelID   string
 	TunnelName string
 	TunnelType string
 }
@@ -335,16 +338,15 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 
 	seriesMap := make(map[trafficSeriesKey]*TunnelTrafficSeries)
 	for _, bucket := range buckets {
-		key := trafficSeriesKey{
-			TunnelName: bucket.TunnelName,
-			TunnelType: bucket.TunnelType,
-		}
+		key := trafficSeriesKeyFromBucket(bucket)
 		series, ok := seriesMap[key]
 		if !ok {
 			series = &TunnelTrafficSeries{
-				TunnelName: bucket.TunnelName,
-				TunnelType: bucket.TunnelType,
-				Points:     []TrafficPoint{},
+				TunnelID:        bucket.TunnelID,
+				TunnelName:      bucket.TunnelName,
+				TunnelType:      bucket.TunnelType,
+				MetadataMissing: trafficBucketMetadataMissing(bucket),
+				Points:          []TrafficPoint{},
 			}
 			seriesMap[key] = series
 		}
@@ -364,12 +366,7 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 	for _, series := range seriesMap {
 		items = append(items, *series)
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].TunnelName != items[j].TunnelName {
-			return items[i].TunnelName < items[j].TunnelName
-		}
-		return items[i].TunnelType < items[j].TunnelType
-	})
+	sortTrafficSeries(items)
 
 	return TrafficQueryResult{
 		Resolution: resolution,
@@ -795,20 +792,48 @@ func foldMinuteBucketIntoHour(combined map[string]TrafficBucket, bucket TrafficB
 }
 
 func trafficBucketKey(bucket TrafficBucket) string {
+	seriesKey := trafficSeriesKeyFromBucket(bucket)
 	return strings.Join([]string{
 		bucket.ClientID,
-		bucket.TunnelName,
-		bucket.TunnelType,
+		seriesKey.TunnelID,
+		seriesKey.TunnelName,
+		seriesKey.TunnelType,
 		string(bucket.Resolution),
 		strconv.FormatInt(bucket.BucketStart, 10),
 	}, "\x00")
+}
+
+func trafficSeriesKeyFromBucket(bucket TrafficBucket) trafficSeriesKey {
+	return trafficSeriesKey{
+		TunnelID:   bucket.TunnelID,
+		TunnelName: bucket.TunnelName,
+		TunnelType: bucket.TunnelType,
+	}
+}
+
+func trafficBucketMetadataMissing(bucket TrafficBucket) bool {
+	return bucket.TunnelID != "" && (bucket.TunnelName == "" || bucket.TunnelType == "")
+}
+
+func sortTrafficSeries(items []TunnelTrafficSeries) {
+	sort.Slice(items, func(i, j int) bool {
+		leftName := items[i].TunnelName
+		rightName := items[j].TunnelName
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		if items[i].TunnelType != items[j].TunnelType {
+			return items[i].TunnelType < items[j].TunnelType
+		}
+		return items[i].TunnelID < items[j].TunnelID
+	})
 }
 
 func bucketMatches(bucket TrafficBucket, clientID, tunnelName string) bool {
 	if bucket.ClientID != clientID {
 		return false
 	}
-	if tunnelName != "" && bucket.TunnelName != tunnelName {
+	if tunnelName != "" && bucket.TunnelName != tunnelName && bucket.TunnelID != tunnelName {
 		return false
 	}
 	return true
