@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"testing"
@@ -208,6 +207,7 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	client.dataSession = serverSession
 	defer mustClose(t, serverSession)
 	defer mustClose(t, clientSession)
+	tunnelName := "udp-e2e-tunnel"
 
 	go func() {
 		for {
@@ -230,8 +230,6 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 			}(stream)
 		}
 	}()
-
-	tunnelName := "udp-e2e-tunnel"
 	req := protocol.ProxyNewRequest{Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
 	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("Failed to start UDP proxy: %v", err)
@@ -308,6 +306,7 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 	client.dataSession = serverSession
 	defer mustClose(t, serverSession)
 	defer mustClose(t, clientSession)
+	tunnelName := "udp-traffic-tunnel"
 
 	go func() {
 		for {
@@ -330,8 +329,6 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 			}(stream)
 		}
 	}()
-
-	tunnelName := "udp-traffic-tunnel"
 	req := protocol.ProxyNewRequest{Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
 	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("Failed to start UDP proxy: %v", err)
