@@ -197,6 +197,7 @@ func (s *Server) publishUDPProxyRuntime(client *ClientConn, tunnel *ProxyTunnel,
 	current.Config.RemotePort = runtime.actualPort
 	current.UDPState = runtime.state
 	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+	markTunnelServerRelayActive(current, client.ID, time.Now())
 	config := current.Config
 	state := current.UDPState
 	client.proxyMu.Unlock()
@@ -224,6 +225,7 @@ func (s *Server) markUDPProxyRuntimeErrorIfCurrent(
 		return
 	}
 	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
+	markTunnelRuntimeError(current, client.ID, message, time.Now())
 	config := current.Config
 	client.proxyMu.Unlock()
 

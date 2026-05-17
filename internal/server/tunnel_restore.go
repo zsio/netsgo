@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"netsgo/pkg/protocol"
 )
@@ -37,11 +38,13 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 				client.proxyMu.Lock()
 				config := storedTunnelToProxyConfig(st)
 				setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
-				client.proxies[st.Name] = &ProxyTunnel{
+				tunnel := &ProxyTunnel{
 					Config: config,
 					limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
 					done:   make(chan struct{}),
 				}
+				initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
+				client.proxies[st.Name] = tunnel
 				client.proxyMu.Unlock()
 				_ = s.persistTunnelStates(client.ID, st.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 				eventConfig := storedTunnelToProxyConfig(st)
@@ -58,11 +61,13 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 				client.proxyMu.Lock()
 				config := storedTunnelToProxyConfig(st)
 				setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
-				client.proxies[st.Name] = &ProxyTunnel{
+				tunnel := &ProxyTunnel{
 					Config: config,
 					limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
 					done:   make(chan struct{}),
 				}
+				initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
+				client.proxies[st.Name] = tunnel
 				client.proxyMu.Unlock()
 				_ = s.persistTunnelStates(client.ID, st.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 				eventConfig := storedTunnelToProxyConfig(st)
@@ -89,11 +94,13 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			config := storedTunnelToProxyConfig(st)
 			setProxyConfigStates(&config, st.DesiredState, st.RuntimeState, st.Error)
 			client.proxyMu.Lock()
-			client.proxies[st.Name] = &ProxyTunnel{
+			tunnel := &ProxyTunnel{
 				Config: config,
 				limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
 				done:   make(chan struct{}),
 			}
+			initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
+			client.proxies[st.Name] = tunnel
 			client.proxyMu.Unlock()
 			restoredCount++
 		}

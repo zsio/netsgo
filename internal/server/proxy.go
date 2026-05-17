@@ -406,6 +406,7 @@ func (s *Server) markTCPProxyRuntimeErrorIfCurrent(
 	}
 	closeTunnelRuntimeResources(current)
 	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
+	markTunnelRuntimeError(current, client.ID, message, time.Now())
 	config := current.Config
 	client.proxyMu.Unlock()
 
