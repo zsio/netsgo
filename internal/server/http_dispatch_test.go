@@ -145,20 +145,8 @@ func addLiveHTTPDispatchTunnel(t *testing.T, s *Server, clientID, tunnelName, do
 func relayDispatchStreamToBackend(stream *yamux.Stream, expectedTunnelName, backendAddr string) {
 	defer func() { _ = stream.Close() }()
 
-	var lenBuf [2]byte
-	if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
-		return
-	}
-	nameLen := int(lenBuf[0])<<8 | int(lenBuf[1])
-	if nameLen <= 0 || nameLen > 1024 {
-		return
-	}
-
-	nameBuf := make([]byte, nameLen)
-	if _, err := io.ReadFull(stream, nameBuf); err != nil {
-		return
-	}
-	if string(nameBuf) != expectedTunnelName {
+	header, err := protocol.DecodeDataStreamHeader(stream)
+	if err != nil || header.TunnelID != expectedTunnelName {
 		return
 	}
 

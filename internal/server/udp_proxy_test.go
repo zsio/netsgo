@@ -217,11 +217,10 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 			}
 			go func(s *yamux.Stream) {
 				defer func() { _ = s.Close() }()
-				var lenBuf [2]byte
-				_, _ = io.ReadFull(s, lenBuf[:])
-				nameLen := int(lenBuf[0])<<8 | int(lenBuf[1])
-				nameBuf := make([]byte, nameLen)
-				_, _ = io.ReadFull(s, nameBuf)
+				header, err := protocol.DecodeDataStreamHeader(s)
+				if err != nil || header.TunnelID != tunnelName {
+					return
+				}
 				localConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", echoPort))
 				if err != nil {
 					return
@@ -318,11 +317,10 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 			}
 			go func(s *yamux.Stream) {
 				defer func() { _ = s.Close() }()
-				var lenBuf [2]byte
-				_, _ = io.ReadFull(s, lenBuf[:])
-				nameLen := int(lenBuf[0])<<8 | int(lenBuf[1])
-				nameBuf := make([]byte, nameLen)
-				_, _ = io.ReadFull(s, nameBuf)
+				header, err := protocol.DecodeDataStreamHeader(s)
+				if err != nil || header.TunnelID != tunnelName {
+					return
+				}
 				localConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", echoPort))
 				if err != nil {
 					return
