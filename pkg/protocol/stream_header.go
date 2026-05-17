@@ -1,0 +1,170 @@
+package protocol
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"unicode/utf8"
+)
+
+const (
+	DataStreamHeaderKindTunnelStream = "tunnel_stream"
+	DataStreamHeaderMagic            = "NGSH"
+	DataStreamHeaderVersion          = byte(1)
+	DataStreamHeaderMaxLen           = 16 * 1024
+	DataStreamHeaderMaxStringLen     = 1024
+	DataStreamHeaderMaxTokenLen      = 4096
+)
+
+// DataStreamHeader is the versioned stream-routing header for tunnel data
+// streams. It replaces name-based yamux stream routing.
+type DataStreamHeader struct {
+	Kind             string `json:"kind"`
+	TunnelID         string `json:"tunnel_id"`
+	Revision         int64  `json:"revision"`
+	StreamID         string `json:"stream_id"`
+	OpenClientID     string `json:"open_client_id"`
+	SourceRole       string `json:"source_role"`
+	TargetRole       string `json:"target_role"`
+	Direction        string `json:"direction"`
+	Transport        string `json:"transport"`
+	OpenToken        string `json:"open_token,omitempty"`
+	ServerAuthorized bool   `json:"server_authorized,omitempty"`
+}
+
+func NewDataStreamID() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:])
+}
+
+func EncodeDataStreamHeader(w io.Writer, header DataStreamHeader) error {
+	if err := validateDataStreamHeader(header); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(header)
+	if err != nil {
+		return err
+	}
+	if len(payload) == 0 || len(payload) > DataStreamHeaderMaxLen {
+		return fmt.Errorf("data stream header length %d exceeds limit", len(payload))
+	}
+
+	var prefix [9]byte
+	copy(prefix[:4], DataStreamHeaderMagic)
+	prefix[4] = DataStreamHeaderVersion
+	binary.BigEndian.PutUint32(prefix[5:9], uint32(len(payload)))
+	if _, err := w.Write(prefix[:]); err != nil {
+		return fmt.Errorf("write data stream header prefix: %w", err)
+	}
+	if _, err := w.Write(payload); err != nil {
+		return fmt.Errorf("write data stream header payload: %w", err)
+	}
+	return nil
+}
+
+func DecodeDataStreamHeader(r io.Reader) (DataStreamHeader, error) {
+	var prefix [9]byte
+	if _, err := io.ReadFull(r, prefix[:]); err != nil {
+		return DataStreamHeader{}, fmt.Errorf("read data stream header prefix: %w", err)
+	}
+	if string(prefix[:4]) != DataStreamHeaderMagic {
+		return DataStreamHeader{}, fmt.Errorf("invalid data stream header magic")
+	}
+	if prefix[4] != DataStreamHeaderVersion {
+		return DataStreamHeader{}, fmt.Errorf("unsupported data stream header version %d", prefix[4])
+	}
+	length := binary.BigEndian.Uint32(prefix[5:9])
+	if length == 0 || length > DataStreamHeaderMaxLen {
+		return DataStreamHeader{}, fmt.Errorf("invalid data stream header length %d", length)
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return DataStreamHeader{}, fmt.Errorf("read data stream header payload: %w", err)
+	}
+	if !utf8.Valid(payload) {
+		return DataStreamHeader{}, fmt.Errorf("data stream header is not utf-8")
+	}
+
+	var header DataStreamHeader
+	dec := json.NewDecoder(bytesReader(payload))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&header); err != nil {
+		return DataStreamHeader{}, fmt.Errorf("decode data stream header json: %w", err)
+	}
+	if dec.More() {
+		return DataStreamHeader{}, fmt.Errorf("data stream header must be one json object")
+	}
+	if err := validateDataStreamHeader(header); err != nil {
+		return DataStreamHeader{}, err
+	}
+	return header, nil
+}
+
+func validateDataStreamHeader(header DataStreamHeader) error {
+	if header.Kind != DataStreamHeaderKindTunnelStream {
+		return fmt.Errorf("unsupported data stream header kind %q", header.Kind)
+	}
+	if header.TunnelID == "" {
+		return fmt.Errorf("data stream header tunnel_id is required")
+	}
+	if header.Revision <= 0 {
+		return fmt.Errorf("data stream header revision must be positive")
+	}
+	if header.StreamID == "" {
+		return fmt.Errorf("data stream header stream_id is required")
+	}
+	if header.OpenClientID == "" {
+		return fmt.Errorf("data stream header open_client_id is required")
+	}
+	if header.Direction == "" {
+		return fmt.Errorf("data stream header direction is required")
+	}
+	if header.Transport == "" {
+		return fmt.Errorf("data stream header transport is required")
+	}
+	if header.Transport != ActualTransportServerRelay && header.Transport != ActualTransportPeerDirect && header.Transport != ActualTransportTURNRelay {
+		return fmt.Errorf("unsupported data stream transport %q", header.Transport)
+	}
+	if !header.ServerAuthorized && header.OpenToken == "" {
+		return fmt.Errorf("data stream header open_token is required")
+	}
+	strings := []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{"tunnel_id", header.TunnelID, DataStreamHeaderMaxStringLen},
+		{"stream_id", header.StreamID, DataStreamHeaderMaxStringLen},
+		{"open_client_id", header.OpenClientID, DataStreamHeaderMaxStringLen},
+		{"source_role", header.SourceRole, DataStreamHeaderMaxStringLen},
+		{"target_role", header.TargetRole, DataStreamHeaderMaxStringLen},
+		{"direction", header.Direction, DataStreamHeaderMaxStringLen},
+		{"transport", header.Transport, DataStreamHeaderMaxStringLen},
+		{"open_token", header.OpenToken, DataStreamHeaderMaxTokenLen},
+	}
+	for _, field := range strings {
+		if len(field.value) > field.limit {
+			return fmt.Errorf("data stream header %s is too long", field.name)
+		}
+	}
+	return nil
+}
+
+func bytesReader(b []byte) io.Reader { return byteSliceReader{b: b} }
+
+type byteSliceReader struct{ b []byte }
+
+func (r byteSliceReader) Read(p []byte) (int, error) {
+	if len(r.b) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.b)
+	r.b = r.b[n:]
+	return n, nil
+}
