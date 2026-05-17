@@ -321,6 +321,7 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 			Name:            "test-tunnel",
 			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
 			ActualTransport: protocol.ActualTransportServerRelay,
+			RuntimeState:    protocol.ProxyRuntimeStateExposed,
 		},
 		done: make(chan struct{}),
 	}

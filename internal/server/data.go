@@ -202,7 +202,7 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 	if err := protocol.WriteStreamHeader(stream, protocol.StreamHeader{
 		ProxyName:       proxyName,
 		TransportPolicy: tunnel.Config.TransportPolicy,
-		ActualTransport: tunnel.Config.RuntimeState,
+		ActualTransport: tunnel.Config.ActualTransport,
 	}); err != nil {
 		_ = stream.Close()
 		return nil, fmt.Errorf("write StreamHeader failed: %w", err)
