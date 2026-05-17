@@ -226,6 +226,7 @@ func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 		}
 		tunnel.UpdatedAt = parsed
 	}
+	tunnel.RuntimeState = protocolRuntimeStateFromStorage(tunnel.RuntimeState)
 	tunnel.Ingress = EndpointSpec{Location: ingressLocation, ClientID: ingressClientID, Type: ingressType, Config: json.RawMessage(ingressConfig)}
 	tunnel.Target = EndpointSpec{Location: targetLocation, ClientID: targetClientID, Type: targetType, Config: json.RawMessage(targetConfig)}
 	tunnel.P2P = P2PState{State: p2pState, Error: p2pError, SessionID: p2pSessionID}
@@ -447,10 +448,7 @@ func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, e
 	if rowsAffected == 0 {
 		return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
 	}
-	if err := replaceTunnelResourceLocksTx(tx, stored); err != nil {
-		return err
-	}
-	return commitTx(tx, &committed)
+	return nil
 }
 
 // UpdateTunnel updates the mutable tunnel configuration and persists it.
@@ -501,7 +499,10 @@ func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localP
 	if rowsAffected == 0 {
 		return fmt.Errorf("tunnel %q does not exist (client_id: %s)", name, clientID)
 	}
-	return nil
+	if err := replaceTunnelResourceLocksTx(tx, stored); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
 }
 
 // UpdateTunnelByID updates a tunnel by stable id and persists mutable configuration, including display name.
@@ -694,4 +695,261 @@ func (s *TunnelStore) GetAllTunnels() ([]StoredTunnel, error) {
 		return nil, err
 	}
 	return tunnels, nil
+}
+
+func normalizeUnifiedTunnelSpec(t *StoredTunnel) {
+	if t.Topology == "" {
+		t.Topology = TunnelTopologyServerExpose
+	}
+	if t.OwnerClientID == "" {
+		t.OwnerClientID = t.ClientID
+	}
+	if t.TransportPolicy == "" {
+		t.TransportPolicy = TunnelTransportServerRelayOnly
+	}
+	if t.ActualTransport == "" {
+		t.ActualTransport = TunnelActualTransportUnknown
+	}
+	if t.P2P.State == "" {
+		t.P2P.State = TunnelP2PStateIdle
+	}
+
+	ingressType := t.Ingress.Type
+	targetType := t.Target.Type
+	switch t.Type {
+	case protocol.ProxyTypeUDP:
+		ingressType = TunnelIngressTypeUDPListen
+		targetType = TunnelTargetTypeUDPService
+	case protocol.ProxyTypeHTTP:
+		ingressType = TunnelIngressTypeHTTPHost
+		targetType = TunnelTargetTypeTCPService
+	default:
+		if t.Type == "" {
+			t.Type = protocol.ProxyTypeTCP
+		}
+		ingressType = TunnelIngressTypeTCPListen
+		targetType = TunnelTargetTypeTCPService
+	}
+
+	t.Ingress = EndpointSpec{
+		Location: "server",
+		Type:     ingressType,
+		Config:   mustJSONRawMessage(tunnelIngressConfig(t)),
+	}
+	t.Target = EndpointSpec{
+		Location: "client",
+		ClientID: t.ClientID,
+		Type:     targetType,
+		Config:   mustJSONRawMessage(tunnelTargetConfig(t)),
+	}
+}
+
+func validateUnifiedTunnelSpec(t StoredTunnel) error {
+	if t.Topology != TunnelTopologyServerExpose && t.Topology != TunnelTopologyClientToClient {
+		return fmt.Errorf("unsupported tunnel topology %q", t.Topology)
+	}
+	if t.OwnerClientID == "" {
+		return fmt.Errorf("tunnel %q is missing owner_client_id", t.Name)
+	}
+	if t.Ingress.Location != "server" && t.Ingress.Location != "client" {
+		return fmt.Errorf("unsupported ingress location %q", t.Ingress.Location)
+	}
+	if t.Target.Location != "client" {
+		return fmt.Errorf("unsupported target location %q", t.Target.Location)
+	}
+	switch t.Ingress.Type {
+	case TunnelIngressTypeTCPListen, TunnelIngressTypeUDPListen, TunnelIngressTypeHTTPHost:
+	default:
+		return fmt.Errorf("unsupported ingress type %q", t.Ingress.Type)
+	}
+	switch t.Target.Type {
+	case TunnelTargetTypeTCPService, TunnelTargetTypeUDPService:
+	default:
+		return fmt.Errorf("unsupported target type %q", t.Target.Type)
+	}
+	switch t.TransportPolicy {
+	case TunnelTransportServerRelayOnly, TunnelTransportDirectPreferred, TunnelTransportDirectOnly:
+	default:
+		return fmt.Errorf("unsupported transport policy %q", t.TransportPolicy)
+	}
+	if !json.Valid(t.Ingress.Config) {
+		return fmt.Errorf("invalid ingress config JSON")
+	}
+	if !json.Valid(t.Target.Config) {
+		return fmt.Errorf("invalid target config JSON")
+	}
+	return nil
+}
+
+func insertTunnelTx(tx *sql.Tx, tunnel StoredTunnel) error {
+	_, err := tx.Exec(`INSERT INTO tunnels (
+		id, client_id, name, type, local_ip, local_port, remote_port, domain, hostname, binding,
+		revision, topology, owner_client_id,
+		ingress_location, ingress_client_id, ingress_type, ingress_config, ingress_bind_ip, ingress_port, ingress_domain, ingress_path,
+		target_location, target_client_id, target_type, target_config, target_host, target_port, target_path, target_resource_key,
+		transport_policy, actual_transport, p2p_state, p2p_error, p2p_session_id,
+		ingress_bps, egress_bps, desired_state, runtime_state, error, created_by_user_id, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tunnel.ID,
+		tunnel.ClientID,
+		tunnel.Name,
+		tunnel.Type,
+		tunnel.LocalIP,
+		tunnel.LocalPort,
+		tunnel.RemotePort,
+		tunnel.Domain,
+		tunnel.Hostname,
+		tunnel.Binding,
+		tunnel.Revision,
+		tunnel.Topology,
+		tunnel.OwnerClientID,
+		tunnel.Ingress.Location,
+		tunnel.Ingress.ClientID,
+		tunnel.Ingress.Type,
+		string(tunnel.Ingress.Config),
+		tunnelIngressBindIP(tunnel),
+		tunnelIngressPort(tunnel),
+		tunnelIngressDomain(tunnel),
+		"",
+		tunnel.Target.Location,
+		tunnel.Target.ClientID,
+		tunnel.Target.Type,
+		string(tunnel.Target.Config),
+		tunnel.LocalIP,
+		tunnel.LocalPort,
+		"",
+		tunnelTargetResourceKey(tunnel),
+		tunnel.TransportPolicy,
+		storageActualTransport(tunnel),
+		tunnel.P2P.State,
+		tunnel.P2P.Error,
+		tunnel.P2P.SessionID,
+		tunnel.IngressBPS,
+		tunnel.EgressBPS,
+		tunnel.DesiredState,
+		storageRuntimeStateFromProtocol(tunnel.RuntimeState),
+		tunnel.Error,
+		tunnel.CreatedByUserID,
+		formatTime(tunnel.CreatedAt),
+		formatTime(tunnel.UpdatedAt),
+	)
+	return err
+}
+
+func replaceTunnelResourceLocksTx(tx *sql.Tx, tunnel StoredTunnel) error {
+	if _, err := tx.Exec(`DELETE FROM tunnel_resource_locks WHERE tunnel_id = ?`, tunnel.ID); err != nil {
+		return err
+	}
+	key, kind, clientID := tunnelIngressResourceLock(tunnel)
+	if key == "" {
+		return nil
+	}
+	_, err := tx.Exec(`INSERT INTO tunnel_resource_locks (resource_key, tunnel_id, resource_kind, client_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+		key, tunnel.ID, kind, clientID, formatTime(time.Now().UTC()))
+	return err
+}
+
+func tunnelIngressResourceLock(tunnel StoredTunnel) (key, kind, clientID string) {
+	switch tunnel.Ingress.Type {
+	case TunnelIngressTypeTCPListen:
+		port := tunnelIngressPort(tunnel)
+		if port <= 0 {
+			return "", "", ""
+		}
+		return "ingress:server:tcp:" + tunnelIngressBindIP(tunnel) + ":" + strconv.Itoa(port), "server_tcp_port", tunnel.Ingress.ClientID
+	case TunnelIngressTypeUDPListen:
+		port := tunnelIngressPort(tunnel)
+		if port <= 0 {
+			return "", "", ""
+		}
+		return "ingress:server:udp:" + tunnelIngressBindIP(tunnel) + ":" + strconv.Itoa(port), "server_udp_port", tunnel.Ingress.ClientID
+	case TunnelIngressTypeHTTPHost:
+		domain := strings.ToLower(tunnelIngressDomain(tunnel))
+		if domain == "" {
+			return "", "", ""
+		}
+		return "ingress:server:http_host:" + domain, "server_http_host", tunnel.Ingress.ClientID
+	default:
+		return "", "", ""
+	}
+}
+
+func tunnelIngressConfig(t *StoredTunnel) map[string]any {
+	switch t.Type {
+	case protocol.ProxyTypeHTTP:
+		return map[string]any{"domain": t.Domain}
+	case protocol.ProxyTypeUDP:
+		return map[string]any{"bind_ip": "0.0.0.0", "port": t.RemotePort}
+	default:
+		return map[string]any{"bind_ip": "0.0.0.0", "port": t.RemotePort}
+	}
+}
+
+func tunnelTargetConfig(t *StoredTunnel) map[string]any {
+	return map[string]any{"host": t.LocalIP, "port": t.LocalPort}
+}
+
+func mustJSONRawMessage(v any) json.RawMessage {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return json.RawMessage(raw)
+}
+
+func tunnelIngressBindIP(tunnel StoredTunnel) string {
+	if tunnel.Ingress.Type == TunnelIngressTypeHTTPHost {
+		return ""
+	}
+	return "0.0.0.0"
+}
+
+func tunnelIngressPort(tunnel StoredTunnel) int {
+	if tunnel.Ingress.Type == TunnelIngressTypeHTTPHost {
+		return 0
+	}
+	return tunnel.RemotePort
+}
+
+func tunnelIngressDomain(tunnel StoredTunnel) string {
+	if tunnel.Ingress.Type != TunnelIngressTypeHTTPHost {
+		return ""
+	}
+	return strings.ToLower(tunnel.Domain)
+}
+
+func tunnelTargetResourceKey(tunnel StoredTunnel) string {
+	targetType := tunnel.Target.Type
+	if targetType == "" {
+		targetType = TunnelTargetTypeTCPService
+	}
+	host := tunnel.LocalIP
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	return "target:client:" + tunnel.ClientID + ":" + targetType + ":" + host + ":" + strconv.Itoa(tunnel.LocalPort)
+}
+
+func storageRuntimeStateFromProtocol(runtimeState string) string {
+	if runtimeState == protocol.ProxyRuntimeStateExposed {
+		return "active"
+	}
+	return runtimeState
+}
+
+func protocolRuntimeStateFromStorage(runtimeState string) string {
+	if runtimeState == "active" {
+		return protocol.ProxyRuntimeStateExposed
+	}
+	return runtimeState
+}
+
+func storageActualTransport(tunnel StoredTunnel) string {
+	if tunnel.ActualTransport != "" && tunnel.ActualTransport != TunnelActualTransportUnknown {
+		return tunnel.ActualTransport
+	}
+	if storageRuntimeStateFromProtocol(tunnel.RuntimeState) == "active" {
+		return TunnelActualTransportServerRelay
+	}
+	return TunnelActualTransportUnknown
 }

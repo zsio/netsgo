@@ -159,12 +159,24 @@ SELECT
 	END,
 	'',
 	created_at
-FROM tunnels;
+FROM tunnels
+WHERE (ingress_type IN ('tcp_listen', 'udp_listen') AND ingress_port > 0)
+   OR (ingress_type = 'http_host' AND ingress_domain <> '');
 
 CREATE INDEX idx_tunnel_resource_locks_tunnel ON tunnel_resource_locks(tunnel_id);
 CREATE INDEX idx_tunnel_resource_locks_client ON tunnel_resource_locks(client_id);
 
 DROP INDEX IF EXISTS idx_traffic_query;
+CREATE TABLE IF NOT EXISTS traffic_buckets (
+	client_id TEXT NOT NULL,
+	tunnel_name TEXT NOT NULL,
+	tunnel_type TEXT NOT NULL,
+	resolution TEXT NOT NULL,
+	bucket_start INTEGER NOT NULL,
+	ingress_bytes INTEGER NOT NULL DEFAULT 0,
+	egress_bytes INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (client_id, tunnel_name, tunnel_type, resolution, bucket_start)
+);
 ALTER TABLE traffic_buckets RENAME TO traffic_buckets_legacy_unified_migration;
 
 CREATE TABLE traffic_buckets (

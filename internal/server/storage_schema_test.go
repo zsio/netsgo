@@ -114,6 +114,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "created_at", typ: "TEXT", notNull: true},
 			{name: "last_seen", typ: "TEXT", notNull: true},
 			{name: "last_ip", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "last_capabilities", typ: "TEXT", notNull: true, defaultValue: "'{}'"},
 		},
 		"client_stats": {
 			{name: "client_id", typ: "TEXT", primaryKey: true},
@@ -167,31 +168,70 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "user_agent", typ: "TEXT", notNull: true, defaultValue: "''"},
 		},
 		"tunnels": {
-			{name: "client_id", typ: "TEXT", notNull: true, primaryKey: true},
-			{name: "name", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "id", typ: "TEXT", primaryKey: true},
+			{name: "name", typ: "TEXT", notNull: true},
+			{name: "client_id", typ: "TEXT", notNull: true},
 			{name: "type", typ: "TEXT", notNull: true, defaultValue: "''"},
 			{name: "local_ip", typ: "TEXT", notNull: true, defaultValue: "''"},
 			{name: "local_port", typ: "INTEGER", notNull: true, defaultValue: "0"},
 			{name: "remote_port", typ: "INTEGER", notNull: true, defaultValue: "0"},
 			{name: "domain", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "hostname", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "binding", typ: "TEXT", notNull: true, defaultValue: "'client_id'"},
+			{name: "revision", typ: "INTEGER", notNull: true, defaultValue: "1"},
+			{name: "topology", typ: "TEXT", notNull: true},
+			{name: "owner_client_id", typ: "TEXT", notNull: true},
+			{name: "ingress_location", typ: "TEXT", notNull: true},
+			{name: "ingress_client_id", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "ingress_type", typ: "TEXT", notNull: true},
+			{name: "ingress_config", typ: "TEXT", notNull: true, defaultValue: "'{}'"},
+			{name: "ingress_bind_ip", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "ingress_port", typ: "INTEGER", notNull: true, defaultValue: "0"},
+			{name: "ingress_domain", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "ingress_path", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "target_location", typ: "TEXT", notNull: true},
+			{name: "target_client_id", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "target_type", typ: "TEXT", notNull: true},
+			{name: "target_config", typ: "TEXT", notNull: true, defaultValue: "'{}'"},
+			{name: "target_host", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "target_port", typ: "INTEGER", notNull: true, defaultValue: "0"},
+			{name: "target_path", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "target_resource_key", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "transport_policy", typ: "TEXT", notNull: true},
+			{name: "actual_transport", typ: "TEXT", notNull: true, defaultValue: "'unknown'"},
+			{name: "p2p_state", typ: "TEXT", notNull: true, defaultValue: "'idle'"},
+			{name: "p2p_error", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "p2p_session_id", typ: "TEXT", notNull: true, defaultValue: "''"},
 			{name: "ingress_bps", typ: "INTEGER", notNull: true, defaultValue: "0"},
 			{name: "egress_bps", typ: "INTEGER", notNull: true, defaultValue: "0"},
 			{name: "desired_state", typ: "TEXT", notNull: true},
 			{name: "runtime_state", typ: "TEXT", notNull: true},
 			{name: "error", typ: "TEXT", notNull: true, defaultValue: "''"},
-			{name: "hostname", typ: "TEXT", notNull: true, defaultValue: "''"},
-			{name: "binding", typ: "TEXT", notNull: true},
-			{name: "id", typ: "TEXT", notNull: true, defaultValue: "''"},
-			{name: "created_at", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "created_by_user_id", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "created_at", typ: "TEXT", notNull: true},
+			{name: "updated_at", typ: "TEXT", notNull: true},
 		},
 		"traffic_buckets": {
-			{name: "client_id", typ: "TEXT", notNull: true, primaryKey: true},
-			{name: "tunnel_name", typ: "TEXT", notNull: true, primaryKey: true},
-			{name: "tunnel_type", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "tunnel_id", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "owner_client_id", typ: "TEXT", notNull: true},
+			{name: "ingress_client_id", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "target_client_id", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "topology", typ: "TEXT", notNull: true},
+			{name: "transport", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "client_id", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "tunnel_name", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "tunnel_type", typ: "TEXT", notNull: true, defaultValue: "''"},
 			{name: "resolution", typ: "TEXT", notNull: true, primaryKey: true},
 			{name: "bucket_start", typ: "INTEGER", notNull: true, primaryKey: true},
 			{name: "ingress_bytes", typ: "INTEGER", notNull: true, defaultValue: "0"},
 			{name: "egress_bytes", typ: "INTEGER", notNull: true, defaultValue: "0"},
+		},
+		"tunnel_resource_locks": {
+			{name: "resource_key", typ: "TEXT", primaryKey: true},
+			{name: "tunnel_id", typ: "TEXT", notNull: true},
+			{name: "resource_kind", typ: "TEXT", notNull: true},
+			{name: "client_id", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "created_at", typ: "TEXT", notNull: true},
 		},
 	}
 	assertSQLiteTables(t, db, wantTables)
@@ -221,12 +261,29 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		},
 		"tunnels": {
 			{name: "idx_tunnels_hostname", unique: false, columns: []string{"hostname"}},
-			{name: "idx_tunnels_id", unique: true, columns: []string{"id"}},
-			{name: "sqlite_autoindex_tunnels_1", unique: true, columns: []string{"client_id", "name"}},
+			{name: "idx_tunnels_ingress_client", unique: false, columns: []string{"ingress_client_id"}},
+			{name: "idx_tunnels_ingress_domain", unique: false, columns: []string{"ingress_domain"}},
+			{name: "idx_tunnels_ingress_port", unique: false, columns: []string{"ingress_location", "ingress_client_id", "ingress_type", "ingress_bind_ip", "ingress_port"}},
+			{name: "idx_tunnels_owner", unique: false, columns: []string{"owner_client_id", "created_at"}},
+			{name: "idx_tunnels_runtime_state", unique: false, columns: []string{"runtime_state"}},
+			{name: "idx_tunnels_target_client", unique: false, columns: []string{"target_client_id"}},
+			{name: "idx_tunnels_target_resource", unique: false, columns: []string{"target_location", "target_client_id", "target_type", "target_resource_key"}},
+			{name: "idx_tunnels_topology", unique: false, columns: []string{"topology"}},
+			{name: "sqlite_autoindex_tunnels_1", unique: true, columns: []string{"id"}},
+			{name: "sqlite_autoindex_tunnels_2", unique: true, columns: []string{"client_id", "name"}},
+			{name: "sqlite_autoindex_tunnels_3", unique: true, columns: []string{"owner_client_id", "name"}},
 		},
 		"traffic_buckets": {
-			{name: "idx_traffic_query", unique: false, columns: []string{"client_id", "tunnel_name", "resolution", "bucket_start"}},
-			{name: "sqlite_autoindex_traffic_buckets_1", unique: true, columns: []string{"client_id", "tunnel_name", "tunnel_type", "resolution", "bucket_start"}},
+			{name: "idx_traffic_compat_query", unique: false, columns: []string{"client_id", "tunnel_name", "resolution", "bucket_start"}},
+			{name: "idx_traffic_ingress_query", unique: false, columns: []string{"ingress_client_id", "resolution", "bucket_start"}},
+			{name: "idx_traffic_owner_query", unique: false, columns: []string{"owner_client_id", "resolution", "bucket_start"}},
+			{name: "idx_traffic_target_query", unique: false, columns: []string{"target_client_id", "resolution", "bucket_start"}},
+			{name: "sqlite_autoindex_traffic_buckets_1", unique: true, columns: []string{"tunnel_id", "transport", "resolution", "bucket_start"}},
+		},
+		"tunnel_resource_locks": {
+			{name: "idx_tunnel_resource_locks_client", unique: false, columns: []string{"client_id"}},
+			{name: "idx_tunnel_resource_locks_tunnel", unique: false, columns: []string{"tunnel_id"}},
+			{name: "sqlite_autoindex_tunnel_resource_locks_1", unique: true, columns: []string{"resource_key"}},
 		},
 	}
 	assertSQLiteIndexes(t, db, wantIndexes)
@@ -236,6 +293,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"002_rebuild_tunnels_without_registered_client_fk",
 		"003_tunnel_stable_id",
 		"004_tunnel_created_at",
+		"005_unified_tunnel_storage",
 	}
 	if got := appliedMigrationNames(t, db); !reflect.DeepEqual(got, wantMigrationNames) {
 		t.Fatalf("applied migrations = %#v, want %#v", got, wantMigrationNames)
@@ -269,6 +327,7 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"002_rebuild_tunnels_without_registered_client_fk",
 		"003_tunnel_stable_id",
 		"004_tunnel_created_at",
+		"005_unified_tunnel_storage",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -425,8 +484,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations failed: %v", err)
 	}
-	if count != 4 {
-		t.Fatalf("schema_migrations count = %d, want 4", count)
+	if count != 5 {
+		t.Fatalf("schema_migrations count = %d, want 5", count)
 	}
 }
 
