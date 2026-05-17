@@ -281,6 +281,20 @@ func (c ProxyConfig) ToProxyNewRequest() ProxyNewRequest {
 	}
 }
 
+// ProxyNewRequest 由 Server 发送给 Client 的代理创建请求
+type ProxyNewRequest struct {
+	ID              string              `json:"id,omitempty"`
+	Name            string              `json:"name"`
+	Type            string              `json:"type"`
+	LocalIP         string              `json:"local_ip"`
+	LocalPort       int                 `json:"local_port"`
+	RemotePort      int                 `json:"remote_port"`
+	Domain          string              `json:"domain,omitempty"`
+	TransportPolicy string              `json:"transport_policy,omitempty"`
+	ActualTransport string              `json:"actual_transport,omitempty"`
+	BandwidthSettings
+}
+
 // 代理隧道类型常量
 const (
 	ProxyTypeTCP  = "tcp"

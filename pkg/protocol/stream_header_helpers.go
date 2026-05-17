@@ -13,18 +13,10 @@ const (
 	StreamHeaderMagic       = "NGSH"
 	StreamHeaderVersion byte = 1
 
-	StreamHeaderMaxLen           = 16 * 1024
-	StreamHeaderMaxStringLen     = 1024
-	StreamHeaderMaxTransportLen  = 64
+	StreamHeaderMaxLen          = 16 * 1024
+	StreamHeaderMaxStringLen    = 1024
+	StreamHeaderMaxTransportLen = 64
 )
-
-// StreamHeader is the versioned header written at the start of every yamux
-// stream used for proxy relays.
-type StreamHeader struct {
-	ProxyName       string `json:"proxy_name"`
-	TransportPolicy  string `json:"transport_policy,omitempty"`
-	ActualTransport  string `json:"actual_transport,omitempty"`
-}
 
 func WriteStreamHeader(w io.Writer, header StreamHeader) error {
 	if err := validateStreamHeader(header); err != nil {
@@ -114,17 +106,4 @@ func validateStreamHeader(header StreamHeader) error {
 		return fmt.Errorf("stream header actual_transport too large: %d > %d", len(header.ActualTransport), StreamHeaderMaxTransportLen)
 	}
 	return nil
-}
-
-func bytesReader(b []byte) io.Reader { return byteSliceReader{b: b} }
-
-type byteSliceReader struct{ b []byte }
-
-func (r byteSliceReader) Read(p []byte) (int, error) {
-	if len(r.b) == 0 {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b)
-	r.b = r.b[n:]
-	return n, nil
 }
