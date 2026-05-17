@@ -77,17 +77,18 @@ func findSeriesWithType(t *testing.T, result TrafficQueryResult, tunnelName, tun
 func mustInsertTrafficBucket(t *testing.T, store *TrafficStore, bucket TrafficBucket) {
 	t.Helper()
 
-	if _, err := store.db.Exec(`INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		bucket.ClientID,
-		bucket.TunnelName,
-		bucket.TunnelType,
-		string(bucket.Resolution),
-		bucket.BucketStart,
-		int64(bucket.IngressBytes),
-		int64(bucket.EgressBytes),
-	); err != nil {
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin traffic insert transaction: %v", err)
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	if err := upsertTrafficBucketReplace(tx, bucket); err != nil {
 		t.Fatalf("failed to insert traffic bucket: %v", err)
+	}
+	if err := commitTx(tx, &committed); err != nil {
+		t.Fatalf("failed to commit traffic bucket: %v", err)
 	}
 }
 
