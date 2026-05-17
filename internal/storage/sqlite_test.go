@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +55,73 @@ func TestOpenRunsMigrationsOnce(t *testing.T) {
 	}
 	if value != 1 {
 		t.Fatalf("migration should run once, value = %d", value)
+	}
+}
+
+func TestOpenRejectsUnknownAppliedMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "netsgo.db")
+	db, err := Open(path, []Migration{{
+		Name: "001_create_counter",
+		Up:   `CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);`,
+	}})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_migrations (name, applied_at) VALUES ('999_future_schema', '2026-05-15T00:00:00Z')`); err != nil {
+		t.Fatalf("insert unknown migration: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	db, err = Open(path, []Migration{{
+		Name: "001_create_counter",
+		Up:   `CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);`,
+	}})
+	if err == nil {
+		_ = db.Close()
+		t.Fatal("Open() error = nil")
+	}
+	if !strings.Contains(err.Error(), `unknown applied migration "999_future_schema"`) {
+		t.Fatalf("Open() error = %q, want unknown applied migration", err)
+	}
+}
+
+func TestOpenWithNoMigrationsAllowsUnknownAppliedMigrations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "netsgo.db")
+	db, err := Open(path, []Migration{{
+		Name: "001_create_counter",
+		Up:   `CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);`,
+	}})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_migrations (name, applied_at) VALUES ('999_future_schema', '2026-05-15T00:00:00Z')`); err != nil {
+		t.Fatalf("insert unknown migration: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	db, err = Open(path, nil)
+	if err != nil {
+		t.Fatalf("Open(path, nil) error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestOpenRejectsDuplicateMigrationNames(t *testing.T) {
+	_, err := Open(filepath.Join(t.TempDir(), "netsgo.db"), []Migration{
+		{Name: "001_create_counter", Up: `CREATE TABLE counter (id INTEGER PRIMARY KEY);`},
+		{Name: "001_create_counter", Up: `CREATE TABLE other_counter (id INTEGER PRIMARY KEY);`},
+	})
+	if err == nil {
+		t.Fatal("Open() error = nil")
+	}
+	if !strings.Contains(err.Error(), `migration "001_create_counter" is duplicated`) {
+		t.Fatalf("Open() error = %q, want duplicated migration", err)
 	}
 }
 

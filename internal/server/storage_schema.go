@@ -2,6 +2,13 @@ package server
 
 import (
 	"database/sql"
+	"fmt"
+	"io/fs"
+	"path"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
 
 	"netsgo/internal/storage"
 )
@@ -10,198 +17,204 @@ const serverDBFileName = "netsgo.db"
 
 const ServerDBFileName = serverDBFileName
 
+const serverMigrationDir = "migrations"
+
+var migrationFileNamePattern = regexp.MustCompile(`^\d{3}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
+
 func openServerDB(path string) (*sql.DB, error) {
-	return storage.Open(path, serverMigrations())
+	migrations, err := serverMigrations()
+	if err != nil {
+		return nil, err
+	}
+	return storage.Open(path, migrations)
 }
 
-func serverMigrations() []storage.Migration {
-	return []storage.Migration{
-		{
-			Name: "001_server_runtime_schema",
-			Up: `
-CREATE TABLE server_config (
-	id INTEGER PRIMARY KEY CHECK (id = 1),
-	initialized INTEGER NOT NULL DEFAULT 0 CHECK (initialized IN (0, 1)),
-	jwt_secret TEXT NOT NULL DEFAULT '',
-	server_addr TEXT NOT NULL DEFAULT '',
-	CHECK (initialized = 0 OR jwt_secret <> '')
-);
-CREATE TABLE allowed_ports (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	start_port INTEGER NOT NULL,
-	end_port INTEGER NOT NULL,
-	CHECK (start_port >= 1 AND start_port <= 65535),
-	CHECK (end_port >= 1 AND end_port <= 65535),
-	CHECK (start_port <= end_port)
-);
-CREATE TABLE admin_users (
-	id TEXT PRIMARY KEY,
-	username TEXT NOT NULL UNIQUE,
-	password_hash TEXT NOT NULL,
-	role TEXT NOT NULL,
-	created_at TEXT NOT NULL,
-	last_login TEXT
-);
-CREATE TABLE api_keys (
-	id TEXT PRIMARY KEY,
-	name TEXT NOT NULL,
-	key_hash TEXT NOT NULL,
-	created_at TEXT NOT NULL,
-	expires_at TEXT,
-	is_active INTEGER NOT NULL,
-	max_uses INTEGER NOT NULL,
-	use_count INTEGER NOT NULL
-);
-CREATE TABLE api_key_permissions (
-	api_key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-	permission TEXT NOT NULL,
-	PRIMARY KEY (api_key_id, permission)
-);
-CREATE TABLE registered_clients (
-	id TEXT PRIMARY KEY,
-	install_id TEXT NOT NULL UNIQUE,
-	display_name TEXT NOT NULL DEFAULT '',
-	hostname TEXT NOT NULL DEFAULT '',
-	os TEXT NOT NULL DEFAULT '',
-	arch TEXT NOT NULL DEFAULT '',
-	ip TEXT NOT NULL DEFAULT '',
-	version TEXT NOT NULL DEFAULT '',
-	public_ipv4 TEXT NOT NULL DEFAULT '',
-	public_ipv6 TEXT NOT NULL DEFAULT '',
-	ingress_bps INTEGER NOT NULL DEFAULT 0,
-	egress_bps INTEGER NOT NULL DEFAULT 0,
-	created_at TEXT NOT NULL,
-	last_seen TEXT NOT NULL,
-	last_ip TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE client_stats (
-	client_id TEXT PRIMARY KEY REFERENCES registered_clients(id) ON DELETE CASCADE,
-	cpu_usage REAL NOT NULL DEFAULT 0,
-	mem_total INTEGER NOT NULL DEFAULT 0,
-	mem_used INTEGER NOT NULL DEFAULT 0,
-	mem_usage REAL NOT NULL DEFAULT 0,
-	disk_total INTEGER NOT NULL DEFAULT 0,
-	disk_used INTEGER NOT NULL DEFAULT 0,
-	disk_usage REAL NOT NULL DEFAULT 0,
-	net_sent INTEGER NOT NULL DEFAULT 0,
-	net_recv INTEGER NOT NULL DEFAULT 0,
-	net_sent_speed REAL NOT NULL DEFAULT 0,
-	net_recv_speed REAL NOT NULL DEFAULT 0,
-	uptime INTEGER NOT NULL DEFAULT 0,
-	process_uptime INTEGER NOT NULL DEFAULT 0,
-	os_install_time INTEGER NOT NULL DEFAULT 0,
-	num_cpu INTEGER NOT NULL DEFAULT 0,
-	app_mem_used INTEGER NOT NULL DEFAULT 0,
-	app_mem_sys INTEGER NOT NULL DEFAULT 0,
-	public_ipv4 TEXT NOT NULL DEFAULT '',
-	public_ipv6 TEXT NOT NULL DEFAULT '',
-	updated_at TEXT,
-	fresh_until TEXT
-);
-CREATE TABLE client_disk_partitions (
-	client_id TEXT NOT NULL REFERENCES registered_clients(id) ON DELETE CASCADE,
-	path TEXT NOT NULL,
-	used INTEGER NOT NULL DEFAULT 0,
-	total INTEGER NOT NULL DEFAULT 0,
-	PRIMARY KEY (client_id, path)
-);
-CREATE TABLE client_tokens (
-	id TEXT PRIMARY KEY,
-	token_hash TEXT NOT NULL UNIQUE,
-	install_id TEXT NOT NULL,
-	key_id TEXT NOT NULL DEFAULT '',
-	client_id TEXT NOT NULL DEFAULT '',
-	created_at TEXT NOT NULL,
-	last_active_at TEXT NOT NULL,
-	last_ip TEXT NOT NULL DEFAULT '',
-	is_revoked INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX idx_client_tokens_install_active ON client_tokens(install_id, is_revoked, last_active_at);
-CREATE TABLE admin_sessions (
-	id TEXT PRIMARY KEY,
-	user_id TEXT NOT NULL,
-	username TEXT NOT NULL,
-	role TEXT NOT NULL,
-	created_at TEXT NOT NULL,
-	expires_at TEXT NOT NULL,
-	ip TEXT NOT NULL DEFAULT '',
-	user_agent TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX idx_admin_sessions_user ON admin_sessions(user_id);
-CREATE INDEX idx_admin_sessions_expires ON admin_sessions(expires_at);
-CREATE TABLE tunnels (
-	client_id TEXT NOT NULL,
-	name TEXT NOT NULL,
-	type TEXT NOT NULL DEFAULT '',
-	local_ip TEXT NOT NULL DEFAULT '',
-	local_port INTEGER NOT NULL DEFAULT 0,
-	remote_port INTEGER NOT NULL DEFAULT 0,
-	domain TEXT NOT NULL DEFAULT '',
-	ingress_bps INTEGER NOT NULL DEFAULT 0,
-	egress_bps INTEGER NOT NULL DEFAULT 0,
-	desired_state TEXT NOT NULL,
-	runtime_state TEXT NOT NULL,
-	error TEXT NOT NULL DEFAULT '',
-	hostname TEXT NOT NULL DEFAULT '',
-	binding TEXT NOT NULL,
-	PRIMARY KEY (client_id, name)
-);
-CREATE INDEX idx_tunnels_hostname ON tunnels(hostname);
-CREATE TABLE traffic_buckets (
-	client_id TEXT NOT NULL,
-	tunnel_name TEXT NOT NULL,
-	tunnel_type TEXT NOT NULL,
-	resolution TEXT NOT NULL,
-	bucket_start INTEGER NOT NULL,
-	ingress_bytes INTEGER NOT NULL DEFAULT 0,
-	egress_bytes INTEGER NOT NULL DEFAULT 0,
-	PRIMARY KEY (client_id, tunnel_name, tunnel_type, resolution, bucket_start)
-);
-CREATE INDEX idx_traffic_query ON traffic_buckets(client_id, tunnel_name, resolution, bucket_start);
-`,
-		},
-		{
-			Name: "002_rebuild_tunnels_without_registered_client_fk",
-			Up: `
-CREATE TABLE tunnels_new (
-	client_id TEXT NOT NULL,
-	name TEXT NOT NULL,
-	type TEXT NOT NULL DEFAULT '',
-	local_ip TEXT NOT NULL DEFAULT '',
-	local_port INTEGER NOT NULL DEFAULT 0,
-	remote_port INTEGER NOT NULL DEFAULT 0,
-	domain TEXT NOT NULL DEFAULT '',
-	ingress_bps INTEGER NOT NULL DEFAULT 0,
-	egress_bps INTEGER NOT NULL DEFAULT 0,
-	desired_state TEXT NOT NULL,
-	runtime_state TEXT NOT NULL,
-	error TEXT NOT NULL DEFAULT '',
-	hostname TEXT NOT NULL DEFAULT '',
-	binding TEXT NOT NULL,
-	PRIMARY KEY (client_id, name)
-);
-INSERT INTO tunnels_new (client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, desired_state, runtime_state, error, hostname, binding)
-SELECT client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, desired_state, runtime_state, error, hostname, binding
-FROM tunnels;
-DROP TABLE tunnels;
-ALTER TABLE tunnels_new RENAME TO tunnels;
-CREATE INDEX idx_tunnels_hostname ON tunnels(hostname);
-`,
-		},
-		{
-			Name: "003_tunnel_stable_id",
-			Up: `
-ALTER TABLE tunnels ADD COLUMN id TEXT NOT NULL DEFAULT '';
-UPDATE tunnels SET id = lower(hex(randomblob(16))) WHERE id = '';
-CREATE UNIQUE INDEX idx_tunnels_id ON tunnels(id);
-`,
-		},
-		{
-			Name: "004_tunnel_created_at",
-			Up: `
-ALTER TABLE tunnels ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
-UPDATE tunnels SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE created_at = '';
-`,
-		},
+func serverMigrations() ([]storage.Migration, error) {
+	return loadMigrations(serverMigrationFS, serverMigrationDir)
+}
+
+func loadMigrations(fsys fs.FS, dir string) ([]storage.Migration, error) {
+	entries, err := fs.ReadDir(fsys, dir)
+	if err != nil {
+		return nil, fmt.Errorf("read migration directory %q: %w", dir, err)
 	}
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
+		return strings.Compare(a.Name(), b.Name())
+	})
+
+	var migrations []storage.Migration
+	seenNames := make(map[string]struct{})
+	seenVersions := make(map[string]string)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		if !migrationFileNamePattern.MatchString(entry.Name()) {
+			return nil, fmt.Errorf("invalid migration file name %q", entry.Name())
+		}
+
+		raw, err := fs.ReadFile(fsys, path.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("read migration file %q: %w", entry.Name(), err)
+		}
+		migration, err := parseMigrationFile(entry.Name(), string(raw))
+		if err != nil {
+			return nil, err
+		}
+
+		if _, ok := seenNames[migration.Name]; ok {
+			return nil, fmt.Errorf("duplicate migration name %q", migration.Name)
+		}
+		seenNames[migration.Name] = struct{}{}
+
+		version, err := migrationVersion(migration.Name)
+		if err != nil {
+			return nil, err
+		}
+		if existing, ok := seenVersions[version]; ok {
+			return nil, fmt.Errorf("duplicate migration version %q in %q and %q", version, existing, entry.Name())
+		}
+		seenVersions[version] = entry.Name()
+
+		migrations = append(migrations, migration)
+	}
+	if len(migrations) == 0 {
+		return nil, fmt.Errorf("no migration files found in %q", dir)
+	}
+	return migrations, nil
+}
+
+func parseMigrationFile(fileName, content string) (storage.Migration, error) {
+	stem := strings.TrimSuffix(fileName, path.Ext(fileName))
+	var migration storage.Migration
+
+	header, up, down, err := splitMigrationSections(fileName, content)
+	if err != nil {
+		return storage.Migration{}, err
+	}
+	if err := parseMigrationHeader(fileName, header, &migration); err != nil {
+		return storage.Migration{}, err
+	}
+	if migration.Name != stem {
+		return storage.Migration{}, fmt.Errorf("migration %q name %q must match file name stem %q", fileName, migration.Name, stem)
+	}
+
+	migration.Up = strings.TrimSpace(up)
+	migration.Down = strings.TrimSpace(down)
+	if migration.Up == "" {
+		return storage.Migration{}, fmt.Errorf("migration %q has empty Up SQL", fileName)
+	}
+	return migration, nil
+}
+
+func splitMigrationSections(fileName, content string) (string, string, string, error) {
+	const (
+		headerSection = "header"
+		upSection     = "up"
+		downSection   = "down"
+	)
+
+	var header, up, down strings.Builder
+	section := headerSection
+	seenUp := false
+	seenDown := false
+	for _, line := range strings.SplitAfter(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch trimmed {
+		case "-- Up:":
+			if seenUp {
+				return "", "", "", fmt.Errorf("migration %q has duplicate -- Up: section", fileName)
+			}
+			if seenDown {
+				return "", "", "", fmt.Errorf("migration %q has -- Up: after -- Down:", fileName)
+			}
+			seenUp = true
+			section = upSection
+			continue
+		case "-- Down:":
+			if seenDown {
+				return "", "", "", fmt.Errorf("migration %q has duplicate -- Down: section", fileName)
+			}
+			if !seenUp {
+				return "", "", "", fmt.Errorf("migration %q has -- Down: before -- Up:", fileName)
+			}
+			seenDown = true
+			section = downSection
+			continue
+		}
+
+		switch section {
+		case headerSection:
+			header.WriteString(line)
+		case upSection:
+			up.WriteString(line)
+		case downSection:
+			down.WriteString(line)
+		}
+	}
+	if !seenUp {
+		return "", "", "", fmt.Errorf("migration %q missing -- Up: section", fileName)
+	}
+	if !seenDown {
+		return "", "", "", fmt.Errorf("migration %q missing -- Down: section", fileName)
+	}
+	return header.String(), up.String(), down.String(), nil
+}
+
+func parseMigrationHeader(fileName, header string, migration *storage.Migration) error {
+	for _, line := range strings.Split(header, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "--") {
+			return fmt.Errorf("migration %q has invalid header line %q", fileName, line)
+		}
+		headerLine := strings.TrimSpace(strings.TrimPrefix(line, "--"))
+		key, value, ok := strings.Cut(headerLine, ":")
+		if !ok {
+			return fmt.Errorf("migration %q has invalid header line %q", fileName, line)
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		switch key {
+		case "Name":
+			migration.Name = value
+		case "Description":
+			migration.Description = value
+		case "CreatedAt":
+			migration.CreatedAt = value
+		default:
+			return fmt.Errorf("migration %q has unknown header field %q", fileName, key)
+		}
+	}
+	if migration.Name == "" {
+		return fmt.Errorf("migration %q missing Name header", fileName)
+	}
+	if migration.Description == "" {
+		return fmt.Errorf("migration %q missing Description header", fileName)
+	}
+	if migration.CreatedAt == "" {
+		return fmt.Errorf("migration %q missing CreatedAt header", fileName)
+	}
+	if _, err := time.Parse(time.RFC3339, migration.CreatedAt); err != nil {
+		return fmt.Errorf("migration %q has invalid CreatedAt %q: %w", fileName, migration.CreatedAt, err)
+	}
+	return nil
+}
+
+func migrationVersion(name string) (string, error) {
+	if len(name) < 3 {
+		return "", fmt.Errorf("migration name %q is too short to contain a version", name)
+	}
+	version := name[:3]
+	for _, digit := range version {
+		if digit < '0' || digit > '9' {
+			return "", fmt.Errorf("migration name %q must start with a three-digit version", name)
+		}
+	}
+	if len(name) == 3 || name[3] != '_' {
+		return "", fmt.Errorf("migration name %q must start with a three-digit version", name)
+	}
+	return version, nil
 }

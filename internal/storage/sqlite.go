@@ -16,8 +16,11 @@ import (
 const privateFileMode = 0o600
 
 type Migration struct {
-	Name string
-	Up   string
+	Name        string
+	Description string
+	CreatedAt   string
+	Up          string
+	Down        string
 }
 
 func Open(path string, migrations []Migration) (*sql.DB, error) {
@@ -201,6 +204,7 @@ func applyMigrations(db *sql.DB, migrations []Migration) error {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
+	knownMigrations := make(map[string]struct{}, len(migrations))
 	for _, migration := range migrations {
 		if migration.Name == "" {
 			return fmt.Errorf("sqlite migration name must not be empty")
@@ -208,7 +212,18 @@ func applyMigrations(db *sql.DB, migrations []Migration) error {
 		if migration.Up == "" {
 			return fmt.Errorf("sqlite migration %q has empty SQL", migration.Name)
 		}
+		if _, ok := knownMigrations[migration.Name]; ok {
+			return fmt.Errorf("sqlite migration %q is duplicated", migration.Name)
+		}
+		knownMigrations[migration.Name] = struct{}{}
+	}
+	if len(migrations) > 0 {
+		if err := rejectUnknownAppliedMigrations(db, knownMigrations); err != nil {
+			return err
+		}
+	}
 
+	for _, migration := range migrations {
 		tx, err := db.Begin()
 		if err != nil {
 			return fmt.Errorf("begin migration %q: %w", migration.Name, err)
@@ -235,6 +250,28 @@ func applyMigrations(db *sql.DB, migrations []Migration) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit migration %q: %w", migration.Name, err)
 		}
+	}
+	return nil
+}
+
+func rejectUnknownAppliedMigrations(db *sql.DB, knownMigrations map[string]struct{}) error {
+	rows, err := db.Query(`SELECT name FROM schema_migrations ORDER BY name`)
+	if err != nil {
+		return fmt.Errorf("query applied migrations: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("scan applied migration: %w", err)
+		}
+		if _, ok := knownMigrations[name]; !ok {
+			return fmt.Errorf("sqlite database has unknown applied migration %q", name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate applied migrations: %w", err)
 	}
 	return nil
 }
