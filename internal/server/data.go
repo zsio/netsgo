@@ -194,6 +194,10 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 		_ = stream.Close()
 		return nil, fmt.Errorf("proxy tunnel %q not found", proxyName)
 	}
+	if tunnel.Config.TransportPolicy == protocol.TransportPolicyDirectOnly && tunnel.Config.ActualTransport == protocol.ActualTransportServerRelay {
+		_ = stream.Close()
+		return nil, fmt.Errorf("direct_only tunnels must not use server relay")
+	}
 
 	if err := protocol.WriteStreamHeader(stream, protocol.StreamHeader{
 		ProxyName:       proxyName,

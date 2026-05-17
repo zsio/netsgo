@@ -1,7 +1,7 @@
 package server
 
 import (
-	"encoding/binary"
+	"bytes"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -362,17 +362,18 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 	}
 	defer mustClose(t, clientStream)
 
-	var lenBuf [2]byte
-	if _, err := clientStream.Read(lenBuf[:]); err != nil {
-		t.Fatalf("Failed to read proxyName length: %v", err)
+	header, err := protocol.ReadStreamHeader(clientStream)
+	if err != nil {
+		t.Fatalf("Failed to read stream header: %v", err)
 	}
-	nameLen := binary.BigEndian.Uint16(lenBuf[:])
-	nameBuf := make([]byte, nameLen)
-	if _, err := clientStream.Read(nameBuf); err != nil {
-		t.Fatalf("Failed to read proxyName content: %v", err)
+	if header.ProxyName != "test-tunnel" {
+		t.Fatalf("proxyName error: %q", header.ProxyName)
 	}
-	if string(nameBuf) != "test-tunnel" {
-		t.Fatalf("proxyName error: %q", string(nameBuf))
+	if header.TransportPolicy != protocol.TransportPolicyServerRelayOnly {
+		t.Fatalf("transport policy error: %q", header.TransportPolicy)
+	}
+	if header.ActualTransport != protocol.ActualTransportServerRelay {
+		t.Fatalf("actual transport error: %q", header.ActualTransport)
 	}
 
 	select {
@@ -403,4 +404,46 @@ func TestOpenStreamToClient_NoDataSession(t *testing.T) {
 	if _, err := s.openStreamToClient(cc, "test-proxy"); err == nil {
 		t.Fatal("Should return error when no dataSession exists")
 	}
+}
+
+func TestOpenStreamToClient_DirectOnlyRejectsServerRelay(t *testing.T) {
+	s := New(0)
+	clientID := "direct-only-client"
+	cc := &ClientConn{
+		ID:         clientID,
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	s.clients.Store(clientID, cc)
+
+	clientPipe, serverPipe := net.Pipe()
+	defer mustClose(t, clientPipe)
+	defer mustClose(t, serverPipe)
+
+	clientSession, _ := mux.NewClientSession(clientPipe, mux.DefaultConfig())
+	defer mustClose(t, clientSession)
+	serverSession, _ := mux.NewServerSession(serverPipe, mux.DefaultConfig())
+	defer mustClose(t, serverSession)
+
+	cc.dataMu.Lock()
+	cc.dataSession = clientSession
+	cc.dataMu.Unlock()
+
+	cc.proxyMu.Lock()
+	cc.proxies["direct-only"] = &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:            "direct-only",
+			TransportPolicy: protocol.TransportPolicyDirectOnly,
+			ActualTransport: protocol.ActualTransportServerRelay,
+		},
+		done: make(chan struct{}),
+	}
+	cc.proxyMu.Unlock()
+
+	if _, err := s.openStreamToClient(cc, "direct-only"); err == nil {
+		t.Fatal("direct_only tunnels should reject server relay streams")
+	}
+
+	_ = serverSession.Close()
 }
