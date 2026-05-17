@@ -179,6 +179,7 @@ func (s *TrafficStore) ApplyDeltas(deltas []TrafficDelta) {
 			IngressBytes:    delta.IngressBytes,
 			EgressBytes:     delta.EgressBytes,
 		}
+		applyTrafficBucketStorageDefaults(&minuteBucket)
 
 		key := trafficBucketKey(minuteBucket)
 		if existing, ok := s.pendingMinute[key]; ok {
@@ -210,6 +211,7 @@ func (s *TrafficStore) ApplyDeltas(deltas []TrafficDelta) {
 			IngressBytes:    delta.IngressBytes,
 			EgressBytes:     delta.EgressBytes,
 		}
+		applyTrafficBucketStorageDefaults(&secondBucket)
 		if err := s.realtimeSecond.Add(secondBucket); err != nil {
 			s.pendingErr = err
 			continue
