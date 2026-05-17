@@ -255,6 +255,8 @@ type ProxyConfig struct {
 	RemotePort        int                 `json:"remote_port"` // 公网暴露端口
 	Domain            string              `json:"domain"`      // HTTP 类型时的域名
 	ClientID          string              `json:"client_id"`   // 所属 Client ID
+	TransportPolicy   string              `json:"transport_policy,omitempty"`
+	ActualTransport   string              `json:"actual_transport,omitempty"`
 	BandwidthSettings                     // 聚合带宽限制（payload bytes/sec，0 = unlimited）
 	CreatedAt         time.Time           `json:"created_at"`             // 创建时间
 	DesiredState      string              `json:"desired_state"`          // 用户目标状态: running, stopped
@@ -273,6 +275,8 @@ func (c ProxyConfig) ToProxyNewRequest() ProxyNewRequest {
 		LocalPort:         c.LocalPort,
 		RemotePort:        c.RemotePort,
 		Domain:            c.Domain,
+		TransportPolicy:   c.TransportPolicy,
+		ActualTransport:   c.ActualTransport,
 		BandwidthSettings: c.BandwidthSettings,
 	}
 }
