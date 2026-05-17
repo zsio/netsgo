@@ -14,6 +14,15 @@ import (
 	"netsgo/pkg/protocol"
 )
 
+func encodeStreamHeader(t *testing.T, header protocol.StreamHeader) []byte {
+	t.Helper()
+	payload, err := protocol.WriteStreamHeaderToBytes(header)
+	if err != nil {
+		t.Fatalf("failed to encode stream header: %v", err)
+	}
+	return payload
+}
+
 func TestClient_HandleStream_Success(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Backend", "ok")
@@ -56,7 +65,7 @@ func TestClient_HandleStream_Success(t *testing.T) {
 			return
 		}
 
-		mustWriteAll(t, serverStream, mustMarshalStreamHeader(t, protocol.StreamHeader{
+		mustWriteAll(t, serverStream, encodeStreamHeader(t, protocol.StreamHeader{
 			ProxyName:      proxyName,
 			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
 			ActualTransport: protocol.ActualTransportServerRelay,
@@ -144,7 +153,7 @@ func TestClient_HandleStream_HTTPProxy_ReusesTCPPath(t *testing.T) {
 			return
 		}
 
-		mustWriteAll(t, serverStream, mustMarshalStreamHeader(t, protocol.StreamHeader{
+		mustWriteAll(t, serverStream, encodeStreamHeader(t, protocol.StreamHeader{
 			ProxyName:      proxyName,
 			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
 			ActualTransport: protocol.ActualTransportServerRelay,
@@ -228,14 +237,6 @@ func TestClient_HandleStream_InvalidHeader(t *testing.T) {
 	}
 }
 
-func mustMarshalStreamHeader(t *testing.T, header protocol.StreamHeader) []byte {
-	t.Helper()
-	payload, err := protocol.WriteStreamHeaderToBytes(header)
-	if err != nil {
-		t.Fatalf("marshal stream header failed: %v", err)
-	}
-	return payload
-}
 
 func TestClient_HandleStream_DialFail(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
