@@ -80,7 +80,7 @@ func TestTunnelStoreHardDeleteRemovesResourceLocksButKeepsTraffic(t *testing.T) 
 	})
 
 	now := minuteFloorUTC(time.Now().UTC())
-	trafficStore.ApplyDeltas([]TrafficDelta{{ClientID: "client-1", TunnelName: "delete-me", TunnelType: protocol.ProxyTypeTCP, MinuteStart: now.Unix(), IngressBytes: 10, EgressBytes: 5}})
+	trafficStore.ApplyDeltas([]TrafficDelta{{TunnelID: "tunnel-keep-traffic", ClientID: "client-1", TunnelName: "delete-me", TunnelType: protocol.ProxyTypeTCP, MinuteStart: now.Unix(), IngressBytes: 10, EgressBytes: 5}})
 	if err := trafficStore.Flush(); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
@@ -104,6 +104,21 @@ func TestTunnelStoreHardDeleteRemovesResourceLocksButKeepsTraffic(t *testing.T) 
 	}
 	if trafficCount != 1 {
 		t.Fatalf("traffic buckets should remain after hard delete, got %d", trafficCount)
+	}
+
+	result, err := trafficStore.QueryWithResolution("client-1", "tunnel-keep-traffic", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
+	if err != nil {
+		t.Fatalf("query deleted tunnel traffic by id failed: %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("deleted tunnel traffic should remain queryable, got %+v", result.Items)
+	}
+	series := result.Items[0]
+	if series.TunnelID != "tunnel-keep-traffic" || !series.MetadataMissing {
+		t.Fatalf("deleted tunnel traffic should carry id and metadata_missing=true, got %+v", series)
+	}
+	if len(series.Points) != 1 || series.Points[0].IngressBytes != 10 || series.Points[0].EgressBytes != 5 {
+		t.Fatalf("deleted tunnel traffic points mismatch: %+v", series.Points)
 	}
 }
 
