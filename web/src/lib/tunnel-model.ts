@@ -71,14 +71,6 @@ export const currentIngressTypes = ['tcp_listen', 'udp_listen', 'http_host'] as 
 export const currentTargetTypes = ['tcp_service', 'udp_service'] as const satisfies readonly TargetEndpointType[];
 export const futureOnlyTargetTypes = ['unix_socket', 'static_file', 'serial_device'] as const;
 
-const endpointLabels = {
-  tcp_listen: 'TCP 入口',
-  udp_listen: 'UDP 入口',
-  http_host: 'HTTP Host',
-  tcp_service: 'TCP 服务',
-  udp_service: 'UDP 服务',
-} as const satisfies Record<IngressEndpointType | TargetEndpointType, string>;
-
 const transportPolicyLabels = {
   server_relay_only: 'Server 中继',
   direct_preferred: 'P2P 优先',
@@ -355,8 +347,6 @@ function getTunnelIngressLabel(tunnel: ProxyConfig) {
       case 'tcp_listen':
       case 'udp_listen':
         return `${ingress.config.bind_ip}:${ingress.config.port}`;
-      default:
-        return `${endpointLabels[ingress.type] ?? ingress.type}`;
     }
   }
 
@@ -372,8 +362,6 @@ function getTunnelTargetLabel(tunnel: ProxyConfig) {
       case 'tcp_service':
       case 'udp_service':
         return `${target.config.ip}:${target.config.port}`;
-      default:
-        return `${endpointLabels[target.type] ?? target.type}`;
     }
   }
 
