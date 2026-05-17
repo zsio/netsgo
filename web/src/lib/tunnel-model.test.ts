@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import type { ProxyConfig } from '@/types';
 
 import {
+  buildTunnelSpecCreateRequest,
   buildTunnelMutationPayload,
   buildTunnelViewModel,
   getTunnelActionAvailability,
@@ -166,6 +167,86 @@ describe('tunnel-model', () => {
       ingress_bps: 0,
       egress_bps: 0,
     });
+  });
+
+  test('创建请求可转换为统一 TunnelSpec server_expose 结构', () => {
+    expect(
+      buildTunnelSpecCreateRequest({
+        clientId: 'client-b',
+        name: 'web',
+        type: 'tcp',
+        local_ip: '127.0.0.1',
+        local_port: 80,
+        remote_port: 18080,
+        ingress_bps: 1024,
+        egress_bps: 2048,
+      }),
+    ).toEqual({
+      name: 'web',
+      topology: 'server_expose',
+      ingress: {
+        location: 'server',
+        type: 'tcp_listen',
+        config: {
+          bind_ip: '0.0.0.0',
+          port: 18080,
+        },
+      },
+      target: {
+        location: 'client',
+        client_id: 'client-b',
+        type: 'tcp_service',
+        config: {
+          ip: '127.0.0.1',
+          port: 80,
+        },
+      },
+      transport_policy: 'server_relay_only',
+      bandwidth_settings: {
+        ingress_bps: 1024,
+        egress_bps: 2048,
+      },
+    });
+  });
+
+  test('TunnelSpec 字段优先驱动拓扑、参与方、传输和绑定提示文案', () => {
+    const view = buildTunnelViewModel(
+      createTunnel({
+        topology: 'client_to_client',
+        ingress: {
+          location: 'client',
+          client_id: 'client-a',
+          type: 'tcp_listen',
+          config: {
+            bind_ip: '0.0.0.0',
+            port: 10022,
+          },
+        },
+        target: {
+          location: 'client',
+          client_id: 'client-b',
+          type: 'tcp_service',
+          config: {
+            ip: '127.0.0.1',
+            port: 22,
+          },
+        },
+        transport_policy: 'direct_preferred',
+        actual_transport: 'peer_direct',
+        p2p: {
+          state: 'connected',
+        },
+      }),
+      true,
+    );
+
+    expect(view.targetLabel).toBe('0.0.0.0:10022');
+    expect(view.destinationLabel).toBe('127.0.0.1:22');
+    expect(view.topologyLabel).toBe('Client ↔ Client');
+    expect(view.participantLabel).toBe('入口 client-a / 目标 client-b');
+    expect(view.transportLabel).toBe('P2P 优先 · P2P 直连');
+    expect(view.p2pLabel).toBe('已直连');
+    expect(view.ingressWarning).toBe('入口绑定到通配地址，会暴露给入口 Client 所在网络。');
   });
 
   test('带宽字段通过共享 payload builder 统一透传', () => {

@@ -198,6 +198,44 @@ describe('TunnelListTable', () => {
     expect(markup).toContain('w-4');
   });
 
+  test('展示统一隧道拓扑、参与方、传输与 wildcard bind 警告', () => {
+    const markup = renderTable([
+      createTunnel({
+        topology: 'client_to_client',
+        ingress: {
+          location: 'client',
+          client_id: 'client-a',
+          type: 'tcp_listen',
+          config: {
+            bind_ip: '0.0.0.0',
+            port: 10022,
+          },
+        },
+        target: {
+          location: 'client',
+          client_id: 'client-b',
+          type: 'tcp_service',
+          config: {
+            ip: '127.0.0.1',
+            port: 22,
+          },
+        },
+        transport_policy: 'direct_preferred',
+        actual_transport: 'server_relay',
+        p2p: {
+          state: 'fallback',
+        },
+      }),
+    ]);
+
+    expect(markup).toContain('拓扑 / 传输');
+    expect(markup).toContain('Client ↔ Client');
+    expect(markup).toContain('入口 client-a / 目标 client-b');
+    expect(markup).toContain('P2P 优先 · Server 中继');
+    expect(markup).toContain('已回退中继');
+    expect(markup).toContain('入口绑定到通配地址，会暴露给入口 Client 所在网络。');
+  });
+
   test('归属节点可按回调渲染为可点击按钮', () => {
     const client = new QueryClient();
     const markup = renderToStaticMarkup(

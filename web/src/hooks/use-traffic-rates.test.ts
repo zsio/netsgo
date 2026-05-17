@@ -206,6 +206,35 @@ describe('buildAggregatedTrafficRates', () => {
     });
   });
 
+  test('metadata_missing history samples do not crash unfiltered charts', () => {
+    const data: ClientTrafficResponse = {
+      resolution: 'minute',
+      items: [
+        {
+          tunnel_id: 'deleted-tunnel',
+          metadata_missing: true,
+          points: [
+            {
+              bucket_start: isoAt(59),
+              ingress_bytes: 120,
+              egress_bytes: 60,
+              total_bytes: 180,
+            },
+          ],
+        },
+      ],
+    };
+
+    const points = buildAggregatedTrafficRates(data, '1h', undefined, Date.UTC(2026, 3, 19, 11, 0, 0));
+
+    expect(hasTrafficSamples(data)).toBe(true);
+    expect(points.at(-1)).toEqual({
+      timestamp: Date.UTC(2026, 3, 19, 10, 59, 0),
+      inRate: 2,
+      outRate: 1,
+    });
+  });
+
   test('reports no samples for a successful response with zero points', () => {
     const data: ClientTrafficResponse = {
       resolution: 'minute',
