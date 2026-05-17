@@ -12,6 +12,7 @@ import type {
   ConsoleSnapshot,
   ConsoleSummary,
   ServerStatus,
+  TunnelChangedEvent,
   TrafficRealtimeEvent,
 } from '@/types';
 
@@ -60,6 +61,16 @@ function applyRealtimeTraffic(queryClient: EventStreamQueryClient, client: Traff
         : traffic,
     );
   }
+}
+
+function getTunnelChangedClientIds(event: TunnelChangedEvent) {
+  return Array.from(new Set([
+    event.client_id,
+    event.tunnel.owner_client_id,
+    event.tunnel.ingress?.client_id,
+    event.tunnel.target?.client_id,
+    event.tunnel.client_id,
+  ].filter((clientId): clientId is string => Boolean(clientId))));
 }
 
 function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data: string) {
@@ -144,14 +155,11 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
       return;
     case 'tunnel_changed':
       try {
-        const parsed = JSON.parse(data) as {
-          client_id: string;
-          action?: string;
-          tunnel: NonNullable<Client['proxies']>[number];
-        };
+        const parsed = JSON.parse(data) as TunnelChangedEvent;
+        const relatedClientIds = getTunnelChangedClientIds(parsed);
         queryClient.setQueryData<Client[]>(['clients'], (old) =>
           old?.map((client) => {
-            if (client.id !== parsed.client_id) {
+            if (!relatedClientIds.includes(client.id)) {
               return client;
             }
 
@@ -179,6 +187,8 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
             };
           }),
         );
+        queryClient.invalidateQueries({ queryKey: ['client-tunnels'] });
+        queryClient.invalidateQueries({ queryKey: ['client-traffic'] });
         void resyncConsoleSnapshot(queryClient);
       } catch {
         queryClient.invalidateQueries({ queryKey: ['clients'] });

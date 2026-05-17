@@ -38,6 +38,13 @@ function createAllowedSet(tunnels?: Pick<ProxyConfig, 'name' | 'type'>[]) {
   return new Set(tunnels.map((tunnel) => `${tunnel.type}:${tunnel.name}`));
 }
 
+function getTrafficSeriesKey(item: ClientTrafficResponse['items'][number]) {
+  if (!item.tunnel_name || !item.tunnel_type) {
+    return item.tunnel_id ? `id:${item.tunnel_id}` : 'metadata_missing';
+  }
+  return `${item.tunnel_type}:${item.tunnel_name}`;
+}
+
 export function hasTrafficSamples(
   data: ClientTrafficResponse | undefined,
   tunnels?: Pick<ProxyConfig, 'name' | 'type'>[],
@@ -49,7 +56,7 @@ export function hasTrafficSamples(
   const allowedSet = createAllowedSet(tunnels);
 
   return data.items.some((item) => {
-    if (allowedSet && !allowedSet.has(`${item.tunnel_type}:${item.tunnel_name}`)) {
+    if (allowedSet && !allowedSet.has(getTrafficSeriesKey(item))) {
       return false;
     }
 
@@ -72,7 +79,7 @@ export function buildAggregatedTrafficRates(
   const allowedSet = createAllowedSet(tunnels);
 
   for (const item of data.items) {
-    if (allowedSet && !allowedSet.has(`${item.tunnel_type}:${item.tunnel_name}`)) {
+    if (allowedSet && !allowedSet.has(getTrafficSeriesKey(item))) {
       continue;
     }
 

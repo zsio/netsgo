@@ -223,6 +223,7 @@ export function TunnelListTable({
                   <tr>
                     <th className="w-36 whitespace-nowrap px-4 py-3 font-medium sm:px-6">隧道名称</th>
                     <th className="w-60 whitespace-nowrap px-4 py-3 font-medium sm:px-6">映射</th>
+                    <th className="w-40 whitespace-nowrap px-4 py-3 font-medium sm:px-6">拓扑 / 传输</th>
                     <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">限速</th>
                     {showTraffic24h && <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">24 小时流量</th>}
                     <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">状态</th>
@@ -331,6 +332,10 @@ function TunnelTableRow({
       </td>
 
       <td className="px-4 py-3 sm:px-6">
+        <TunnelTopologyCell view={view} />
+      </td>
+
+      <td className="px-4 py-3 sm:px-6">
         <TunnelSpeedLimit tunnel={tunnel} />
       </td>
 
@@ -409,6 +414,24 @@ function TunnelSpeedLimit({ tunnel }: { tunnel: TunnelEntry }) {
   );
 }
 
+function TunnelTopologyCell({ view }: { view: ReturnType<typeof buildTunnelViewModel> }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1 text-xs">
+      <span className="truncate text-foreground" title={view.participantLabel}>
+        {view.topologyLabel} · {view.participantLabel}
+      </span>
+      <span className="truncate text-muted-foreground" title={`${view.transportLabel} / ${view.p2pLabel}`}>
+        {view.transportLabel} / {view.p2pLabel}
+      </span>
+      {view.ingressWarning && (
+        <span className="truncate text-amber-600" title={view.ingressWarning}>
+          {view.ingressWarning}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function TunnelMapping({
   tunnel,
   view,
@@ -420,9 +443,7 @@ function TunnelMapping({
   const sourceRef = useRef<HTMLSpanElement>(null);
   const destinationRef = useRef<HTMLSpanElement>(null);
   const [isWrapped, setIsWrapped] = useState(false);
-  const targetLabel = tunnel.type === 'http'
-    ? view.targetLabel
-    : `:${tunnel.remote_port}`;
+  const targetLabel = view.targetLabel;
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -462,7 +483,7 @@ function TunnelMapping({
     <div ref={wrapperRef} className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
       <span ref={sourceRef} className="inline-flex items-center gap-2 min-w-0">
         <span className="inline-flex h-6 w-11 shrink-0 items-center justify-center rounded bg-secondary text-[10px] font-mono uppercase text-secondary-foreground border border-border/50">
-          {tunnel.type.toUpperCase()}
+          {(tunnel.ingress?.type ?? tunnel.type).toUpperCase()}
         </span>
         <span className="text-primary font-medium whitespace-nowrap">{targetLabel}</span>
       </span>

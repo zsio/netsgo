@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/input-group';
 import toast from 'react-hot-toast';
 import { useCreateTunnel, useUpdateTunnel } from '@/hooks/use-tunnel-mutations';
-import { getTunnelMutationErrorMessage } from '@/lib/tunnel-model';
+import { currentTargetTypes, getTunnelMutationErrorMessage } from '@/lib/tunnel-model';
 import { bpsToMbpsInput, parseMbpsInputToBps } from '@/lib/format';
 import { useServerStatus } from '@/hooks/use-server-status';
 import type { ProxyType, ProxyConfig } from '@/types';
@@ -290,6 +290,10 @@ function TunnelDialogForm({
               </Button>
             ))}
           </div>
+          <p className="text-[11px] text-muted-foreground">
+            当前目标类型仅开放 {currentTargetTypes.map((targetType) => targetType === 'tcp_service' ? 'TCP 服务' : 'UDP 服务').join(' / ')}；
+            Unix Socket、静态文件和串口设备暂不在表单中提供。
+          </p>
         </div>
 
         {/* 本地地址 */}

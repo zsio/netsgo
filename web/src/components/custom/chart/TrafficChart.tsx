@@ -57,6 +57,14 @@ function getTunnelSeriesKey(name: string, type: ProxyType) {
   return `${type}:${name}`;
 }
 
+function getTrafficSeriesKey(item: ClientTrafficResponse['items'][number]) {
+  return item.tunnel_id ?? getTunnelSeriesKey(item.tunnel_name ?? '(metadata missing)', item.tunnel_type ?? 'tcp');
+}
+
+function getTrafficSeriesName(item: ClientTrafficResponse['items'][number]) {
+  return item.tunnel_name ?? `已删除隧道 ${item.tunnel_id ?? 'unknown'}`;
+}
+
 function formatTrafficValue(value: number, range?: ClientTrafficRange) {
   const formatted = formatBytes(value).replace('.0 ', ' ');
   return range === '60s' ? `${formatted}/s` : formatted;
@@ -129,11 +137,11 @@ function buildTrafficTrendChartState(
   }
 
   for (const item of data?.items ?? []) {
-    const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
+    const seriesKey = getTrafficSeriesKey(item);
     if (!knownTunnels.has(seriesKey)) {
       knownTunnels.set(seriesKey, {
-        name: item.tunnel_name,
-        type: item.tunnel_type,
+        name: getTrafficSeriesName(item),
+        type: item.tunnel_type ?? 'tcp',
       });
     }
   }
@@ -172,7 +180,7 @@ function buildTrafficTrendChartState(
       timestamps.add(timestamp);
     }
 
-    const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
+    const seriesKey = getTrafficSeriesKey(item);
     pointsByTunnel.set(seriesKey, pointMap);
   }
 
