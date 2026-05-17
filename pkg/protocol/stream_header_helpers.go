@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	StreamHeaderMagic       = "NGSH"
+	StreamHeaderMagic        = "NGSH"
 	StreamHeaderVersion byte = 1
 
 	StreamHeaderMaxLen          = 16 * 1024

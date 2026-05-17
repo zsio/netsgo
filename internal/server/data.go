@@ -196,7 +196,7 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 	}
 
 	if err := protocol.WriteStreamHeader(stream, protocol.StreamHeader{
-		ProxyName:      proxyName,
+		ProxyName:       proxyName,
 		TransportPolicy: tunnel.Config.TransportPolicy,
 		ActualTransport: tunnel.Config.RuntimeState,
 	}); err != nil {

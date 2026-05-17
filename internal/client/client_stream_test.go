@@ -67,7 +67,7 @@ func TestClient_HandleStream_Success(t *testing.T) {
 		}
 
 		mustWriteAll(t, serverStream, encodeStreamHeader(t, protocol.StreamHeader{
-			ProxyName:      proxyName,
+			ProxyName:       proxyName,
 			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
 			ActualTransport: protocol.ActualTransportServerRelay,
 		}))
@@ -155,7 +155,7 @@ func TestClient_HandleStream_HTTPProxy_ReusesTCPPath(t *testing.T) {
 		}
 
 		mustWriteAll(t, serverStream, encodeStreamHeader(t, protocol.StreamHeader{
-			ProxyName:      proxyName,
+			ProxyName:       proxyName,
 			TransportPolicy: protocol.TransportPolicyServerRelayOnly,
 			ActualTransport: protocol.ActualTransportServerRelay,
 		}))
@@ -237,7 +237,6 @@ func TestClient_HandleStream_InvalidHeader(t *testing.T) {
 		t.Fatalf("server stream write failed: %v", err)
 	}
 }
-
 
 func TestClient_HandleStream_DialFail(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
