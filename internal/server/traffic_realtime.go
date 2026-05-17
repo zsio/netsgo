@@ -75,7 +75,7 @@ func (s *Server) collectRealtimeTrafficEvent(now time.Time) realtimeTrafficEvent
 			return true
 		}
 
-		knownTunnels := trafficSeriesKeysFromProxyConfigs(client.ProxyConfigsSnapshot(), "")
+		knownTunnels := trafficSeriesKeysFromProxyConfigs(clientID, client.ProxyConfigsSnapshot(), "")
 		if len(knownTunnels) == 0 {
 			return true
 		}
@@ -122,7 +122,7 @@ func (s *Server) knownTrafficTunnels(clientID, tunnelName string) []trafficSerie
 
 	if value, ok := s.clients.Load(clientID); ok {
 		if client, ok := value.(*ClientConn); ok && client.isLive() {
-			for _, key := range trafficSeriesKeysFromProxyConfigs(client.ProxyConfigsSnapshot(), tunnelName) {
+			for _, key := range trafficSeriesKeysFromProxyConfigs(clientID, client.ProxyConfigsSnapshot(), tunnelName) {
 				add(key)
 			}
 		}
@@ -147,7 +147,7 @@ func (s *Server) knownTrafficTunnels(clientID, tunnelName string) []trafficSerie
 	return keys
 }
 
-func trafficSeriesKeysFromProxyConfigs(configs []protocol.ProxyConfig, tunnelName string) []trafficSeriesKey {
+func trafficSeriesKeysFromProxyConfigs(clientID string, configs []protocol.ProxyConfig, tunnelName string) []trafficSeriesKey {
 	keys := make([]trafficSeriesKey, 0, len(configs))
 	for _, config := range configs {
 		if config.Name == "" || config.Type == "" {
@@ -156,7 +156,11 @@ func trafficSeriesKeysFromProxyConfigs(configs []protocol.ProxyConfig, tunnelNam
 		if tunnelName != "" && config.Name != tunnelName {
 			continue
 		}
-		keys = append(keys, trafficSeriesKey{TunnelID: config.ID, TunnelName: config.Name, TunnelType: config.Type})
+		tunnelID := config.ID
+		if tunnelID == "" {
+			tunnelID = fallbackTrafficTunnelID(clientID, config.Name, config.Type)
+		}
+		keys = append(keys, trafficSeriesKey{TunnelID: tunnelID, TunnelName: config.Name, TunnelType: config.Type})
 	}
 	sortTrafficSeriesKeys(keys)
 	return keys

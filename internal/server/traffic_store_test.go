@@ -883,8 +883,8 @@ func TestTrafficStore_RenameTunnelOverflowDoesNotMutatePendingOrRealtimeBuckets(
 	secondStart := secondFloorUTC(now).Unix()
 	minuteStart := minuteFloorUTC(now).Unix()
 	ts.ApplyDeltas([]TrafficDelta{
-		{ClientID: "c1", TunnelName: "old", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: ^uint64(0)},
-		{ClientID: "c1", TunnelName: "new", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: 1},
+		{TunnelID: "stable-tunnel", ClientID: "c1", TunnelName: "old", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: ^uint64(0)},
+		{TunnelID: "stable-tunnel", ClientID: "c1", TunnelName: "new", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: 1},
 	})
 
 	err := ts.RenameTunnel("c1", "old", "new")
