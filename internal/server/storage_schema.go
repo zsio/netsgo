@@ -126,7 +126,7 @@ func splitMigrationSections(fileName, content string) (string, string, string, e
 				return "", "", "", fmt.Errorf("migration %q has duplicate -- Up: section", fileName)
 			}
 			if seenDown {
-				return "", "", "", fmt.Errorf("migration %q has -- Up: after -- Down:", fileName)
+				return "", "", "", fmt.Errorf("migration %q has -- Up: after -- Down", fileName)
 			}
 			seenUp = true
 			section = upSection
@@ -136,7 +136,7 @@ func splitMigrationSections(fileName, content string) (string, string, string, e
 				return "", "", "", fmt.Errorf("migration %q has duplicate -- Down: section", fileName)
 			}
 			if !seenUp {
-				return "", "", "", fmt.Errorf("migration %q has -- Down: before -- Up:", fileName)
+				return "", "", "", fmt.Errorf("migration %q has -- Down: before -- Up", fileName)
 			}
 			seenDown = true
 			section = downSection

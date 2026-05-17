@@ -305,7 +305,7 @@ func TestLoadMigrationsRejectsInvalidFiles(t *testing.T) {
 -- Down:
 `)},
 			},
-			wantErr: "-- Down: before -- Up:",
+			wantErr: "-- Down: before -- Up",
 		},
 		{
 			name: "duplicate version",
