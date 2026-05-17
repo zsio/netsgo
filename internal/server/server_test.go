@@ -2358,9 +2358,10 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		}
 
 		respMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-			Name:     expectedName,
-			Accepted: true,
-			Message:  "ok",
+			Name:              expectedName,
+			ProvisionRevision: proxyReq.ProvisionRevision,
+			Accepted:          true,
+			Message:           "ok",
 		})
 		if err := wsConn.WriteJSON(respMsg); err != nil {
 			t.Fatalf("failed to send proxy_provision_ack: %v", err)
@@ -3020,9 +3021,10 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	s.store.mu.Unlock()
 
 	ackResume, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-		Name:     resumeProxyReq.Name,
-		Accepted: true,
-		Message:  "ok",
+		Name:              resumeProxyReq.Name,
+		ProvisionRevision: resumeProxyReq.ProvisionRevision,
+		Accepted:          true,
+		Message:           "ok",
 	})
 	if err := wsConn.WriteJSON(ackResume); err != nil {
 		t.Fatalf("failed to send resume ack: %v", err)
@@ -3157,9 +3159,10 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	s.store.mu.Unlock()
 
 	restoreAck, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-		Name:     restoreReq.Name,
-		Accepted: true,
-		Message:  "ok",
+		Name:              restoreReq.Name,
+		ProvisionRevision: restoreReq.ProvisionRevision,
+		Accepted:          true,
+		Message:           "ok",
 	})
 	if err := controlConn.WriteJSON(restoreAck); err != nil {
 		t.Fatalf("failed to send restore ack: %v", err)
