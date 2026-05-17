@@ -904,8 +904,13 @@ func autoTrafficResolution(from, to time.Time) TrafficResolution {
 }
 
 func (s *TrafficStore) recordBytesAt(now time.Time, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
+	s.recordTunnelBytesAt(now, "", clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
+}
+
+func (s *TrafficStore) recordTunnelBytesAt(now time.Time, tunnelID, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
 	now = now.UTC()
 	s.ApplyDeltas([]TrafficDelta{{
+		TunnelID:     tunnelID,
 		ClientID:     clientID,
 		TunnelName:   tunnelName,
 		TunnelType:   tunnelType,
