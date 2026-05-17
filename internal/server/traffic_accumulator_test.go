@@ -9,16 +9,16 @@ func TestTrafficAccumulatorAggregatesBySecondAndTunnel(t *testing.T) {
 	acc := newTrafficAccumulator()
 	base := time.Unix(1_700_000_000, 123_000_000).UTC()
 
-	if err := acc.Add(base, "c1", "web", "http", 100, 10); err != nil {
+	if err := acc.Add(base, "", "c1", "web", "http", 100, 10); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
-	if err := acc.Add(base.Add(500*time.Millisecond), "c1", "web", "http", 50, 5); err != nil {
+	if err := acc.Add(base.Add(500*time.Millisecond), "", "c1", "web", "http", 50, 5); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
-	if err := acc.Add(base.Add(time.Second), "c1", "web", "http", 7, 3); err != nil {
+	if err := acc.Add(base.Add(time.Second), "", "c1", "web", "http", 7, 3); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
-	if err := acc.Add(base, "c1", "ssh", "tcp", 20, 2); err != nil {
+	if err := acc.Add(base, "", "c1", "ssh", "tcp", 20, 2); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
 
