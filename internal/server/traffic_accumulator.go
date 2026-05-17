@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"netsgo/pkg/protocol"
 )
 
 const trafficAccumulatorShardCount = 32
@@ -19,6 +21,7 @@ type trafficAccumulatorShard struct {
 }
 
 type trafficAccumulatorKey struct {
+	tunnelID    string
 	clientID    string
 	tunnelName  string
 	tunnelType  string
@@ -34,7 +37,7 @@ func newTrafficAccumulator() *trafficAccumulator {
 	return acc
 }
 
-func (a *trafficAccumulator) Add(now time.Time, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) error {
+func (a *trafficAccumulator) Add(now time.Time, tunnelID, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) error {
 	if a == nil || clientID == "" || tunnelName == "" || tunnelType == "" {
 		return nil
 	}
@@ -44,6 +47,7 @@ func (a *trafficAccumulator) Add(now time.Time, clientID, tunnelName, tunnelType
 
 	now = now.UTC()
 	delta := TrafficDelta{
+		TunnelID:     tunnelID,
 		ClientID:     clientID,
 		TunnelName:   tunnelName,
 		TunnelType:   tunnelType,
@@ -53,6 +57,7 @@ func (a *trafficAccumulator) Add(now time.Time, clientID, tunnelName, tunnelType
 		EgressBytes:  egressBytes,
 	}
 	key := trafficAccumulatorKey{
+		tunnelID:    delta.TunnelID,
 		clientID:    delta.ClientID,
 		tunnelName:  delta.TunnelName,
 		tunnelType:  delta.TunnelType,
@@ -103,6 +108,9 @@ func (a *trafficAccumulator) Drain() []TrafficDelta {
 	}
 
 	sort.Slice(deltas, func(i, j int) bool {
+		if deltas[i].TunnelID != deltas[j].TunnelID {
+			return deltas[i].TunnelID < deltas[j].TunnelID
+		}
 		if deltas[i].ClientID != deltas[j].ClientID {
 			return deltas[i].ClientID < deltas[j].ClientID
 		}
@@ -136,7 +144,8 @@ func (a *trafficAccumulator) Len() int {
 }
 
 func trafficAccumulatorShardIndex(key trafficAccumulatorKey) int {
-	hash := trafficAccumulatorHashString(2166136261, key.clientID)
+	hash := trafficAccumulatorHashString(2166136261, key.tunnelID)
+	hash = trafficAccumulatorHashString(hash, key.clientID)
 	hash = trafficAccumulatorHashString(hash, key.tunnelName)
 	hash = trafficAccumulatorHashString(hash, key.tunnelType)
 	return int(hash % trafficAccumulatorShardCount)
@@ -154,7 +163,19 @@ func (s *Server) recordTraffic(clientID, tunnelName, tunnelType string, ingressB
 	s.recordTrafficAt(time.Now(), clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
 }
 
+func (s *Server) recordTunnelTraffic(clientID string, config protocol.ProxyConfig, ingressBytes, egressBytes uint64) {
+	s.recordTunnelTrafficAt(time.Now(), clientID, config, ingressBytes, egressBytes)
+}
+
+func (s *Server) recordTunnelTrafficAt(now time.Time, clientID string, config protocol.ProxyConfig, ingressBytes, egressBytes uint64) {
+	s.recordTrafficObservationAt(now, config.ID, clientID, config.Name, config.Type, ingressBytes, egressBytes)
+}
+
 func (s *Server) recordTrafficAt(now time.Time, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
+	s.recordTrafficObservationAt(now, "", clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
+}
+
+func (s *Server) recordTrafficObservationAt(now time.Time, tunnelID, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
 	if s == nil || s.trafficStore == nil {
 		return
 	}
@@ -164,20 +185,20 @@ func (s *Server) recordTrafficAt(now time.Time, clientID, tunnelName, tunnelType
 
 	acc := s.trafficAccumulator
 	if acc == nil {
-		s.trafficStore.recordBytesAt(now, clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
+		s.trafficStore.recordTunnelBytesAt(now, tunnelID, clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
 		return
 	}
 
-	if err := acc.Add(now, clientID, tunnelName, tunnelType, ingressBytes, egressBytes); err == nil {
+	if err := acc.Add(now, tunnelID, clientID, tunnelName, tunnelType, ingressBytes, egressBytes); err == nil {
 		return
 	}
 
 	// Overflow is practically unreachable for normal chunk sizes. Flush the current
 	// batch and retry so the hot path can still preserve the observation.
 	s.flushTrafficObservations()
-	if err := acc.Add(now, clientID, tunnelName, tunnelType, ingressBytes, egressBytes); err != nil {
+	if err := acc.Add(now, tunnelID, clientID, tunnelName, tunnelType, ingressBytes, egressBytes); err != nil {
 		log.Printf("⚠️ Failed to aggregate traffic bytes for client %s tunnel %s: %v", clientID, tunnelName, err)
-		s.trafficStore.recordBytesAt(now, clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
+		s.trafficStore.recordTunnelBytesAt(now, tunnelID, clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
 	}
 }
 

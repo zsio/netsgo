@@ -337,7 +337,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			sess.Close()
 			state.removeSession(key)
 		} else {
-			s.recordTraffic(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(n), 0)
+			s.recordTunnelTraffic(client.ID, tunnel.Config, uint64(n), 0)
 		}
 	}
 }
