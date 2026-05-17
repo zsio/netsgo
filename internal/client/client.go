@@ -903,33 +903,29 @@ func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
 }
 
 // handleStream handles a single yamux stream:
-// 1. Read the StreamHeader to get proxy_name
-// 2. Look up the local proxy configuration by proxy_name
+// 1. Read the DataStreamHeader to get the stable tunnel identity
+// 2. Look up the local proxy configuration by tunnel id or legacy name
 // 3. Dial the local service
 // 4. Relay(stream, localConn)
 func (c *Client) handleStream(stream *yamux.Stream) {
 	defer func() { _ = stream.Close() }()
 
-	header, err := protocol.ReadStreamHeader(stream)
+	header, err := protocol.DecodeDataStreamHeader(stream)
 	if err != nil {
-		log.Printf("⚠️ Failed to read StreamHeader: %v", err)
+		log.Printf("⚠️ Failed to read DataStreamHeader: %v", err)
 		return
 	}
-	proxyName := header.ProxyName
-
-	// Look up the proxy configuration.
-	val, ok := c.proxies.Load(proxyName)
+	proxyName, cfg, ok := c.proxyForDataStreamHeader(header)
 	if !ok {
-		log.Printf("⚠️ Unknown proxy name: %s", proxyName)
+		log.Printf("⚠️ Unknown tunnel id: %s", header.TunnelID)
 		return
 	}
-	cfg := val.(protocol.ProxyNewRequest)
-	if header.TransportPolicy != "" && cfg.TransportPolicy != "" && header.TransportPolicy != cfg.TransportPolicy {
-		log.Printf("⚠️ StreamHeader transport policy mismatch for %s: header=%s cfg=%s", proxyName, header.TransportPolicy, cfg.TransportPolicy)
+	if cfg.TransportPolicy == protocol.TransportPolicyDirectOnly && header.Transport == protocol.ActualTransportServerRelay {
+		log.Printf("⚠️ DataStreamHeader server relay denied for direct_only tunnel %s", proxyName)
 		return
 	}
-	if header.ActualTransport != "" && cfg.ActualTransport != "" && header.ActualTransport != cfg.ActualTransport {
-		log.Printf("⚠️ StreamHeader actual transport mismatch for %s: header=%s cfg=%s", proxyName, header.ActualTransport, cfg.ActualTransport)
+	if cfg.ActualTransport != "" && cfg.ActualTransport != protocol.ActualTransportUnknown && header.Transport != cfg.ActualTransport {
+		log.Printf("⚠️ DataStreamHeader transport mismatch for %s: header=%s cfg=%s", proxyName, header.Transport, cfg.ActualTransport)
 		return
 	}
 
@@ -949,6 +945,35 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 
 	// Relay traffic in both directions.
 	mux.Relay(stream, localConn)
+}
+
+func (c *Client) proxyForDataStreamHeader(header protocol.DataStreamHeader) (string, protocol.ProxyNewRequest, bool) {
+	if val, ok := c.proxies.Load(header.TunnelID); ok {
+		cfg := val.(protocol.ProxyNewRequest)
+		return cfg.Name, cfg, true
+	}
+
+	var proxyName string
+	var cfg protocol.ProxyNewRequest
+	found := false
+	c.proxies.Range(func(key, value any) bool {
+		candidate, ok := value.(protocol.ProxyNewRequest)
+		if !ok {
+			return true
+		}
+		if candidate.ID != "" && candidate.ID == header.TunnelID {
+			if name, ok := key.(string); ok && name != "" {
+				proxyName = name
+			} else {
+				proxyName = candidate.Name
+			}
+			cfg = candidate
+			found = true
+			return false
+		}
+		return true
+	})
+	return proxyName, cfg, found
 }
 
 // requestProxy requests creation of a proxy tunnel over the control channel.

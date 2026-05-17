@@ -167,8 +167,8 @@ func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) err
 	return conn.WriteMessage(websocket.BinaryMessage, []byte{status})
 }
 
-// openStreamToClient opens a new stream on the client's yamux session and
-// writes a StreamHeader to tell the client which proxy this stream belongs to.
+// openStreamToClient opens a new server-relay stream on the client's yamux session and
+// writes a DataStreamHeader that identifies the tunnel/revision before payload bytes.
 func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.Conn, error) {
 	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
 		return nil, fmt.Errorf("client [%s] is not online", client.ID)
@@ -187,26 +187,52 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 		return nil, fmt.Errorf("OpenStream failed: %w", err)
 	}
 
-	client.proxyMu.RLock()
+	client.proxyMu.Lock()
 	tunnel, ok := client.proxies[proxyName]
-	client.proxyMu.RUnlock()
+	if ok {
+		ensureTunnelRuntimeRevision(tunnel)
+	}
+	var header protocol.DataStreamHeader
+	if ok {
+		header = dataStreamHeaderForServerRelay(client, tunnel, proxyName)
+	}
+	client.proxyMu.Unlock()
 	if !ok {
 		_ = stream.Close()
 		return nil, fmt.Errorf("proxy tunnel %q not found", proxyName)
 	}
-	if tunnel.Config.TransportPolicy == protocol.TransportPolicyDirectOnly && tunnel.Config.ActualTransport == protocol.ActualTransportServerRelay {
+	if tunnel.Config.TransportPolicy == protocol.TransportPolicyDirectOnly {
 		_ = stream.Close()
 		return nil, fmt.Errorf("direct_only tunnels must not use server relay")
 	}
 
-	if err := protocol.WriteStreamHeader(stream, protocol.StreamHeader{
-		ProxyName:       proxyName,
-		TransportPolicy: tunnel.Config.TransportPolicy,
-		ActualTransport: tunnel.Config.ActualTransport,
-	}); err != nil {
+	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
 		_ = stream.Close()
-		return nil, fmt.Errorf("write StreamHeader failed: %w", err)
+		return nil, fmt.Errorf("write DataStreamHeader failed: %w", err)
 	}
 
 	return stream, nil
+}
+
+func dataStreamHeaderForServerRelay(client *ClientConn, tunnel *ProxyTunnel, fallbackName string) protocol.DataStreamHeader {
+	tunnelID := tunnel.Config.ID
+	if tunnelID == "" {
+		tunnelID = fallbackName
+	}
+	streamID := protocol.NewDataStreamID()
+	if streamID == "" {
+		streamID = generateUUID()
+	}
+	return protocol.DataStreamHeader{
+		Kind:             protocol.DataStreamHeaderKindTunnelStream,
+		TunnelID:         tunnelID,
+		Revision:         int64(ensureTunnelRuntimeRevision(tunnel)),
+		StreamID:         streamID,
+		OpenClientID:     client.ID,
+		SourceRole:       protocol.DataStreamRoleServer,
+		TargetRole:       protocol.DataStreamRoleTarget,
+		Direction:        protocol.DataStreamDirectionIngressToTarget,
+		Transport:        protocol.ActualTransportServerRelay,
+		ServerAuthorized: true,
+	}
 }

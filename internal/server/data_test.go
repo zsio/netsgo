@@ -370,18 +370,18 @@ func TestOpenStreamToClient_Success(t *testing.T) {
 	}
 	defer mustClose(t, clientStream)
 
-	header, err := protocol.ReadStreamHeader(clientStream)
+	header, err := protocol.DecodeDataStreamHeader(clientStream)
 	if err != nil {
 		t.Fatalf("Failed to read stream header: %v", err)
 	}
-	if header.ProxyName != "test-tunnel" {
-		t.Fatalf("proxyName error: %q", header.ProxyName)
+	if header.TunnelID != "test-tunnel" {
+		t.Fatalf("tunnel id error: %q", header.TunnelID)
 	}
-	if header.TransportPolicy != protocol.TransportPolicyServerRelayOnly {
-		t.Fatalf("transport policy error: %q", header.TransportPolicy)
+	if header.Transport != protocol.ActualTransportServerRelay {
+		t.Fatalf("actual transport error: %q", header.Transport)
 	}
-	if header.ActualTransport != protocol.ActualTransportServerRelay {
-		t.Fatalf("actual transport error: %q", header.ActualTransport)
+	if !header.ServerAuthorized {
+		t.Fatal("server-opened stream should be marked server_authorized")
 	}
 
 	select {
