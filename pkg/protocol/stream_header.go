@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
@@ -17,6 +18,12 @@ const (
 	DataStreamHeaderMaxLen           = 16 * 1024
 	DataStreamHeaderMaxStringLen     = 1024
 	DataStreamHeaderMaxTokenLen      = 4096
+
+	DataStreamRoleServer  = "server"
+	DataStreamRoleIngress = "ingress"
+	DataStreamRoleTarget  = "target"
+
+	DataStreamDirectionIngressToTarget = "ingress_to_target"
 )
 
 // DataStreamHeader is the versioned stream-routing header for tunnel data
@@ -92,21 +99,22 @@ func DecodeDataStreamHeader(r io.Reader) (DataStreamHeader, error) {
 	}
 
 	var header DataStreamHeader
-	dec := json.NewDecoder(bytesReader(payload))
+	dec := json.NewDecoder(bytes.NewReader(payload))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&header); err != nil {
 		return DataStreamHeader{}, fmt.Errorf("decode data stream header json: %w", err)
 	}
-	if dec.More() {
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
 		return DataStreamHeader{}, fmt.Errorf("data stream header must be one json object")
 	}
-	if err := validateDataStreamHeader(header); err != nil {
+	if err := ValidateDataStreamHeader(header); err != nil {
 		return DataStreamHeader{}, err
 	}
 	return header, nil
 }
 
-func validateDataStreamHeader(header DataStreamHeader) error {
+func ValidateDataStreamHeader(header DataStreamHeader) error {
 	if header.Kind != DataStreamHeaderKindTunnelStream {
 		return fmt.Errorf("unsupported data stream header kind %q", header.Kind)
 	}
@@ -131,6 +139,9 @@ func validateDataStreamHeader(header DataStreamHeader) error {
 	if header.Transport != ActualTransportServerRelay && header.Transport != ActualTransportPeerDirect && header.Transport != ActualTransportTURNRelay {
 		return fmt.Errorf("unsupported data stream transport %q", header.Transport)
 	}
+	if header.Direction != DataStreamDirectionIngressToTarget {
+		return fmt.Errorf("unsupported data stream direction %q", header.Direction)
+	}
 	if !header.ServerAuthorized && header.OpenToken == "" {
 		return fmt.Errorf("data stream header open_token is required")
 	}
@@ -153,18 +164,20 @@ func validateDataStreamHeader(header DataStreamHeader) error {
 			return fmt.Errorf("data stream header %s is too long", field.name)
 		}
 	}
+	if header.SourceRole != "" && !isKnownDataStreamRole(header.SourceRole) {
+		return fmt.Errorf("unsupported data stream source_role %q", header.SourceRole)
+	}
+	if header.TargetRole != "" && !isKnownDataStreamRole(header.TargetRole) {
+		return fmt.Errorf("unsupported data stream target_role %q", header.TargetRole)
+	}
 	return nil
 }
 
-func bytesReader(b []byte) io.Reader { return byteSliceReader{b: b} }
-
-type byteSliceReader struct{ b []byte }
-
-func (r byteSliceReader) Read(p []byte) (int, error) {
-	if len(r.b) == 0 {
-		return 0, io.EOF
+func isKnownDataStreamRole(role string) bool {
+	switch role {
+	case DataStreamRoleServer, DataStreamRoleIngress, DataStreamRoleTarget:
+		return true
+	default:
+		return false
 	}
-	n := copy(p, r.b)
-	r.b = r.b[n:]
-	return n, nil
 }
