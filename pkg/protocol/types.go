@@ -249,6 +249,7 @@ type TunnelCapabilities struct {
 type ProxyConfig struct {
 	ID                string              `json:"id"`          // 隧道稳定 ID（管理面唯一标识）
 	Name              string              `json:"name"`        // 隧道名称（唯一标识）
+	Revision          int64               `json:"revision"`    // 管理面规格修订号
 	Type              string              `json:"type"`        // 隧道类型: tcp, udp, http
 	LocalIP           string              `json:"local_ip"`    // 内网目标服务 IP
 	LocalPort         int                 `json:"local_port"`  // 内网目标服务端口

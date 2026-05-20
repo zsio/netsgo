@@ -19,6 +19,7 @@ const (
 )
 
 var ErrTunnelNotFound = errors.New("tunnel not found")
+var ErrTunnelRevisionConflict = errors.New("tunnel revision conflict")
 
 const (
 	TunnelTopologyServerExpose       = "server_expose"
@@ -558,6 +559,76 @@ func (s *TunnelStore) UpdateTunnelByID(clientID, id, name string, localIP string
 		return err
 	}
 	return commitTx(tx, &committed)
+}
+
+// UpdateTunnelByIDWithRevision updates a tunnel by stable id and increments the
+// spec revision. The update is conditional on expectedRevision and returns
+// ErrTunnelRevisionConflict on stale writes.
+func (s *TunnelStore) UpdateTunnelByIDWithRevision(clientID, id string, expectedRevision int64, name string, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) (StoredTunnel, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	exists, err := s.tunnelIDExists(clientID, id)
+	if err != nil {
+		return StoredTunnel{}, err
+	}
+	if !exists {
+		return StoredTunnel{}, fmt.Errorf("tunnel id %q does not exist (client_id: %s)", id, clientID)
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return StoredTunnel{}, err
+	}
+
+	stored, err := scanStoredTunnel(s.db.QueryRow(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE client_id = ? AND id = ?`, clientID, id))
+	if err != nil {
+		return StoredTunnel{}, err
+	}
+	if expectedRevision <= 0 {
+		return StoredTunnel{}, fmt.Errorf("expected revision is required")
+	}
+	if stored.Revision != expectedRevision {
+		return StoredTunnel{}, ErrTunnelRevisionConflict
+	}
+	stored.Name = name
+	stored.LocalIP = localIP
+	stored.LocalPort = localPort
+	stored.RemotePort = remotePort
+	stored.Domain = domain
+	stored.IngressBPS = ingressBPS
+	stored.EgressBPS = egressBPS
+	stored.Revision++
+	stored.UpdatedAt = time.Now().UTC()
+	if err := stored.normalize(); err != nil {
+		return StoredTunnel{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return StoredTunnel{}, err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+	query := `UPDATE tunnels SET name = ?, revision = ?, local_ip = ?, local_port = ?, remote_port = ?, domain = ?, ingress_bps = ?, egress_bps = ?, ingress_config = ?, ingress_bind_ip = ?, ingress_port = ?, ingress_domain = ?, target_config = ?, target_host = ?, target_port = ?, target_resource_key = ?, updated_at = ? WHERE client_id = ? AND id = ?`
+	args := []any{stored.Name, stored.Revision, stored.LocalIP, stored.LocalPort, stored.RemotePort, stored.Domain, stored.IngressBPS, stored.EgressBPS, string(stored.Ingress.Config), tunnelIngressBindIP(stored), tunnelIngressPort(stored), tunnelIngressDomain(stored), string(stored.Target.Config), stored.LocalIP, stored.LocalPort, tunnelTargetResourceKey(stored), formatTime(stored.UpdatedAt), clientID, id}
+	query += ` AND revision = ?`
+	args = append(args, expectedRevision)
+	result, err := tx.Exec(query, args...)
+	if err != nil {
+		return StoredTunnel{}, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return StoredTunnel{}, err
+	}
+	if rowsAffected == 0 {
+		return StoredTunnel{}, ErrTunnelRevisionConflict
+	}
+	if err := replaceTunnelResourceLocksTx(tx, stored); err != nil {
+		return StoredTunnel{}, err
+	}
+	if err := commitTx(tx, &committed); err != nil {
+		return StoredTunnel{}, err
+	}
+	return stored, nil
 }
 
 // UpdateHostname updates the display hostname for a given Client.

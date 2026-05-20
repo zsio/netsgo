@@ -561,6 +561,81 @@ VALUES ('client-existing', 'existing', 'tcp', '127.0.0.1', 80, 18080, '', 100, 2
 	}
 }
 
+func TestOpenServerDBPreservesLegacyTrafficWithoutTunnelMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server", "netsgo.db")
+	oldDB, err := storage.Open(path, []storage.Migration{{
+		Name: "001_server_runtime_schema",
+		Up: `
+CREATE TABLE registered_clients (
+	id TEXT PRIMARY KEY,
+	install_id TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE tunnels (
+	id TEXT NOT NULL DEFAULT '',
+	client_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	type TEXT NOT NULL DEFAULT '',
+	local_ip TEXT NOT NULL DEFAULT '',
+	local_port INTEGER NOT NULL DEFAULT 0,
+	remote_port INTEGER NOT NULL DEFAULT 0,
+	domain TEXT NOT NULL DEFAULT '',
+	ingress_bps INTEGER NOT NULL DEFAULT 0,
+	egress_bps INTEGER NOT NULL DEFAULT 0,
+	desired_state TEXT NOT NULL,
+	runtime_state TEXT NOT NULL,
+	error TEXT NOT NULL DEFAULT '',
+	hostname TEXT NOT NULL DEFAULT '',
+	binding TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	PRIMARY KEY (client_id, name)
+);
+CREATE INDEX idx_tunnels_hostname ON tunnels(hostname);
+CREATE TABLE traffic_buckets (
+	client_id TEXT NOT NULL,
+	tunnel_name TEXT NOT NULL,
+	tunnel_type TEXT NOT NULL,
+	resolution TEXT NOT NULL,
+	bucket_start INTEGER NOT NULL,
+	ingress_bytes INTEGER NOT NULL DEFAULT 0,
+	egress_bytes INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (client_id, tunnel_name, tunnel_type, resolution, bucket_start)
+);
+CREATE INDEX idx_traffic_query ON traffic_buckets(client_id, tunnel_name, resolution, bucket_start);
+INSERT INTO registered_clients (id, install_id) VALUES ('client-existing', 'install-existing');
+INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
+VALUES ('client-existing', 'deleted-tunnel', 'tcp', 'minute', 1700000000, 123, 456);
+`,
+	}})
+	if err != nil {
+		t.Fatalf("create old schema failed: %v", err)
+	}
+	if err := oldDB.Close(); err != nil {
+		t.Fatalf("oldDB.Close() error = %v", err)
+	}
+
+	db, err := openServerDB(path)
+	if err != nil {
+		t.Fatalf("openServerDB() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var tunnelID, ownerClientID, targetClientID, topology, transport string
+	var ingressBytes, egressBytes int64
+	if err := db.QueryRow(`SELECT tunnel_id, owner_client_id, target_client_id, topology, transport, ingress_bytes, egress_bytes FROM traffic_buckets WHERE client_id = ? AND tunnel_name = ?`,
+		"client-existing", "deleted-tunnel").Scan(&tunnelID, &ownerClientID, &targetClientID, &topology, &transport, &ingressBytes, &egressBytes); err != nil {
+		t.Fatalf("query migrated orphan traffic: %v", err)
+	}
+	if tunnelID != "legacy:client-existing:deleted-tunnel:tcp" {
+		t.Fatalf("synthetic tunnel_id = %q", tunnelID)
+	}
+	if ownerClientID != "client-existing" || targetClientID != "client-existing" || topology != "server_expose" || transport != "server_relay" {
+		t.Fatalf("migrated metadata mismatch: owner=%q target=%q topology=%q transport=%q", ownerClientID, targetClientID, topology, transport)
+	}
+	if ingressBytes != 123 || egressBytes != 456 {
+		t.Fatalf("migrated bytes mismatch: ingress=%d egress=%d", ingressBytes, egressBytes)
+	}
+}
+
 func TestOpenServerDBDoesNotCreateJsonFiles(t *testing.T) {
 	root := t.TempDir()
 	db, err := openServerDB(filepath.Join(root, "server", "netsgo.db"))

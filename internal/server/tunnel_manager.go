@@ -130,6 +130,7 @@ func (s *Server) createOfflineManagedTunnel(clientID string, req protocol.ProxyN
 		ClientID:        clientID,
 		Hostname:        record.Info.Hostname,
 		Binding:         TunnelBindingClientID,
+		Revision:        1,
 		CreatedAt:       time.Now().UTC(),
 	}
 	setStoredTunnelStates(&stored, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateOffline, "")
@@ -267,6 +268,10 @@ func (s *Server) deleteManagedTunnel(client *ClientConn, name string) error {
 }
 
 func (s *Server) updateManagedTunnel(client *ClientConn, selector, newName string, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) (protocol.ProxyConfig, error) {
+	return s.updateManagedTunnelWithRevision(client, selector, 0, newName, localIP, localPort, remotePort, domain, ingressBPS, egressBPS)
+}
+
+func (s *Server) updateManagedTunnelWithRevision(client *ClientConn, selector string, expectedRevision int64, newName string, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) (protocol.ProxyConfig, error) {
 	name, tunnel, ok := findTunnelBySelector(client, selector)
 	if !ok {
 		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", selector)
@@ -321,9 +326,23 @@ func (s *Server) updateManagedTunnel(client *ClientConn, selector, newName strin
 		}
 	}
 
+	var updatedStored StoredTunnel
 	if s.store != nil {
-		if err := s.store.UpdateTunnelByID(client.ID, tunnel.Config.ID, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS); err != nil {
-			return protocol.ProxyConfig{}, err
+		if expectedRevision > 0 {
+			var err error
+			updatedStored, err = s.store.UpdateTunnelByIDWithRevision(client.ID, tunnel.Config.ID, expectedRevision, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS)
+			if err != nil {
+				return protocol.ProxyConfig{}, err
+			}
+		} else {
+			if err := s.store.UpdateTunnelByID(client.ID, tunnel.Config.ID, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS); err != nil {
+				return protocol.ProxyConfig{}, err
+			}
+			if stored, err := s.store.GetTunnelByIDE(client.ID, tunnel.Config.ID); err == nil {
+				updatedStored = stored
+			} else if !errors.Is(err, ErrTunnelNotFound) {
+				return protocol.ProxyConfig{}, err
+			}
 		}
 	}
 	if req.Name != name && s.trafficStore != nil {
@@ -347,6 +366,13 @@ func (s *Server) updateManagedTunnel(client *ClientConn, selector, newName strin
 		client.proxies[req.Name] = tunnel
 	}
 	tunnel.Config.Name = req.Name
+	if updatedStored.Revision > 0 {
+		tunnel.Config.Revision = updatedStored.Revision
+	} else if tunnel.Config.Revision == 0 {
+		tunnel.Config.Revision = 1
+	} else {
+		tunnel.Config.Revision++
+	}
 	tunnel.Config.LocalIP = req.LocalIP
 	tunnel.Config.LocalPort = req.LocalPort
 	tunnel.Config.RemotePort = req.RemotePort
@@ -420,6 +446,7 @@ func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) e
 	if err != nil {
 		return err
 	}
+	tunnel.Config.Revision = stored.Revision
 	if err := s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, ""); err != nil {
 		s.removeTunnelRuntime(client, stored.Name)
 		return err
@@ -531,12 +558,20 @@ func (s *Server) rollbackResumedTunnelAfterReady(client *ClientConn, name, previ
 }
 
 func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, errMsg string, createdAt time.Time) protocol.ProxyConfig {
+	return s.upsertTunnelPlaceholderWithRevision(client, req, 1, desiredState, runtimeState, errMsg, createdAt)
+}
+
+func (s *Server) upsertTunnelPlaceholderWithRevision(client *ClientConn, req protocol.ProxyNewRequest, revision int64, desiredState, runtimeState, errMsg string, createdAt time.Time) protocol.ProxyConfig {
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
+	}
+	if revision <= 0 {
+		revision = 1
 	}
 	config := protocol.ProxyConfig{
 		ID:                req.ID,
 		Name:              req.Name,
+		Revision:          revision,
 		Type:              req.Type,
 		LocalIP:           req.LocalIP,
 		LocalPort:         req.LocalPort,
@@ -565,7 +600,7 @@ func (s *Server) upsertTunnelPlaceholder(client *ClientConn, req protocol.ProxyN
 func (s *Server) failRestoredTunnelAfterReady(client *ClientConn, stored StoredTunnel, message string) {
 	s.removeTunnelRuntime(client, stored.Name)
 	_ = s.notifyClientProxyClose(client, stored.Name, "provision_failed")
-	config := s.upsertTunnelPlaceholder(client, stored.ProxyNewRequest, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message, stored.CreatedAt)
+	config := s.upsertTunnelPlaceholderWithRevision(client, stored.ProxyNewRequest, stored.Revision, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message, stored.CreatedAt)
 	_ = s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
 	s.emitTunnelChanged(client.ID, config, "error")
 }
@@ -574,6 +609,7 @@ func storedTunnelToProxyConfig(stored StoredTunnel) protocol.ProxyConfig {
 	config := protocol.ProxyConfig{
 		ID:                stored.ID,
 		Name:              stored.Name,
+		Revision:          stored.Revision,
 		Type:              stored.Type,
 		LocalIP:           stored.LocalIP,
 		LocalPort:         stored.LocalPort,
@@ -593,6 +629,7 @@ func storedTunnelFromRuntime(client *ClientConn, tunnel *ProxyTunnel) StoredTunn
 		ClientID:        client.ID,
 		Hostname:        client.GetInfo().Hostname,
 		Binding:         TunnelBindingClientID,
+		Revision:        tunnel.Config.Revision,
 		CreatedAt:       tunnel.Config.CreatedAt,
 	}
 	stored.DesiredState = tunnel.Config.DesiredState
@@ -641,6 +678,10 @@ func offlineManagedStateAfterUpdate(stored StoredTunnel) (string, string, string
 }
 
 func (s *Server) updateOfflineManagedTunnel(clientID, selector, newName, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) (protocol.ProxyConfig, error) {
+	return s.updateOfflineManagedTunnelWithRevision(clientID, selector, 0, newName, localIP, localPort, remotePort, domain, ingressBPS, egressBPS)
+}
+
+func (s *Server) updateOfflineManagedTunnelWithRevision(clientID, selector string, expectedRevision int64, newName, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) (protocol.ProxyConfig, error) {
 	stored, err := s.loadOfflineManagedTunnelBySelector(clientID, selector)
 	if err != nil {
 		return protocol.ProxyConfig{}, err
@@ -674,8 +715,14 @@ func (s *Server) updateOfflineManagedTunnel(clientID, selector, newName, localIP
 			return protocol.ProxyConfig{}, err
 		}
 	}
-	if err := s.store.UpdateTunnelByID(clientID, stored.ID, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS); err != nil {
-		return protocol.ProxyConfig{}, err
+	if expectedRevision > 0 {
+		if _, err := s.store.UpdateTunnelByIDWithRevision(clientID, stored.ID, expectedRevision, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS); err != nil {
+			return protocol.ProxyConfig{}, err
+		}
+	} else {
+		if err := s.store.UpdateTunnelByID(clientID, stored.ID, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS); err != nil {
+			return protocol.ProxyConfig{}, err
+		}
 	}
 	if req.Name != stored.Name && s.trafficStore != nil {
 		if err := s.trafficStore.RenameTunnel(clientID, stored.Name, req.Name); err != nil {

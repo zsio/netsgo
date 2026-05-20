@@ -232,6 +232,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 		Config: protocol.ProxyConfig{
 			ID:                req.ID,
 			Name:              req.Name,
+			Revision:          1,
 			Type:              req.Type,
 			LocalIP:           req.LocalIP,
 			LocalPort:         req.LocalPort,

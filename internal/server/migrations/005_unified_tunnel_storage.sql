@@ -201,11 +201,11 @@ INSERT INTO traffic_buckets (
 	client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes
 )
 SELECT
-	t.id,
-	t.owner_client_id,
-	t.ingress_client_id,
-	t.target_client_id,
-	t.topology,
+	COALESCE(t.id, 'legacy:' || b.client_id || ':' || b.tunnel_name || ':' || b.tunnel_type),
+	COALESCE(t.owner_client_id, b.client_id),
+	COALESCE(t.ingress_client_id, ''),
+	COALESCE(t.target_client_id, b.client_id),
+	COALESCE(t.topology, 'server_expose'),
 	'server_relay',
 	b.client_id,
 	b.tunnel_name,
@@ -215,7 +215,7 @@ SELECT
 	b.ingress_bytes,
 	b.egress_bytes
 FROM traffic_buckets_legacy_unified_migration b
-JOIN tunnels t ON t.client_id = b.client_id AND t.name = b.tunnel_name;
+LEFT JOIN tunnels t ON t.client_id = b.client_id AND t.name = b.tunnel_name;
 
 DROP TABLE traffic_buckets_legacy_unified_migration;
 

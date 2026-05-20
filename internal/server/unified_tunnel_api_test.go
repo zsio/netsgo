@@ -225,12 +225,23 @@ func TestAPI_UnifiedTunnelUpdateRequiresExpectedRevisionAndHardDelete(t *testing
 	if updatePayload.Tunnel.ID != created.ID {
 		t.Fatalf("updated tunnel id mismatch: want %q, got %q", created.ID, updatePayload.Tunnel.ID)
 	}
+	if updatePayload.Tunnel.Revision != 2 {
+		t.Fatalf("updated revision: want 2, got %d", updatePayload.Tunnel.Revision)
+	}
 	stored, err := s.store.GetTunnelByIDE(record.ID, created.ID)
 	if err != nil {
 		t.Fatalf("updated tunnel should remain persisted: %v", err)
 	}
+	if stored.Revision != 2 {
+		t.Fatalf("stored revision: want 2, got %d", stored.Revision)
+	}
 	if stored.LocalPort != 2222 || stored.RemotePort != 22005 || stored.IngressBPS != 128 || stored.EgressBPS != 256 {
 		t.Fatalf("stored update mismatch: %+v", stored)
+	}
+
+	staleSecondResp := doMuxRequest(t, handler, http.MethodPut, "/api/tunnels/"+created.ID, token, validUpdate)
+	if staleSecondResp.Code != http.StatusConflict {
+		t.Fatalf("second update with stale revision: want 409, got %d body=%s", staleSecondResp.Code, staleSecondResp.Body.String())
 	}
 
 	deleteResp := doMuxRequest(t, handler, http.MethodDelete, "/api/tunnels/"+created.ID, token, nil)

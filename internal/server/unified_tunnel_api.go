@@ -374,11 +374,15 @@ func (s *Server) handleUpdateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 
 	var updated protocol.ProxyConfig
 	if client, ok := s.loadLiveClient(ownerClientID); ok {
-		updated, err = s.updateManagedTunnel(client, current.ID, proxyReq.Name, proxyReq.LocalIP, proxyReq.LocalPort, proxyReq.RemotePort, proxyReq.Domain, proxyReq.IngressBPS, proxyReq.EgressBPS)
+		updated, err = s.updateManagedTunnelWithRevision(client, current.ID, req.ExpectedRevision, proxyReq.Name, proxyReq.LocalIP, proxyReq.LocalPort, proxyReq.RemotePort, proxyReq.Domain, proxyReq.IngressBPS, proxyReq.EgressBPS)
 	} else {
-		updated, err = s.updateOfflineManagedTunnel(ownerClientID, current.ID, proxyReq.Name, proxyReq.LocalIP, proxyReq.LocalPort, proxyReq.RemotePort, proxyReq.Domain, proxyReq.IngressBPS, proxyReq.EgressBPS)
+		updated, err = s.updateOfflineManagedTunnelWithRevision(ownerClientID, current.ID, req.ExpectedRevision, proxyReq.Name, proxyReq.LocalIP, proxyReq.LocalPort, proxyReq.RemotePort, proxyReq.Domain, proxyReq.IngressBPS, proxyReq.EgressBPS)
 	}
 	if err != nil {
+		if errors.Is(err, ErrTunnelRevisionConflict) {
+			encodeJSON(w, http.StatusConflict, map[string]any{"error": errTunnelRevisionConflict.Error(), "error_code": "revision_conflict"})
+			return
+		}
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
@@ -642,7 +646,10 @@ func decodeStrictEndpointConfig(raw json.RawMessage, target any) error {
 }
 
 func unifiedSpecFromProxyConfig(config protocol.ProxyConfig) tunnelSpecAPI {
-	revision := int64(1)
+	revision := config.Revision
+	if revision <= 0 {
+		revision = 1
+	}
 	createdAt := config.CreatedAt
 	updatedAt := config.CreatedAt
 	if updatedAt.IsZero() {
