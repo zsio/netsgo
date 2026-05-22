@@ -21,6 +21,8 @@ const (
 	MsgTypeTunnelProvisionAck   = "tunnel_provision_ack"
 	MsgTypeTunnelUnprovision    = "tunnel_unprovision"
 	MsgTypeTunnelRuntimeReport  = "tunnel_runtime_report"
+	MsgTypeTunnelPreflight      = "tunnel_preflight"
+	MsgTypeTunnelPreflightResp  = "tunnel_preflight_resp"
 	MsgTypeTunnelStreamClose    = "tunnel_stream_close"
 	MsgTypeP2PSessionPrepare    = "p2p_session_prepare"
 	MsgTypeP2PSessionReady      = "p2p_session_ready"
@@ -140,6 +142,26 @@ type TunnelRuntimeReport struct {
 	Participant ParticipantRuntime `json:"participant,omitempty"`
 	Transport   TransportRuntime   `json:"transport,omitempty"`
 	Message     string             `json:"message,omitempty"`
+}
+
+// TunnelPreflightRequest asks a client to check a local ingress resource.
+type TunnelPreflightRequest struct {
+	RequestID string       `json:"request_id"`
+	TunnelID  string       `json:"tunnel_id,omitempty"`
+	Revision  int64        `json:"revision,omitempty"`
+	Role      string       `json:"role"`
+	Ingress   EndpointSpec `json:"ingress"`
+}
+
+// TunnelPreflightResponse reports the result of a preflight resource check.
+type TunnelPreflightResponse struct {
+	RequestID string `json:"request_id"`
+	TunnelID  string `json:"tunnel_id,omitempty"`
+	Revision  int64  `json:"revision,omitempty"`
+	Role      string `json:"role"`
+	Accepted  bool   `json:"accepted"`
+	Code      string `json:"code,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
 
 // ProxyNewRequest 请求创建一条新的代理隧道

@@ -11,11 +11,13 @@ import (
 
 func createUnifiedAPITestClient(t *testing.T, s *Server, installID, hostname string) RegisteredClient {
 	t.Helper()
+	capabilities := protocol.DefaultClientCapabilities()
 	record, err := s.auth.adminStore.GetOrCreateClient(installID, protocol.ClientInfo{
-		Hostname: hostname,
-		OS:       "linux",
-		Arch:     "amd64",
-		Version:  "0.1.0",
+		Hostname:     hostname,
+		OS:           "linux",
+		Arch:         "amd64",
+		Version:      "0.1.0",
+		Capabilities: &capabilities,
 	}, "127.0.0.1:12345")
 	if err != nil {
 		t.Fatalf("failed to create client record: %v", err)
@@ -157,23 +159,119 @@ func TestAPI_UnifiedTunnelRejectsFutureTargetsAndDirectPolicies(t *testing.T) {
 		t.Fatal("unsupported direct policy payload must not be persisted")
 	}
 
+	source := createUnifiedAPITestClient(t, s, "install-unified-source", "unified-source")
+	ingress := createUnifiedAPITestClient(t, s, "install-unified-ingress", "unified-ingress")
 	clientRelayBody := []byte(`{
-		"name":"client-relay",
+		"name":"client-relay-direct",
 		"topology":"client_to_client",
-		"ingress":{"location":"client","client_id":"` + record.ID + `","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":22003}},
-		"target":{"location":"client","client_id":"` + record.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
-		"transport_policy":"server_relay_only"
+		"ingress":{"location":"client","client_id":"` + ingress.ID + `","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":22003}},
+		"target":{"location":"client","client_id":"` + source.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"direct_only"
 	}`)
 	resp = doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, clientRelayBody)
-	if resp.Code != http.StatusNotImplemented {
-		t.Fatalf("client_to_client relay create: want 501 for unavailable runtime slice, got %d body=%s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("client_to_client direct create: want 400 for unavailable direct transport, got %d body=%s", resp.Code, resp.Body.String())
 	}
 	body = tunnelMutationErrorResponse{}
 	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
-		t.Fatalf("failed to decode client_to_client error: %v", err)
+		t.Fatalf("failed to decode client_to_client direct error: %v", err)
 	}
-	if body.ErrorCode != "client_to_client_unavailable" || body.Field != "topology" {
-		t.Fatalf("client_to_client error mismatch: %+v", body)
+	if body.ErrorCode != "direct_transport_unavailable" || body.Field != "transport_policy" {
+		t.Fatalf("client_to_client direct error mismatch: %+v", body)
+	}
+}
+
+func TestAPI_UnifiedTunnelCreateClientToClientPersistsOwnerAndRoles(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	source := createUnifiedAPITestClient(t, s, "install-c2c-source", "c2c-source")
+	ingress := createUnifiedAPITestClient(t, s, "install-c2c-ingress", "c2c-ingress")
+
+	body := []byte(`{
+		"name":"source-to-ingress",
+		"topology":"client_to_client",
+		"ingress":{"location":"client","client_id":"` + ingress.ID + `","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":23001}},
+		"target":{"location":"client","client_id":"` + source.ID + `","type":"tcp_service","config":{"host":"a2","port":8080}},
+		"transport_policy":"server_relay_only"
+	}`)
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("client_to_client create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("failed to decode create response: %v", err)
+	}
+	if created.Topology != tunnelTopologyClientToClient {
+		t.Fatalf("topology: want client_to_client, got %q", created.Topology)
+	}
+	if created.OwnerClientID != source.ID {
+		t.Fatalf("owner_client_id: want source %q, got %q", source.ID, created.OwnerClientID)
+	}
+	if created.Ingress.ClientID != ingress.ID || created.Target.ClientID != source.ID {
+		t.Fatalf("participants mismatch: ingress=%+v target=%+v", created.Ingress, created.Target)
+	}
+	if created.RuntimeState != protocol.ProxyRuntimeStateOffline {
+		t.Fatalf("offline clients should create as offline, got %s", created.RuntimeState)
+	}
+
+	stored, err := s.store.GetTunnelByIDE(source.ID, created.ID)
+	if err != nil {
+		t.Fatalf("client_to_client tunnel should persist under source owner: %v", err)
+	}
+	if stored.Topology != TunnelTopologyClientToClient || stored.OwnerClientID != source.ID {
+		t.Fatalf("stored topology/owner mismatch: %+v", stored)
+	}
+	if stored.Ingress.ClientID != ingress.ID || stored.Target.ClientID != source.ID {
+		t.Fatalf("stored participants mismatch: ingress=%+v target=%+v", stored.Ingress, stored.Target)
+	}
+
+	for _, tc := range []struct {
+		role     string
+		clientID string
+	}{
+		{role: "owner", clientID: source.ID},
+		{role: "target", clientID: source.ID},
+		{role: "ingress", clientID: ingress.ID},
+		{role: "related", clientID: ingress.ID},
+	} {
+		listResp := doMuxRequest(t, handler, http.MethodGet, "/api/clients/"+tc.clientID+"/tunnels?role="+tc.role, token, nil)
+		if listResp.Code != http.StatusOK {
+			t.Fatalf("GET role %s for %s: want 200, got %d body=%s", tc.role, tc.clientID, listResp.Code, listResp.Body.String())
+		}
+		var list []tunnelSpecAPI
+		if err := mustDecodeJSON(t, listResp.Body, &list); err != nil {
+			t.Fatalf("failed to decode role %s list: %v", tc.role, err)
+		}
+		if len(list) != 1 || list[0].ID != created.ID {
+			t.Fatalf("role %s list mismatch: %+v", tc.role, list)
+		}
+	}
+}
+
+func TestAPI_UnifiedTunnelRejectsSameClientToClientParticipants(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	record := createUnifiedAPITestClient(t, s, "install-c2c-same", "c2c-same")
+	body := []byte(`{
+		"name":"bad-same-client",
+		"topology":"client_to_client",
+		"ingress":{"location":"client","client_id":"` + record.ID + `","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":23002}},
+		"target":{"location":"client","client_id":"` + record.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`)
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, body)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("same participant create: want 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var bodyResp tunnelMutationErrorResponse
+	if err := mustDecodeJSON(t, resp.Body, &bodyResp); err != nil {
+		t.Fatalf("failed to decode same participant error: %v", err)
+	}
+	if bodyResp.ErrorCode != "same_ingress_and_target_client" || bodyResp.Field != "ingress.client_id" {
+		t.Fatalf("same participant error mismatch: %+v", bodyResp)
 	}
 }
 

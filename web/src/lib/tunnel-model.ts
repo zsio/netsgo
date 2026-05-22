@@ -67,6 +67,13 @@ export interface TunnelSpecMutationInput extends TunnelMutationPayloadInput {
   name: string;
 }
 
+export interface ClientToClientTunnelSpecMutationInput extends TunnelMutationPayloadInput {
+  ingressClientId: string;
+  targetClientId: string;
+  name: string;
+  bind_ip: string;
+}
+
 export const currentIngressTypes = ['tcp_listen', 'udp_listen', 'http_host'] as const satisfies readonly IngressEndpointType[];
 export const currentTargetTypes = ['tcp_service', 'udp_service'] as const satisfies readonly TargetEndpointType[];
 export const futureOnlyTargetTypes = ['unix_socket', 'static_file', 'serial_device'] as const;
@@ -139,6 +146,72 @@ export function buildTunnelSpecCreateRequest(input: TunnelSpecMutationInput): Tu
   return {
     name: input.name,
     topology: 'server_expose',
+    ingress,
+    target,
+    transport_policy: 'server_relay_only',
+    bandwidth_settings: {
+      ingress_bps: payload.ingress_bps,
+      egress_bps: payload.egress_bps,
+    },
+  };
+}
+
+export function buildClientToClientTunnelSpecCreateRequest(
+  input: ClientToClientTunnelSpecMutationInput,
+): TunnelCreateRequest {
+  if (input.type === 'http') {
+    throw new Error('Client-to-Client 暂不支持 HTTP 入口');
+  }
+  if (input.ingressClientId === input.targetClientId) {
+    throw new Error('访问入口客户端不能与服务来源客户端相同');
+  }
+  const payload = buildTunnelMutationPayload(input);
+  const bindIP = input.bind_ip.trim();
+  if (!bindIP) {
+    throw new Error('Client-to-Client 入口监听地址必填');
+  }
+  const target: TunnelTarget = input.type === 'udp'
+    ? {
+      location: 'client',
+      client_id: input.targetClientId,
+      type: 'udp_service',
+      config: {
+        ip: payload.local_ip,
+        port: payload.local_port,
+      },
+    }
+    : {
+      location: 'client',
+      client_id: input.targetClientId,
+      type: 'tcp_service',
+      config: {
+        ip: payload.local_ip,
+        port: payload.local_port,
+      },
+    };
+  const ingress: TunnelIngress = input.type === 'udp'
+    ? {
+      location: 'client',
+      client_id: input.ingressClientId,
+      type: 'udp_listen',
+      config: {
+        bind_ip: bindIP,
+        port: payload.remote_port,
+      },
+    }
+    : {
+      location: 'client',
+      client_id: input.ingressClientId,
+      type: 'tcp_listen',
+      config: {
+        bind_ip: bindIP,
+        port: payload.remote_port,
+      },
+    };
+
+  return {
+    name: input.name,
+    topology: 'client_to_client',
     ingress,
     target,
     transport_policy: 'server_relay_only',

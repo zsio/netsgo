@@ -590,6 +590,7 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 	hostname, _ := os.Hostname()
 	localIP := netutil.GetOutboundIP()
 	_, _, token := c.currentAuthState()
+	capabilities := protocol.DefaultClientCapabilities()
 
 	authReq := protocol.AuthRequest{
 		Key:       c.Key,
@@ -604,6 +605,7 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 			UpdateCapability: &protocol.UpdateCapability{
 				InstallMethod: installmethod.Detect(svcmgr.RoleClient),
 			},
+			Capabilities: &capabilities,
 		},
 	}
 

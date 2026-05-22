@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import type { ProxyConfig } from '@/types';
 
 import {
+  buildClientToClientTunnelSpecCreateRequest,
   buildTunnelSpecCreateRequest,
   buildTunnelMutationPayload,
   buildTunnelViewModel,
@@ -205,6 +206,89 @@ describe('tunnel-model', () => {
       bandwidth_settings: {
         ingress_bps: 1024,
         egress_bps: 2048,
+      },
+    });
+  });
+
+  test('创建请求可转换为统一 TunnelSpec client_to_client TCP 结构', () => {
+    expect(
+      buildClientToClientTunnelSpecCreateRequest({
+        ingressClientId: 'client-b',
+        targetClientId: 'client-a',
+        name: 'a-web-on-b',
+        type: 'tcp',
+        bind_ip: '127.0.0.1',
+        local_ip: 'a2',
+        local_port: 8080,
+        remote_port: 18080,
+      }),
+    ).toEqual({
+      name: 'a-web-on-b',
+      topology: 'client_to_client',
+      ingress: {
+        location: 'client',
+        client_id: 'client-b',
+        type: 'tcp_listen',
+        config: {
+          bind_ip: '127.0.0.1',
+          port: 18080,
+        },
+      },
+      target: {
+        location: 'client',
+        client_id: 'client-a',
+        type: 'tcp_service',
+        config: {
+          ip: 'a2',
+          port: 8080,
+        },
+      },
+      transport_policy: 'server_relay_only',
+      bandwidth_settings: {
+        ingress_bps: 0,
+        egress_bps: 0,
+      },
+    });
+  });
+
+  test('创建请求可转换为统一 TunnelSpec client_to_client UDP 结构', () => {
+    expect(
+      buildClientToClientTunnelSpecCreateRequest({
+        ingressClientId: 'client-b',
+        targetClientId: 'client-a',
+        name: 'a-dns-on-b',
+        type: 'udp',
+        bind_ip: '0.0.0.0',
+        local_ip: '10.0.0.53',
+        local_port: 53,
+        remote_port: 1053,
+        ingress_bps: 4096,
+      }),
+    ).toEqual({
+      name: 'a-dns-on-b',
+      topology: 'client_to_client',
+      ingress: {
+        location: 'client',
+        client_id: 'client-b',
+        type: 'udp_listen',
+        config: {
+          bind_ip: '0.0.0.0',
+          port: 1053,
+        },
+      },
+      target: {
+        location: 'client',
+        client_id: 'client-a',
+        type: 'udp_service',
+        config: {
+          ip: '10.0.0.53',
+          port: 53,
+        },
+      },
+      transport_policy: 'server_relay_only',
+      bandwidth_settings: {
+        ingress_bps: 4096,
+        egress_bps: 0,
       },
     });
   });

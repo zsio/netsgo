@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -610,7 +611,7 @@ func (s *AdminStore) UpdateAdminLoginTime(id string) error {
 
 func scanRegisteredClientBase(row dbScanner) (RegisteredClient, error) {
 	var client RegisteredClient
-	var createdAt, lastSeen string
+	var createdAt, lastSeen, capabilitiesRaw string
 	if err := row.Scan(
 		&client.ID,
 		&client.InstallID,
@@ -627,8 +628,16 @@ func scanRegisteredClientBase(row dbScanner) (RegisteredClient, error) {
 		&createdAt,
 		&lastSeen,
 		&client.LastIP,
+		&capabilitiesRaw,
 	); err != nil {
 		return RegisteredClient{}, err
+	}
+	if capabilitiesRaw != "" && capabilitiesRaw != "{}" {
+		var capabilities protocol.ClientCapabilities
+		if err := json.Unmarshal([]byte(capabilitiesRaw), &capabilities); err != nil {
+			return RegisteredClient{}, fmt.Errorf("decode registered client capabilities: %w", err)
+		}
+		client.Info.Capabilities = &capabilities
 	}
 	parsedCreatedAt, err := parseTime(createdAt)
 	if err != nil {
@@ -644,7 +653,7 @@ func scanRegisteredClientBase(row dbScanner) (RegisteredClient, error) {
 }
 
 func registeredClientSelectColumns() string {
-	return `id, install_id, display_name, hostname, os, arch, ip, version, public_ipv4, public_ipv6, ingress_bps, egress_bps, created_at, last_seen, last_ip`
+	return `id, install_id, display_name, hostname, os, arch, ip, version, public_ipv4, public_ipv6, ingress_bps, egress_bps, created_at, last_seen, last_ip, last_capabilities`
 }
 
 func loadRegisteredClient(q dbQuerier, where string, args ...any) (RegisteredClient, error) {
@@ -660,11 +669,26 @@ func loadRegisteredClient(q dbQuerier, where string, args ...any) (RegisteredCli
 	return client, nil
 }
 
+func marshalClientCapabilities(capabilities *protocol.ClientCapabilities) (string, error) {
+	if capabilities == nil {
+		return "{}", nil
+	}
+	raw, err := json.Marshal(capabilities)
+	if err != nil {
+		return "", fmt.Errorf("encode registered client capabilities: %w", err)
+	}
+	return string(raw), nil
+}
+
 func upsertClientInfo(exec dbExecer, clientID string, info protocol.ClientInfo, lastSeen time.Time, lastIP string) error {
+	capabilitiesRaw, err := marshalClientCapabilities(info.Capabilities)
+	if err != nil {
+		return err
+	}
 	if _, err := exec.Exec(`UPDATE registered_clients
-		SET hostname = ?, os = ?, arch = ?, ip = ?, version = ?, public_ipv4 = ?, public_ipv6 = ?, last_seen = ?, last_ip = ?
+		SET hostname = ?, os = ?, arch = ?, ip = ?, version = ?, public_ipv4 = ?, public_ipv6 = ?, last_seen = ?, last_ip = ?, last_capabilities = ?
 		WHERE id = ?`,
-		info.Hostname, info.OS, info.Arch, info.IP, info.Version, info.PublicIPv4, info.PublicIPv6, formatTime(lastSeen), lastIP, clientID); err != nil {
+		info.Hostname, info.OS, info.Arch, info.IP, info.Version, info.PublicIPv4, info.PublicIPv6, formatTime(lastSeen), lastIP, capabilitiesRaw, clientID); err != nil {
 		return err
 	}
 	return nil
@@ -694,10 +718,14 @@ func getOrCreateClientInTx(tx *sql.Tx, installID string, info protocol.ClientInf
 		LastSeen:  now,
 		LastIP:    lastIP,
 	}
+	capabilitiesRaw, err := marshalClientCapabilities(info.Capabilities)
+	if err != nil {
+		return RegisteredClient{}, err
+	}
 	if _, err := tx.Exec(`INSERT INTO registered_clients
-		(id, install_id, display_name, hostname, os, arch, ip, version, public_ipv4, public_ipv6, ingress_bps, egress_bps, created_at, last_seen, last_ip)
-		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`,
-		client.ID, client.InstallID, info.Hostname, info.OS, info.Arch, info.IP, info.Version, info.PublicIPv4, info.PublicIPv6, formatTime(now), formatTime(now), lastIP); err != nil {
+		(id, install_id, display_name, hostname, os, arch, ip, version, public_ipv4, public_ipv6, ingress_bps, egress_bps, created_at, last_seen, last_ip, last_capabilities)
+		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`,
+		client.ID, client.InstallID, info.Hostname, info.OS, info.Arch, info.IP, info.Version, info.PublicIPv4, info.PublicIPv6, formatTime(now), formatTime(now), lastIP, capabilitiesRaw); err != nil {
 		return RegisteredClient{}, err
 	}
 	return client, nil
@@ -759,10 +787,14 @@ func (s *AdminStore) TouchClient(clientID string, info protocol.ClientInfo, remo
 	committed := false
 	defer rollbackUnlessCommitted(tx, &committed)
 
+	capabilitiesRaw, err := marshalClientCapabilities(info.Capabilities)
+	if err != nil {
+		return err
+	}
 	result, err := tx.Exec(`UPDATE registered_clients
-		SET hostname = ?, os = ?, arch = ?, ip = ?, version = ?, public_ipv4 = ?, public_ipv6 = ?, last_seen = ?, last_ip = ?
+		SET hostname = ?, os = ?, arch = ?, ip = ?, version = ?, public_ipv4 = ?, public_ipv6 = ?, last_seen = ?, last_ip = ?, last_capabilities = ?
 		WHERE id = ?`,
-		info.Hostname, info.OS, info.Arch, info.IP, info.Version, info.PublicIPv4, info.PublicIPv6, formatTime(now), lastIP, clientID)
+		info.Hostname, info.OS, info.Arch, info.IP, info.Version, info.PublicIPv4, info.PublicIPv6, formatTime(now), lastIP, capabilitiesRaw, clientID)
 	if err != nil {
 		return err
 	}

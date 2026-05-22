@@ -48,8 +48,8 @@ func TestTunnelStoreResourceLockConflictRollsBackTunnelInsert(t *testing.T) {
 	if err == nil {
 		t.Fatal("duplicate server listen resource lock should reject insert")
 	}
-	if !strings.Contains(err.Error(), "constraint") {
-		t.Fatalf("expected SQLite constraint error, got %v", err)
+	if !strings.Contains(err.Error(), "ingress resource conflict") {
+		t.Fatalf("expected ingress resource conflict error, got %v", err)
 	}
 
 	if _, ok := store.GetTunnel("client-1", "second"); ok {
