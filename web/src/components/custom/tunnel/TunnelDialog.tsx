@@ -17,7 +17,9 @@ import { useCreateTunnel, useUpdateTunnel } from '@/hooks/use-tunnel-mutations';
 import { currentTargetTypes, getTunnelMutationErrorMessage } from '@/lib/tunnel-model';
 import { bpsToMbpsInput, parseMbpsInputToBps } from '@/lib/format';
 import { useServerStatus } from '@/hooks/use-server-status';
-import type { ProxyType, ProxyConfig } from '@/types';
+import { getClientDisplayName } from '@/lib/client-utils';
+import { cn } from '@/lib/utils';
+import type { Client, ProxyType, ProxyConfig, TunnelTopology } from '@/types';
 
 /** 编辑模式下传入的隧道数据 */
 export interface TunnelDialogEditData extends ProxyConfig {
@@ -27,6 +29,7 @@ export interface TunnelDialogEditData extends ProxyConfig {
 interface TunnelDialogCreateProps {
   mode: 'create';
   clientId: string;
+  clients?: Client[];
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   /** 触发按钮（作为 DialogTrigger children） */
@@ -51,6 +54,9 @@ const typeOptions: { value: ProxyType; label: string }[] = [
 
 interface TunnelFormState {
   name: string;
+  topology: TunnelTopology;
+  ingressClientId: string;
+  bindIp: string;
   type: ProxyType;
   localIp: string;
   localPort: string;
@@ -64,6 +70,11 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
   if (props.mode === 'edit' && props.tunnel) {
     return {
       name: props.tunnel.name,
+      topology: props.tunnel.topology ?? 'server_expose',
+      ingressClientId: props.tunnel.ingress?.client_id ?? '',
+      bindIp: props.tunnel.ingress?.type === 'tcp_listen' || props.tunnel.ingress?.type === 'udp_listen'
+        ? props.tunnel.ingress.config.bind_ip
+        : '127.0.0.1',
       type: props.tunnel.type,
       localIp: props.tunnel.local_ip || '127.0.0.1',
       localPort: String(props.tunnel.local_port || ''),
@@ -76,6 +87,9 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
 
   return {
     name: '',
+    topology: 'server_expose',
+    ingressClientId: '',
+    bindIp: '127.0.0.1',
     type: 'tcp',
     localIp: '127.0.0.1',
     localPort: '',
@@ -143,6 +157,9 @@ function TunnelDialogForm({
   const isEdit = props.mode === 'edit';
   const initialForm = getInitialFormState(props);
   const [name, setName] = useState(initialForm.name);
+  const [topology, setTopology] = useState<TunnelTopology>(initialForm.topology);
+  const [ingressClientId, setIngressClientId] = useState(initialForm.ingressClientId);
+  const [bindIp, setBindIp] = useState(initialForm.bindIp);
   const [type, setType] = useState<ProxyType>(initialForm.type);
   const [localIp, setLocalIp] = useState(initialForm.localIp);
   const [localPort, setLocalPort] = useState(initialForm.localPort);
@@ -151,7 +168,19 @@ function TunnelDialogForm({
   const [ingressBps, setIngressBps] = useState(initialForm.ingressBps);
   const [egressBps, setEgressBps] = useState(initialForm.egressBps);
 
+  const clients = props.mode === 'create' ? (props.clients ?? []) : [];
+  const sourceClient = props.mode === 'create'
+    ? clients.find((client) => client.id === props.clientId)
+    : undefined;
+  const ingressClientOptions = clients.filter((client) => client.id !== (props.mode === 'create' ? props.clientId : ''));
+  const selectedIngressClientId = ingressClientId || ingressClientOptions[0]?.id || '';
+  const isClientToClient = topology === 'client_to_client';
   const isHttp = type === 'http';
+  const selectClassName = cn(
+    'h-8 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-sm outline-none transition-colors',
+    'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
+    'disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50',
+  );
 
   const createTunnel = useCreateTunnel();
   const updateTunnel = useUpdateTunnel();
@@ -183,6 +212,12 @@ function TunnelDialogForm({
         {
           clientId: tunnel.clientId,
           tunnelId: tunnel.id,
+          expected_revision: tunnel.revision,
+          topology: tunnel.topology,
+          ingress_client_id: tunnel.ingress?.client_id,
+          bind_ip: tunnel.ingress?.type === 'tcp_listen' || tunnel.ingress?.type === 'udp_listen'
+            ? tunnel.ingress.config.bind_ip
+            : undefined,
           name,
           type: tunnel.type,
           local_ip: localIp,
@@ -208,6 +243,9 @@ function TunnelDialogForm({
     createTunnel.mutate(
       {
         clientId: props.clientId,
+        topology,
+        ingress_client_id: isClientToClient ? selectedIngressClientId : undefined,
+        bind_ip: isClientToClient ? bindIp : undefined,
         name,
         type,
         local_ip: localIp,
@@ -232,6 +270,9 @@ function TunnelDialogForm({
   const parsedRemotePort = Number.parseInt(remotePort, 10);
   const parsedIngressBps = parseMbpsInputToBps(ingressBps);
   const parsedEgressBps = parseMbpsInputToBps(egressBps);
+  const effectiveTypeOptions = isClientToClient
+    ? typeOptions.filter((opt) => opt.value !== 'http')
+    : typeOptions;
   const isValid = isEdit
     ? Boolean(
       name.trim()
@@ -245,6 +286,7 @@ function TunnelDialogForm({
       name.trim()
       && localPort
       && Number.parseInt(localPort, 10) > 0
+      && (isClientToClient ? selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
       && (isHttp ? domain.trim() : parsedRemotePort > 0)
       && parsedIngressBps !== null
       && parsedEgressBps !== null,
@@ -274,10 +316,61 @@ function TunnelDialogForm({
         </div>
 
         {/* 协议类型 */}
+        {!isEdit && (
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">隧道拓扑</label>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                variant={topology === 'server_expose' ? 'default' : 'outline'}
+                onClick={() => setTopology('server_expose')}
+              >
+                Server 暴露
+              </Button>
+              <Button
+                type="button"
+                variant={topology === 'client_to_client' ? 'default' : 'outline'}
+                onClick={() => {
+                  setTopology('client_to_client');
+                  if (type === 'http') setType('tcp');
+                }}
+              >
+                客户端互访
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {isClientToClient && !isEdit && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">服务来源客户端</label>
+              <Input
+                value={sourceClient ? getClientDisplayName(sourceClient) : props.mode === 'create' ? props.clientId : ''}
+                disabled
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">访问入口客户端</label>
+              <select
+                className={selectClassName}
+                value={selectedIngressClientId}
+                onChange={(e) => setIngressClientId(e.target.value)}
+              >
+                {ingressClientOptions.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {getClientDisplayName(client)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
         <div className="space-y-1.5">
           <label className="text-sm font-medium">协议类型</label>
           <div className="flex gap-2">
-            {typeOptions.map((opt) => (
+            {effectiveTypeOptions.map((opt) => (
               <Button
                 key={opt.value}
                 type="button"
@@ -291,7 +384,7 @@ function TunnelDialogForm({
             ))}
           </div>
           <p className="text-[11px] text-muted-foreground">
-            当前目标类型仅开放 {currentTargetTypes.map((targetType) => targetType === 'tcp_service' ? 'TCP 服务' : 'UDP 服务').join(' / ')}；
+            {isClientToClient ? '客户端互访当前开放 TCP / UDP，传输固定为 Server 中继。' : `当前目标类型仅开放 ${currentTargetTypes.map((targetType) => targetType === 'tcp_service' ? 'TCP 服务' : 'UDP 服务').join(' / ')}；`}
             Unix Socket、静态文件和串口设备暂不在表单中提供。
           </p>
         </div>
@@ -299,7 +392,7 @@ function TunnelDialogForm({
         {/* 本地地址 */}
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">本地 IP</label>
+            <label className="text-sm font-medium">{isClientToClient ? '目标服务地址' : '本地 IP'}</label>
             <Input
               placeholder="127.0.0.1"
               value={localIp}
@@ -307,7 +400,7 @@ function TunnelDialogForm({
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">本地端口</label>
+            <label className="text-sm font-medium">{isClientToClient ? '目标服务端口' : '本地端口'}</label>
             <Input
               type="number"
               placeholder="e.g. 22"
@@ -335,24 +428,41 @@ function TunnelDialogForm({
             </p>
           </div>
         ) : (
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">公网端口</label>
-            <Input
-              type="number"
-              placeholder="e.g. 18080"
-              value={remotePort}
-              onChange={(e) => setRemotePort(e.target.value)}
-              min={1}
-              max={65535}
-            />
-            <p className="text-[11px] text-muted-foreground mt-1.5">
-              可用端口范围：
-              {status?.allowed_ports === undefined
-                ? '加载中…'
-                : status.allowed_ports.length > 0
-                  ? status.allowed_ports.map(p => p.start === p.end ? p.start : `${p.start}-${p.end}`).join(', ')
-                  : '无限制'}
-            </p>
+          <div className={cn('grid gap-3', isClientToClient ? 'grid-cols-2' : 'grid-cols-1')}>
+            {isClientToClient && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">入口监听地址</label>
+                <Input
+                  placeholder="127.0.0.1 / 0.0.0.0"
+                  value={bindIp}
+                  onChange={(e) => setBindIp(e.target.value)}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{isClientToClient ? '入口监听端口' : '公网端口'}</label>
+              <Input
+                type="number"
+                placeholder="e.g. 18080"
+                value={remotePort}
+                onChange={(e) => setRemotePort(e.target.value)}
+                min={1}
+                max={65535}
+              />
+              {!isClientToClient && (
+                <p className="text-[11px] text-muted-foreground mt-1.5">
+                  可用端口范围：
+                  {status?.allowed_ports === undefined
+                    ? '加载中…'
+                    : status.allowed_ports.length > 0
+                      ? status.allowed_ports.map(p => p.start === p.end ? p.start : `${p.start}-${p.end}`).join(', ')
+                      : '无限制'}
+                </p>
+              )}
+            </div>
           </div>
         )}
 

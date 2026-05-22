@@ -185,13 +185,31 @@ func (s *Server) handleUnifiedTunnelAction(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI) {
 	if current.Topology == tunnelTopologyClientToClient {
-		config, err := s.resumeOfflineManagedTunnel(current.OwnerClientID, current.ID)
+		stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID)
 		if err != nil {
 			status, payload := tunnelMutationErrorStatusAndBody(err)
 			encodeJSON(w, status, payload)
 			return
 		}
-		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed", "tunnel": specFromStoredTunnelConfig(config, s)})
+		if err := s.store.UpdateStates(current.OwnerClientID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateOffline, ""); err != nil {
+			status, payload := tunnelMutationErrorStatusAndBody(err)
+			encodeJSON(w, status, payload)
+			return
+		}
+		stored.DesiredState = protocol.ProxyDesiredStateRunning
+		stored.RuntimeState = protocol.ProxyRuntimeStateOffline
+		if err := s.reconcileClientRelayTunnel(stored); err != nil {
+			status, payload := tunnelMutationErrorStatusAndBody(err)
+			encodeJSON(w, status, payload)
+			return
+		}
+		stored, err = s.store.GetTunnelByIDE(current.OwnerClientID, current.ID)
+		if err != nil {
+			status, payload := tunnelMutationErrorStatusAndBody(err)
+			encodeJSON(w, status, payload)
+			return
+		}
+		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed", "tunnel": specFromStoredTunnel(stored, s)})
 		return
 	}
 	if client, ok := s.loadLiveClient(current.OwnerClientID); ok {
@@ -223,6 +241,19 @@ func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAP
 
 func (s *Server) stopUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI) {
 	if current.Topology == tunnelTopologyClientToClient {
+		stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID)
+		if err != nil {
+			status, payload := tunnelMutationErrorStatusAndBody(err)
+			encodeJSON(w, status, payload)
+			return
+		}
+		s.c2c.delete(stored.ID)
+		if ingressClient, ok := s.loadLiveClient(stored.Ingress.ClientID); ok {
+			_ = s.notifyClientTunnelUnprovision(ingressClient, stored.ID, stored.Revision, protocol.DataStreamRoleIngress, "stopped")
+		}
+		if targetClient, ok := s.loadLiveClient(stored.Target.ClientID); ok {
+			_ = s.notifyClientTunnelUnprovision(targetClient, stored.ID, stored.Revision, protocol.DataStreamRoleTarget, "stopped")
+		}
 		config, err := s.stopOfflineManagedTunnel(current.OwnerClientID, current.ID)
 		if err != nil {
 			status, payload := tunnelMutationErrorStatusAndBody(err)
@@ -451,6 +482,15 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 	}
 
 	if current.Topology == tunnelTopologyClientToClient {
+		if stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID); err == nil {
+			s.c2c.delete(stored.ID)
+			if ingressClient, ok := s.loadLiveClient(stored.Ingress.ClientID); ok {
+				_ = s.notifyClientTunnelUnprovision(ingressClient, stored.ID, stored.Revision, protocol.DataStreamRoleIngress, "deleted")
+			}
+			if targetClient, ok := s.loadLiveClient(stored.Target.ClientID); ok {
+				_ = s.notifyClientTunnelUnprovision(targetClient, stored.ID, stored.Revision, protocol.DataStreamRoleTarget, "deleted")
+			}
+		}
 		if err := s.deleteOfflineManagedTunnel(current.OwnerClientID, current.ID); err != nil {
 			status, payload := tunnelMutationErrorStatusAndBody(err)
 			encodeJSON(w, status, payload)
@@ -718,6 +758,12 @@ func (s *Server) createUnifiedStoredTunnel(req tunnelCreateRequestAPI) (StoredTu
 	if err := s.store.AddTunnel(stored); err != nil {
 		return StoredTunnel{}, err
 	}
+	if err := s.reconcileClientRelayTunnel(stored); err != nil {
+		return StoredTunnel{}, err
+	}
+	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
+		stored = reloaded
+	}
 	s.emitTunnelChanged(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "created")
 	return stored, nil
 }
@@ -753,6 +799,12 @@ func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevisi
 
 	if err := s.store.ReplaceTunnelByID(current.OwnerClientID, current.ID, expectedRevision, stored); err != nil {
 		return StoredTunnel{}, err
+	}
+	if err := s.reconcileClientRelayTunnel(stored); err != nil {
+		return StoredTunnel{}, err
+	}
+	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
+		stored = reloaded
 	}
 	s.emitTunnelChanged(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "updated")
 	return stored, nil

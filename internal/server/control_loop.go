@@ -186,6 +186,21 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 }
 
 func (s *Server) handleProxyProvisionAckMessage(client *ClientConn, msg protocol.Message) {
+	var unifiedAck protocol.TunnelProvisionAck
+	if err := msg.ParsePayload(&unifiedAck); err == nil && unifiedAck.TunnelID != "" {
+		resp := provisionAckResult{
+			name:     unifiedAck.TunnelID,
+			accepted: unifiedAck.Accepted,
+			message:  unifiedAck.Message,
+			revision: uint64(unifiedAck.Revision),
+		}
+		if s.resolveTunnelProvisionAckWaiter(client.ID, client.generation, resp) {
+			return
+		}
+		log.Printf("📩 Received unmatched tunnel provisioning ack [%s]: tunnel_id=%s role=%s accepted=%v", client.ID, unifiedAck.TunnelID, unifiedAck.Role, unifiedAck.Accepted)
+		return
+	}
+
 	var ack protocol.ProxyProvisionAck
 	if err := msg.ParsePayload(&ack); err != nil {
 		log.Printf("⚠️ Failed to parse provisioning ack [%s]: %v", client.ID, err)

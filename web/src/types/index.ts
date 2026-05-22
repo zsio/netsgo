@@ -241,6 +241,9 @@ export interface ProxyConfig {
 export interface CreateTunnelInput {
   clientId: string;
   name: string;
+  topology?: TunnelTopology;
+  ingress_client_id?: string;
+  bind_ip?: string;
   type: ProxyType;
   local_ip: string;
   local_port: number;
@@ -255,6 +258,9 @@ export interface UpdateTunnelInput {
   tunnelId: string;
   expected_revision?: number;
   name: string;
+  topology?: TunnelTopology;
+  ingress_client_id?: string;
+  bind_ip?: string;
   type: ProxyType;
   local_ip: string;
   local_port: number;

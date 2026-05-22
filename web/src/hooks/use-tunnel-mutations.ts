@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, api, tunnelApi } from '@/lib/api';
-import { buildTunnelMutationPayload, buildTunnelSpecCreateRequest } from '@/lib/tunnel-model';
-import type { CreateTunnelInput, TunnelClientRole, UpdateTunnelInput } from '@/types';
+import {
+  buildClientToClientTunnelSpecCreateRequest,
+  buildTunnelMutationPayload,
+  buildTunnelSpecCreateRequest,
+} from '@/lib/tunnel-model';
+import type { CreateTunnelInput, TunnelClientRole, TunnelTopology, UpdateTunnelInput } from '@/types';
 
 function invalidateTunnelQueries(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ['clients'] });
@@ -32,15 +36,50 @@ function shouldUseLegacyTunnelEndpoint(error: unknown) {
   return error instanceof ApiError && (error.status === 404 || error.status === 405);
 }
 
+function buildTunnelSpec(data: {
+  topology?: TunnelTopology;
+  ingress_client_id?: string;
+  bind_ip?: string;
+  clientId: string;
+  name: string;
+  type: CreateTunnelInput['type'];
+  local_ip: string;
+  local_port: number;
+  remote_port?: number;
+  domain?: string;
+  ingress_bps?: number;
+  egress_bps?: number;
+}) {
+  if (data.topology === 'client_to_client') {
+    return buildClientToClientTunnelSpecCreateRequest({
+      ingressClientId: data.ingress_client_id ?? '',
+      targetClientId: data.clientId,
+      name: data.name,
+      type: data.type,
+      local_ip: data.local_ip,
+      local_port: data.local_port,
+      remote_port: data.remote_port,
+      domain: data.domain,
+      bind_ip: data.bind_ip ?? '',
+      ingress_bps: data.ingress_bps,
+      egress_bps: data.egress_bps,
+    });
+  }
+  return buildTunnelSpecCreateRequest(data);
+}
+
 export function useCreateTunnel() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (data: CreateTunnelInput) => {
       try {
-        return await tunnelApi.create(buildTunnelSpecCreateRequest(data));
+        return await tunnelApi.create(buildTunnelSpec(data));
       } catch (error) {
         if (!shouldUseLegacyTunnelEndpoint(error)) {
+          throw error;
+        }
+        if (data.topology === 'client_to_client') {
           throw error;
         }
         try {
@@ -122,7 +161,7 @@ export function useUpdateTunnel() {
       try {
         return await tunnelApi.update(data.tunnelId, {
           expected_revision: data.expected_revision,
-          spec: buildTunnelSpecCreateRequest(data),
+          spec: buildTunnelSpec(data),
         });
       } catch (error) {
         if (!shouldUseLegacyTunnelEndpoint(error)) {

@@ -57,6 +57,7 @@ type Client struct {
 	dataSession      *yamux.Session // yamux session for the data channel
 	dataMu           sync.RWMutex
 	proxies          sync.Map // proxy_name -> ProxyNewRequest
+	tunnels          sync.Map // tunnel_id:role -> *clientTunnelRuntime
 	useTLS           bool
 	startTime        time.Time // Program start time, used to calculate process uptime
 	publicIPv4       string    // Cached public IPv4 address
@@ -484,6 +485,13 @@ func (c *Client) cleanup() {
 
 	c.proxies.Range(func(key, _ any) bool {
 		c.proxies.Delete(key)
+		return true
+	})
+	c.tunnels.Range(func(key, value any) bool {
+		if rt, ok := value.(*clientTunnelRuntime); ok {
+			rt.close()
+		}
+		c.tunnels.Delete(key)
 		return true
 	})
 
@@ -1108,6 +1116,30 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			// Heartbeat reply, ignore.
 
 		case protocol.MsgTypeProxyProvision:
+			var meta struct {
+				TunnelID string `json:"tunnel_id"`
+			}
+			if err := msg.ParsePayload(&meta); err == nil && meta.TunnelID != "" {
+				var req protocol.TunnelProvisionRequest
+				if err := msg.ParsePayload(&req); err != nil {
+					log.Printf("⚠️ Failed to parse tunnel provision instruction: %v", err)
+					continue
+				}
+				ack := c.handleTunnelProvision(rt, req)
+				resp, _ := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, ack)
+				if err := rt.writeJSON(resp); err != nil {
+					log.Printf("⚠️ Failed to send tunnel provisioning ACK [%s]: %v", req.TunnelID, err)
+					c.failRuntime(rt, "tunnel_provision_ack_write_failed")
+					return
+				}
+				if ack.Accepted {
+					log.Printf("✅ Accepted tunnel provisioning config from server [%s] role=%s", req.TunnelID, req.Role)
+				} else {
+					log.Printf("⚠️ Rejected tunnel provisioning config from server [%s] role=%s: %s", req.TunnelID, req.Role, ack.Message)
+				}
+				continue
+			}
+
 			// Sent by the server: asks the client to accept/provision a proxy tunnel configuration.
 			var req protocol.ProxyProvisionRequest
 			if err := msg.ParsePayload(&req); err != nil {
@@ -1147,6 +1179,20 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			}
 
 		case protocol.MsgTypeProxyClose:
+			var meta struct {
+				TunnelID string `json:"tunnel_id"`
+			}
+			if err := msg.ParsePayload(&meta); err == nil && meta.TunnelID != "" {
+				var req protocol.TunnelUnprovisionRequest
+				if err := msg.ParsePayload(&req); err != nil {
+					log.Printf("⚠️ Failed to parse tunnel unprovision instruction: %v", err)
+					continue
+				}
+				c.handleTunnelUnprovision(req)
+				log.Printf("🔌 Tunnel unprovisioned: %s role=%s (reason: %s)", req.TunnelID, req.Role, req.Reason)
+				continue
+			}
+
 			// Sent by the server: close the proxy tunnel.
 			var req protocol.ProxyCloseRequest
 			if err := msg.ParsePayload(&req); err != nil {

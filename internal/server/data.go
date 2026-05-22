@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/hashicorp/yamux"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
@@ -140,6 +141,8 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 		go s.restoreTunnels(client)
 	}
 
+	go s.acceptClientOpenedDataStreams(client, session)
+
 	<-session.CloseChan()
 
 	client.dataMu.Lock()
@@ -165,6 +168,24 @@ func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) err
 		_ = conn.SetWriteDeadline(time.Time{})
 	}()
 	return conn.WriteMessage(websocket.BinaryMessage, []byte{status})
+}
+
+func (s *Server) acceptClientOpenedDataStreams(client *ClientConn, session *yamux.Session) {
+	for {
+		stream, err := session.AcceptStream()
+		if err != nil {
+			return
+		}
+		go func() {
+			header, err := protocol.DecodeDataStreamHeader(stream)
+			if err != nil {
+				log.Printf("⚠️ data channel: decode client-opened stream header failed [%s]: %v", client.ID, err)
+				_ = stream.Close()
+				return
+			}
+			s.handleClientOpenedDataStream(client, stream, header)
+		}()
+	}
 }
 
 // openStreamToClient opens a new server-relay stream on the client's yamux session and

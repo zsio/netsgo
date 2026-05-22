@@ -47,6 +47,7 @@ type Server struct {
 	publicIPv6                  string          // cached public IPv6
 	publicIPMu                  sync.RWMutex    // protects public IP cache
 	tunnels                     *TunnelRegistry // tunnel provision wait and timeout
+	c2c                         *clientRelayRegistry
 	releaseIndexCache           *releaseIndexCache
 	updateCapabilityCache       *updateCapabilityCache // cached server install capability for status API
 }
@@ -87,6 +88,7 @@ func New(port int) *Server {
 		auth:               newAuthService(),
 		sessions:           newSessionManager(),
 		tunnels:            newTunnelRegistry(),
+		c2c:                newClientRelayRegistry(),
 		startTime:          time.Now(),
 		done:               make(chan struct{}),
 	}

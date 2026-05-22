@@ -9,9 +9,10 @@ import { getClientDisplayName } from '@/lib/client-utils';
 
 interface TunnelTableProps {
   client: Client;
+  clients?: Client[];
 }
 
-export function TunnelTable({ client }: TunnelTableProps) {
+export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const {
     data: trafficData,
@@ -82,6 +83,7 @@ export function TunnelTable({ client }: TunnelTableProps) {
       <TunnelDialog
         mode="create"
         clientId={client.id}
+        clients={clients}
         open={createOpen}
         onOpenChange={setCreateOpen}
         hideTrigger
