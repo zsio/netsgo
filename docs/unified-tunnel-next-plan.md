@@ -93,6 +93,17 @@ Web 规则：
 - 选择访问入口客户端时，应排除当前选中的服务来源客户端。
 - 服务端仍必须做同样校验，不能只依赖前端。
 
+## 客户端身份和能力
+
+所有出现在 `ingress.client_id` 或 `target.client_id` 的客户端都必须是服务端已知的稳定客户端。`server_expose` 的 ingress 在服务端，不需要也不能提交 ingress client ID。
+
+capabilities 校验按角色执行：
+
+- `server_expose`：只校验服务来源客户端的 target 能力，例如 `tcp_service`、`udp_service`。
+- `client_to_client`：访问入口客户端校验 ingress 能力，例如 `tcp_listen`、`udp_listen`；服务来源客户端校验 target 能力，例如 `tcp_service`、`udp_service`。
+- 服务端自己的 TCP/UDP/HTTP 入口能力不走客户端 capabilities，而由服务端配置校验和 preflight 负责。
+- 没有 capabilities 的客户端视为能力不满足。
+
 ## 持久化边界
 
 持久化的是配置和用户意图，不是旧运行结果。
@@ -108,6 +119,8 @@ Web 规则：
 - desired state
 - revision
 - 创建/更新时间
+
+`revision` 是隧道配置版本号。每次配置更新都必须递增；客户端 ACK、runtime report 和数据流头都必须带当前 revision。旧 revision 的 ACK、report 或数据流不能影响当前配置。
 
 不作为权威持久化：
 
@@ -157,6 +170,8 @@ issues 不写 SQLite。它们是运行态内存快照加实时计算结果：
 - 尝试失败：`error`
 
 `active` 不代表目标服务可达，也不代表已经跑过测试流量。它只代表 NetsGo 自己负责的入口、控制通道、数据通道和 provisioning 都 ready。
+
+active 的进入顺序必须避免循环定义：先满足除入口资源外的前置条件，再由 reconcile 尝试持有入口资源；入口端口监听或 HTTP 路由注册成功后，隧道才进入 `active`。如果入口资源持有失败，隧道进入 `error` 并写入内存 issues。
 
 不能主动建空连接验证 relay path。实际 relay stream 在真实流量到来时建立。
 
@@ -269,7 +284,9 @@ issue 摘要优先级：
 - 任意一端失败或超时，已成功的一端必须回滚 unprovision。
 - 只有所有必要条件 ready 后，入口才保持开放。
 
-server-expose HTTP 在目标客户端离线时不注册 host/domain 路由。外部请求按“没有此隧道”处理，沿用现有未匹配 host 逻辑。
+入口资源持有顺序：先确认必要客户端在线、数据通道可用、capabilities 满足，并完成当前 revision 的 provisioning；然后尝试持有入口资源；入口资源持有成功后才进入 `active`。如果后续 reconcile 发现 active 隧道的 listener、HTTP route 或客户端本地 listener 句柄已经不存在，必须退出 active 并重新收敛。
+
+server-expose HTTP 在目标客户端离线时不注册 host/domain 路由。外部请求按“没有此隧道”处理，不新增 offline tunnel 专属响应；具体返回完全等同于未配置该 host。
 
 server-expose TCP/UDP 未 active 时不监听端口，外部表现为连接失败或端口未开放。
 
@@ -384,6 +401,8 @@ preflight 失败不写入 runtime issues，因为创建/更新失败时没有新
 - 服务端启动
 - 每分钟定时重试
 
+每次 reconcile 都必须检查 active 隧道的运行态句柄是否仍然存在，例如服务端 TCP/UDP listener、HTTP route、客户端入口 listener、目标端当前 revision provisioning 状态。句柄丢失说明隧道不再 active，必须重新收敛；但 reconcile 仍不得主动探测目标业务服务。
+
 自动重试规则：
 
 - 只处理 `desired_state = running` 的隧道。
@@ -414,8 +433,10 @@ preflight 失败不写入 runtime issues，因为创建/更新失败时没有新
 
 server-expose：
 
-- 服务端持有入口资源。
 - 服务来源客户端负责接收 relay stream 或 UDP frame，并连接目标服务地址。
+- 服务端负责持有入口资源。
+- provision 顺序是：先向服务来源客户端下发当前 revision 并等待 ACK；ACK 成功后服务端再监听 TCP/UDP 端口或注册 HTTP route；任一步失败都回滚已经完成的运行态。
+- 如果目标客户端离线或数据通道不可用，服务端不得提前持有入口资源。
 
 client-to-client：
 
@@ -450,6 +471,7 @@ UDP client-to-client 数据流：
 - UDP 正反向流量都要保留准确的隧道身份。
 - 每条隧道的 UDP 状态要有边界，不能无上限增长。
 - stop、delete、update 或客户端断线必须关闭 UDP listener 并清理运行态。
+- UDP 会话状态必须有明确边界：默认每条隧道最多保留 4096 个 UDP association，单个 association 空闲 2 分钟后清理；超过上限时优先清理最久未使用的 association。
 
 断线和请求失败：
 
@@ -474,7 +496,9 @@ API 行为：
 - 统一 create/update 继续拒绝 client-to-client HTTP ingress。
 - 统一 create/update 继续拒绝 direct transport。
 - create/update 失败时返回字段级错误，包含 `field`、`code` 和可展示 message。
-- API 返回的 runtime state 和 issues 必须来自当前事实与内存运行态，不盲信数据库旧 runtime_state。
+- API 继续返回 `runtime_state` 字段，但该字段必须由当前事实与内存运行态实时计算得出，不盲信数据库旧 runtime_state。
+- API 返回的 `issues` 同样来自实时计算和内存运行态，不从数据库读取旧 issues。
+- 字段级错误 code 应稳定复用，至少覆盖：`unknown_client`、`capability_not_supported`、`same_ingress_and_target_client`、`invalid_bind_ip`、`ingress_resource_conflict`、`ingress_preflight_timeout`、`ingress_preflight_rejected`、`ingress_port_in_use`、`direct_transport_unavailable`、`unsupported_topology`、`unsupported_endpoint_type`。
 - 按客户端角色查询时：
   - owner 能看到自己拥有的服务来源侧隧道。
   - ingress 能看到自己作为访问入口的隧道。
@@ -505,7 +529,7 @@ API 行为：
 - server-expose 和 client-to-client 走同一套 reconcile 入口。
 - owner 派生为服务来源客户端。
 - client-to-client 服务来源客户端和访问入口客户端相同时被拒绝。
-- 两端都必须是服务端已知客户端。
+- 配置中出现的客户端必须是服务端已知稳定客户端，server-expose 不要求 ingress client。
 - 客户端 capabilities 不满足时创建失败。
 - client-to-client 入口 `bind_ip` 缺失或非 IPv4 时创建失败。
 - server-expose TCP/UDP 服务端端口冲突或被系统占用时创建失败。
@@ -517,7 +541,7 @@ API 行为：
 - 访问入口客户端离线时允许创建，并显示 offline。
 - server-expose 服务来源客户端离线时允许创建，并显示 offline。
 - 创建成功不等待目标客户端联通。
-- 两端都在线时 provisioning 成功，隧道进入 active。
+- 必要客户端在线且 provisioning 成功，入口资源持有成功后，隧道进入 active。
 - 任意必要客户端离线时隧道不能进入 active，且旧在线 issues 不展示。
 - 控制通道在线但数据通道未就绪时显示 offline。
 - capabilities 不满足时显示 error，不进入 provisioning。
