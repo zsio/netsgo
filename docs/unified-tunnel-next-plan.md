@@ -520,6 +520,180 @@ API 行为：
 - 问题详情放在弹窗、popover、tooltip 或类似 tip 中。
 - peer-direct 设计完成前，direct transport 控制项应隐藏或禁用。
 
+## 实施路线
+
+推荐按下面顺序实现，避免先写数据面导致控制面和状态语义返工。
+
+### 1. 协议和共享模型
+
+先补齐协议层，确保 server、client、web 都使用同一套字段和消息语义。
+
+主要落点：
+
+- `pkg/protocol/types.go`
+- `pkg/protocol/message.go`
+- `pkg/protocol/stream_header.go`
+- `web/src/types/`
+- `web/src/lib/tunnel-model.ts`
+
+工作内容：
+
+- 明确 `TunnelSpec`、participant role、runtime issue、transport runtime 的字段。
+- 增加或补齐 provision、unprovision、runtime report、preflight request/response 消息。
+- 确认 `DataStreamHeader` 携带 tunnel ID、revision、source role、target role、transport，并作为唯一数据流路由协议头。
+- 定义稳定错误 code，供 API 和前端复用。
+
+### 2. 服务端运行态内存模型
+
+先建立统一 runtime registry，不直接把旧 `runtime_state` 当权威。
+
+主要落点：
+
+- `internal/server/server.go`
+- `internal/server/tunnel_registry.go`
+- `internal/server/tunnel_ready.go`
+- `internal/server/tunnel_manager.go`
+- `internal/server/store.go`
+
+工作内容：
+
+- 为每条 tunnel 维护内存 runtime：当前 revision、参与端 ACK 状态、入口资源句柄、issues、pending waiter。
+- API 返回时用持久化配置 + 当前客户端连接事实 + 内存 runtime 计算 `runtime_state` 和 `issues`。
+- 服务端启动后不恢复旧 active，所有 running 隧道等待 reconcile 重新收敛。
+
+### 3. 统一 Reconcile
+
+把 server-expose 和 client-to-client 都接到同一套 reconcile 入口。
+
+主要落点：
+
+- `internal/server/tunnel_manager.go`
+- `internal/server/proxy.go`
+- `internal/server/control_loop.go`
+- `internal/server/session_manager.go`
+- `internal/server/data.go`
+
+工作内容：
+
+- 为创建、更新、启动、停止、删除、客户端上线/断线、数据通道变化、ACK、runtime report、服务端启动、每分钟 retry 接入同一套 reconcile。
+- 实现状态优先级：idle、offline、capability error、pending、runtime error、active。
+- 实现半成功回滚和 active 句柄检查。
+- 确保入口资源只在整体 active 条件满足时持有。
+
+### 4. Preflight 和入口资源管理
+
+先统一入口资源校验，再真正启动入口。
+
+主要落点：
+
+- `internal/server/unified_tunnel_api.go`
+- `internal/server/proxy_validation.go`
+- `internal/server/proxy.go`
+- `internal/client/client.go`
+- `internal/client/udp_handler.go`
+
+工作内容：
+
+- server-expose TCP/UDP：服务端检查端口配置冲突和真实监听可用性。
+- server-expose HTTP：服务端检查 host/domain 路由唯一性。
+- client-to-client TCP/UDP：服务端通过控制通道向访问入口客户端发送 preflight，客户端临时 bind 后释放。
+- preflight 失败作为 create/update 字段级错误返回，不写 runtime issues。
+
+### 5. Server-Expose 迁入统一机制
+
+先把现有能力迁入统一机制，避免新旧两套并存。
+
+主要落点：
+
+- `internal/server/proxy.go`
+- `internal/server/tunnel_manager.go`
+- `internal/server/http_tunnel*.go`
+- `internal/server/data.go`
+- `internal/client/client.go`
+
+工作内容：
+
+- server-expose TCP/UDP/HTTP 创建成功只表示配置保存成功，不等待目标联通。
+- 目标客户端 ACK 成功后，服务端再监听端口或注册 HTTP route。
+- 目标客户端离线时释放入口资源。
+- HTTP relay path 不可用时返回 502；offline 未注册 host 时按未配置 host 处理。
+
+### 6. Client-To-Client TCP
+
+在统一控制面和 server-expose 稳定后实现 TCP client-to-client。
+
+主要落点：
+
+- `internal/client/client.go`
+- `internal/server/data.go`
+- `pkg/mux/`
+- `internal/server/traffic_store.go`
+
+工作内容：
+
+- 访问入口客户端按 provision 启动本地 TCP listener。
+- 真实连接到来时，访问入口客户端携带 `DataStreamHeader` 打开到服务端的数据流。
+- 服务端校验 tunnel ID、revision、role、transport 后打开到服务来源客户端的数据流。
+- 服务来源客户端连接目标 TCP 服务并转发字节。
+- 目标服务连接失败只关闭当前连接并打日志，不写 issues。
+
+### 7. Client-To-Client UDP
+
+TCP 稳定后实现 UDP，避免同时处理两套数据面复杂度。
+
+主要落点：
+
+- `internal/client/udp_handler.go`
+- `internal/server/data.go`
+- `pkg/mux/`
+- `internal/server/traffic_store.go`
+
+工作内容：
+
+- 访问入口客户端监听 UDP 并封装 datagram。
+- 服务端按 tunnel ID/revision/role 转发 UDP frame。
+- 服务来源客户端把 datagram 发给目标 UDP 服务并处理反向流量。
+- 实现每条隧道最多 4096 个 UDP association、空闲 2 分钟清理、超过上限清理最久未使用 association。
+
+### 8. API 和前端
+
+后端语义稳定后再暴露完整管理体验。
+
+主要落点：
+
+- `internal/server/unified_tunnel_api.go`
+- `web/src/lib/api.ts`
+- `web/src/lib/tunnel-model.ts`
+- `web/src/hooks/`
+- `web/src/components/custom/tunnel/`
+
+工作内容：
+
+- create/update 支持 server-expose 和 client-to-client 的统一 payload。
+- 字段级错误落到正确表单字段。
+- 创建/编辑表单使用“服务来源客户端、访问入口客户端、目标服务地址、入口监听地址”这套用户词汇。
+- 列表展示状态 badge、最高优先级问题摘要和 `+N`。
+- 完整 issues 放在弹窗、popover、tooltip 或类似 tip 中。
+
+### 9. 验证和回归
+
+最后按风险从小到大补测试。
+
+主要落点：
+
+- `internal/server/*_test.go`
+- `internal/client/*_test.go`
+- `pkg/protocol/*_test.go`
+- `web/src/**/*.test.ts*`
+- `test/e2e/`
+
+工作内容：
+
+- 先跑协议、存储、API、reconcile 单元测试。
+- 再跑 server/client/protocol 相关包测试。
+- 再跑前端 build 和相关组件测试。
+- 最后覆盖直连、nginx、caddy 三类路径。
+
 ## 验证计划
 
 后端最小测试：
