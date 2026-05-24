@@ -205,3 +205,131 @@ func TestClientRelayRejectsStaleRevision(t *testing.T) {
 		t.Fatal("stale relay stream was not rejected")
 	}
 }
+
+func TestClientRelayRejectsWrongDirection(t *testing.T) {
+	stored := testClientRelayStoredTunnel(t)
+	header := testClientRelayHeader(stored)
+	header.Direction = "target_to_ingress"
+
+	if err := validateClientRelayHeader(stored, stored.Ingress.ClientID, header); err == nil {
+		t.Fatal("wrong relay direction should be rejected")
+	}
+}
+
+func TestClientRelayUDPTransfersFrames(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	stored := testClientRelayStoredTunnel(t)
+	stored.Type = protocol.ProxyTypeUDP
+	stored.Ingress.Type = protocol.IngressTypeUDPListen
+	stored.Target.Type = protocol.TargetTypeUDPService
+	mustAddStableTunnel(t, s.store, stored)
+	s.c2c.set(stored)
+
+	targetPipe, serverPipe := net.Pipe()
+	defer mustClose(t, targetPipe)
+	defer mustClose(t, serverPipe)
+	targetClientSession, err := mux.NewClientSession(targetPipe, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("target client session: %v", err)
+	}
+	defer mustClose(t, targetClientSession)
+	serverTargetSession, err := mux.NewServerSession(serverPipe, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("server target session: %v", err)
+	}
+	defer mustClose(t, serverTargetSession)
+
+	targetClient := &ClientConn{
+		ID:          stored.Target.ClientID,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverTargetSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(targetClient.ID, targetClient)
+
+	ingressClient := &ClientConn{
+		ID:         stored.Ingress.ClientID,
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+
+	targetStreamCh := make(chan net.Conn, 1)
+	go func() {
+		stream, err := targetClientSession.AcceptStream()
+		if err != nil {
+			targetStreamCh <- nil
+			return
+		}
+		targetStreamCh <- stream
+	}()
+
+	ingressStream, relayStream := net.Pipe()
+	defer mustClose(t, ingressStream)
+	defer mustClose(t, relayStream)
+
+	done := make(chan struct{})
+	go func() {
+		s.handleClientOpenedDataStream(ingressClient, relayStream, testClientRelayHeader(stored))
+		close(done)
+	}()
+
+	var targetStream net.Conn
+	select {
+	case targetStream = <-targetStreamCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for target stream")
+	}
+	if targetStream == nil {
+		t.Fatal("target stream failed to open")
+	}
+	defer mustClose(t, targetStream)
+
+	header, err := protocol.DecodeDataStreamHeader(targetStream)
+	if err != nil {
+		t.Fatalf("decode target stream header: %v", err)
+	}
+	if header.TunnelID != stored.ID || header.Revision != stored.Revision {
+		t.Fatalf("target header identity mismatch: %+v", header)
+	}
+	if header.SourceRole != protocol.DataStreamRoleServer || header.TargetRole != protocol.DataStreamRoleTarget {
+		t.Fatalf("target header roles mismatch: %+v", header)
+	}
+
+	payload := []byte("udp packet to target")
+	if err := mux.WriteUDPFrame(ingressStream, payload); err != nil {
+		t.Fatalf("write ingress udp frame: %v", err)
+	}
+	mustSetReadDeadline(t, targetStream, time.Now().Add(2*time.Second))
+	got, err := mux.ReadUDPFrame(targetStream)
+	if err != nil {
+		t.Fatalf("read target udp frame: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("target udp payload mismatch: got %q want %q", got, payload)
+	}
+
+	response := []byte("udp reply to ingress")
+	if err := mux.WriteUDPFrame(targetStream, response); err != nil {
+		t.Fatalf("write target udp frame: %v", err)
+	}
+	mustSetReadDeadline(t, ingressStream, time.Now().Add(2*time.Second))
+	reply, err := mux.ReadUDPFrame(ingressStream)
+	if err != nil {
+		t.Fatalf("read ingress udp frame: %v", err)
+	}
+	if !bytes.Equal(reply, response) {
+		t.Fatalf("ingress udp payload mismatch: got %q want %q", reply, response)
+	}
+
+	_ = ingressStream.Close()
+	_ = targetStream.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("udp relay did not stop after streams closed")
+	}
+}

@@ -12,6 +12,7 @@ func (s *Server) resolveTunnelProvisionAckWaiter(clientID string, generation uin
 
 func (s *Server) cancelTunnelProvisionAckWaiters(clientID string, generation uint64) {
 	s.tunnels.cancelProvisionAckWaiters(clientID, generation)
+	s.tunnels.cancelPreflightWaiters(clientID, generation)
 }
 
 func (s *Server) waitForTunnelProvisionAck(client *ClientConn, req protocol.ProxyNewRequest) (provisionAckResult, error) {

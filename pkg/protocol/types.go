@@ -104,6 +104,20 @@ type TransportRuntime struct {
 	LastDirectError string    `json:"last_direct_error,omitempty"`
 }
 
+// TunnelIssue records a current NetsGo-owned runtime/provisioning/resource
+// problem for a tunnel. Issues are projected from live facts and in-memory
+// runtime state; they are not persisted as authoritative storage state.
+type TunnelIssue struct {
+	Code       string          `json:"code"`
+	Scope      string          `json:"scope"`
+	ClientID   string          `json:"client_id,omitempty"`
+	Severity   string          `json:"severity"`
+	Message    string          `json:"message"`
+	Retryable  bool            `json:"retryable"`
+	ObservedAt time.Time       `json:"observed_at"`
+	Details    json.RawMessage `json:"details,omitempty"`
+}
+
 // TunnelSpec is the canonical tunnel payload used by API, protocol, storage,
 // runtime and events.
 type TunnelSpec struct {
@@ -122,9 +136,10 @@ type TunnelSpec struct {
 
 	P2P P2PState `json:"p2p"`
 
-	DesiredState string `json:"desired_state"`
-	RuntimeState string `json:"runtime_state"`
-	Error        string `json:"error,omitempty"`
+	DesiredState string        `json:"desired_state"`
+	RuntimeState string        `json:"runtime_state"`
+	Error        string        `json:"error,omitempty"`
+	Issues       []TunnelIssue `json:"issues,omitempty"`
 
 	Participants TunnelParticipants `json:"participants,omitempty"`
 	Transport    TransportRuntime   `json:"transport,omitempty"`
@@ -300,10 +315,22 @@ const (
 
 // Tunnel mutation error code constants used by the admin HTTP API.
 const (
-	TunnelMutationErrorCodeDomainInvalid      = "domain_invalid"
-	TunnelMutationErrorCodeServerAddrConflict = "server_addr_conflict"
-	TunnelMutationErrorCodeHTTPTunnelConflict = "http_tunnel_conflict"
-	TunnelMutationErrorCodeTunnelBusy         = "tunnel_busy"
+	TunnelMutationErrorCodeDomainInvalid              = "domain_invalid"
+	TunnelMutationErrorCodeServerAddrConflict         = "server_addr_conflict"
+	TunnelMutationErrorCodeHTTPTunnelConflict         = "http_tunnel_conflict"
+	TunnelMutationErrorCodeTunnelBusy                 = "tunnel_busy"
+	TunnelMutationErrorCodeUnknownClient              = "unknown_client"
+	TunnelMutationErrorCodeCapabilityNotSupported     = "capability_not_supported"
+	TunnelMutationErrorCodeSameIngressAndTargetClient = "same_ingress_and_target_client"
+	TunnelMutationErrorCodeInvalidBindIP              = "invalid_bind_ip"
+	TunnelMutationErrorCodeIngressResourceConflict    = "ingress_resource_conflict"
+	TunnelMutationErrorCodeIngressPreflightTimeout    = "ingress_preflight_timeout"
+	TunnelMutationErrorCodeIngressPreflightRejected   = "ingress_preflight_rejected"
+	TunnelMutationErrorCodeIngressPortInUse           = "ingress_port_in_use"
+	TunnelMutationErrorCodeDirectTransportUnavailable = "direct_transport_unavailable"
+	TunnelMutationErrorCodeUnsupportedTopology        = "unsupported_topology"
+	TunnelMutationErrorCodeUnsupportedEndpointType    = "unsupported_endpoint_type"
+	TunnelMutationErrorCodeRevisionConflict           = "revision_conflict"
 )
 
 // WebSocket 子协议常量

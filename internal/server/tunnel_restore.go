@@ -84,7 +84,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 		case st.DesiredState == protocol.ProxyDesiredStateRunning &&
 			(st.RuntimeState == protocol.ProxyRuntimeStateExposed || st.RuntimeState == protocol.ProxyRuntimeStatePending || st.RuntimeState == protocol.ProxyRuntimeStateOffline):
 			log.Printf("🔄 restoring tunnel: %s (:%d → %s:%d)", st.Name, st.RemotePort, st.LocalIP, st.LocalPort)
-			if err := s.restoreManagedTunnel(client, st); err != nil {
+			if err := s.reconcileStoredUnifiedTunnel(st, "restore"); err != nil {
 				log.Printf("⚠️ failed to restore tunnel [%s]: %v", st.Name, err)
 				continue
 			}

@@ -567,3 +567,67 @@ func TestConstants(t *testing.T) {
 		t.Errorf("ProxyRuntimeStateError 期望 'error'，得到 %q", ProxyRuntimeStateError)
 	}
 }
+
+func TestTunnelIssueJSONRoundTrip(t *testing.T) {
+	observedAt := time.Date(2026, 5, 22, 10, 0, 0, 0, time.UTC)
+	issue := TunnelIssue{
+		Code:       TunnelMutationErrorCodeIngressPortInUse,
+		Scope:      "ingress_client",
+		ClientID:   "client-b",
+		Severity:   "error",
+		Message:    "访问入口客户端端口已被占用",
+		Retryable:  true,
+		ObservedAt: observedAt,
+		Details:    json.RawMessage(`{"bind_ip":"0.0.0.0","port":18080}`),
+	}
+
+	data, err := json.Marshal(issue)
+	if err != nil {
+		t.Fatalf("marshal TunnelIssue: %v", err)
+	}
+	var got TunnelIssue
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal TunnelIssue: %v", err)
+	}
+	if !reflect.DeepEqual(got, issue) {
+		t.Fatalf("TunnelIssue round trip mismatch:\n got: %+v\nwant: %+v", got, issue)
+	}
+}
+
+func TestTunnelSpecIssuesJSONRoundTrip(t *testing.T) {
+	spec := TunnelSpec{
+		ID:              "tun-1",
+		Name:            "demo",
+		Revision:        3,
+		Topology:        TunnelTopologyClientToClient,
+		OwnerClientID:   "target-client",
+		TransportPolicy: TransportPolicyServerRelayOnly,
+		ActualTransport: ActualTransportUnknown,
+		DesiredState:    TunnelDesiredStateRunning,
+		RuntimeState:    TunnelRuntimeStateError,
+		Issues: []TunnelIssue{{
+			Code:       "provision_ack_timeout",
+			Scope:      "target_client",
+			ClientID:   "target-client",
+			Severity:   "error",
+			Message:    "provisioning timed out",
+			Retryable:  true,
+			ObservedAt: time.Date(2026, 5, 22, 11, 0, 0, 0, time.UTC),
+		}},
+	}
+
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal TunnelSpec: %v", err)
+	}
+	if !strings.Contains(string(data), `"issues"`) {
+		t.Fatalf("TunnelSpec JSON should include issues, got %s", data)
+	}
+	var got TunnelSpec
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal TunnelSpec: %v", err)
+	}
+	if len(got.Issues) != 1 || got.Issues[0].Code != "provision_ack_timeout" || got.Issues[0].ClientID != "target-client" {
+		t.Fatalf("TunnelSpec issues mismatch: %+v", got.Issues)
+	}
+}

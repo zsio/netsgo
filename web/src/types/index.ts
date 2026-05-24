@@ -176,6 +176,21 @@ export interface TransportRuntime {
 }
 
 /** TunnelSpec = Ingress + Target + Transport. Current endpoint scope excludes future-only target types. */
+
+export type TunnelIssueScope = "ingress_client" | "target_client" | "server" | "transport" | "config";
+export type TunnelIssueSeverity = "info" | "warning" | "error";
+
+export interface TunnelIssue {
+  code: string;
+  scope: TunnelIssueScope | string;
+  client_id?: string;
+  severity: TunnelIssueSeverity | string;
+  message: string;
+  retryable: boolean;
+  observed_at: string;
+  details?: Record<string, unknown>;
+}
+
 export interface TunnelSpec {
   id: string;
   name: string;
@@ -190,6 +205,7 @@ export interface TunnelSpec {
   desired_state: ProxyDesiredState;
   runtime_state: ProxyRuntimeState;
   error?: string;
+  issues?: TunnelIssue[];
   participants?: TunnelParticipants;
   transport?: TransportRuntime;
   bandwidth_settings: BandwidthSettings;
@@ -234,6 +250,7 @@ export interface ProxyConfig {
   desired_state: ProxyDesiredState;
   runtime_state: ProxyRuntimeState;
   error?: string;
+  issues?: TunnelIssue[];
   capabilities: TunnelCapabilities;
 }
 
@@ -506,5 +523,8 @@ export interface AdminConfigUpdateResponse {
 export interface TunnelMutationErrorResponse {
   success?: boolean;
   error?: string;
+  message?: string;
   error_code?: string;
+  code?: string;
+  field?: string;
 }

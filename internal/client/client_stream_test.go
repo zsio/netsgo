@@ -287,3 +287,71 @@ func TestClient_HandleStream_DialFail(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestClient_HandleStream_RejectsStaleRevisionAndWrongRoles(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	proxyName := "guarded-proxy"
+	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:                proxyName,
+		Name:              proxyName,
+		LocalIP:           "127.0.0.1",
+		LocalPort:         1,
+		TransportPolicy:   protocol.TransportPolicyServerRelayOnly,
+		ActualTransport:   protocol.ActualTransportServerRelay,
+		ProvisionRevision: 3,
+	})
+
+	valid := testDataStreamHeader(proxyName)
+	valid.Revision = 3
+	for name, mutate := range map[string]func(*protocol.DataStreamHeader){
+		"stale revision": func(header *protocol.DataStreamHeader) { header.Revision = 2 },
+		"wrong source":   func(header *protocol.DataStreamHeader) { header.SourceRole = protocol.DataStreamRoleTarget },
+		"wrong target":   func(header *protocol.DataStreamHeader) { header.TargetRole = protocol.DataStreamRoleIngress },
+		"wrong transport": func(header *protocol.DataStreamHeader) {
+			header.Transport = protocol.ActualTransportPeerDirect
+			header.ServerAuthorized = true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clientConn, serverConn := net.Pipe()
+			defer mustClose(t, clientConn)
+			defer mustClose(t, serverConn)
+
+			clientSession, err := mux.NewClientSession(clientConn, mux.DefaultConfig())
+			if err != nil {
+				t.Fatalf("client session: %v", err)
+			}
+			defer mustClose(t, clientSession)
+			serverSession, err := mux.NewServerSession(serverConn, mux.DefaultConfig())
+			if err != nil {
+				t.Fatalf("server session: %v", err)
+			}
+			defer mustClose(t, serverSession)
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				stream, err := serverSession.Open()
+				if err != nil {
+					return
+				}
+				defer func() { _ = stream.Close() }()
+				header := valid
+				mutate(&header)
+				mustWriteAll(t, stream, encodeDataStreamHeader(t, header))
+			}()
+
+			stream, err := clientSession.AcceptStream()
+			if err != nil {
+				t.Fatalf("accept stream: %v", err)
+			}
+			c.handleStream(stream)
+
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("server stream did not close after rejected header")
+			}
+		})
+	}
+}

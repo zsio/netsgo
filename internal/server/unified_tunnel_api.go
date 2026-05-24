@@ -92,6 +92,7 @@ type tunnelSpecAPI struct {
 	DesiredState      string                       `json:"desired_state"`
 	RuntimeState      string                       `json:"runtime_state"`
 	Error             string                       `json:"error,omitempty"`
+	Issues            []protocol.TunnelIssue       `json:"issues,omitempty"`
 	Participants      tunnelParticipantsAPI        `json:"participants,omitempty"`
 	Transport         transportRuntimeAPI          `json:"transport,omitempty"`
 	BandwidthSettings protocol.BandwidthSettings   `json:"bandwidth_settings"`
@@ -198,7 +199,7 @@ func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAP
 		}
 		stored.DesiredState = protocol.ProxyDesiredStateRunning
 		stored.RuntimeState = protocol.ProxyRuntimeStateOffline
-		if err := s.reconcileClientRelayTunnel(stored); err != nil {
+		if err := s.reconcileStoredUnifiedTunnel(stored, "resume"); err != nil {
 			status, payload := tunnelMutationErrorStatusAndBody(err)
 			encodeJSON(w, status, payload)
 			return
@@ -247,13 +248,7 @@ func (s *Server) stopUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI)
 			encodeJSON(w, status, payload)
 			return
 		}
-		s.c2c.delete(stored.ID)
-		if ingressClient, ok := s.loadLiveClient(stored.Ingress.ClientID); ok {
-			_ = s.notifyClientTunnelUnprovision(ingressClient, stored.ID, stored.Revision, protocol.DataStreamRoleIngress, "stopped")
-		}
-		if targetClient, ok := s.loadLiveClient(stored.Target.ClientID); ok {
-			_ = s.notifyClientTunnelUnprovision(targetClient, stored.ID, stored.Revision, protocol.DataStreamRoleTarget, "stopped")
-		}
+		s.unprovisionClientRelayTunnel(stored, "stopped")
 		config, err := s.stopOfflineManagedTunnel(current.OwnerClientID, current.ID)
 		if err != nil {
 			status, payload := tunnelMutationErrorStatusAndBody(err)
@@ -483,13 +478,7 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 
 	if current.Topology == tunnelTopologyClientToClient {
 		if stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID); err == nil {
-			s.c2c.delete(stored.ID)
-			if ingressClient, ok := s.loadLiveClient(stored.Ingress.ClientID); ok {
-				_ = s.notifyClientTunnelUnprovision(ingressClient, stored.ID, stored.Revision, protocol.DataStreamRoleIngress, "deleted")
-			}
-			if targetClient, ok := s.loadLiveClient(stored.Target.ClientID); ok {
-				_ = s.notifyClientTunnelUnprovision(targetClient, stored.ID, stored.Revision, protocol.DataStreamRoleTarget, "deleted")
-			}
+			s.unprovisionClientRelayTunnel(stored, "deleted")
 		}
 		if err := s.deleteOfflineManagedTunnel(current.OwnerClientID, current.ID); err != nil {
 			status, payload := tunnelMutationErrorStatusAndBody(err)
@@ -547,7 +536,7 @@ func (s *Server) proxyRequestFromUnifiedCreate(req tunnelCreateRequestAPI, exist
 		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("unsupported transport_policy %q", req.TransportPolicy), "transport_policy", "unsupported_transport_policy", http.StatusBadRequest)
 	}
 	if req.TransportPolicy != tunnelTransportPolicyServerRelayOnly {
-		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("transport policy %q requires direct transport support, which is not available in this build", req.TransportPolicy), "transport_policy", "direct_transport_unavailable", http.StatusBadRequest)
+		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("transport policy %q requires direct transport support, which is not available in this build", req.TransportPolicy), "transport_policy", protocol.TunnelMutationErrorCodeDirectTransportUnavailable, http.StatusBadRequest)
 	}
 
 	ownerClientID, err := deriveUnifiedTunnelOwner(req.Topology, req.Ingress, req.Target)
@@ -555,6 +544,9 @@ func (s *Server) proxyRequestFromUnifiedCreate(req tunnelCreateRequestAPI, exist
 		return protocol.ProxyNewRequest{}, "", err
 	}
 	if err := validateUnifiedEndpointCombination(req.Topology, req.Ingress, req.Target); err != nil {
+		return protocol.ProxyNewRequest{}, "", err
+	}
+	if err := s.validateUnifiedClientsAndCapabilities(req); err != nil {
 		return protocol.ProxyNewRequest{}, "", err
 	}
 
@@ -606,7 +598,7 @@ func deriveUnifiedTunnelOwner(topology string, ingress, target endpointSpecAPI) 
 		}
 		return target.ClientID, nil
 	default:
-		return "", newProxyRequestValidationError(fmt.Errorf("unsupported topology %q", topology), "topology", "unsupported_topology", http.StatusBadRequest)
+		return "", newProxyRequestValidationError(fmt.Errorf("unsupported topology %q", topology), "topology", protocol.TunnelMutationErrorCodeUnsupportedTopology, http.StatusBadRequest)
 	}
 }
 
@@ -644,7 +636,7 @@ func validateUnifiedEndpointCombination(topology string, ingress, target endpoin
 			return newProxyRequestValidationError(fmt.Errorf("ingress.client_id is required"), "ingress.client_id", "missing_client_id", http.StatusBadRequest)
 		}
 		if ingress.ClientID == target.ClientID {
-			return newProxyRequestValidationError(fmt.Errorf("ingress and target clients must differ"), "ingress.client_id", "same_ingress_and_target_client", http.StatusBadRequest)
+			return newProxyRequestValidationError(fmt.Errorf("ingress and target clients must differ"), "ingress.client_id", protocol.TunnelMutationErrorCodeSameIngressAndTargetClient, http.StatusBadRequest)
 		}
 		if ingress.Type == tunnelIngressTypeHTTPHost {
 			return newProxyRequestValidationError(fmt.Errorf("client_to_client does not support http_host ingress"), "ingress.type", "unsupported_ingress_type", http.StatusBadRequest)
@@ -653,7 +645,7 @@ func validateUnifiedEndpointCombination(topology string, ingress, target endpoin
 			return newProxyRequestValidationError(fmt.Errorf("unsupported ingress type %q", ingress.Type), "ingress.type", "unsupported_ingress_type", http.StatusBadRequest)
 		}
 	default:
-		return newProxyRequestValidationError(fmt.Errorf("unsupported topology %q", topology), "topology", "unsupported_topology", http.StatusBadRequest)
+		return newProxyRequestValidationError(fmt.Errorf("unsupported topology %q", topology), "topology", protocol.TunnelMutationErrorCodeUnsupportedTopology, http.StatusBadRequest)
 	}
 
 	switch ingress.Type {
@@ -692,13 +684,13 @@ func decodeListenEndpointConfig(endpoint endpointSpecAPI, topology string) (ingr
 		}
 		if cfg.BindIP == "" {
 			if topology == tunnelTopologyClientToClient {
-				return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("bind_ip is required for client_to_client ingress"), "ingress.config.bind_ip", "invalid_bind_ip", http.StatusBadRequest)
+				return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("bind_ip is required for client_to_client ingress"), "ingress.config.bind_ip", protocol.TunnelMutationErrorCodeInvalidBindIP, http.StatusBadRequest)
 			}
 			cfg.BindIP = "0.0.0.0"
 		}
 		ip := net.ParseIP(cfg.BindIP)
 		if ip == nil || ip.To4() == nil {
-			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("bind_ip must be a valid IPv4 address"), "ingress.config.bind_ip", "invalid_bind_ip", http.StatusBadRequest)
+			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("bind_ip must be a valid IPv4 address"), "ingress.config.bind_ip", protocol.TunnelMutationErrorCodeInvalidBindIP, http.StatusBadRequest)
 		}
 		if cfg.Port < 1 || cfg.Port > 65535 {
 			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("port must be in range 1-65535"), "ingress.config.port", "invalid_endpoint_config", http.StatusBadRequest)
@@ -758,7 +750,7 @@ func (s *Server) createUnifiedStoredTunnel(req tunnelCreateRequestAPI) (StoredTu
 	if err := s.store.AddTunnel(stored); err != nil {
 		return StoredTunnel{}, err
 	}
-	if err := s.reconcileClientRelayTunnel(stored); err != nil {
+	if err := s.reconcileStoredUnifiedTunnel(stored, "created"); err != nil {
 		return StoredTunnel{}, err
 	}
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
@@ -800,7 +792,10 @@ func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevisi
 	if err := s.store.ReplaceTunnelByID(current.OwnerClientID, current.ID, expectedRevision, stored); err != nil {
 		return StoredTunnel{}, err
 	}
-	if err := s.reconcileClientRelayTunnel(stored); err != nil {
+	if existing.Topology == TunnelTopologyClientToClient {
+		s.unprovisionClientRelayTunnel(existing, "updated")
+	}
+	if err := s.reconcileStoredUnifiedTunnel(stored, "updated"); err != nil {
 		return StoredTunnel{}, err
 	}
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
@@ -827,7 +822,7 @@ func (s *Server) storedTunnelFromUnifiedRequest(req tunnelCreateRequestAPI, exis
 		req.TransportPolicy = tunnelTransportPolicyServerRelayOnly
 	}
 	if req.TransportPolicy != tunnelTransportPolicyServerRelayOnly {
-		return StoredTunnel{}, newProxyRequestValidationError(fmt.Errorf("transport policy %q requires direct transport support, which is not available in this build", req.TransportPolicy), "transport_policy", "direct_transport_unavailable", http.StatusBadRequest)
+		return StoredTunnel{}, newProxyRequestValidationError(fmt.Errorf("transport policy %q requires direct transport support, which is not available in this build", req.TransportPolicy), "transport_policy", protocol.TunnelMutationErrorCodeDirectTransportUnavailable, http.StatusBadRequest)
 	}
 	if err := validateUnifiedEndpointCombination(req.Topology, req.Ingress, req.Target); err != nil {
 		return StoredTunnel{}, err
@@ -847,6 +842,12 @@ func (s *Server) storedTunnelFromUnifiedRequest(req tunnelCreateRequestAPI, exis
 	if err := s.validateUnifiedClientsAndCapabilities(req); err != nil {
 		return StoredTunnel{}, err
 	}
+	if err := s.validateUnifiedIngressResourceAvailable(req, existingID); err != nil {
+		return StoredTunnel{}, err
+	}
+	if err := s.preflightClientIngress(req, existingID); err != nil {
+		return StoredTunnel{}, err
+	}
 
 	proxyType := protocol.ProxyTypeTCP
 	switch req.Ingress.Type {
@@ -856,7 +857,7 @@ func (s *Server) storedTunnelFromUnifiedRequest(req tunnelCreateRequestAPI, exis
 		proxyType = protocol.ProxyTypeHTTP
 	}
 	if req.Topology == tunnelTopologyClientToClient && proxyType == protocol.ProxyTypeHTTP {
-		return StoredTunnel{}, newProxyRequestValidationError(fmt.Errorf("client_to_client does not support http_host ingress"), "ingress.type", "unsupported_endpoint_type", http.StatusBadRequest)
+		return StoredTunnel{}, newProxyRequestValidationError(fmt.Errorf("client_to_client does not support http_host ingress"), "ingress.type", protocol.TunnelMutationErrorCodeUnsupportedEndpointType, http.StatusBadRequest)
 	}
 	id := existingID
 	if id == "" {
@@ -924,21 +925,63 @@ func normalizedIngressConfigRaw(endpointType string, cfg ingressEndpointConfigAP
 func (s *Server) validateUnifiedClientsAndCapabilities(req tunnelCreateRequestAPI) error {
 	target, ok := s.registeredClientInfo(req.Target.ClientID)
 	if !ok {
-		return newProxyRequestValidationError(fmt.Errorf("unknown target client %q", req.Target.ClientID), "target.client_id", "unknown_client", http.StatusBadRequest)
+		return newProxyRequestValidationError(fmt.Errorf("unknown target client %q", req.Target.ClientID), "target.client_id", protocol.TunnelMutationErrorCodeUnknownClient, http.StatusBadRequest)
 	}
 	if !clientSupportsTargetType(target.Info.Capabilities, req.Target.Type) {
-		return newProxyRequestValidationError(fmt.Errorf("target client does not support %s", req.Target.Type), "target.type", "capability_not_supported", http.StatusBadRequest)
+		return newProxyRequestValidationError(fmt.Errorf("target client does not support %s", req.Target.Type), "target.type", protocol.TunnelMutationErrorCodeCapabilityNotSupported, http.StatusBadRequest)
 	}
 	if req.Topology == tunnelTopologyClientToClient {
 		ingress, ok := s.registeredClientInfo(req.Ingress.ClientID)
 		if !ok {
-			return newProxyRequestValidationError(fmt.Errorf("unknown ingress client %q", req.Ingress.ClientID), "ingress.client_id", "unknown_client", http.StatusBadRequest)
+			return newProxyRequestValidationError(fmt.Errorf("unknown ingress client %q", req.Ingress.ClientID), "ingress.client_id", protocol.TunnelMutationErrorCodeUnknownClient, http.StatusBadRequest)
 		}
 		if !clientSupportsIngressType(ingress.Info.Capabilities, req.Ingress.Type) {
-			return newProxyRequestValidationError(fmt.Errorf("ingress client does not support %s", req.Ingress.Type), "ingress.type", "capability_not_supported", http.StatusBadRequest)
+			return newProxyRequestValidationError(fmt.Errorf("ingress client does not support %s", req.Ingress.Type), "ingress.type", protocol.TunnelMutationErrorCodeCapabilityNotSupported, http.StatusBadRequest)
 		}
 	}
 	return nil
+}
+
+func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequestAPI, excludeID string) error {
+	if s.store == nil || req.Ingress.Location != tunnelEndpointLocationClient {
+		return nil
+	}
+	if req.Ingress.Type != tunnelIngressTypeTCPListen && req.Ingress.Type != tunnelIngressTypeUDPListen {
+		return nil
+	}
+	want, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
+	if err != nil {
+		return err
+	}
+	if want.Port <= 0 {
+		return nil
+	}
+	tunnels, err := s.store.GetAllTunnels()
+	if err != nil {
+		return fmt.Errorf("failed to check ingress resource conflicts: %w", err)
+	}
+	for _, existing := range tunnels {
+		if existing.ID == excludeID || existing.Ingress.Location != tunnelEndpointLocationClient {
+			continue
+		}
+		if existing.Ingress.ClientID != req.Ingress.ClientID || existing.Ingress.Type != req.Ingress.Type {
+			continue
+		}
+		got, err := decodeListenEndpointConfig(endpointSpecAPI{Location: existing.Ingress.Location, ClientID: existing.Ingress.ClientID, Type: existing.Ingress.Type, Config: existing.Ingress.Config}, existing.Topology)
+		if err != nil || got.Port != want.Port {
+			continue
+		}
+		if ipv4BindConflicts(got.BindIP, want.BindIP) {
+			return newProxyRequestValidationError(fmt.Errorf("ingress resource %s:%d conflicts with tunnel %q", want.BindIP, want.Port, existing.Name), "ingress.config.port", protocol.TunnelMutationErrorCodeIngressResourceConflict, http.StatusConflict)
+		}
+	}
+	return nil
+}
+
+func ipv4BindConflicts(a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	return a == b || a == "0.0.0.0" || b == "0.0.0.0"
 }
 
 func (s *Server) registeredClientInfo(clientID string) (RegisteredClient, bool) {
@@ -1038,6 +1081,7 @@ func unifiedSpecFromProxyConfig(config protocol.ProxyConfig) tunnelSpecAPI {
 		DesiredState:    config.DesiredState,
 		RuntimeState:    runtimeState,
 		Error:           config.Error,
+		Issues:          issuesFromTunnelError(config.Error, runtimeState, config.ClientID),
 		Participants: tunnelParticipantsAPI{
 			Ingress: participantRuntimeAPI{Role: "ingress", State: runtimeState, Revision: revision},
 			Target:  participantRuntimeAPI{ClientID: config.ClientID, Role: "target", State: runtimeState, Revision: revision},
@@ -1054,9 +1098,28 @@ func unifiedSpecFromProxyConfig(config protocol.ProxyConfig) tunnelSpecAPI {
 	}
 }
 
+func issuesFromTunnelError(message, runtimeState, clientID string) []protocol.TunnelIssue {
+	if strings.TrimSpace(message) == "" || runtimeState != protocol.ProxyRuntimeStateError {
+		return nil
+	}
+	issue := protocol.TunnelIssue{
+		Code:       "runtime_error",
+		Scope:      "transport",
+		ClientID:   clientID,
+		Severity:   "error",
+		Message:    message,
+		Retryable:  true,
+		ObservedAt: time.Now().UTC(),
+	}
+	return []protocol.TunnelIssue{issue}
+}
+
 func specFromStoredTunnel(stored StoredTunnel, s *Server) tunnelSpecAPI {
 	config := storedTunnelToProxyConfig(stored)
-	spec := unifiedSpecFromProxyConfig(proxyConfigForClientView(config, s.isClientOnline(stored.OwnerClientID)))
+	computedRuntime := computedRuntimeStateForStoredTunnel(stored, s)
+	config.RuntimeState = runtimeStateForProxyConfig(computedRuntime)
+	config.Error = ""
+	spec := unifiedSpecFromProxyConfig(config)
 	spec.Topology = stored.Topology
 	spec.OwnerClientID = stored.OwnerClientID
 	spec.Ingress = endpointSpecAPI{
@@ -1072,25 +1135,20 @@ func specFromStoredTunnel(stored StoredTunnel, s *Server) tunnelSpecAPI {
 		Config:   stored.Target.Config,
 	}
 	spec.TransportPolicy = stored.TransportPolicy
-	spec.ActualTransport = stored.ActualTransport
-	if spec.ActualTransport == "" {
-		spec.ActualTransport = tunnelActualTransportUnknown
+	spec.ActualTransport = tunnelActualTransportUnknown
+	if computedRuntime == tunnelRuntimeStateActive {
+		spec.ActualTransport = protocol.ActualTransportServerRelay
 	}
 	spec.P2P = p2pStateAPI{State: stored.P2P.State, Error: stored.P2P.Error, SessionID: stored.P2P.SessionID}
 	if spec.P2P.State == "" {
 		spec.P2P.State = tunnelP2PStateIdle
 	}
-	runtimeState := stored.RuntimeState
-	if runtimeState == protocol.ProxyRuntimeStateExposed {
-		runtimeState = tunnelRuntimeStateActive
-	}
-	if stored.DesiredState == protocol.ProxyDesiredStateRunning && !requiredTunnelClientsOnline(stored, s) && runtimeState != protocol.ProxyRuntimeStateError {
-		runtimeState = protocol.ProxyRuntimeStateOffline
-	}
-	spec.RuntimeState = runtimeState
+	spec.RuntimeState = computedRuntime
+	spec.Error = ""
+	spec.Issues = s.unifiedRuntime.issuesForStoredTunnel(stored, requiredTunnelClientsOnline(stored, s))
 	spec.Participants = tunnelParticipantsAPI{
-		Ingress: participantRuntimeAPI{ClientID: stored.Ingress.ClientID, Role: "ingress", State: participantStateForSpecRuntime(stored.Ingress.ClientID, runtimeState), Revision: stored.Revision},
-		Target:  participantRuntimeAPI{ClientID: stored.Target.ClientID, Role: "target", State: participantStateForSpecRuntime(stored.Target.ClientID, runtimeState), Revision: stored.Revision},
+		Ingress: participantRuntimeAPI{ClientID: stored.Ingress.ClientID, Role: "ingress", State: participantStateForSpecRuntime(stored.Ingress.ClientID, computedRuntime), Revision: stored.Revision},
+		Target:  participantRuntimeAPI{ClientID: stored.Target.ClientID, Role: "target", State: participantStateForSpecRuntime(stored.Target.ClientID, computedRuntime), Revision: stored.Revision},
 	}
 	spec.Transport = transportRuntimeAPI{
 		Policy:   stored.TransportPolicy,
@@ -1099,6 +1157,41 @@ func specFromStoredTunnel(stored StoredTunnel, s *Server) tunnelSpecAPI {
 	}
 	spec.UpdatedAt = stored.UpdatedAt
 	return spec
+}
+
+func computedRuntimeStateForStoredTunnel(stored StoredTunnel, s *Server) string {
+	if stored.DesiredState == protocol.ProxyDesiredStateStopped {
+		return protocol.ProxyRuntimeStateIdle
+	}
+	if !requiredTunnelClientsOnline(stored, s) {
+		return protocol.ProxyRuntimeStateOffline
+	}
+	if stored.Topology == TunnelTopologyClientToClient {
+		if _, ok := s.c2c.get(stored.ID); ok && (stored.RuntimeState == protocol.ProxyRuntimeStateExposed || stored.RuntimeState == protocol.TunnelRuntimeStateActive) {
+			return tunnelRuntimeStateActive
+		}
+		return protocol.ProxyRuntimeStatePending
+	}
+	if stored.Topology == TunnelTopologyServerExpose || stored.Topology == "" {
+		if client, ok := s.loadLiveClient(stored.OwnerClientID); ok {
+			if _, tunnel, exists := findTunnelBySelector(client, stored.ID); exists {
+				if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && isTunnelExposed(tunnel.Config) {
+					return tunnelRuntimeStateActive
+				}
+				if tunnel.Config.RuntimeState == protocol.ProxyRuntimeStatePending {
+					return protocol.ProxyRuntimeStatePending
+				}
+			}
+		}
+	}
+	return protocol.ProxyRuntimeStatePending
+}
+
+func runtimeStateForProxyConfig(runtimeState string) string {
+	if runtimeState == tunnelRuntimeStateActive {
+		return protocol.ProxyRuntimeStateExposed
+	}
+	return runtimeState
 }
 
 func specFromStoredTunnelConfig(config protocol.ProxyConfig, s *Server) tunnelSpecAPI {

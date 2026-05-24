@@ -2,11 +2,13 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
 	"time"
 
+	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
 
@@ -52,25 +54,25 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 		return nil
 	}
 	if stored.DesiredState == protocol.ProxyDesiredStateStopped {
-		s.c2c.delete(stored.ID)
+		s.unprovisionClientRelayTunnel(stored, "stopped")
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateIdle, "")
 	}
-	if stored.Ingress.Type != TunnelIngressTypeTCPListen {
+	if stored.Ingress.Type != TunnelIngressTypeTCPListen && stored.Ingress.Type != TunnelIngressTypeUDPListen {
 		return nil
 	}
 	if !s.isClientOnline(stored.Ingress.ClientID) || !s.isClientOnline(stored.Target.ClientID) {
-		s.c2c.delete(stored.ID)
+		s.unprovisionClientRelayTunnel(stored, "participant_offline")
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
 	}
 
 	ingressClient, ok := s.loadLiveClient(stored.Ingress.ClientID)
 	if !ok || !clientHasDataSession(ingressClient) {
-		s.c2c.delete(stored.ID)
+		s.unprovisionClientRelayTunnel(stored, "ingress_data_offline")
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
 	}
 	targetClient, ok := s.loadLiveClient(stored.Target.ClientID)
 	if !ok || !clientHasDataSession(targetClient) {
-		s.c2c.delete(stored.ID)
+		s.unprovisionClientRelayTunnel(stored, "target_data_offline")
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
 	}
 
@@ -84,7 +86,7 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 		Role:     protocol.DataStreamRoleTarget,
 		Spec:     tunnelSpecProtocolFromStored(stored, protocol.ProxyRuntimeStatePending),
 	}); err != nil {
-		s.c2c.delete(stored.ID)
+		s.unprovisionClientRelayTunnel(stored, "target_provision_failed")
 		_ = s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateError, err.Error())
 		return err
 	}
@@ -94,12 +96,24 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 		Role:     protocol.DataStreamRoleIngress,
 		Spec:     tunnelSpecProtocolFromStored(stored, protocol.ProxyRuntimeStatePending),
 	}); err != nil {
-		s.c2c.delete(stored.ID)
-		_ = s.notifyClientTunnelUnprovision(targetClient, stored.ID, stored.Revision, protocol.DataStreamRoleTarget, "ingress_provision_failed")
+		s.unprovisionClientRelayTunnel(stored, "ingress_provision_failed")
 		_ = s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateError, err.Error())
 		return err
 	}
 	return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
+}
+
+func (s *Server) unprovisionClientRelayTunnel(stored StoredTunnel, reason string) {
+	if stored.Topology != TunnelTopologyClientToClient {
+		return
+	}
+	s.c2c.delete(stored.ID)
+	if ingressClient, ok := s.loadLiveClient(stored.Ingress.ClientID); ok {
+		_ = s.notifyClientTunnelUnprovision(ingressClient, stored.ID, stored.Revision, protocol.DataStreamRoleIngress, reason)
+	}
+	if targetClient, ok := s.loadLiveClient(stored.Target.ClientID); ok {
+		_ = s.notifyClientTunnelUnprovision(targetClient, stored.ID, stored.Revision, protocol.DataStreamRoleTarget, reason)
+	}
 }
 
 func (s *Server) updateStoredTunnelRuntime(stored StoredTunnel, runtimeState, message string) error {
@@ -128,12 +142,12 @@ func (s *Server) waitForClientTunnelProvisionAck(client *ClientConn, req protoco
 	if req.Revision <= 0 {
 		return fmt.Errorf("tunnel %q missing revision", req.TunnelID)
 	}
-	ch, err := s.tunnels.registerProvisionAckWaiter(client, req.TunnelID, uint64(req.Revision))
+	ch, err := s.tunnels.registerProvisionAckWaiter(client, req.TunnelID, uint64(req.Revision), req.Role)
 	if err != nil {
 		return err
 	}
 	if err := s.notifyClientTunnelProvision(client, req); err != nil {
-		s.tunnels.unregisterProvisionAckWaiter(client, req.TunnelID, uint64(req.Revision))
+		s.tunnels.unregisterProvisionAckWaiter(client, req.TunnelID, uint64(req.Revision), req.Role)
 		return err
 	}
 
@@ -154,7 +168,7 @@ func (s *Server) waitForClientTunnelProvisionAck(client *ClientConn, req protoco
 		}
 		return nil
 	case <-timer.C:
-		s.tunnels.unregisterProvisionAckWaiter(client, req.TunnelID, uint64(req.Revision))
+		s.tunnels.unregisterProvisionAckWaiter(client, req.TunnelID, uint64(req.Revision), req.Role)
 		return errTunnelProvisionAckTimeout
 	}
 }
@@ -241,9 +255,70 @@ func (s *Server) handleClientOpenedDataStream(openClient *ClientConn, openStream
 	}
 	defer func() { _ = targetStream.Close() }()
 
+	if stored.Ingress.Type == TunnelIngressTypeUDPListen {
+		s.relayClientUDPFrames(stored, targetStream, openStream, targetClient.BandwidthRuntime(), nil)
+		return
+	}
+
 	_, _ = relayTunnelPayload(targetStream, openStream, targetClient.BandwidthRuntime(), nil, func(ingressBytes, egressBytes uint64) {
 		s.recordTrafficObservationAt(time.Now(), stored.ID, stored.OwnerClientID, stored.Name, stored.Type, ingressBytes, egressBytes)
 	})
+}
+
+func (s *Server) relayClientUDPFrames(stored StoredTunnel, targetStream, ingressStream net.Conn, clientRuntime, tunnelRuntime *directionalBandwidthRuntime) {
+	ingressSlots := payloadBudgetSlots(payloadDirectionIngress, clientRuntime, tunnelRuntime)
+	egressSlots := payloadBudgetSlots(payloadDirectionEgress, clientRuntime, tunnelRuntime)
+
+	var once sync.Once
+	closeAll := func() {
+		_ = targetStream.Close()
+		_ = ingressStream.Close()
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for {
+			payload, err := mux.ReadUDPFrame(ingressStream)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("⚠️ client relay UDP read ingress frame failed [%s]: %v", stored.ID, err)
+				}
+				once.Do(closeAll)
+				return
+			}
+			reserveFullPayloadBandwidth(len(payload), ingressSlots...)
+			if err := mux.WriteUDPFrame(targetStream, payload); err != nil {
+				log.Printf("⚠️ client relay UDP write target frame failed [%s]: %v", stored.ID, err)
+				once.Do(closeAll)
+				return
+			}
+			s.recordTrafficObservationAt(time.Now(), stored.ID, stored.OwnerClientID, stored.Name, stored.Type, uint64(len(payload)), 0)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			payload, err := mux.ReadUDPFrame(targetStream)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("⚠️ client relay UDP read target frame failed [%s]: %v", stored.ID, err)
+				}
+				once.Do(closeAll)
+				return
+			}
+			reserveFullPayloadBandwidth(len(payload), egressSlots...)
+			if err := mux.WriteUDPFrame(ingressStream, payload); err != nil {
+				log.Printf("⚠️ client relay UDP write ingress frame failed [%s]: %v", stored.ID, err)
+				once.Do(closeAll)
+				return
+			}
+			s.recordTrafficObservationAt(time.Now(), stored.ID, stored.OwnerClientID, stored.Name, stored.Type, 0, uint64(len(payload)))
+		}
+	}()
+
+	wg.Wait()
 }
 
 func validateClientRelayHeader(stored StoredTunnel, openClientID string, header protocol.DataStreamHeader) error {
@@ -255,6 +330,9 @@ func validateClientRelayHeader(stored StoredTunnel, openClientID string, header 
 	}
 	if header.SourceRole != protocol.DataStreamRoleIngress || header.TargetRole != protocol.DataStreamRoleTarget {
 		return fmt.Errorf("invalid relay roles source=%s target=%s", header.SourceRole, header.TargetRole)
+	}
+	if header.Direction != protocol.DataStreamDirectionIngressToTarget {
+		return fmt.Errorf("invalid relay direction %s", header.Direction)
 	}
 	if header.Transport != protocol.ActualTransportServerRelay {
 		return fmt.Errorf("invalid relay transport %s", header.Transport)

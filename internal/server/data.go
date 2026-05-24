@@ -139,6 +139,8 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 			"info":      info,
 		})
 		go s.restoreTunnels(client)
+	} else {
+		go s.reconcileTunnelsForClient(client.ID, "data_channel_ready")
 	}
 
 	go s.acceptClientOpenedDataStreams(client, session)
@@ -157,6 +159,7 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("🔌 data channel disconnected: Client [%s] generation=%d", clientID, generation)
+	s.releaseUnifiedRuntimeForClient(clientID)
 	s.invalidateLogicalSessionIfCurrent(clientID, generation, "data_session_closed")
 }
 

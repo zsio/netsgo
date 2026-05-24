@@ -352,7 +352,7 @@ function TunnelTableRow({
       )}
 
       <td className="px-4 py-3 sm:px-6">
-        <TunnelStatusBadge status={view.status} error={tunnel.error} />
+        <TunnelStatusBadge status={view.status} error={tunnel.error} issues={tunnel.issues} />
       </td>
 
       {showClient && (
@@ -503,9 +503,11 @@ function TunnelMapping({
 function TunnelStatusBadge({
   status,
   error,
+  issues,
 }: {
   status: TunnelStatusPresentation;
   error?: string;
+  issues?: TunnelEntry['issues'];
 }) {
   const dotClassName = cn(
     'size-1.5 rounded-full',
@@ -525,23 +527,38 @@ function TunnelStatusBadge({
     status.key === 'error' && 'bg-destructive/10 text-destructive border-destructive/20',
   );
 
+  const issueItems = issues ?? [];
+  const tooltipLines = issueItems.length > 0
+    ? issueItems.map((issue) => `${issue.severity}: ${issue.message}`)
+    : error
+      ? [error]
+      : [];
+
   return (
     <div className="flex flex-col gap-1 items-start">
       <Badge variant="outline" className={cn(badgeClassName, 'px-2 sm:px-2.5')} aria-label={status.label}>
         <span className={dotClassName} />
         <span className="hidden sm:inline">{status.label}</span>
-        {status.key === 'error' && error && (
+        {issueItems.length > 0 && (
+          <span className="rounded bg-background/70 px-1 font-mono text-[10px]">{issueItems.length}</span>
+        )}
+        {tooltipLines.length > 0 && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <HelpCircle className="h-3.5 w-3.5 opacity-70 hover:opacity-100 cursor-help" />
+              <HelpCircle className="h-3.5 w-3.5 opacity-70 hover:opacity-100 cursor-help" aria-label={tooltipLines.join('\n')} />
             </TooltipTrigger>
-            <TooltipContent side="top">
-              <p>{error}</p>
+            <TooltipContent side="top" className="max-w-xs space-y-1">
+              {tooltipLines.map((line) => (
+                <p key={line}>{line}</p>
+              ))}
             </TooltipContent>
           </Tooltip>
         )}
       </Badge>
-      {status.description && (status.key !== 'error' || !error) && (
+      {issueItems.length > 0 && (
+        <p className="hidden text-[11px] text-destructive sm:block">当前 {issueItems.length} 个运行问题</p>
+      )}
+      {status.description && issueItems.length === 0 && (status.key !== 'error' || !error) && (
         <p className="hidden text-[11px] text-muted-foreground sm:block">{status.description}</p>
       )}
     </div>

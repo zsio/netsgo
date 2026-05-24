@@ -160,6 +160,7 @@ func tunnelMutationErrorStatusAndBody(err error) (int, tunnelMutationErrorRespon
 	payload := tunnelMutationErrorResponse{
 		Success: false,
 		Error:   err.Error(),
+		Message: err.Error(),
 	}
 
 	var ruleErr *httpTunnelRuleError
@@ -179,11 +180,13 @@ func tunnelMutationErrorStatusAndBody(err error) (int, tunnelMutationErrorRespon
 	case errors.As(err, &ruleErr):
 		status = http.StatusConflict
 		payload.ErrorCode = ruleErr.ErrorCode()
+		payload.Code = ruleErr.ErrorCode()
 		payload.Field = ruleErr.Field()
 		payload.ConflictingTunnels = ruleErr.ConflictingTunnels()
 	case errors.As(err, &validationErr):
 		status = validationErr.StatusCode()
 		payload.ErrorCode = validationErr.ErrorCode()
+		payload.Code = validationErr.ErrorCode()
 		payload.Field = validationErr.Field()
 	}
 

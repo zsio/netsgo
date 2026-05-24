@@ -294,4 +294,27 @@ describe('TunnelListTable', () => {
     expect(enabledMarkup).toContain('title="速率趋势"');
     expect(disabledMarkup).not.toContain('title="速率趋势"');
   });
+
+  test('显示统一隧道运行 issues 数量与详情', () => {
+    const markup = renderTable([
+      createTunnel({
+        runtime_state: 'error',
+        issues: [
+          {
+            code: 'ingress_port_in_use',
+            scope: 'ingress_client',
+            severity: 'error',
+            message: '入口端口已被占用',
+            retryable: true,
+            observed_at: '2026-05-24T01:00:00Z',
+          },
+        ],
+      }),
+    ]);
+
+    expect(markup).toContain('当前 1 个运行问题');
+    expect(markup).toContain('error: 入口端口已被占用');
+    expect(markup).toContain('lucide-circle-question-mark');
+  });
+
 });

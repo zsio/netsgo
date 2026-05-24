@@ -248,7 +248,7 @@ export function buildTunnelViewModel(
 export function getTunnelMutationErrorMessage(error: unknown) {
   if (error instanceof ApiError) {
     const body = error.body as TunnelMutationErrorResponse | undefined;
-    switch (body?.error_code) {
+    switch (body?.code ?? body?.error_code) {
       case 'server_addr_conflict':
         return '该域名与当前管理地址冲突，请改用其他业务域名。';
       case 'http_tunnel_conflict':

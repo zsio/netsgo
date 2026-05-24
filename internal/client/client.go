@@ -930,12 +930,8 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 		log.Printf("⚠️ Unknown tunnel id: %s", header.TunnelID)
 		return
 	}
-	if cfg.TransportPolicy == protocol.TransportPolicyDirectOnly && header.Transport == protocol.ActualTransportServerRelay {
-		log.Printf("⚠️ DataStreamHeader server relay denied for direct_only tunnel %s", proxyName)
-		return
-	}
-	if cfg.ActualTransport != "" && cfg.ActualTransport != protocol.ActualTransportUnknown && header.Transport != cfg.ActualTransport {
-		log.Printf("⚠️ DataStreamHeader transport mismatch for %s: header=%s cfg=%s", proxyName, header.Transport, cfg.ActualTransport)
+	if !dataStreamHeaderMatchesProxyConfig(header, cfg) {
+		log.Printf("⚠️ DataStreamHeader rejected for %s: tunnel=%s revision=%d source=%s target=%s direction=%s transport=%s", proxyName, header.TunnelID, header.Revision, header.SourceRole, header.TargetRole, header.Direction, header.Transport)
 		return
 	}
 
@@ -955,6 +951,31 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 
 	// Relay traffic in both directions.
 	mux.Relay(stream, localConn)
+}
+
+func dataStreamHeaderMatchesProxyConfig(header protocol.DataStreamHeader, cfg protocol.ProxyNewRequest) bool {
+	if cfg.ProvisionRevision != 0 && header.Revision != int64(cfg.ProvisionRevision) {
+		return false
+	}
+	if header.TargetRole != protocol.DataStreamRoleTarget {
+		return false
+	}
+	if header.SourceRole != protocol.DataStreamRoleServer && header.SourceRole != protocol.DataStreamRoleIngress {
+		return false
+	}
+	if header.Direction != protocol.DataStreamDirectionIngressToTarget {
+		return false
+	}
+	if header.Transport != protocol.ActualTransportServerRelay {
+		return false
+	}
+	if cfg.TransportPolicy == protocol.TransportPolicyDirectOnly {
+		return false
+	}
+	if cfg.ActualTransport != "" && cfg.ActualTransport != protocol.ActualTransportUnknown && header.Transport != cfg.ActualTransport {
+		return false
+	}
+	return true
 }
 
 func (c *Client) proxyForDataStreamHeader(header protocol.DataStreamHeader) (string, protocol.ProxyNewRequest, bool) {
@@ -1161,6 +1182,19 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			if err := rt.writeJSON(resp); err != nil {
 				log.Printf("⚠️ Failed to send provisioning ACK [%s]: %v", req.Name, err)
 				c.failRuntime(rt, "proxy_provision_ack_write_failed")
+				return
+			}
+
+		case protocol.MsgTypeTunnelPreflight:
+			var req protocol.TunnelPreflightRequest
+			if err := msg.ParsePayload(&req); err != nil {
+				log.Printf("⚠️ Failed to parse tunnel preflight request: %v", err)
+				continue
+			}
+			resp, _ := protocol.NewMessage(protocol.MsgTypeTunnelPreflightResp, c.handleTunnelPreflight(req))
+			if err := rt.writeJSON(resp); err != nil {
+				log.Printf("⚠️ Failed to send tunnel preflight response [%s]: %v", req.RequestID, err)
+				c.failRuntime(rt, "tunnel_preflight_resp_write_failed")
 				return
 			}
 
