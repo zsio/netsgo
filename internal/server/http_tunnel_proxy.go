@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -286,11 +285,7 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 			pr.Out.Header = headers
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			status := http.StatusBadGateway
-			if isHTTPRouteUnavailable(err) {
-				status = http.StatusServiceUnavailable
-			}
-			http.Error(w, http.StatusText(status), status)
+			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		},
 	}
 
@@ -300,14 +295,4 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 		ingressBytes, egressBytes := cc.ingressEgressBytes()
 		s.recordTunnelTraffic(route.client.ID, route.config, ingressBytes, egressBytes)
 	}
-}
-
-func isHTTPRouteUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return errors.Is(err, context.Canceled) ||
-		strings.Contains(msg, "is not online") ||
-		strings.Contains(msg, "data channel not established")
 }
