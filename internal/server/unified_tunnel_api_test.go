@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -570,6 +571,45 @@ func TestAPI_UnifiedTunnelUpdateUnprovisionsOldClientToClientParticipants(t *tes
 	}
 }
 
+func TestAPI_UnifiedTunnelCreateDoesNotWaitForServerExposeProvisionAck(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	s.tunnels.tunnelReadyTimeout = time.Second
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "server-expose-async-target", "install-server-expose-async-target")
+	defer mustClose(t, targetConn)
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+
+	create := []byte(fmt.Sprintf(`{
+		"name":"server-expose-async",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`, reserveTCPPort(t), targetAuth.ClientID))
+
+	started := time.Now()
+	resp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	elapsed := time.Since(started)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("server_expose create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if elapsed >= s.tunnels.tunnelReadyTimeout/2 {
+		t.Fatalf("server_expose create should not wait for provisioning timeout, elapsed=%s timeout=%s", elapsed, s.tunnels.tunnelReadyTimeout)
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+	if created.RuntimeState != protocol.ProxyRuntimeStatePending {
+		t.Fatalf("online server_expose create should project pending before async ACK, got %q", created.RuntimeState)
+	}
+}
+
 func TestAPI_UnifiedTunnelCreatePersistsProvisionRuntimeFailure(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)
@@ -603,14 +643,30 @@ func TestAPI_UnifiedTunnelCreatePersistsProvisionRuntimeFailure(t *testing.T) {
 	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
 		t.Fatalf("decode created tunnel: %v", err)
 	}
-	if created.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("runtime state should project provisioning error, got %q", created.RuntimeState)
-	}
-	if len(created.Issues) != 1 || created.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckTimeout || created.Issues[0].ClientID != targetAuth.ClientID {
-		t.Fatalf("created issue mismatch: %+v", created.Issues)
-	}
 	if _, err := s.store.GetTunnelByIDE(targetAuth.ClientID, created.ID); err != nil {
 		t.Fatalf("tunnel should remain persisted after runtime failure: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		getResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodGet, "/api/tunnels/"+created.ID, token, nil)
+		if getResp.Code != http.StatusOK {
+			t.Fatalf("GET tunnel: want 200, got %d body=%s", getResp.Code, getResp.Body.String())
+		}
+		var got tunnelSpecAPI
+		if err := mustDecodeJSON(t, getResp.Body, &got); err != nil {
+			t.Fatalf("decode tunnel: %v", err)
+		}
+		if got.RuntimeState == protocol.ProxyRuntimeStateError {
+			if len(got.Issues) != 1 || got.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckTimeout || got.Issues[0].ClientID != targetAuth.ClientID {
+				t.Fatalf("created issue mismatch: %+v", got.Issues)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runtime state should eventually project provisioning error, last state=%q issues=%+v", got.RuntimeState, got.Issues)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -858,6 +914,72 @@ func TestAPI_UnifiedTunnelRejectsClientIngressResourceConflictBeforePersist(t *t
 	}
 	if _, err := s.store.GetTunnelByIDE(targetB.ID, "conflict-c2c"); !errors.Is(err, ErrTunnelNotFound) {
 		t.Fatalf("conflicting create must not persist, got err=%v", err)
+	}
+}
+
+func TestAPI_UnifiedTunnelRejectsOccupiedServerExposePortBeforePersist(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	target := createUnifiedAPITestClient(t, s, "install-server-port-busy-target", "server-port-busy-target")
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("occupy tcp port: %v", err)
+	}
+	defer mustClose(t, ln)
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	body := []byte(`{
+		"name":"server-port-busy",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":` + strconv.Itoa(port) + `}},
+		"target":{"location":"client","client_id":"` + target.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`)
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, body)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("occupied server port create: want 409, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var bodyResp tunnelMutationErrorResponse
+	if err := mustDecodeJSON(t, resp.Body, &bodyResp); err != nil {
+		t.Fatalf("decode port error: %v", err)
+	}
+	if bodyResp.ErrorCode != protocol.TunnelMutationErrorCodeIngressPortInUse || bodyResp.Field != "ingress.config.port" {
+		t.Fatalf("occupied port error mismatch: %+v", bodyResp)
+	}
+	if _, err := s.store.GetTunnelByIDE(target.ID, "server-port-busy"); !errors.Is(err, ErrTunnelNotFound) {
+		t.Fatalf("failed server port preflight must not persist config, got err=%v", err)
+	}
+}
+
+func TestAPI_UnifiedTunnelAllowsServerExposeTCPAndUDPSamePort(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	target := createUnifiedAPITestClient(t, s, "install-server-shared-port-target", "server-shared-port-target")
+	port := reserveTCPPort(t)
+	tcpBody := []byte(`{
+		"name":"server-shared-tcp",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":` + strconv.Itoa(port) + `}},
+		"target":{"location":"client","client_id":"` + target.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`)
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, tcpBody)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("server TCP create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	udpBody := []byte(`{
+		"name":"server-shared-udp",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"udp_listen","config":{"bind_ip":"0.0.0.0","port":` + strconv.Itoa(port) + `}},
+		"target":{"location":"client","client_id":"` + target.ID + `","type":"udp_service","config":{"ip":"127.0.0.1","port":5353}},
+		"transport_policy":"server_relay_only"
+	}`)
+	resp = doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, udpBody)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("server UDP same-port create: want 201, got %d body=%s", resp.Code, resp.Body.String())
 	}
 }
 

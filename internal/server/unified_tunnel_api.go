@@ -185,99 +185,48 @@ func (s *Server) handleUnifiedTunnelAction(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI) {
-	if current.Topology == tunnelTopologyClientToClient {
-		stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID)
-		if err != nil {
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		if err := s.store.UpdateStates(current.OwnerClientID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateOffline, ""); err != nil {
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		stored.DesiredState = protocol.ProxyDesiredStateRunning
-		stored.RuntimeState = protocol.ProxyRuntimeStateOffline
-		if err := s.reconcileStoredUnifiedTunnel(stored, "resume"); err != nil {
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		stored, err = s.store.GetTunnelByIDE(current.OwnerClientID, current.ID)
-		if err != nil {
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed", "tunnel": specFromStoredTunnel(stored, s)})
-		return
-	}
-	if client, ok := s.loadLiveClient(current.OwnerClientID); ok {
-		tunnelName, tunnel, exists := findTunnelBySelector(client, current.ID)
-		if !exists {
-			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
-			return
-		}
-		if !canResumeTunnel(tunnel.Config) {
-			encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "only stopped/idle or running/error tunnels can be resumed"})
-			return
-		}
-		if err := s.resumeManagedTunnel(client, tunnelName); err != nil {
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed"})
-		return
-	}
-
-	if _, err := s.resumeOfflineManagedTunnel(current.OwnerClientID, current.ID); err != nil {
+	stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID)
+	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
-	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed"})
+	if err := s.store.UpdateStates(current.OwnerClientID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateOffline, ""); err != nil {
+		status, payload := tunnelMutationErrorStatusAndBody(err)
+		encodeJSON(w, status, payload)
+		return
+	}
+	stored.DesiredState = protocol.ProxyDesiredStateRunning
+	stored.RuntimeState = protocol.ProxyRuntimeStateOffline
+	s.scheduleUnifiedTunnelReconcile(stored, "resume")
+	stored, err = s.store.GetTunnelByIDE(current.OwnerClientID, current.ID)
+	if err != nil {
+		status, payload := tunnelMutationErrorStatusAndBody(err)
+		encodeJSON(w, status, payload)
+		return
+	}
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed", "tunnel": specFromStoredTunnel(stored, s)})
 }
 
 func (s *Server) stopUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI) {
-	if current.Topology == tunnelTopologyClientToClient {
-		stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID)
-		if err != nil {
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		s.unprovisionClientRelayTunnel(stored, "stopped")
-		config, err := s.stopOfflineManagedTunnel(current.OwnerClientID, current.ID)
-		if err != nil {
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel stopped", "tunnel": specFromStoredTunnelConfig(config, s)})
-		return
-	}
-	if client, ok := s.loadLiveClient(current.OwnerClientID); ok {
-		tunnelName, _, exists := findTunnelBySelector(client, current.ID)
-		if !exists {
-			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
-			return
-		}
-		if err := s.stopManagedTunnel(client, tunnelName); err != nil {
-			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel stopped"})
-		return
-	}
-
-	if _, err := s.stopOfflineManagedTunnel(current.OwnerClientID, current.ID); err != nil {
+	stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID)
+	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
-	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel stopped"})
+	stored.DesiredState = protocol.ProxyDesiredStateStopped
+	stored.RuntimeState = protocol.ProxyRuntimeStateIdle
+	if err := s.reconcileStoredUnifiedTunnel(stored, "stop"); err != nil {
+		_ = err
+	}
+	config, err := s.stopOfflineManagedTunnel(current.OwnerClientID, current.ID)
+	if err != nil {
+		status, payload := tunnelMutationErrorStatusAndBody(err)
+		encodeJSON(w, status, payload)
+		return
+	}
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel stopped", "tunnel": specFromStoredTunnelConfig(config, s)})
 }
 
 func (s *Server) handleListUnifiedTunnels(w http.ResponseWriter, _ *http.Request) {
@@ -359,38 +308,13 @@ func (s *Server) handleCreateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if req.Topology == tunnelTopologyClientToClient {
-		config, err := s.createUnifiedStoredTunnel(req)
-		if err != nil {
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		encodeJSON(w, http.StatusCreated, specFromStoredTunnel(config, s))
-		return
-	}
-
-	proxyReq, ownerClientID, err := s.proxyRequestFromUnifiedCreate(req, "")
+	config, err := s.createUnifiedStoredTunnel(req)
 	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
-
-	var config protocol.ProxyConfig
-	if client, ok := s.loadLiveClient(ownerClientID); ok {
-		config, err = s.createManagedTunnel(client, proxyReq, true, "created")
-	} else {
-		config, err = s.createOfflineManagedTunnel(ownerClientID, proxyReq)
-	}
-	if err != nil {
-		status, payload := tunnelMutationErrorStatusAndBody(err)
-		encodeJSON(w, status, payload)
-		return
-	}
-
-	spec := unifiedSpecFromProxyConfig(proxyConfigForClientView(config, s.isClientOnline(ownerClientID)))
-	encodeJSON(w, http.StatusCreated, spec)
+	encodeJSON(w, http.StatusCreated, specFromStoredTunnel(config, s))
 }
 
 func (s *Server) handleUpdateUnifiedTunnel(w http.ResponseWriter, r *http.Request) {
@@ -419,38 +343,7 @@ func (s *Server) handleUpdateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if current.Topology == tunnelTopologyClientToClient || req.Spec.Topology == tunnelTopologyClientToClient {
-		updated, err := s.updateUnifiedStoredTunnel(current, req.ExpectedRevision, req.Spec)
-		if err != nil {
-			if errors.Is(err, ErrTunnelRevisionConflict) {
-				encodeJSON(w, http.StatusConflict, map[string]any{"error": errTunnelRevisionConflict.Error(), "error_code": "revision_conflict"})
-				return
-			}
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		encodeJSON(w, http.StatusOK, map[string]any{"success": true, "tunnel": specFromStoredTunnel(updated, s)})
-		return
-	}
-
-	proxyReq, ownerClientID, err := s.proxyRequestFromUnifiedCreate(req.Spec, current.ID)
-	if err != nil {
-		status, payload := tunnelMutationErrorStatusAndBody(err)
-		encodeJSON(w, status, payload)
-		return
-	}
-	if ownerClientID != current.OwnerClientID {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "tunnel owner cannot be changed"})
-		return
-	}
-
-	var updated protocol.ProxyConfig
-	if client, ok := s.loadLiveClient(ownerClientID); ok {
-		updated, err = s.updateManagedTunnelWithRevision(client, current.ID, req.ExpectedRevision, proxyReq.Name, proxyReq.LocalIP, proxyReq.LocalPort, proxyReq.RemotePort, proxyReq.Domain, proxyReq.IngressBPS, proxyReq.EgressBPS)
-	} else {
-		updated, err = s.updateOfflineManagedTunnelWithRevision(ownerClientID, current.ID, req.ExpectedRevision, proxyReq.Name, proxyReq.LocalIP, proxyReq.LocalPort, proxyReq.RemotePort, proxyReq.Domain, proxyReq.IngressBPS, proxyReq.EgressBPS)
-	}
+	updated, err := s.updateUnifiedStoredTunnel(current, req.ExpectedRevision, req.Spec)
 	if err != nil {
 		if errors.Is(err, ErrTunnelRevisionConflict) {
 			encodeJSON(w, http.StatusConflict, map[string]any{"error": errTunnelRevisionConflict.Error(), "error_code": "revision_conflict"})
@@ -460,9 +353,7 @@ func (s *Server) handleUpdateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		encodeJSON(w, status, payload)
 		return
 	}
-
-	spec := unifiedSpecFromProxyConfig(proxyConfigForClientView(updated, s.isClientOnline(ownerClientID)))
-	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "tunnel": spec})
+	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "tunnel": specFromStoredTunnel(updated, s)})
 }
 
 func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Request) {
@@ -476,35 +367,15 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if current.Topology == tunnelTopologyClientToClient {
-		if stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID); err == nil {
+	if stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID); err == nil {
+		if stored.Topology == TunnelTopologyClientToClient {
 			s.unprovisionClientRelayTunnel(stored, "deleted")
+		} else if client, ok := s.loadLiveClient(stored.OwnerClientID); ok {
+			if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
+				_ = s.CloseProxyRuntime(client, name)
+				_ = s.notifyClientProxyClose(client, name, "deleted")
+			}
 		}
-		if err := s.deleteOfflineManagedTunnel(current.OwnerClientID, current.ID); err != nil {
-			status, payload := tunnelMutationErrorStatusAndBody(err)
-			encodeJSON(w, status, payload)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	if client, ok := s.loadLiveClient(current.OwnerClientID); ok {
-		tunnelName, tunnel, exists := findTunnelBySelector(client, current.ID)
-		if !exists {
-			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
-			return
-		}
-		if !canEditOrDeleteLiveTunnel(tunnel.Config) {
-			encodeJSON(w, http.StatusBadRequest, tunnelDeleteBlockedErrorBody(tunnel.Config))
-			return
-		}
-		if err := s.deleteManagedTunnel(client, tunnelName); err != nil {
-			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-		return
 	}
 
 	if err := s.deleteOfflineManagedTunnel(current.OwnerClientID, current.ID); err != nil {
@@ -750,11 +621,7 @@ func (s *Server) createUnifiedStoredTunnel(req tunnelCreateRequestAPI) (StoredTu
 	if err := s.store.AddTunnel(stored); err != nil {
 		return StoredTunnel{}, err
 	}
-	if err := s.reconcileStoredUnifiedTunnel(stored, "created"); err != nil {
-		// Reconcile failures are runtime facts after the config has been saved;
-		// create success only means the desired tunnel configuration is valid.
-		_ = err
-	}
+	s.scheduleUnifiedTunnelReconcile(stored, "created")
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
 		stored = reloaded
 	}
@@ -796,12 +663,13 @@ func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevisi
 	}
 	if existing.Topology == TunnelTopologyClientToClient {
 		s.unprovisionClientRelayTunnel(existing, "updated")
+	} else if client, ok := s.loadLiveClient(existing.OwnerClientID); ok {
+		if name, _, exists := findTunnelBySelector(client, existing.ID); exists {
+			_ = s.CloseProxyRuntime(client, name)
+			_ = s.notifyClientProxyClose(client, name, "updated")
+		}
 	}
-	if err := s.reconcileStoredUnifiedTunnel(stored, "updated"); err != nil {
-		// Runtime convergence failures should be reflected by runtime_state and
-		// in-memory issues, not by rolling back a valid saved spec.
-		_ = err
-	}
+	s.scheduleUnifiedTunnelReconcile(stored, "updated")
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
 		stored = reloaded
 	}
@@ -947,38 +815,168 @@ func (s *Server) validateUnifiedClientsAndCapabilities(req tunnelCreateRequestAP
 }
 
 func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequestAPI, excludeID string) error {
-	if s.store == nil || req.Ingress.Location != tunnelEndpointLocationClient {
+	if s.store == nil {
 		return nil
 	}
-	if req.Ingress.Type != tunnelIngressTypeTCPListen && req.Ingress.Type != tunnelIngressTypeUDPListen {
+	switch req.Ingress.Type {
+	case tunnelIngressTypeTCPListen, tunnelIngressTypeUDPListen, tunnelIngressTypeHTTPHost:
+	default:
 		return nil
 	}
-	want, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
-	if err != nil {
-		return err
+
+	var current StoredTunnel
+	hasCurrent := false
+	if excludeID != "" {
+		found, ok, err := s.findStoredTunnelByID(excludeID)
+		if err != nil {
+			return fmt.Errorf("failed to load current tunnel for ingress resource validation: %w", err)
+		}
+		current = found
+		hasCurrent = ok
 	}
-	if want.Port <= 0 {
-		return nil
-	}
+
 	tunnels, err := s.store.GetAllTunnels()
 	if err != nil {
 		return fmt.Errorf("failed to check ingress resource conflicts: %w", err)
 	}
 	for _, existing := range tunnels {
-		if existing.ID == excludeID || existing.Ingress.Location != tunnelEndpointLocationClient {
+		if existing.ID == excludeID {
 			continue
 		}
-		if existing.Ingress.ClientID != req.Ingress.ClientID || existing.Ingress.Type != req.Ingress.Type {
-			continue
+		conflicts, err := unifiedIngressResourcesConflict(req, existing)
+		if err != nil {
+			return err
 		}
-		got, err := decodeListenEndpointConfig(endpointSpecAPI{Location: existing.Ingress.Location, ClientID: existing.Ingress.ClientID, Type: existing.Ingress.Type, Config: existing.Ingress.Config}, existing.Topology)
-		if err != nil || got.Port != want.Port {
-			continue
-		}
-		if ipv4BindConflicts(got.BindIP, want.BindIP) {
-			return newProxyRequestValidationError(fmt.Errorf("ingress resource %s:%d conflicts with tunnel %q", want.BindIP, want.Port, existing.Name), "ingress.config.port", protocol.TunnelMutationErrorCodeIngressResourceConflict, http.StatusConflict)
+		if conflicts {
+			return newProxyRequestValidationError(fmt.Errorf("ingress resource conflicts with tunnel %q", existing.Name), "ingress.config.port", protocol.TunnelMutationErrorCodeIngressResourceConflict, http.StatusConflict)
 		}
 	}
+
+	if req.Topology != tunnelTopologyServerExpose || req.Ingress.Location != tunnelEndpointLocationServer {
+		return nil
+	}
+	if req.Ingress.Type == tunnelIngressTypeHTTPHost {
+		cfg, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
+		if err != nil {
+			return err
+		}
+		excludeName := ""
+		excludeClientID := ""
+		if hasCurrent {
+			excludeName = current.Name
+			excludeClientID = current.OwnerClientID
+		}
+		return checkDomainConflict(cfg.Domain, excludeName, excludeClientID, s)
+	}
+	if hasCurrent && sameUnifiedIngressResource(current.Ingress, req.Ingress, current.Topology, req.Topology) {
+		return nil
+	}
+
+	return s.preflightServerIngressResource(req)
+}
+
+func unifiedIngressResourcesConflict(req tunnelCreateRequestAPI, existing StoredTunnel) (bool, error) {
+	if existing.Ingress.Location != req.Ingress.Location || existing.Ingress.Type != req.Ingress.Type {
+		return false, nil
+	}
+	switch req.Ingress.Type {
+	case tunnelIngressTypeHTTPHost:
+		return false, nil
+	case tunnelIngressTypeTCPListen, tunnelIngressTypeUDPListen:
+		want, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
+		if err != nil {
+			return false, err
+		}
+		got, err := decodeListenEndpointConfig(endpointSpecAPI{Location: existing.Ingress.Location, ClientID: existing.Ingress.ClientID, Type: existing.Ingress.Type, Config: existing.Ingress.Config}, existing.Topology)
+		if err != nil {
+			return false, err
+		}
+		if want.Port <= 0 || got.Port != want.Port {
+			return false, nil
+		}
+		if req.Ingress.Location == tunnelEndpointLocationClient {
+			return existing.Ingress.ClientID == req.Ingress.ClientID && ipv4BindConflicts(got.BindIP, want.BindIP), nil
+		}
+		return req.Ingress.Location == tunnelEndpointLocationServer, nil
+	default:
+		return false, nil
+	}
+}
+
+func sameUnifiedIngressResource(current EndpointSpec, next endpointSpecAPI, currentTopology, nextTopology string) bool {
+	if current.Location != next.Location || current.ClientID != next.ClientID || current.Type != next.Type {
+		return false
+	}
+	switch current.Type {
+	case tunnelIngressTypeHTTPHost:
+		currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI{Location: current.Location, ClientID: current.ClientID, Type: current.Type, Config: current.Config}, currentTopology)
+		if err != nil {
+			return false
+		}
+		nextCfg, err := decodeListenEndpointConfig(next, nextTopology)
+		if err != nil {
+			return false
+		}
+		return canonicalHost(currentCfg.Domain) == canonicalHost(nextCfg.Domain)
+	case tunnelIngressTypeTCPListen, tunnelIngressTypeUDPListen:
+		currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI{Location: current.Location, ClientID: current.ClientID, Type: current.Type, Config: current.Config}, currentTopology)
+		if err != nil {
+			return false
+		}
+		nextCfg, err := decodeListenEndpointConfig(next, nextTopology)
+		if err != nil {
+			return false
+		}
+		return currentCfg.BindIP == nextCfg.BindIP && currentCfg.Port == nextCfg.Port
+	default:
+		return false
+	}
+}
+
+func (s *Server) preflightServerIngressResource(req tunnelCreateRequestAPI) error {
+	switch req.Ingress.Type {
+	case tunnelIngressTypeHTTPHost:
+		return nil
+	case tunnelIngressTypeTCPListen, tunnelIngressTypeUDPListen:
+	default:
+		return nil
+	}
+	cfg, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
+	if err != nil {
+		return err
+	}
+	if cfg.Port <= 0 {
+		return nil
+	}
+	if cfg.Port == 80 || cfg.Port == 443 {
+		return newProxyRequestValidationError(fmt.Errorf("TCP/UDP tunnels cannot use reserved port %d", cfg.Port), "ingress.config.port", "", http.StatusBadRequest)
+	}
+	if listenPort := serverListenPort(s); listenPort > 0 && cfg.Port == listenPort {
+		return newProxyRequestValidationError(fmt.Errorf("port %d conflicts with the NetsGo management service listen port", cfg.Port), "ingress.config.port", protocol.TunnelMutationErrorCodeIngressResourceConflict, http.StatusConflict)
+	}
+	if s.auth.adminStore != nil {
+		initialized, err := s.auth.adminStore.IsInitializedE()
+		if err != nil {
+			return newProxyRequestValidationError(fmt.Errorf("failed to read initialization state: %w", err), "ingress.config.port", "", http.StatusServiceUnavailable)
+		}
+		if initialized && !s.auth.adminStore.IsPortAllowed(cfg.Port) {
+			return newProxyRequestValidationError(fmt.Errorf("port %d is not in the allowed range", cfg.Port), "ingress.config.port", "", http.StatusBadRequest)
+		}
+	}
+	addr := fmt.Sprintf(":%d", cfg.Port)
+	if req.Ingress.Type == tunnelIngressTypeUDPListen {
+		conn, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return newProxyRequestValidationError(fmt.Errorf("server UDP ingress port %d is not available: %w", cfg.Port, err), "ingress.config.port", protocol.TunnelMutationErrorCodeIngressPortInUse, http.StatusConflict)
+		}
+		_ = conn.Close()
+		return nil
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return newProxyRequestValidationError(fmt.Errorf("server TCP ingress port %d is not available: %w", cfg.Port, err), "ingress.config.port", protocol.TunnelMutationErrorCodeIngressPortInUse, http.StatusConflict)
+	}
+	_ = ln.Close()
 	return nil
 }
 
@@ -1182,7 +1180,7 @@ func computedRuntimeStateForStoredTunnel(stored StoredTunnel, s *Server) string 
 	if stored.Topology == TunnelTopologyServerExpose || stored.Topology == "" {
 		if client, ok := s.loadLiveClient(stored.OwnerClientID); ok {
 			if _, tunnel, exists := findTunnelBySelector(client, stored.ID); exists {
-				if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && isTunnelExposed(tunnel.Config) {
+				if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && serverExposeRuntimeHeld(tunnel) {
 					return tunnelRuntimeStateActive
 				}
 				if tunnel.Config.RuntimeState == protocol.ProxyRuntimeStatePending {

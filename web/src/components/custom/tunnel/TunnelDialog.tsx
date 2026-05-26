@@ -216,7 +216,7 @@ function TunnelDialogForm({
           topology: tunnel.topology,
           ingress_client_id: tunnel.ingress?.client_id,
           bind_ip: tunnel.ingress?.type === 'tcp_listen' || tunnel.ingress?.type === 'udp_listen'
-            ? tunnel.ingress.config.bind_ip
+            ? bindIp
             : undefined,
           name,
           type: tunnel.type,
