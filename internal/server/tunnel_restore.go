@@ -22,6 +22,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 		return
 	}
 	if len(tunnels) == 0 {
+		s.reconcileNonOwnerTunnelsForClient(client.ID, "restore_related")
 		return
 	}
 
@@ -113,4 +114,5 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			"count":     restoredCount,
 		})
 	}
+	s.reconcileNonOwnerTunnelsForClient(client.ID, "restore_related")
 }

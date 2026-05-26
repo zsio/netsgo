@@ -238,6 +238,24 @@ func (s *Server) reconcileTunnelsForClient(clientID, reason string) {
 	}
 }
 
+func (s *Server) reconcileNonOwnerTunnelsForClient(clientID, reason string) {
+	if s == nil || s.store == nil || strings.TrimSpace(clientID) == "" {
+		return
+	}
+	tunnels, err := s.store.GetAllTunnels()
+	if err != nil {
+		return
+	}
+	for _, stored := range tunnels {
+		if stored.OwnerClientID == clientID || stored.ClientID == clientID {
+			continue
+		}
+		if stored.Target.ClientID == clientID || stored.Ingress.ClientID == clientID {
+			_ = s.reconcileStoredUnifiedTunnel(stored, reason)
+		}
+	}
+}
+
 func (s *Server) releaseUnifiedRuntimeForClient(clientID string) {
 	if s == nil || s.store == nil || strings.TrimSpace(clientID) == "" {
 		return

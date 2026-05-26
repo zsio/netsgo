@@ -72,3 +72,53 @@ func TestReconcileRunningUnifiedTunnelsSkipsStoppedAndProjectsOffline(t *testing
 		t.Fatalf("stopped tunnel should be skipped by retry reconcile, got %s/%s", gotStopped.DesiredState, gotStopped.RuntimeState)
 	}
 }
+
+func TestRestoreTunnelsReconcilesNonOwnerClientRelayParticipant(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	stored := testStoredC2CTunnelForReconcile(
+		"related-c2c",
+		"related-c2c",
+		protocol.ProxyDesiredStateRunning,
+		protocol.ProxyRuntimeStateOffline,
+		22024,
+	)
+	mustAddStableTunnel(t, s.store, stored)
+
+	caps := protocol.DefaultClientCapabilities()
+	_, ingressSession := newTestClientRelayDataSession(t)
+	_, targetSession := newTestClientRelayDataSession(t)
+	ingressClient := &ClientConn{
+		ID:          stored.Ingress.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		dataSession: ingressSession,
+		generation:  1,
+		state:       clientStateLive,
+		proxies:     make(map[string]*ProxyTunnel),
+	}
+	targetClient := &ClientConn{
+		ID:          stored.Target.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		dataSession: targetSession,
+		generation:  1,
+		state:       clientStateLive,
+		proxies:     make(map[string]*ProxyTunnel),
+	}
+	s.clients.Store(ingressClient.ID, ingressClient)
+	s.clients.Store(targetClient.ID, targetClient)
+
+	s.restoreTunnels(ingressClient)
+
+	got, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("load related tunnel: %v", err)
+	}
+	if got.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("non-owner participant restore should reconcile related tunnel, got runtime_state=%q", got.RuntimeState)
+	}
+	spec := specFromStoredTunnel(got, s)
+	if len(spec.Issues) == 0 || spec.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckRejected {
+		t.Fatalf("related reconcile should record provisioning issue after control write failure, got %+v", spec.Issues)
+	}
+}
