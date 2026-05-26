@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
 import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
 import { useClientTraffic } from '@/hooks/use-client-traffic';
+import { useClientTunnelsByRole } from '@/hooks/use-tunnel-mutations';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 
@@ -19,6 +20,7 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
     isLoading: isTraffic24hLoading,
     isError: isTraffic24hError,
   } = useClientTraffic(client.id, '24h');
+  const { data: relatedTunnels } = useClientTunnelsByRole(client.id, 'related');
 
   const traffic24hByTunnel = useMemo(() => {
     const totals = new Map<string, number>();
@@ -33,7 +35,8 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
     return totals;
   }, [trafficData?.items]);
 
-  const tunnels: TunnelEntry[] = (client.proxies ?? []).map((proxy) => ({
+  const tunnelSource = relatedTunnels ?? client.proxies ?? [];
+  const tunnels: TunnelEntry[] = tunnelSource.map((proxy) => ({
     ...proxy,
     clientId: client.id,
     clientName: getClientDisplayName(client),
