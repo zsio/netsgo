@@ -58,25 +58,38 @@ func ackProvisionMessages(t *testing.T, conn interface {
 }, count int) {
 	t.Helper()
 	for i := 0; i < count; i++ {
-		msg := readControlMessageOfType(t, conn, protocol.MsgTypeTunnelProvision)
-		var req protocol.TunnelProvisionRequest
-		if err := msg.ParsePayload(&req); err != nil {
-			t.Fatalf("parse provision payload: %v", err)
-		}
-		ack, err := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
-			TunnelID: req.TunnelID,
-			Revision: req.Revision,
-			Role:     req.Role,
-			Accepted: true,
-			Message:  "ok",
-		})
-		if err != nil {
-			t.Fatalf("build provision ack: %v", err)
-		}
-		if err := conn.WriteJSON(ack); err != nil {
-			t.Fatalf("write provision ack: %v", err)
-		}
+		ackTunnelProvision(t, conn)
 	}
+}
+
+func ackTunnelProvision(t *testing.T, conn interface {
+	SetReadDeadline(time.Time) error
+	ReadJSON(any) error
+	WriteJSON(any) error
+}) protocol.TunnelProvisionRequest {
+	t.Helper()
+	msg := readControlMessageOfType(t, conn, protocol.MsgTypeTunnelProvision)
+	var req protocol.TunnelProvisionRequest
+	if err := msg.ParsePayload(&req); err != nil {
+		t.Fatalf("parse provision payload: %v", err)
+	}
+	if req.TunnelID == "" {
+		t.Fatalf("expected unified tunnel provision payload, got empty tunnel_id: %+v", req)
+	}
+	ack, err := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
+		TunnelID: req.TunnelID,
+		Revision: req.Revision,
+		Role:     req.Role,
+		Accepted: true,
+		Message:  "ok",
+	})
+	if err != nil {
+		t.Fatalf("build provision ack: %v", err)
+	}
+	if err := conn.WriteJSON(ack); err != nil {
+		t.Fatalf("write provision ack: %v", err)
+	}
+	return req
 }
 
 func ackLegacyProxyProvision(t *testing.T, conn interface {
@@ -857,9 +870,12 @@ func TestAPI_UnifiedTunnelServerExposeListenFailureProjectsIssue(t *testing.T) {
 		t.Fatalf("target client id mismatch after reconnect: want %s got %s", target.ID, targetAuth.ClientID)
 	}
 	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
-	provisionReq := ackLegacyProxyProvision(t, targetConn)
-	if provisionReq.Name != "server-expose-listen-race" || provisionReq.ProvisionRevision == 0 {
-		t.Fatalf("legacy provision payload mismatch: %+v", provisionReq)
+	provisionReq := ackTunnelProvision(t, targetConn)
+	if provisionReq.TunnelID != created.ID || provisionReq.Revision != created.Revision || provisionReq.Role != protocol.DataStreamRoleTarget {
+		t.Fatalf("server-expose provision identity mismatch: %+v", provisionReq)
+	}
+	if provisionReq.Spec.Topology != tunnelTopologyServerExpose || provisionReq.Spec.Target.ClientID != target.ID || provisionReq.Spec.Target.Type != tunnelTargetTypeTCPService {
+		t.Fatalf("server-expose provision spec mismatch: %+v", provisionReq.Spec)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)

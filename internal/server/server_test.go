@@ -3148,12 +3148,15 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	if restoreMsg.Type != protocol.MsgTypeProxyProvision {
 		t.Fatalf("restore phase: want %s, got %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
 	}
-	var restoreReq protocol.ProxyProvisionRequest
+	var restoreReq protocol.TunnelProvisionRequest
 	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
-		t.Fatalf("failed to parse restore proxy_provision: %v", err)
+		t.Fatalf("failed to parse restore tunnel_provision: %v", err)
 	}
-	if restoreReq.Name != "restore-fail-tunnel" {
-		t.Fatalf("restore tunnel name: want restore-fail-tunnel, got %s", restoreReq.Name)
+	if restoreReq.TunnelID == "" || restoreReq.Revision <= 0 || restoreReq.Role != protocol.DataStreamRoleTarget {
+		t.Fatalf("restore provision identity mismatch: %+v", restoreReq)
+	}
+	if restoreReq.Spec.Name != "restore-fail-tunnel" {
+		t.Fatalf("restore tunnel name: want restore-fail-tunnel, got %s", restoreReq.Spec.Name)
 	}
 
 	s.store.mu.Lock()
@@ -3161,11 +3164,12 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	s.store.failSaveCount = 1
 	s.store.mu.Unlock()
 
-	restoreAck, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-		Name:              restoreReq.Name,
-		ProvisionRevision: restoreReq.ProvisionRevision,
-		Accepted:          true,
-		Message:           "ok",
+	restoreAck, _ := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
+		TunnelID: restoreReq.TunnelID,
+		Revision: restoreReq.Revision,
+		Role:     restoreReq.Role,
+		Accepted: true,
+		Message:  "ok",
 	})
 	if err := controlConn.WriteJSON(restoreAck); err != nil {
 		t.Fatalf("failed to send restore ack: %v", err)
@@ -3276,18 +3280,22 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 		t.Fatalf("HTTP restore phase: want %s, got %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
 	}
 
-	var restoreReq protocol.ProxyProvisionRequest
+	var restoreReq protocol.TunnelProvisionRequest
 	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
-		t.Fatalf("failed to parse HTTP restore proxy_provision: %v", err)
+		t.Fatalf("failed to parse HTTP restore tunnel_provision: %v", err)
 	}
-	if restoreReq.Name != "restore-http" {
-		t.Fatalf("restore tunnel name: want restore-http, got %s", restoreReq.Name)
+	if restoreReq.Spec.Name != "restore-http" {
+		t.Fatalf("restore tunnel name: want restore-http, got %s", restoreReq.Spec.Name)
 	}
-	if restoreReq.Type != protocol.ProxyTypeHTTP {
-		t.Fatalf("restore tunnel type: want http, got %s", restoreReq.Type)
+	if restoreReq.Spec.Ingress.Type != protocol.IngressTypeHTTPHost {
+		t.Fatalf("restore ingress type: want http_host, got %s", restoreReq.Spec.Ingress.Type)
 	}
-	if restoreReq.Domain != "app.example.com" {
-		t.Fatalf("restore tunnel domain: want app.example.com, got %s", restoreReq.Domain)
+	var httpCfg httpHostConfigAPI
+	if err := json.Unmarshal(restoreReq.Spec.Ingress.Config, &httpCfg); err != nil {
+		t.Fatalf("decode restore HTTP ingress config: %v", err)
+	}
+	if httpCfg.Domain != "app.example.com" {
+		t.Fatalf("restore tunnel domain: want app.example.com, got %s", httpCfg.Domain)
 	}
 
 	client, ok := s.loadLiveClient(authResp.ClientID)

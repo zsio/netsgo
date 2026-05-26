@@ -266,7 +266,7 @@ func (s *Server) markUDPProxyRuntimeErrorIfCurrent(
 	}
 	s.recordServerExposeIngressIssue(tunnel.Config.ID, tunnel.Config.Type, message)
 	s.emitTunnelChanged(client.ID, config, "error")
-	if err := s.notifyClientProxyClose(client, tunnel.Config.Name, "runtime_error"); err != nil {
+	if err := s.notifyServerExposeTargetUnprovision(client, config, "runtime_error"); err != nil {
 		log.Printf("⚠️ UDP proxy [%s] failed to notify client of close: %v", tunnel.Config.Name, err)
 	}
 }

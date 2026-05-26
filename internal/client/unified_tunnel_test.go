@@ -338,6 +338,34 @@ func TestClientTunnelUnprovisionIgnoresStaleTargetRevision(t *testing.T) {
 	}
 }
 
+func TestClientTunnelUnprovisionDeletesLegacyProxyByTunnelID(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
+	proxy, err := proxyRequestFromTunnelSpec(req.Spec)
+	if err != nil {
+		t.Fatalf("build proxy request: %v", err)
+	}
+	c.proxies.Store(proxy.Name, proxy)
+
+	c.handleTunnelUnprovision(protocol.TunnelUnprovisionRequest{
+		TunnelID: req.TunnelID,
+		Revision: req.Revision - 1,
+		Role:     protocol.DataStreamRoleTarget,
+	})
+	if _, ok := c.proxies.Load(proxy.Name); !ok {
+		t.Fatal("stale tunnel-id unprovision deleted legacy keyed proxy")
+	}
+
+	c.handleTunnelUnprovision(protocol.TunnelUnprovisionRequest{
+		TunnelID: req.TunnelID,
+		Revision: req.Revision,
+		Role:     protocol.DataStreamRoleTarget,
+	})
+	if _, ok := c.proxies.Load(proxy.Name); ok {
+		t.Fatal("current tunnel-id unprovision did not delete legacy keyed proxy")
+	}
+}
+
 func TestClientTunnelPreflightTCPBindSuccessAndFailure(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	port := reserveClientTCPPort(t)

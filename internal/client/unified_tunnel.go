@@ -256,14 +256,36 @@ func (c *Client) handleTunnelUnprovision(req protocol.TunnelUnprovisionRequest) 
 	}
 
 	if req.Role == protocol.DataStreamRoleTarget || req.Role == "" {
-		if value, ok := c.proxies.Load(req.TunnelID); ok {
-			proxy, isProxy := value.(protocol.ProxyNewRequest)
-			stale := isProxy && req.Revision > 0 && proxy.ProvisionRevision > 0 && uint64(req.Revision) != proxy.ProvisionRevision
-			if !stale {
-				c.proxies.CompareAndDelete(req.TunnelID, value)
-			}
-		}
+		c.deleteProxyByTunnelUnprovision(req)
 	}
+}
+
+func (c *Client) deleteProxyByTunnelUnprovision(req protocol.TunnelUnprovisionRequest) {
+	if req.TunnelID == "" {
+		return
+	}
+	if value, ok := c.proxies.Load(req.TunnelID); ok {
+		if proxyUnprovisionMatchesRevision(value, req.Revision) {
+			c.proxies.CompareAndDelete(req.TunnelID, value)
+		}
+		return
+	}
+	c.proxies.Range(func(key, value any) bool {
+		proxy, ok := value.(protocol.ProxyNewRequest)
+		if !ok || proxy.ID != req.TunnelID || !proxyUnprovisionMatchesRevision(value, req.Revision) {
+			return true
+		}
+		c.proxies.CompareAndDelete(key, value)
+		return false
+	})
+}
+
+func proxyUnprovisionMatchesRevision(value any, revision int64) bool {
+	proxy, ok := value.(protocol.ProxyNewRequest)
+	if !ok {
+		return false
+	}
+	return revision <= 0 || proxy.ProvisionRevision == 0 || uint64(revision) == proxy.ProvisionRevision
 }
 
 func (c *Client) startIngressTunnelRuntime(rt *sessionRuntime, req protocol.TunnelProvisionRequest) error {

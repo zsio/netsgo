@@ -95,7 +95,7 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 		if client, ok := s.loadLiveClient(stored.OwnerClientID); ok {
 			if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
 				_ = s.CloseProxyRuntime(client, name)
-				_ = s.notifyClientProxyClose(client, name, "stopped")
+				_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "stopped")
 			}
 		}
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateIdle, "")
@@ -107,7 +107,7 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 		if ok {
 			if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
 				_ = s.CloseProxyRuntime(client, name)
-				_ = s.notifyClientProxyClose(client, name, "participant_offline")
+				_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "participant_offline")
 			}
 		}
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
@@ -116,7 +116,7 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 		s.unifiedRuntime.clearTunnelIssues(stored.ID)
 		if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
 			_ = s.CloseProxyRuntime(client, name)
-			_ = s.notifyClientProxyClose(client, name, "capability_not_supported")
+			_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "capability_not_supported")
 		}
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateError, issues[0].Message)
 	}
@@ -125,7 +125,7 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && serverExposeRuntimeHeld(tunnel) {
 			if s.unifiedRuntime.hasIssuesForStoredTunnel(stored, true) {
 				s.removeTunnelRuntime(client, name)
-				_ = s.notifyClientProxyClose(client, name, "retrying_after_runtime_issue")
+				_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "retrying_after_runtime_issue")
 			} else {
 				s.unifiedRuntime.clearServerIssues(stored.ID)
 				return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
@@ -137,7 +137,7 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateStopped {
 			s.unifiedRuntime.clearTunnelIssues(stored.ID)
 			_ = s.CloseProxyRuntime(client, name)
-			_ = s.notifyClientProxyClose(client, name, "stopped")
+			_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "stopped")
 			return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateIdle, "")
 		}
 		if isTunnelExposed(tunnel.Config) && !serverExposeRuntimeHeld(tunnel) {
@@ -146,7 +146,7 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 	}
 
 	s.unifiedRuntime.clearTunnelIssues(stored.ID)
-	if err := s.restoreManagedTunnel(client, stored); err != nil {
+	if err := s.restoreUnifiedServerExposeTunnel(client, stored); err != nil {
 		s.recordServerExposeReconcileIssue(stored, err)
 		return err
 	}
