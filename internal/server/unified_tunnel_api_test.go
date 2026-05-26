@@ -79,6 +79,32 @@ func ackProvisionMessages(t *testing.T, conn interface {
 	}
 }
 
+func ackLegacyProxyProvision(t *testing.T, conn interface {
+	SetReadDeadline(time.Time) error
+	ReadJSON(any) error
+	WriteJSON(any) error
+}) protocol.ProxyProvisionRequest {
+	t.Helper()
+	msg := readControlMessageOfType(t, conn, protocol.MsgTypeProxyProvision)
+	var req protocol.ProxyProvisionRequest
+	if err := msg.ParsePayload(&req); err != nil {
+		t.Fatalf("parse legacy proxy provision payload: %v", err)
+	}
+	ack, err := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
+		Name:              req.Name,
+		ProvisionRevision: req.ProvisionRevision,
+		Accepted:          true,
+		Message:           "ok",
+	})
+	if err != nil {
+		t.Fatalf("build legacy proxy provision ack: %v", err)
+	}
+	if err := conn.WriteJSON(ack); err != nil {
+		t.Fatalf("write legacy proxy provision ack: %v", err)
+	}
+	return req
+}
+
 func setLiveClientDefaultCapabilities(t *testing.T, s *Server, clientID string) {
 	t.Helper()
 	value, ok := s.clients.Load(clientID)
@@ -665,6 +691,154 @@ func TestAPI_UnifiedTunnelCreatePersistsProvisionRuntimeFailure(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("runtime state should eventually project provisioning error, last state=%q issues=%+v", got.RuntimeState, got.Issues)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAPI_UnifiedTunnelServerExposeProvisionTimeoutProjectsIssue(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	s.tunnels.tunnelReadyTimeout = 20 * time.Millisecond
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "server-expose-timeout-target", "install-server-expose-timeout-target")
+	defer mustClose(t, targetConn)
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+
+	create := []byte(fmt.Sprintf(`{
+		"name":"server-expose-provision-timeout",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`, reserveTCPPort(t), targetAuth.ClientID))
+
+	resp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("server_expose create should persist despite runtime timeout: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		getResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodGet, "/api/tunnels/"+created.ID, token, nil)
+		if getResp.Code != http.StatusOK {
+			t.Fatalf("GET tunnel: want 200, got %d body=%s", getResp.Code, getResp.Body.String())
+		}
+		var got tunnelSpecAPI
+		if err := mustDecodeJSON(t, getResp.Body, &got); err != nil {
+			t.Fatalf("decode tunnel: %v", err)
+		}
+		if got.RuntimeState == protocol.ProxyRuntimeStateError {
+			if len(got.Issues) != 1 || got.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckTimeout || got.Issues[0].Scope != "target_client" || got.Issues[0].ClientID != targetAuth.ClientID {
+				t.Fatalf("server-expose timeout issue mismatch: %+v", got.Issues)
+			}
+			clientsResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodGet, "/api/clients", token, nil)
+			if clientsResp.Code != http.StatusOK {
+				t.Fatalf("GET clients: want 200, got %d body=%s", clientsResp.Code, clientsResp.Body.String())
+			}
+			var clients []clientView
+			if err := mustDecodeJSON(t, clientsResp.Body, &clients); err != nil {
+				t.Fatalf("decode clients: %v", err)
+			}
+			var projected *protocol.ProxyConfig
+			for i := range clients {
+				if clients[i].ID != targetAuth.ClientID {
+					continue
+				}
+				for j := range clients[i].Proxies {
+					if clients[i].Proxies[j].ID == created.ID {
+						projected = &clients[i].Proxies[j]
+						break
+					}
+				}
+			}
+			if projected == nil {
+				t.Fatalf("unified tunnel should appear in /api/clients projection")
+			}
+			if projected.Topology != tunnelTopologyServerExpose || projected.Ingress == nil || projected.Target == nil {
+				t.Fatalf("/api/clients tunnel should keep unified metadata: %+v", projected)
+			}
+			if projected.Issues == nil || len(*projected.Issues) != 1 || (*projected.Issues)[0].Code != protocol.TunnelIssueCodeProvisionAckTimeout {
+				t.Fatalf("/api/clients tunnel should keep unified issues: %+v", projected.Issues)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server_expose should eventually project provisioning error, last state=%q issues=%+v", got.RuntimeState, got.Issues)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAPI_UnifiedTunnelServerExposeListenFailureProjectsIssue(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	target := createUnifiedAPITestClient(t, s, "install-server-expose-listen-target", "server-expose-listen-target")
+	port := reserveTCPPort(t)
+	create := []byte(fmt.Sprintf(`{
+		"name":"server-expose-listen-race",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`, port, target.ID))
+	resp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("offline server_expose create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		t.Fatalf("occupy server-expose port after create: %v", err)
+	}
+	defer mustClose(t, ln)
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "server-expose-listen-target", "install-server-expose-listen-target")
+	defer mustClose(t, targetConn)
+	if targetAuth.ClientID != target.ID {
+		t.Fatalf("target client id mismatch after reconnect: want %s got %s", target.ID, targetAuth.ClientID)
+	}
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+	provisionReq := ackLegacyProxyProvision(t, targetConn)
+	if provisionReq.Name != "server-expose-listen-race" || provisionReq.ProvisionRevision == 0 {
+		t.Fatalf("legacy provision payload mismatch: %+v", provisionReq)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		getResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodGet, "/api/tunnels/"+created.ID, token, nil)
+		if getResp.Code != http.StatusOK {
+			t.Fatalf("GET tunnel: want 200, got %d body=%s", getResp.Code, getResp.Body.String())
+		}
+		var got tunnelSpecAPI
+		if err := mustDecodeJSON(t, getResp.Body, &got); err != nil {
+			t.Fatalf("decode tunnel: %v", err)
+		}
+		if got.RuntimeState == protocol.ProxyRuntimeStateError {
+			if len(got.Issues) != 1 || got.Issues[0].Code != protocol.TunnelIssueCodeIngressPortInUse || got.Issues[0].Scope != "server" {
+				t.Fatalf("server-expose listen issue mismatch: %+v", got.Issues)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server_expose should eventually project listen failure, last state=%q issues=%+v", got.RuntimeState, got.Issues)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

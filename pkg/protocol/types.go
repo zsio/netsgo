@@ -121,6 +121,9 @@ type TunnelIssue struct {
 // Stable tunnel issue codes emitted by server/client runtime paths.
 const (
 	TunnelIssueCodeRuntimeReport          = "runtime_report"
+	TunnelIssueCodeIngressPortInUse       = "ingress_port_in_use"
+	TunnelIssueCodeIngressListenFailed    = "ingress_listen_failed"
+	TunnelIssueCodeIngressRouteFailed     = "ingress_route_failed"
 	TunnelIssueCodeProvisionAckTimeout    = "provision_ack_timeout"
 	TunnelIssueCodeProvisionAckRejected   = "provision_ack_rejected"
 	TunnelIssueCodeProvisionAckCancelled  = "provision_ack_cancelled"
@@ -280,8 +283,16 @@ type ProxyConfig struct {
 	RemotePort        int                 `json:"remote_port"` // 公网暴露端口
 	Domain            string              `json:"domain"`      // HTTP 类型时的域名
 	ClientID          string              `json:"client_id"`   // 所属 Client ID
+	Topology          string              `json:"topology,omitempty"`
+	OwnerClientID     string              `json:"owner_client_id,omitempty"`
+	Ingress           *EndpointSpec       `json:"ingress,omitempty"`
+	Target            *EndpointSpec       `json:"target,omitempty"`
 	TransportPolicy   string              `json:"transport_policy,omitempty"`
 	ActualTransport   string              `json:"actual_transport,omitempty"`
+	P2P               *P2PState           `json:"p2p,omitempty"`
+	Issues            *[]TunnelIssue      `json:"issues,omitempty"`
+	Participants      *TunnelParticipants `json:"participants,omitempty"`
+	Transport         *TransportRuntime   `json:"transport,omitempty"`
 	BandwidthSettings                     // 聚合带宽限制（payload bytes/sec，0 = unlimited）
 	CreatedAt         time.Time           `json:"created_at"`             // 创建时间
 	DesiredState      string              `json:"desired_state"`          // 用户目标状态: running, stopped

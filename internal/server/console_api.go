@@ -135,14 +135,11 @@ func (s *Server) collectClientViews() []clientView {
 				LastIP:      registered.LastIP,
 			}
 			if s.store != nil {
-				stored, err := s.store.GetTunnelsByClientID(registered.ID)
+				proxies, _, err := s.storedProxyViewsForClient(registered.ID)
 				if err != nil {
 					log.Printf("⚠️ failed to load tunnels for client %s: %v", registered.ID, err)
 				}
-				view.Proxies = make([]protocol.ProxyConfig, 0, len(stored))
-				for _, tunnel := range stored {
-					view.Proxies = append(view.Proxies, proxyConfigForClientView(storedTunnelToProxyConfig(tunnel), false))
-				}
+				view.Proxies = proxies
 			}
 			views[registered.ID] = view
 		}
@@ -153,9 +150,18 @@ func (s *Server) collectClientViews() []clientView {
 		if !client.isLive() {
 			return true
 		}
+		proxies, seen, err := s.storedProxyViewsForClient(client.ID)
+		if err != nil {
+			log.Printf("⚠️ failed to load tunnels for live client %s: %v", client.ID, err)
+			proxies = []protocol.ProxyConfig{}
+			seen = map[string]struct{}{}
+		}
 		configs := client.ProxyConfigsSnapshot()
-		proxies := make([]protocol.ProxyConfig, 0, len(configs))
 		for _, config := range configs {
+			key := proxyConfigViewKey(config)
+			if _, exists := seen[key]; exists {
+				continue
+			}
 			proxies = append(proxies, proxyConfigForClientView(config, true))
 		}
 		sort.Slice(proxies, func(i, j int) bool {
@@ -199,6 +205,68 @@ func (s *Server) collectClientViews() []clientView {
 	sort.Slice(clients, func(i, j int) bool { return clients[i].Info.Hostname < clients[j].Info.Hostname })
 
 	return clients
+}
+
+func (s *Server) storedProxyViewsForClient(clientID string) ([]protocol.ProxyConfig, map[string]struct{}, error) {
+	seen := map[string]struct{}{}
+	if s.store == nil {
+		return []protocol.ProxyConfig{}, seen, nil
+	}
+	stored, err := s.store.GetTunnelsByClientID(clientID)
+	if err != nil {
+		return nil, seen, err
+	}
+	proxies := make([]protocol.ProxyConfig, 0, len(stored))
+	for _, tunnel := range stored {
+		config := s.storedTunnelViewConfig(tunnel)
+		seen[proxyConfigViewKey(config)] = struct{}{}
+		proxies = append(proxies, config)
+	}
+	return proxies, seen, nil
+}
+
+func (s *Server) storedTunnelViewConfig(stored StoredTunnel) protocol.ProxyConfig {
+	config := storedTunnelToProxyConfig(stored)
+	spec := specFromStoredTunnel(stored, s)
+	setProxyConfigStates(&config, spec.DesiredState, runtimeStateForProxyConfig(spec.RuntimeState), spec.Error)
+	config.ActualTransport = spec.ActualTransport
+	config.TransportPolicy = spec.TransportPolicy
+	if len(spec.Issues) > 0 {
+		issues := append([]protocol.TunnelIssue(nil), spec.Issues...)
+		config.Issues = &issues
+	}
+	config.Capabilities = spec.Capabilities
+	config.P2P = &protocol.P2PState{State: spec.P2P.State, Error: spec.P2P.Error, SessionID: spec.P2P.SessionID}
+	config.Participants = &protocol.TunnelParticipants{
+		Ingress: protocol.ParticipantRuntime{
+			ClientID: spec.Participants.Ingress.ClientID,
+			Role:     spec.Participants.Ingress.Role,
+			State:    spec.Participants.Ingress.State,
+			Revision: spec.Participants.Ingress.Revision,
+			Error:    spec.Participants.Ingress.Error,
+		},
+		Target: protocol.ParticipantRuntime{
+			ClientID: spec.Participants.Target.ClientID,
+			Role:     spec.Participants.Target.Role,
+			State:    spec.Participants.Target.State,
+			Revision: spec.Participants.Target.Revision,
+			Error:    spec.Participants.Target.Error,
+		},
+	}
+	config.Transport = &protocol.TransportRuntime{
+		Policy:   spec.Transport.Policy,
+		Actual:   spec.Transport.Actual,
+		P2PState: spec.Transport.P2PState,
+		P2PError: spec.Transport.P2PError,
+	}
+	return config
+}
+
+func proxyConfigViewKey(config protocol.ProxyConfig) string {
+	if config.ID != "" {
+		return config.ID
+	}
+	return config.Name
 }
 
 func (s *Server) serverStatusLoop() {

@@ -414,6 +414,7 @@ func (s *Server) markTCPProxyRuntimeErrorIfCurrent(
 	if err := s.persistTunnelStates(client.ID, tunnel.Config.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message); err != nil {
 		log.Printf("⚠️ TCP proxy [%s] failed to persist error state: %v", tunnel.Config.Name, err)
 	}
+	s.recordServerExposeIngressIssue(tunnel.Config.ID, tunnel.Config.Type, message)
 	s.emitTunnelChanged(client.ID, config, "error")
 	if err := s.notifyClientProxyClose(client, tunnel.Config.Name, "runtime_error"); err != nil {
 		log.Printf("⚠️ TCP proxy [%s] failed to notify client of close: %v", tunnel.Config.Name, err)

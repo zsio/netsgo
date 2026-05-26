@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -90,6 +91,7 @@ func (s *Server) findStoredTunnelByID(tunnelID string) (StoredTunnel, bool, erro
 
 func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 	if stored.DesiredState == protocol.ProxyDesiredStateStopped {
+		s.unifiedRuntime.clearTunnelIssues(stored.ID)
 		if client, ok := s.loadLiveClient(stored.OwnerClientID); ok {
 			if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
 				_ = s.CloseProxyRuntime(client, name)
@@ -101,6 +103,7 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 
 	client, ok := s.loadLiveClient(stored.OwnerClientID)
 	if !ok || !clientHasDataSession(client) {
+		s.unifiedRuntime.clearTunnelIssues(stored.ID)
 		if ok {
 			if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
 				_ = s.CloseProxyRuntime(client, name)
@@ -112,12 +115,19 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 
 	if name, tunnel, exists := findTunnelBySelector(client, stored.ID); exists {
 		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && serverExposeRuntimeHeld(tunnel) {
-			return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
+			if s.unifiedRuntime.hasIssuesForStoredTunnel(stored, true) {
+				s.removeTunnelRuntime(client, name)
+				_ = s.notifyClientProxyClose(client, name, "retrying_after_runtime_issue")
+			} else {
+				s.unifiedRuntime.clearServerIssues(stored.ID)
+				return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
+			}
 		}
 		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && tunnel.Config.RuntimeState == protocol.ProxyRuntimeStatePending {
 			return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStatePending, "")
 		}
 		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateStopped {
+			s.unifiedRuntime.clearTunnelIssues(stored.ID)
 			_ = s.CloseProxyRuntime(client, name)
 			_ = s.notifyClientProxyClose(client, name, "stopped")
 			return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateIdle, "")
@@ -127,7 +137,13 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 		}
 	}
 
-	return s.restoreManagedTunnel(client, stored)
+	s.unifiedRuntime.clearTunnelIssues(stored.ID)
+	if err := s.restoreManagedTunnel(client, stored); err != nil {
+		s.recordServerExposeReconcileIssue(stored, err)
+		return err
+	}
+	s.unifiedRuntime.clearServerIssues(stored.ID)
+	return nil
 }
 
 func serverExposeRuntimeHeld(tunnel *ProxyTunnel) bool {
@@ -142,6 +158,61 @@ func serverExposeRuntimeHeld(tunnel *ProxyTunnel) bool {
 	default:
 		return tunnel.Listener != nil
 	}
+}
+
+func (s *Server) recordServerExposeReconcileIssue(stored StoredTunnel, err error) {
+	if err == nil {
+		return
+	}
+	var rejected *tunnelProvisionRejectedError
+	switch {
+	case errors.Is(err, errTunnelProvisionAckTimeout):
+		s.recordServerExposeProvisionIssue(stored, protocol.TunnelIssueCodeProvisionAckTimeout, err)
+	case errors.Is(err, errTunnelProvisionAckCancelled):
+		s.recordServerExposeProvisionIssue(stored, protocol.TunnelIssueCodeProvisionAckCancelled, err)
+	case errors.As(err, &rejected):
+		s.recordServerExposeProvisionIssue(stored, protocol.TunnelIssueCodeProvisionAckRejected, err)
+	default:
+		s.recordServerExposeIngressIssue(stored.ID, stored.Type, err.Error())
+	}
+}
+
+func (s *Server) recordServerExposeProvisionIssue(stored StoredTunnel, code string, err error) {
+	s.unifiedRuntime.recordServerIssue(stored.ID, protocol.TunnelIssue{
+		Code:       code,
+		Scope:      "target_client",
+		ClientID:   stored.Target.ClientID,
+		Severity:   "error",
+		Message:    tunnelProvisionErrorMessage(err),
+		Retryable:  true,
+		ObservedAt: time.Now().UTC(),
+	})
+}
+
+func (s *Server) recordServerExposeIngressIssue(tunnelID, tunnelType, message string) {
+	message = strings.TrimSpace(message)
+	if tunnelID == "" || message == "" {
+		return
+	}
+	s.unifiedRuntime.recordServerIssue(tunnelID, protocol.TunnelIssue{
+		Code:       serverExposeIngressIssueCode(tunnelType, message),
+		Scope:      "server",
+		Severity:   "error",
+		Message:    message,
+		Retryable:  true,
+		ObservedAt: time.Now().UTC(),
+	})
+}
+
+func serverExposeIngressIssueCode(tunnelType, message string) string {
+	if tunnelType == protocol.ProxyTypeHTTP {
+		return protocol.TunnelIssueCodeIngressRouteFailed
+	}
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "address already in use") || strings.Contains(lower, "only one usage of each socket address") {
+		return protocol.TunnelIssueCodeIngressPortInUse
+	}
+	return protocol.TunnelIssueCodeIngressListenFailed
 }
 
 func (s *Server) reconcileTunnelsForClient(clientID, reason string) {

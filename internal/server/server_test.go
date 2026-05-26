@@ -706,7 +706,7 @@ func TestAPI_DeleteClient_RejectsOnlineClient(t *testing.T) {
 	}
 }
 
-func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
+func TestAPI_Clients_OfflineLegacyErrorTunnelProjectsOfflineFromLiveFacts(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
@@ -744,11 +744,11 @@ func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *test
 		if proxy["desired_state"] != "running" {
 			t.Fatalf("desired_state: want running, got %v", proxy["desired_state"])
 		}
-		if proxy["runtime_state"] != "error" {
-			t.Fatalf("runtime_state: want error, got %v", proxy["runtime_state"])
+		if proxy["runtime_state"] != "offline" {
+			t.Fatalf("runtime_state: want offline, got %v", proxy["runtime_state"])
 		}
-		if proxy["error"] != "restore failed" {
-			t.Fatalf("error: expected restore failed to be preserved, got %v", proxy["error"])
+		if proxy["error"] != nil {
+			t.Fatalf("offline projection should not preserve stale runtime error, got %v", proxy["error"])
 		}
 		return
 	}

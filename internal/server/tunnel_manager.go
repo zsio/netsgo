@@ -616,8 +616,31 @@ func storedTunnelToProxyConfig(stored StoredTunnel) protocol.ProxyConfig {
 		RemotePort:        stored.RemotePort,
 		Domain:            stored.Domain,
 		ClientID:          stored.ClientID,
+		Topology:          stored.Topology,
+		OwnerClientID:     stored.OwnerClientID,
 		BandwidthSettings: stored.BandwidthSettings,
 		CreatedAt:         stored.CreatedAt,
+	}
+	if stored.TransportPolicy != "" {
+		config.TransportPolicy = stored.TransportPolicy
+	}
+	if stored.ActualTransport != "" {
+		config.ActualTransport = stored.ActualTransport
+	}
+	if stored.Ingress.Location != "" || stored.Ingress.Type != "" {
+		ingress := endpointSpecProtocolFromStored(stored.Ingress)
+		config.Ingress = &ingress
+	}
+	if stored.Target.Location != "" || stored.Target.Type != "" || stored.Target.ClientID != "" {
+		target := endpointSpecProtocolFromStored(stored.Target)
+		config.Target = &target
+	}
+	if stored.P2P.State != "" || stored.P2P.Error != "" || stored.P2P.SessionID != "" {
+		config.P2P = &protocol.P2PState{
+			State:     stored.P2P.State,
+			Error:     stored.P2P.Error,
+			SessionID: stored.P2P.SessionID,
+		}
 	}
 	setProxyConfigStates(&config, stored.DesiredState, stored.RuntimeState, stored.Error)
 	return config

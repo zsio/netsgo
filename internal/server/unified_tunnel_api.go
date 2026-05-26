@@ -1119,8 +1119,8 @@ func issuesFromTunnelError(message, runtimeState, clientID string) []protocol.Tu
 func specFromStoredTunnel(stored StoredTunnel, s *Server) tunnelSpecAPI {
 	config := storedTunnelToProxyConfig(stored)
 	computedRuntime := computedRuntimeStateForStoredTunnel(stored, s)
-	config.RuntimeState = runtimeStateForProxyConfig(computedRuntime)
-	config.Error = ""
+	setProxyConfigStates(&config, stored.DesiredState, runtimeStateForProxyConfig(computedRuntime), "")
+	config.Capabilities = computeTunnelCapabilities(config)
 	spec := unifiedSpecFromProxyConfig(config)
 	spec.Topology = stored.Topology
 	spec.OwnerClientID = stored.OwnerClientID
@@ -1252,6 +1252,9 @@ func (s *Server) allUnifiedTunnelSpecs() ([]tunnelSpecAPI, error) {
 		view := proxyConfigForClientView(config, online)
 		if view.ID == "" {
 			view.ID = view.Name
+		}
+		if _, exists := byID[view.ID]; exists {
+			return
 		}
 		byID[view.ID] = unifiedSpecFromProxyConfig(view)
 	}
