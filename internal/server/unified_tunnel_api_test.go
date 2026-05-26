@@ -158,6 +158,35 @@ func respondPreflight(t *testing.T, conn interface {
 	}
 }
 
+func rejectPreflight(t *testing.T, conn interface {
+	SetReadDeadline(time.Time) error
+	ReadJSON(any) error
+	WriteJSON(any) error
+}, code, message string) protocol.TunnelPreflightRequest {
+	t.Helper()
+	msg := readControlMessageOfType(t, conn, protocol.MsgTypeTunnelPreflight)
+	var req protocol.TunnelPreflightRequest
+	if err := msg.ParsePayload(&req); err != nil {
+		t.Fatalf("parse preflight payload: %v", err)
+	}
+	resp, err := protocol.NewMessage(protocol.MsgTypeTunnelPreflightResp, protocol.TunnelPreflightResponse{
+		RequestID: req.RequestID,
+		TunnelID:  req.TunnelID,
+		Revision:  req.Revision,
+		Role:      req.Role,
+		Accepted:  false,
+		Code:      code,
+		Message:   message,
+	})
+	if err != nil {
+		t.Fatalf("build rejected preflight response: %v", err)
+	}
+	if err := conn.WriteJSON(resp); err != nil {
+		t.Fatalf("write rejected preflight response: %v", err)
+	}
+	return req
+}
+
 func doMuxRequestAsync(t *testing.T, handler http.Handler, method, path, token string, body []byte) <-chan *httptest.ResponseRecorder {
 	t.Helper()
 	ch := make(chan *httptest.ResponseRecorder, 1)
@@ -1056,6 +1085,87 @@ func TestAPI_UnifiedTunnelUpdateSameIngressPortSkipsSelfPreflightConflict(t *tes
 	resp = awaitMuxResponse(t, updateRespCh)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("same-port client_to_client update: want 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestAPI_UnifiedTunnelUpdatePreflightFailureKeepsOldClientToClientConfig(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "c2c-preflight-update-target", "install-c2c-preflight-update-target")
+	defer mustClose(t, targetConn)
+	ingressConn, ingressAuth := connectAndAuthWithInstallID(t, ts, "c2c-preflight-update-ingress", "install-c2c-preflight-update-ingress")
+	defer mustClose(t, ingressConn)
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+	setLiveClientDefaultCapabilities(t, s, ingressAuth.ClientID)
+	ingressPort := reserveTCPPort(t)
+
+	create := []byte(fmt.Sprintf(`{
+		"name":"c2c-preflight-update",
+		"topology":"client_to_client",
+		"ingress":{"location":"client","client_id":"%s","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`, ingressAuth.ClientID, ingressPort, targetAuth.ClientID))
+	createRespCh := doMuxRequestAsync(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	respondPreflight(t, ingressConn)
+	ackProvisionMessages(t, targetConn, 1)
+	ackProvisionMessages(t, ingressConn, 1)
+	resp := awaitMuxResponse(t, createRespCh)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("client_to_client create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+
+	update := []byte(fmt.Sprintf(`{"expected_revision":%d,"spec":{
+		"name":"c2c-preflight-update",
+		"topology":"client_to_client",
+		"ingress":{"location":"client","client_id":"%s","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":2222}},
+		"transport_policy":"server_relay_only"
+	}}`, created.Revision, ingressAuth.ClientID, reserveTCPPort(t), targetAuth.ClientID))
+	updateRespCh := doMuxRequestAsync(t, s.StartHTTPOnly(), http.MethodPut, "/api/tunnels/"+created.ID, token, update)
+	preflightReq := rejectPreflight(t, ingressConn, protocol.TunnelMutationErrorCodeIngressPortInUse, "port already in use")
+	if preflightReq.TunnelID != created.ID || preflightReq.Revision != created.Revision+1 || preflightReq.Role != protocol.DataStreamRoleIngress {
+		t.Fatalf("update preflight identity mismatch: %+v", preflightReq)
+	}
+	resp = awaitMuxResponse(t, updateRespCh)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("preflight-rejected update: want 409, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var mutationErr tunnelMutationErrorResponse
+	if err := mustDecodeJSON(t, resp.Body, &mutationErr); err != nil {
+		t.Fatalf("decode mutation error: %v", err)
+	}
+	if mutationErr.ErrorCode != protocol.TunnelMutationErrorCodeIngressPortInUse || mutationErr.Field != "ingress.config.port" {
+		t.Fatalf("mutation error mismatch: %+v", mutationErr)
+	}
+
+	stored, err := s.store.GetTunnelByIDE(targetAuth.ClientID, created.ID)
+	if err != nil {
+		t.Fatalf("stored tunnel should remain after rejected update: %v", err)
+	}
+	if stored.Revision != created.Revision || stored.LocalPort != 22 {
+		t.Fatalf("rejected update should keep old revision/target, got revision=%d local_port=%d", stored.Revision, stored.LocalPort)
+	}
+	cfg, err := decodeListenEndpointConfig(endpointSpecAPI{
+		Location: stored.Ingress.Location,
+		ClientID: stored.Ingress.ClientID,
+		Type:     stored.Ingress.Type,
+		Config:   stored.Ingress.Config,
+	}, stored.Topology)
+	if err != nil {
+		t.Fatalf("decode stored ingress: %v", err)
+	}
+	if cfg.Port != ingressPort {
+		t.Fatalf("rejected update should keep old ingress port: want %d, got %d", ingressPort, cfg.Port)
 	}
 }
 
