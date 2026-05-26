@@ -355,3 +355,57 @@ func TestClient_HandleStream_RejectsStaleRevisionAndWrongRoles(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_HandleStream_RejectsDirectOnlyRelayStream(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	proxyName := "direct-only-proxy"
+	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:                proxyName,
+		Name:              proxyName,
+		LocalIP:           "127.0.0.1",
+		LocalPort:         1,
+		TransportPolicy:   protocol.TransportPolicyDirectOnly,
+		ActualTransport:   protocol.ActualTransportServerRelay,
+		ProvisionRevision: 3,
+	})
+
+	clientConn, serverConn := net.Pipe()
+	defer mustClose(t, clientConn)
+	defer mustClose(t, serverConn)
+
+	clientSession, err := mux.NewClientSession(clientConn, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("client session: %v", err)
+	}
+	defer mustClose(t, clientSession)
+	serverSession, err := mux.NewServerSession(serverConn, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("server session: %v", err)
+	}
+	defer mustClose(t, serverSession)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		stream, err := serverSession.Open()
+		if err != nil {
+			return
+		}
+		defer func() { _ = stream.Close() }()
+		header := testDataStreamHeader(proxyName)
+		header.Revision = 3
+		mustWriteAll(t, stream, encodeDataStreamHeader(t, header))
+	}()
+
+	stream, err := clientSession.AcceptStream()
+	if err != nil {
+		t.Fatalf("accept stream: %v", err)
+	}
+	c.handleStream(stream)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server stream did not close after direct_only relay rejection")
+	}
+}
