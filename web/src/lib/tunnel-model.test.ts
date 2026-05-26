@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
+import { ApiError } from '@/lib/api';
 import type { ProxyConfig } from '@/types';
 
 import {
@@ -8,6 +9,7 @@ import {
   buildTunnelMutationPayload,
   buildTunnelViewModel,
   getTunnelActionAvailability,
+  getTunnelMutationFieldError,
 } from './tunnel-model';
 
 function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
@@ -361,5 +363,27 @@ describe('tunnel-model', () => {
       local_port: 22,
       domain: '',
     })).toThrow('必须填写明确的公网端口');
+  });
+
+  test('API 字段错误保留字段、文案和错误码', () => {
+    const error = new ApiError(400, 'Bad Request', 'bind_ip must be a valid IPv4 address', {
+      field: 'ingress.config.bind_ip',
+      code: 'invalid_bind_ip',
+    });
+
+    expect(getTunnelMutationFieldError(error)).toEqual({
+      field: 'ingress.config.bind_ip',
+      message: 'bind_ip must be a valid IPv4 address',
+      code: 'invalid_bind_ip',
+    });
+  });
+
+  test('无字段信息的 API 错误不生成字段提示', () => {
+    const error = new ApiError(409, 'Conflict', 'port is already in use', {
+      code: 'ingress_port_in_use',
+    });
+
+    expect(getTunnelMutationFieldError(error)).toBeNull();
+    expect(getTunnelMutationFieldError(new Error('plain error'))).toBeNull();
   });
 });

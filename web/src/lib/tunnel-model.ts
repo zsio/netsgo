@@ -272,6 +272,21 @@ export function getTunnelMutationErrorMessage(error: unknown) {
   return '提交失败，请稍后重试';
 }
 
+export function getTunnelMutationFieldError(error: unknown) {
+  if (!(error instanceof ApiError)) {
+    return null;
+  }
+  const body = error.body as TunnelMutationErrorResponse | undefined;
+  if (!body?.field) {
+    return null;
+  }
+  return {
+    field: body.field,
+    message: getTunnelMutationErrorMessage(error),
+    code: body.code ?? body.error_code,
+  };
+}
+
 export function getTunnelActionAvailability(
   tunnel: Pick<ProxyConfig, 'capabilities'>,
 ): TunnelActionAvailability {

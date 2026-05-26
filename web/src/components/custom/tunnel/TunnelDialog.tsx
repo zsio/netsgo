@@ -14,7 +14,11 @@ import {
 } from '@/components/ui/input-group';
 import toast from 'react-hot-toast';
 import { useCreateTunnel, useUpdateTunnel } from '@/hooks/use-tunnel-mutations';
-import { currentTargetTypes, getTunnelMutationErrorMessage } from '@/lib/tunnel-model';
+import {
+  currentTargetTypes,
+  getTunnelMutationErrorMessage,
+  getTunnelMutationFieldError,
+} from '@/lib/tunnel-model';
 import { bpsToMbpsInput, parseMbpsInputToBps } from '@/lib/format';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { getClientDisplayName } from '@/lib/client-utils';
@@ -66,6 +70,29 @@ interface TunnelFormState {
   domain: string;
   ingressBps: string;
   egressBps: string;
+}
+
+type TunnelFieldError = NonNullable<ReturnType<typeof getTunnelMutationFieldError>>;
+
+function fieldErrorMatches(error: TunnelFieldError | null, fields: readonly string[]) {
+  return Boolean(error && fields.includes(error.field));
+}
+
+function FieldErrorText({
+  error,
+  fields,
+}: {
+  error: TunnelFieldError | null;
+  fields: readonly string[];
+}) {
+  if (!fieldErrorMatches(error, fields)) {
+    return null;
+  }
+  return (
+    <p className="text-[11px] font-medium text-destructive">
+      {error?.message}
+    </p>
+  );
 }
 
 function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
@@ -172,6 +199,7 @@ function TunnelDialogForm({
   const [domain, setDomain] = useState(initialForm.domain);
   const [ingressBps, setIngressBps] = useState(initialForm.ingressBps);
   const [egressBps, setEgressBps] = useState(initialForm.egressBps);
+  const [fieldError, setFieldError] = useState<TunnelFieldError | null>(null);
 
   const clients = props.clients ?? [];
   const selectedTargetClientId = targetClientId || (props.mode === 'create' ? props.clientId : props.tunnel?.target?.client_id ?? props.tunnel?.owner_client_id ?? props.tunnel?.clientId ?? '');
@@ -192,6 +220,15 @@ function TunnelDialogForm({
   const updateTunnel = useUpdateTunnel();
   const mutation = isEdit ? updateTunnel : createTunnel;
 
+  const clearMutationFeedback = () => {
+    if (fieldError) {
+      setFieldError(null);
+    }
+    if (mutation.isError) {
+      mutation.reset();
+    }
+  };
+
   const { data: status } = useServerStatus({
     enabled: open,
     refetchOnMount: 'always',
@@ -200,6 +237,7 @@ function TunnelDialogForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setFieldError(null);
     const parsedLocalPort = Number.parseInt(localPort, 10);
     const parsedRemotePort = remotePort ? Number.parseInt(remotePort, 10) : 0;
     const parsedIngressBps = parseMbpsInputToBps(ingressBps);
@@ -235,10 +273,12 @@ function TunnelDialogForm({
         },
         {
           onSuccess: () => {
+            setFieldError(null);
             setOpen(false);
             toast.success(`隧道「${name}」已更新`);
           },
           onError: (err) => {
+            setFieldError(getTunnelMutationFieldError(err));
             toast.error(getTunnelMutationErrorMessage(err));
           },
         },
@@ -263,10 +303,12 @@ function TunnelDialogForm({
       },
       {
         onSuccess: () => {
+          setFieldError(null);
           setOpen(false);
           toast.success(`隧道「${name}」创建成功`);
         },
         onError: (err) => {
+          setFieldError(getTunnelMutationFieldError(err));
           toast.error(getTunnelMutationErrorMessage(err));
         },
       },
@@ -319,9 +361,13 @@ function TunnelDialogForm({
           <Input
             placeholder="例如 ssh-dev"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              clearMutationFeedback();
+              setName(e.target.value);
+            }}
             autoFocus
           />
+          <FieldErrorText error={fieldError} fields={['name']} />
         </div>
 
         {/* 协议类型 */}
@@ -331,7 +377,10 @@ function TunnelDialogForm({
             <Button
               type="button"
               variant={topology === 'server_expose' ? 'default' : 'outline'}
-              onClick={() => setTopology('server_expose')}
+              onClick={() => {
+                clearMutationFeedback();
+                setTopology('server_expose');
+              }}
             >
               Server 暴露
             </Button>
@@ -339,6 +388,7 @@ function TunnelDialogForm({
               type="button"
               variant={topology === 'client_to_client' ? 'default' : 'outline'}
               onClick={() => {
+                clearMutationFeedback();
                 setTopology('client_to_client');
                 if (type === 'http') setType('tcp');
               }}
@@ -346,6 +396,7 @@ function TunnelDialogForm({
               客户端互访
             </Button>
           </div>
+          <FieldErrorText error={fieldError} fields={['topology', 'transport_policy']} />
         </div>
 
         {(isClientToClient || clients.length > 1) && (
@@ -357,6 +408,7 @@ function TunnelDialogForm({
                   className={selectClassName}
                   value={selectedTargetClientId}
                   onChange={(e) => {
+                    clearMutationFeedback();
                     const nextTargetClientId = e.target.value;
                     setTargetClientId(nextTargetClientId);
                     if (ingressClientId === nextTargetClientId) {
@@ -373,6 +425,7 @@ function TunnelDialogForm({
               ) : (
                 <Input value={sourceClient ? getClientDisplayName(sourceClient) : selectedTargetClientId} disabled />
               )}
+              <FieldErrorText error={fieldError} fields={['target.client_id', 'client_id']} />
             </div>
             {isClientToClient && (
               <div className="space-y-1.5">
@@ -380,7 +433,10 @@ function TunnelDialogForm({
                 <select
                   className={selectClassName}
                   value={selectedIngressClientId}
-                  onChange={(e) => setIngressClientId(e.target.value)}
+                  onChange={(e) => {
+                    clearMutationFeedback();
+                    setIngressClientId(e.target.value);
+                  }}
                 >
                   {ingressClientOptions.map((client) => (
                     <option key={client.id} value={client.id}>
@@ -388,6 +444,7 @@ function TunnelDialogForm({
                     </option>
                   ))}
                 </select>
+                <FieldErrorText error={fieldError} fields={['ingress.client_id']} />
               </div>
             )}
           </div>
@@ -402,7 +459,10 @@ function TunnelDialogForm({
                 type="button"
                 variant={type === opt.value ? 'default' : 'outline'}
                 className="flex-1"
-                onClick={() => setType(opt.value)}
+                onClick={() => {
+                  clearMutationFeedback();
+                  setType(opt.value);
+                }}
               >
                 {opt.label}
               </Button>
@@ -412,6 +472,7 @@ function TunnelDialogForm({
             {isClientToClient ? '客户端互访当前开放 TCP / UDP，传输固定为 Server 中继。' : `当前目标类型仅开放 ${currentTargetTypes.map((targetType) => targetType === 'tcp_service' ? 'TCP 服务' : 'UDP 服务').join(' / ')}；`}
             Unix Socket、静态文件和串口设备暂不在表单中提供。
           </p>
+          <FieldErrorText error={fieldError} fields={['target.type', 'ingress.type']} />
         </div>
 
         {/* 本地地址 */}
@@ -421,8 +482,12 @@ function TunnelDialogForm({
             <Input
               placeholder="127.0.0.1"
               value={localIp}
-              onChange={(e) => setLocalIp(e.target.value)}
+              onChange={(e) => {
+                clearMutationFeedback();
+                setLocalIp(e.target.value);
+              }}
             />
+            <FieldErrorText error={fieldError} fields={['target.config.ip', 'target.config.host', 'target.config', 'local_ip']} />
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium">{isClientToClient ? '目标服务端口' : '本地端口'}</label>
@@ -430,10 +495,14 @@ function TunnelDialogForm({
               type="number"
               placeholder="e.g. 22"
               value={localPort}
-              onChange={(e) => setLocalPort(e.target.value)}
+              onChange={(e) => {
+                clearMutationFeedback();
+                setLocalPort(e.target.value);
+              }}
               min={1}
               max={65535}
             />
+            <FieldErrorText error={fieldError} fields={['target.config.port', 'local_port']} />
           </div>
         </div>
 
@@ -443,11 +512,15 @@ function TunnelDialogForm({
             <Input
               placeholder="e.g. app.example.com"
               value={domain}
-              onChange={(e) => setDomain(e.target.value)}
+              onChange={(e) => {
+                clearMutationFeedback();
+                setDomain(e.target.value);
+              }}
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
             />
+            <FieldErrorText error={fieldError} fields={['domain', 'ingress.config.domain']} />
             <p className="text-[11px] text-muted-foreground mt-1.5">
               HTTP 隧道按域名分流，不再使用公网端口作为用户输入。
             </p>
@@ -460,11 +533,15 @@ function TunnelDialogForm({
                 <Input
                   placeholder="127.0.0.1 / 0.0.0.0"
                   value={bindIp}
-                  onChange={(e) => setBindIp(e.target.value)}
+                  onChange={(e) => {
+                    clearMutationFeedback();
+                    setBindIp(e.target.value);
+                  }}
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
                 />
+                <FieldErrorText error={fieldError} fields={['ingress.config.bind_ip', 'bind_ip']} />
               </div>
             )}
             <div className="space-y-1.5">
@@ -473,10 +550,14 @@ function TunnelDialogForm({
                 type="number"
                 placeholder="e.g. 18080"
                 value={remotePort}
-                onChange={(e) => setRemotePort(e.target.value)}
+                onChange={(e) => {
+                  clearMutationFeedback();
+                  setRemotePort(e.target.value);
+                }}
                 min={1}
                 max={65535}
               />
+              <FieldErrorText error={fieldError} fields={['remote_port', 'ingress.config.port']} />
               {!isClientToClient && (
                 <p className="text-[11px] text-muted-foreground mt-1.5">
                   可用端口范围：
@@ -500,13 +581,17 @@ function TunnelDialogForm({
                 step="any"
                 placeholder="0"
                 value={ingressBps}
-                onChange={(e) => setIngressBps(e.target.value)}
+                onChange={(e) => {
+                  clearMutationFeedback();
+                  setIngressBps(e.target.value);
+                }}
                 min={0}
               />
               <InputGroupAddon align="inline-end">
                 <InputGroupText>MiB/s</InputGroupText>
               </InputGroupAddon>
             </InputGroup>
+            <FieldErrorText error={fieldError} fields={['ingress_bps', 'bandwidth_settings.ingress_bps']} />
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium">出站限速</label>
@@ -516,13 +601,17 @@ function TunnelDialogForm({
                 step="any"
                 placeholder="0"
                 value={egressBps}
-                onChange={(e) => setEgressBps(e.target.value)}
+                onChange={(e) => {
+                  clearMutationFeedback();
+                  setEgressBps(e.target.value);
+                }}
                 min={0}
               />
               <InputGroupAddon align="inline-end">
                 <InputGroupText>MiB/s</InputGroupText>
               </InputGroupAddon>
             </InputGroup>
+            <FieldErrorText error={fieldError} fields={['egress_bps', 'bandwidth_settings.egress_bps']} />
           </div>
         </div>
         <p className="text-[11px] text-muted-foreground -mt-1">
