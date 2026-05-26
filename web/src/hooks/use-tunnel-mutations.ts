@@ -32,7 +32,10 @@ export function useClientTunnelsByRole(clientId: string | undefined, role: Tunne
   });
 }
 
-function shouldUseLegacyTunnelEndpoint(error: unknown) {
+export function shouldUseLegacyTunnelEndpoint(error: unknown, topology?: TunnelTopology) {
+  if (topology === 'client_to_client') {
+    return false;
+  }
   return error instanceof ApiError && (error.status === 404 || error.status === 405);
 }
 
@@ -76,10 +79,7 @@ export function useCreateTunnel() {
       try {
         return await tunnelApi.create(buildTunnelSpec(data));
       } catch (error) {
-        if (!shouldUseLegacyTunnelEndpoint(error)) {
-          throw error;
-        }
-        if (data.topology === 'client_to_client') {
+        if (!shouldUseLegacyTunnelEndpoint(error, data.topology)) {
           throw error;
         }
         try {
@@ -164,7 +164,7 @@ export function useUpdateTunnel() {
           spec: buildTunnelSpec(data),
         });
       } catch (error) {
-        if (!shouldUseLegacyTunnelEndpoint(error)) {
+        if (!shouldUseLegacyTunnelEndpoint(error, data.topology)) {
           throw error;
         }
         try {
