@@ -776,6 +776,63 @@ func TestAPI_UnifiedTunnelUpdateUnprovisionsOldClientToClientParticipants(t *tes
 	}
 }
 
+func TestAPI_UnifiedTunnelStopUnprovisionsClientToClientParticipants(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "c2c-stop-target", "install-c2c-stop-target")
+	defer mustClose(t, targetConn)
+	ingressConn, ingressAuth := connectAndAuthWithInstallID(t, ts, "c2c-stop-ingress", "install-c2c-stop-ingress")
+	defer mustClose(t, ingressConn)
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+	setLiveClientDefaultCapabilities(t, s, ingressAuth.ClientID)
+
+	create := []byte(fmt.Sprintf(`{
+		"name":"c2c-stop",
+		"topology":"client_to_client",
+		"ingress":{"location":"client","client_id":"%s","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`, ingressAuth.ClientID, reserveTCPPort(t), targetAuth.ClientID))
+	createRespCh := doMuxRequestAsync(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	respondPreflight(t, ingressConn)
+	ackProvisionMessages(t, targetConn, 1)
+	ackProvisionMessages(t, ingressConn, 1)
+	resp := awaitMuxResponse(t, createRespCh)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("client_to_client create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+
+	stopResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodPut, "/api/tunnels/"+created.ID+"/stop", token, nil)
+	if stopResp.Code != http.StatusOK {
+		t.Fatalf("client_to_client stop: want 200, got %d body=%s", stopResp.Code, stopResp.Body.String())
+	}
+
+	targetUnprovision := readTunnelUnprovision(t, targetConn)
+	if targetUnprovision.TunnelID != created.ID || targetUnprovision.Revision != created.Revision || targetUnprovision.Role != protocol.DataStreamRoleTarget || targetUnprovision.Reason != "stopped" {
+		t.Fatalf("target stop unprovision mismatch: %+v", targetUnprovision)
+	}
+	ingressUnprovision := readTunnelUnprovision(t, ingressConn)
+	if ingressUnprovision.TunnelID != created.ID || ingressUnprovision.Revision != created.Revision || ingressUnprovision.Role != protocol.DataStreamRoleIngress || ingressUnprovision.Reason != "stopped" {
+		t.Fatalf("ingress stop unprovision mismatch: %+v", ingressUnprovision)
+	}
+	stored, err := s.store.GetTunnelByIDE(targetAuth.ClientID, created.ID)
+	if err != nil {
+		t.Fatalf("stopped tunnel should remain persisted: %v", err)
+	}
+	if stored.DesiredState != protocol.ProxyDesiredStateStopped || stored.RuntimeState != protocol.ProxyRuntimeStateIdle {
+		t.Fatalf("stop should persist stopped/idle, got %s/%s", stored.DesiredState, stored.RuntimeState)
+	}
+}
+
 func TestAPI_UnifiedTunnelCreateDoesNotWaitForServerExposeProvisionAck(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)
