@@ -93,6 +93,78 @@ func newTestClientRelayDataSession(t *testing.T) (*yamux.Session, *yamux.Session
 	return clientSession, serverSession
 }
 
+func assertClientRelayTrafficBucket(t *testing.T, s *Server, store *TrafficStore, stored StoredTunnel, ingressBytes, egressBytes uint64) {
+	t.Helper()
+
+	s.flushTrafficObservations()
+	if err := store.Flush(); err != nil {
+		t.Fatalf("flush traffic store: %v", err)
+	}
+
+	rows, err := store.db.Query(`SELECT client_id, owner_client_id, ingress_client_id, target_client_id, topology, transport, tunnel_name, tunnel_type, SUM(ingress_bytes), SUM(egress_bytes)
+FROM traffic_buckets
+WHERE tunnel_id = ? AND resolution = ?
+GROUP BY client_id, owner_client_id, ingress_client_id, target_client_id, topology, transport, tunnel_name, tunnel_type`,
+		stored.ID, string(TrafficResolutionMinute))
+	if err != nil {
+		t.Fatalf("query traffic bucket: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type trafficGroup struct {
+		clientID        string
+		ownerClientID   string
+		ingressClientID string
+		targetClientID  string
+		topology        string
+		transport       string
+		tunnelName      string
+		tunnelType      string
+		ingressBytes    int64
+		egressBytes     int64
+	}
+	groups := []trafficGroup{}
+	for rows.Next() {
+		var group trafficGroup
+		if err := rows.Scan(
+			&group.clientID,
+			&group.ownerClientID,
+			&group.ingressClientID,
+			&group.targetClientID,
+			&group.topology,
+			&group.transport,
+			&group.tunnelName,
+			&group.tunnelType,
+			&group.ingressBytes,
+			&group.egressBytes,
+		); err != nil {
+			t.Fatalf("scan traffic bucket: %v", err)
+		}
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate traffic buckets: %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("expected one client relay traffic metadata group, got %+v", groups)
+	}
+
+	group := groups[0]
+	if group.clientID != stored.OwnerClientID ||
+		group.ownerClientID != stored.OwnerClientID ||
+		group.ingressClientID != stored.Ingress.ClientID ||
+		group.targetClientID != stored.Target.ClientID ||
+		group.topology != TunnelTopologyClientToClient ||
+		group.transport != protocol.ActualTransportServerRelay ||
+		group.tunnelName != stored.Name ||
+		group.tunnelType != stored.Type {
+		t.Fatalf("client relay traffic identity mismatch: %+v", group)
+	}
+	if uint64(group.ingressBytes) != ingressBytes || uint64(group.egressBytes) != egressBytes {
+		t.Fatalf("client relay traffic bytes mismatch: got ingress=%d egress=%d want ingress=%d egress=%d", group.ingressBytes, group.egressBytes, ingressBytes, egressBytes)
+	}
+}
+
 func TestClientRelayRegistryStoresTunnelBandwidthRuntime(t *testing.T) {
 	stored := testClientRelayStoredTunnel(t)
 	stored.IngressBPS = 123
@@ -121,6 +193,9 @@ func TestClientRelayRegistryStoresTunnelBandwidthRuntime(t *testing.T) {
 func TestClientRelayTCPTransfersBytes(t *testing.T) {
 	s := New(0)
 	s.store = newTestTunnelStore(t)
+	trafficStore, cleanupTraffic := newTestTrafficStore(t)
+	defer cleanupTraffic()
+	s.trafficStore = trafficStore
 
 	stored := testClientRelayStoredTunnel(t)
 	mustAddStableTunnel(t, s.store, stored)
@@ -231,6 +306,8 @@ func TestClientRelayTCPTransfersBytes(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("relay did not stop after streams closed")
 	}
+
+	assertClientRelayTrafficBucket(t, s, trafficStore, stored, uint64(len(payload)), uint64(len(response)))
 }
 
 func TestClientRelayRejectsStaleRevision(t *testing.T) {
@@ -269,6 +346,9 @@ func TestClientRelayRejectsWrongDirection(t *testing.T) {
 func TestClientRelayUDPTransfersFrames(t *testing.T) {
 	s := New(0)
 	s.store = newTestTunnelStore(t)
+	trafficStore, cleanupTraffic := newTestTrafficStore(t)
+	defer cleanupTraffic()
+	s.trafficStore = trafficStore
 
 	stored := testClientRelayStoredTunnel(t)
 	stored.Type = protocol.ProxyTypeUDP
@@ -382,6 +462,8 @@ func TestClientRelayUDPTransfersFrames(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("udp relay did not stop after streams closed")
 	}
+
+	assertClientRelayTrafficBucket(t, s, trafficStore, stored, uint64(len(payload)), uint64(len(response)))
 }
 
 func TestClientRelayProvisionTimeoutProjectsIssue(t *testing.T) {

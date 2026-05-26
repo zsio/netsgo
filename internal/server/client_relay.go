@@ -335,7 +335,7 @@ func (s *Server) handleClientOpenedDataStream(openClient *ClientConn, openStream
 	}
 
 	_, _ = relayTunnelPayload(targetStream, openStream, targetClient.BandwidthRuntime(), s.c2c.limits(stored.ID), func(ingressBytes, egressBytes uint64) {
-		s.recordTrafficObservationAt(time.Now(), stored.ID, stored.OwnerClientID, stored.Name, stored.Type, ingressBytes, egressBytes)
+		s.recordStoredTunnelTrafficAt(time.Now(), stored, ingressBytes, egressBytes)
 	})
 }
 
@@ -368,7 +368,7 @@ func (s *Server) relayClientUDPFrames(stored StoredTunnel, targetStream, ingress
 				once.Do(closeAll)
 				return
 			}
-			s.recordTrafficObservationAt(time.Now(), stored.ID, stored.OwnerClientID, stored.Name, stored.Type, uint64(len(payload)), 0)
+			s.recordStoredTunnelTrafficAt(time.Now(), stored, uint64(len(payload)), 0)
 		}
 	}()
 	go func() {
@@ -388,7 +388,7 @@ func (s *Server) relayClientUDPFrames(stored StoredTunnel, targetStream, ingress
 				once.Do(closeAll)
 				return
 			}
-			s.recordTrafficObservationAt(time.Now(), stored.ID, stored.OwnerClientID, stored.Name, stored.Type, 0, uint64(len(payload)))
+			s.recordStoredTunnelTrafficAt(time.Now(), stored, 0, uint64(len(payload)))
 		}
 	}()
 

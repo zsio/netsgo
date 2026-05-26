@@ -38,24 +38,27 @@ func newTrafficAccumulator() *trafficAccumulator {
 }
 
 func (a *trafficAccumulator) Add(now time.Time, tunnelID, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) error {
-	if a == nil || clientID == "" || tunnelName == "" || tunnelType == "" {
-		return nil
-	}
-	if ingressBytes == 0 && egressBytes == 0 {
-		return nil
-	}
-
-	now = now.UTC()
-	delta := TrafficDelta{
+	return a.AddDelta(now, TrafficDelta{
 		TunnelID:     tunnelID,
 		ClientID:     clientID,
 		TunnelName:   tunnelName,
 		TunnelType:   tunnelType,
-		SecondStart:  secondFloorUTC(now).Unix(),
-		MinuteStart:  minuteFloorUTC(now).Unix(),
 		IngressBytes: ingressBytes,
 		EgressBytes:  egressBytes,
+	})
+}
+
+func (a *trafficAccumulator) AddDelta(now time.Time, delta TrafficDelta) error {
+	if a == nil || delta.ClientID == "" || delta.TunnelName == "" || delta.TunnelType == "" {
+		return nil
 	}
+	if delta.IngressBytes == 0 && delta.EgressBytes == 0 {
+		return nil
+	}
+
+	now = now.UTC()
+	delta.SecondStart = secondFloorUTC(now).Unix()
+	delta.MinuteStart = minuteFloorUTC(now).Unix()
 	key := trafficAccumulatorKey{
 		tunnelID:    delta.TunnelID,
 		clientID:    delta.ClientID,
@@ -83,12 +86,31 @@ func (a *trafficAccumulator) Add(now time.Time, tunnelID, clientID, tunnelName, 
 		}
 		existing.IngressBytes = mergedIngress
 		existing.EgressBytes = mergedEgress
+		mergeTrafficDeltaMetadata(&existing, delta)
 		shard.pending[key] = existing
 		return nil
 	}
 
 	shard.pending[key] = delta
 	return nil
+}
+
+func mergeTrafficDeltaMetadata(existing *TrafficDelta, delta TrafficDelta) {
+	if existing.OwnerClientID == "" {
+		existing.OwnerClientID = delta.OwnerClientID
+	}
+	if existing.IngressClientID == "" {
+		existing.IngressClientID = delta.IngressClientID
+	}
+	if existing.TargetClientID == "" {
+		existing.TargetClientID = delta.TargetClientID
+	}
+	if existing.Topology == "" {
+		existing.Topology = delta.Topology
+	}
+	if existing.Transport == "" || existing.Transport == TunnelActualTransportUnknown {
+		existing.Transport = delta.Transport
+	}
 }
 
 func (a *trafficAccumulator) Drain() []TrafficDelta {
@@ -168,7 +190,7 @@ func (s *Server) recordTunnelTraffic(clientID string, config protocol.ProxyConfi
 }
 
 func (s *Server) recordTunnelTrafficAt(now time.Time, clientID string, config protocol.ProxyConfig, ingressBytes, egressBytes uint64) {
-	s.recordTrafficObservationAt(now, config.ID, clientID, config.Name, config.Type, ingressBytes, egressBytes)
+	s.recordTrafficDeltaAt(now, trafficDeltaFromProxyConfig(clientID, config, ingressBytes, egressBytes))
 }
 
 func (s *Server) recordTrafficAt(now time.Time, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
@@ -182,27 +204,124 @@ func (s *Server) recordTrafficObservationAt(now time.Time, tunnelID, clientID, t
 	if ingressBytes == 0 && egressBytes == 0 {
 		return
 	}
-	if tunnelID == "" {
-		tunnelID = s.resolveTrafficTunnelID(clientID, tunnelName, tunnelType)
+	s.recordTrafficDeltaAt(now, TrafficDelta{
+		TunnelID:     tunnelID,
+		ClientID:     clientID,
+		TunnelName:   tunnelName,
+		TunnelType:   tunnelType,
+		IngressBytes: ingressBytes,
+		EgressBytes:  egressBytes,
+	})
+}
+
+func (s *Server) recordStoredTunnelTrafficAt(now time.Time, stored StoredTunnel, ingressBytes, egressBytes uint64) {
+	s.recordTrafficDeltaAt(now, trafficDeltaFromStoredTunnel(stored, ingressBytes, egressBytes))
+}
+
+func (s *Server) recordTrafficDeltaAt(now time.Time, delta TrafficDelta) {
+	if s == nil || s.trafficStore == nil {
+		return
+	}
+	if delta.IngressBytes == 0 && delta.EgressBytes == 0 {
+		return
+	}
+	if delta.TunnelID == "" {
+		delta.TunnelID = s.resolveTrafficTunnelID(delta.ClientID, delta.TunnelName, delta.TunnelType)
 	}
 
 	acc := s.trafficAccumulator
 	if acc == nil {
-		s.trafficStore.recordTunnelBytesAt(now, tunnelID, clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
+		now = now.UTC()
+		delta.SecondStart = secondFloorUTC(now).Unix()
+		delta.MinuteStart = minuteFloorUTC(now).Unix()
+		s.trafficStore.ApplyDeltas([]TrafficDelta{delta})
 		return
 	}
 
-	if err := acc.Add(now, tunnelID, clientID, tunnelName, tunnelType, ingressBytes, egressBytes); err == nil {
+	if err := acc.AddDelta(now, delta); err == nil {
 		return
 	}
 
 	// Overflow is practically unreachable for normal chunk sizes. Flush the current
 	// batch and retry so the hot path can still preserve the observation.
 	s.flushTrafficObservations()
-	if err := acc.Add(now, tunnelID, clientID, tunnelName, tunnelType, ingressBytes, egressBytes); err != nil {
-		log.Printf("⚠️ Failed to aggregate traffic bytes for client %s tunnel %s: %v", clientID, tunnelName, err)
-		s.trafficStore.recordTunnelBytesAt(now, tunnelID, clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
+	if err := acc.AddDelta(now, delta); err != nil {
+		log.Printf("⚠️ Failed to aggregate traffic bytes for client %s tunnel %s: %v", delta.ClientID, delta.TunnelName, err)
+		now = now.UTC()
+		delta.SecondStart = secondFloorUTC(now).Unix()
+		delta.MinuteStart = minuteFloorUTC(now).Unix()
+		s.trafficStore.ApplyDeltas([]TrafficDelta{delta})
 	}
+}
+
+func trafficDeltaFromProxyConfig(clientID string, config protocol.ProxyConfig, ingressBytes, egressBytes uint64) TrafficDelta {
+	ownerClientID := config.OwnerClientID
+	if ownerClientID == "" {
+		ownerClientID = clientID
+	}
+	ingressClientID := ""
+	if config.Ingress != nil {
+		ingressClientID = config.Ingress.ClientID
+	}
+	targetClientID := clientID
+	if config.Target != nil && config.Target.ClientID != "" {
+		targetClientID = config.Target.ClientID
+	}
+	topology := config.Topology
+	if topology == "" {
+		topology = TunnelTopologyServerExpose
+	}
+	return TrafficDelta{
+		TunnelID:        config.ID,
+		ClientID:        clientID,
+		OwnerClientID:   ownerClientID,
+		IngressClientID: ingressClientID,
+		TargetClientID:  targetClientID,
+		Topology:        topology,
+		Transport:       relayTrafficTransport(config.ActualTransport),
+		TunnelName:      config.Name,
+		TunnelType:      config.Type,
+		IngressBytes:    ingressBytes,
+		EgressBytes:     egressBytes,
+	}
+}
+
+func trafficDeltaFromStoredTunnel(stored StoredTunnel, ingressBytes, egressBytes uint64) TrafficDelta {
+	ownerClientID := stored.OwnerClientID
+	if ownerClientID == "" {
+		ownerClientID = stored.ClientID
+	}
+	if ownerClientID == "" {
+		ownerClientID = stored.Target.ClientID
+	}
+	targetClientID := stored.Target.ClientID
+	if targetClientID == "" {
+		targetClientID = ownerClientID
+	}
+	topology := stored.Topology
+	if topology == "" {
+		topology = TunnelTopologyServerExpose
+	}
+	return TrafficDelta{
+		TunnelID:        stored.ID,
+		ClientID:        ownerClientID,
+		OwnerClientID:   ownerClientID,
+		IngressClientID: stored.Ingress.ClientID,
+		TargetClientID:  targetClientID,
+		Topology:        topology,
+		Transport:       relayTrafficTransport(stored.ActualTransport),
+		TunnelName:      stored.Name,
+		TunnelType:      stored.Type,
+		IngressBytes:    ingressBytes,
+		EgressBytes:     egressBytes,
+	}
+}
+
+func relayTrafficTransport(actual string) string {
+	if actual == "" || actual == TunnelActualTransportUnknown {
+		return TunnelActualTransportServerRelay
+	}
+	return actual
 }
 
 func (s *Server) resolveTrafficTunnelID(clientID, tunnelName, tunnelType string) string {
