@@ -715,6 +715,62 @@ func TestAPI_UnifiedTunnelDeleteUnprovisionsServerExposeTarget(t *testing.T) {
 	}
 }
 
+func TestAPI_UnifiedTunnelDeleteUnprovisionsClientToClientParticipants(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "c2c-delete-target", "install-c2c-delete-target")
+	defer mustClose(t, targetConn)
+	ingressConn, ingressAuth := connectAndAuthWithInstallID(t, ts, "c2c-delete-ingress", "install-c2c-delete-ingress")
+	defer mustClose(t, ingressConn)
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+	setLiveClientDefaultCapabilities(t, s, ingressAuth.ClientID)
+
+	create := []byte(fmt.Sprintf(`{
+		"name":"c2c-delete",
+		"topology":"client_to_client",
+		"ingress":{"location":"client","client_id":"%s","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`, ingressAuth.ClientID, reserveTCPPort(t), targetAuth.ClientID))
+	createRespCh := doMuxRequestAsync(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	respondPreflight(t, ingressConn)
+	ackProvisionMessages(t, targetConn, 1)
+	ackProvisionMessages(t, ingressConn, 1)
+	resp := awaitMuxResponse(t, createRespCh)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("client_to_client create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+
+	deleteResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodDelete, "/api/tunnels/"+created.ID, token, nil)
+	if deleteResp.Code != http.StatusNoContent {
+		t.Fatalf("client_to_client delete: want 204, got %d body=%s", deleteResp.Code, deleteResp.Body.String())
+	}
+
+	targetUnprovision := readTunnelUnprovision(t, targetConn)
+	if targetUnprovision.TunnelID != created.ID || targetUnprovision.Revision != created.Revision || targetUnprovision.Role != protocol.DataStreamRoleTarget || targetUnprovision.Reason != "deleted" {
+		t.Fatalf("target delete unprovision mismatch: %+v", targetUnprovision)
+	}
+	ingressUnprovision := readTunnelUnprovision(t, ingressConn)
+	if ingressUnprovision.TunnelID != created.ID || ingressUnprovision.Revision != created.Revision || ingressUnprovision.Role != protocol.DataStreamRoleIngress || ingressUnprovision.Reason != "deleted" {
+		t.Fatalf("ingress delete unprovision mismatch: %+v", ingressUnprovision)
+	}
+	if _, ok := s.c2c.get(created.ID); ok {
+		t.Fatal("delete should remove client relay runtime")
+	}
+	if _, err := s.store.GetTunnelByIDE(targetAuth.ClientID, created.ID); !errors.Is(err, ErrTunnelNotFound) {
+		t.Fatalf("deleted tunnel should be hard-deleted, got err=%v", err)
+	}
+}
+
 func TestAPI_UnifiedTunnelUpdateUnprovisionsOldClientToClientParticipants(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)
