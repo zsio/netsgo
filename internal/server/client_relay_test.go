@@ -93,6 +93,31 @@ func newTestClientRelayDataSession(t *testing.T) (*yamux.Session, *yamux.Session
 	return clientSession, serverSession
 }
 
+func TestClientRelayRegistryStoresTunnelBandwidthRuntime(t *testing.T) {
+	stored := testClientRelayStoredTunnel(t)
+	stored.IngressBPS = 123
+	stored.EgressBPS = 456
+
+	registry := newClientRelayRegistry()
+	registry.set(stored)
+
+	limits := registry.limits(stored.ID)
+	if limits == nil {
+		t.Fatal("expected client relay registry to create tunnel bandwidth runtime")
+	}
+	if got := limits.Budget(payloadDirectionIngress).Preview(4096); got != 123 {
+		t.Fatalf("ingress tunnel budget: want 123, got %d", got)
+	}
+	if got := limits.Budget(payloadDirectionEgress).Preview(4096); got != 456 {
+		t.Fatalf("egress tunnel budget: want 456, got %d", got)
+	}
+
+	registry.delete(stored.ID)
+	if limits := registry.limits(stored.ID); limits != nil {
+		t.Fatal("delete should remove client relay bandwidth runtime")
+	}
+}
+
 func TestClientRelayTCPTransfersBytes(t *testing.T) {
 	s := New(0)
 	s.store = newTestTunnelStore(t)

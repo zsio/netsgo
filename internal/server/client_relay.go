@@ -15,11 +15,16 @@ import (
 
 type clientRelayRegistry struct {
 	mu       sync.RWMutex
-	runtimes map[string]StoredTunnel
+	runtimes map[string]clientRelayRuntime
+}
+
+type clientRelayRuntime struct {
+	stored StoredTunnel
+	limits *directionalBandwidthRuntime
 }
 
 func newClientRelayRegistry() *clientRelayRegistry {
-	return &clientRelayRegistry{runtimes: make(map[string]StoredTunnel)}
+	return &clientRelayRegistry{runtimes: make(map[string]clientRelayRuntime)}
 }
 
 func (r *clientRelayRegistry) set(stored StoredTunnel) {
@@ -27,7 +32,10 @@ func (r *clientRelayRegistry) set(stored StoredTunnel) {
 		return
 	}
 	r.mu.Lock()
-	r.runtimes[stored.ID] = stored
+	r.runtimes[stored.ID] = clientRelayRuntime{
+		stored: stored,
+		limits: newDirectionalBandwidthRuntime(stored.BandwidthSettings, realBandwidthClock{}),
+	}
 	r.mu.Unlock()
 }
 
@@ -45,9 +53,22 @@ func (r *clientRelayRegistry) get(tunnelID string) (StoredTunnel, bool) {
 		return StoredTunnel{}, false
 	}
 	r.mu.RLock()
-	stored, ok := r.runtimes[tunnelID]
+	runtime, ok := r.runtimes[tunnelID]
 	r.mu.RUnlock()
-	return stored, ok
+	return runtime.stored, ok
+}
+
+func (r *clientRelayRegistry) limits(tunnelID string) *directionalBandwidthRuntime {
+	if r == nil || tunnelID == "" {
+		return nil
+	}
+	r.mu.RLock()
+	runtime, ok := r.runtimes[tunnelID]
+	r.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return runtime.limits
 }
 
 func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
@@ -309,11 +330,11 @@ func (s *Server) handleClientOpenedDataStream(openClient *ClientConn, openStream
 	defer func() { _ = targetStream.Close() }()
 
 	if stored.Ingress.Type == TunnelIngressTypeUDPListen {
-		s.relayClientUDPFrames(stored, targetStream, openStream, targetClient.BandwidthRuntime(), nil)
+		s.relayClientUDPFrames(stored, targetStream, openStream, targetClient.BandwidthRuntime(), s.c2c.limits(stored.ID))
 		return
 	}
 
-	_, _ = relayTunnelPayload(targetStream, openStream, targetClient.BandwidthRuntime(), nil, func(ingressBytes, egressBytes uint64) {
+	_, _ = relayTunnelPayload(targetStream, openStream, targetClient.BandwidthRuntime(), s.c2c.limits(stored.ID), func(ingressBytes, egressBytes uint64) {
 		s.recordTrafficObservationAt(time.Now(), stored.ID, stored.OwnerClientID, stored.Name, stored.Type, ingressBytes, egressBytes)
 	})
 }
