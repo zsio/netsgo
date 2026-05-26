@@ -1074,6 +1074,64 @@ func TestServer_TunnelRuntimeReportIgnoresWrongRoleClient(t *testing.T) {
 	}
 }
 
+func TestServer_TunnelRuntimeReportSchedulesReconcile(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	stored := testClientRelayStoredTunnel(t)
+	mustAddStableTunnel(t, s.store, stored)
+	s.c2c.set(stored)
+
+	caps := protocol.DefaultClientCapabilities()
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+	targetClient := &ClientConn{
+		ID:          stored.Target.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		generation:  1,
+		state:       clientStateLive,
+		dataSession: targetSession,
+	}
+	ingressClient := &ClientConn{
+		ID:          stored.Ingress.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		generation:  1,
+		state:       clientStateLive,
+		dataSession: ingressSession,
+	}
+	s.clients.Store(stored.Target.ClientID, targetClient)
+	s.clients.Store(stored.Ingress.ClientID, ingressClient)
+
+	msg, err := protocol.NewMessage(protocol.MsgTypeTunnelRuntimeReport, protocol.TunnelRuntimeReport{
+		TunnelID: stored.ID,
+		Revision: stored.Revision,
+		Role:     protocol.DataStreamRoleIngress,
+		Message:  "ingress listener failed",
+	})
+	if err != nil {
+		t.Fatalf("build runtime report: %v", err)
+	}
+
+	s.handleTunnelRuntimeReportMessage(ingressClient, *msg)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+		if err != nil {
+			t.Fatalf("load tunnel: %v", err)
+		}
+		spec := specFromStoredTunnel(got, s)
+		if got.RuntimeState == protocol.ProxyRuntimeStateError &&
+			len(spec.Issues) > 0 &&
+			spec.Issues[0].Code == protocol.TunnelIssueCodeProvisionAckRejected {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runtime report should trigger reconcile and provisioning issue, state=%q issues=%+v", got.RuntimeState, spec.Issues)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestAPI_UnifiedTunnelCapabilityLossProjectsError(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()

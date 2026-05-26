@@ -259,6 +259,7 @@ func (s *Server) handleTunnelRuntimeReportMessage(client *ClientConn, msg protoc
 
 	s.unifiedRuntime.recordReport(client.ID, report, time.Now())
 	s.emitTunnelChanged(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "runtime_report")
+	s.scheduleUnifiedTunnelReconcile(stored, "runtime_report")
 	log.Printf("📩 Received tunnel runtime report [%s]: tunnel_id=%s role=%s revision=%d message=%q", client.ID, report.TunnelID, report.Role, report.Revision, report.Message)
 }
 

@@ -326,7 +326,9 @@ func (c *Client) acceptIngressTCP(rt *sessionRuntime, req protocol.TunnelProvisi
 			case <-runtime.done:
 				return
 			default:
-				log.Printf("⚠️ tunnel ingress accept failed [%s]: %v", req.TunnelID, err)
+				message := fmt.Sprintf("tunnel ingress accept failed [%s]: %v", req.TunnelID, err)
+				log.Printf("⚠️ %s", message)
+				c.failIngressTunnelRuntime(rt, req, runtime, message)
 				return
 			}
 		}
@@ -345,7 +347,9 @@ func (c *Client) acceptIngressUDP(rt *sessionRuntime, req protocol.TunnelProvisi
 			case <-runtime.done:
 				return
 			default:
-				log.Printf("⚠️ tunnel UDP ingress read failed [%s]: %v", req.TunnelID, err)
+				message := fmt.Sprintf("tunnel UDP ingress read failed [%s]: %v", req.TunnelID, err)
+				log.Printf("⚠️ %s", message)
+				c.failIngressTunnelRuntime(rt, req, runtime, message)
 				return
 			}
 		}
@@ -354,6 +358,16 @@ func (c *Client) acceptIngressUDP(rt *sessionRuntime, req protocol.TunnelProvisi
 		copy(payload, buf[:n])
 		c.handleIngressUDPDatagram(rt, req, runtime, srcAddr, payload)
 	}
+}
+
+func (c *Client) failIngressTunnelRuntime(rt *sessionRuntime, req protocol.TunnelProvisionRequest, runtime *clientTunnelRuntime, message string) {
+	c.reportTunnelRuntimeError(rt, req, message)
+	if runtime == nil {
+		return
+	}
+	key := tunnelRuntimeKey(req.TunnelID, req.Role)
+	c.tunnels.CompareAndDelete(key, runtime)
+	runtime.close()
 }
 
 func (c *Client) reapIngressUDPAssociations(runtime *clientTunnelRuntime) {

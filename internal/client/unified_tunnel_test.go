@@ -152,6 +152,67 @@ func TestClientReportsIngressRuntimeErrorWhenDataSessionUnavailable(t *testing.T
 	}
 }
 
+func TestClientReportsIngressRuntimeErrorWhenTCPListenerFails(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	c.ClientID = "ingress-client"
+	clientWS, serverWS := newClientTestWebSocketPair(t)
+	defer mustClose(t, clientWS)
+	defer mustClose(t, serverWS)
+
+	rt := &sessionRuntime{done: make(chan struct{}), conn: clientWS}
+	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleIngress, reserveClientTCPPort(t))
+	ack := c.handleTunnelProvision(rt, req)
+	if !ack.Accepted {
+		t.Fatalf("ingress provision rejected: %s", ack.Message)
+	}
+
+	key := tunnelRuntimeKey(req.TunnelID, protocol.DataStreamRoleIngress)
+	value, ok := c.tunnels.Load(key)
+	if !ok {
+		t.Fatal("ingress runtime was not stored")
+	}
+	runtime, ok := value.(*clientTunnelRuntime)
+	if !ok {
+		t.Fatalf("ingress runtime has unexpected type %T", value)
+	}
+	if runtime.listener == nil {
+		t.Fatal("ingress runtime missing TCP listener")
+	}
+	if err := runtime.listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+
+	if err := serverWS.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set websocket read deadline: %v", err)
+	}
+	var msg protocol.Message
+	if err := serverWS.ReadJSON(&msg); err != nil {
+		t.Fatalf("read runtime report: %v", err)
+	}
+	if msg.Type != protocol.MsgTypeTunnelRuntimeReport {
+		t.Fatalf("message type: want %s, got %s", protocol.MsgTypeTunnelRuntimeReport, msg.Type)
+	}
+	var report protocol.TunnelRuntimeReport
+	if err := msg.ParsePayload(&report); err != nil {
+		t.Fatalf("parse runtime report: %v", err)
+	}
+	if report.TunnelID != req.TunnelID || report.Revision != req.Revision || report.Role != protocol.DataStreamRoleIngress {
+		t.Fatalf("runtime report identity mismatch: %+v", report)
+	}
+	if !strings.Contains(report.Message, "tunnel ingress accept failed") {
+		t.Fatalf("runtime report message should explain listener failure, got %q", report.Message)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := c.tunnels.Load(key); !ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("failed ingress runtime remained registered after listener failure")
+}
+
 func assertTCPPortClosed(t *testing.T, addr string) {
 	t.Helper()
 	deadline := time.Now().Add(500 * time.Millisecond)
