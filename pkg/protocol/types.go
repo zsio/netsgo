@@ -118,6 +118,15 @@ type TunnelIssue struct {
 	Details    json.RawMessage `json:"details,omitempty"`
 }
 
+// Stable tunnel issue codes emitted by server/client runtime paths.
+const (
+	TunnelIssueCodeRuntimeReport          = "runtime_report"
+	TunnelIssueCodeProvisionAckTimeout    = "provision_ack_timeout"
+	TunnelIssueCodeProvisionAckRejected   = "provision_ack_rejected"
+	TunnelIssueCodeProvisionAckCancelled  = "provision_ack_cancelled"
+	TunnelIssueCodeTargetStreamOpenFailed = "target_stream_open_failed"
+)
+
 // TunnelSpec is the canonical tunnel payload used by API, protocol, storage,
 // runtime and events.
 type TunnelSpec struct {

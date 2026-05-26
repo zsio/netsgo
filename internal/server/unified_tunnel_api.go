@@ -751,7 +751,9 @@ func (s *Server) createUnifiedStoredTunnel(req tunnelCreateRequestAPI) (StoredTu
 		return StoredTunnel{}, err
 	}
 	if err := s.reconcileStoredUnifiedTunnel(stored, "created"); err != nil {
-		return StoredTunnel{}, err
+		// Reconcile failures are runtime facts after the config has been saved;
+		// create success only means the desired tunnel configuration is valid.
+		_ = err
 	}
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
 		stored = reloaded
@@ -796,7 +798,9 @@ func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevisi
 		s.unprovisionClientRelayTunnel(existing, "updated")
 	}
 	if err := s.reconcileStoredUnifiedTunnel(stored, "updated"); err != nil {
-		return StoredTunnel{}, err
+		// Runtime convergence failures should be reflected by runtime_state and
+		// in-memory issues, not by rolling back a valid saved spec.
+		_ = err
 	}
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
 		stored = reloaded
@@ -1165,6 +1169,9 @@ func computedRuntimeStateForStoredTunnel(stored StoredTunnel, s *Server) string 
 	}
 	if !requiredTunnelClientsOnline(stored, s) {
 		return protocol.ProxyRuntimeStateOffline
+	}
+	if s.unifiedRuntime.hasIssuesForStoredTunnel(stored, true) {
+		return protocol.ProxyRuntimeStateError
 	}
 	if stored.Topology == TunnelTopologyClientToClient {
 		if _, ok := s.c2c.get(stored.ID); ok && (stored.RuntimeState == protocol.ProxyRuntimeStateExposed || stored.RuntimeState == protocol.TunnelRuntimeStateActive) {

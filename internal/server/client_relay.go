@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -55,6 +56,7 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 	}
 	if stored.DesiredState == protocol.ProxyDesiredStateStopped {
 		s.unprovisionClientRelayTunnel(stored, "stopped")
+		s.unifiedRuntime.clearTunnelIssues(stored.ID)
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateIdle, "")
 	}
 	if stored.Ingress.Type != TunnelIngressTypeTCPListen && stored.Ingress.Type != TunnelIngressTypeUDPListen {
@@ -62,20 +64,30 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 	}
 	if !s.isClientOnline(stored.Ingress.ClientID) || !s.isClientOnline(stored.Target.ClientID) {
 		s.unprovisionClientRelayTunnel(stored, "participant_offline")
+		s.unifiedRuntime.clearServerIssues(stored.ID)
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
 	}
 
 	ingressClient, ok := s.loadLiveClient(stored.Ingress.ClientID)
 	if !ok || !clientHasDataSession(ingressClient) {
 		s.unprovisionClientRelayTunnel(stored, "ingress_data_offline")
+		s.unifiedRuntime.clearServerIssues(stored.ID)
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
 	}
 	targetClient, ok := s.loadLiveClient(stored.Target.ClientID)
 	if !ok || !clientHasDataSession(targetClient) {
 		s.unprovisionClientRelayTunnel(stored, "target_data_offline")
+		s.unifiedRuntime.clearServerIssues(stored.ID)
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
 	}
 
+	if active, ok := s.c2c.get(stored.ID); ok && active.Revision == stored.Revision &&
+		(stored.RuntimeState == protocol.ProxyRuntimeStateExposed || stored.RuntimeState == protocol.TunnelRuntimeStateActive) &&
+		!s.unifiedRuntime.hasIssuesForStoredTunnel(stored, true) {
+		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
+	}
+
+	s.unifiedRuntime.clearTunnelIssues(stored.ID)
 	s.c2c.set(stored)
 	if err := s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStatePending, ""); err != nil {
 		return err
@@ -87,6 +99,7 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 		Spec:     tunnelSpecProtocolFromStored(stored, protocol.ProxyRuntimeStatePending),
 	}); err != nil {
 		s.unprovisionClientRelayTunnel(stored, "target_provision_failed")
+		s.recordClientRelayProvisionIssue(stored, protocol.DataStreamRoleTarget, err)
 		_ = s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateError, err.Error())
 		return err
 	}
@@ -97,10 +110,36 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 		Spec:     tunnelSpecProtocolFromStored(stored, protocol.ProxyRuntimeStatePending),
 	}); err != nil {
 		s.unprovisionClientRelayTunnel(stored, "ingress_provision_failed")
+		s.recordClientRelayProvisionIssue(stored, protocol.DataStreamRoleIngress, err)
 		_ = s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateError, err.Error())
 		return err
 	}
+	s.unifiedRuntime.clearTunnelIssues(stored.ID)
 	return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
+}
+
+func (s *Server) recordClientRelayProvisionIssue(stored StoredTunnel, role string, err error) {
+	code := protocol.TunnelIssueCodeProvisionAckRejected
+	if errors.Is(err, errTunnelProvisionAckTimeout) {
+		code = protocol.TunnelIssueCodeProvisionAckTimeout
+	} else if errors.Is(err, errTunnelProvisionAckCancelled) {
+		code = protocol.TunnelIssueCodeProvisionAckCancelled
+	}
+	clientID := stored.Target.ClientID
+	scope := "target_client"
+	if role == protocol.DataStreamRoleIngress {
+		clientID = stored.Ingress.ClientID
+		scope = "ingress_client"
+	}
+	s.unifiedRuntime.recordServerIssue(stored.ID, protocol.TunnelIssue{
+		Code:       code,
+		Scope:      scope,
+		ClientID:   clientID,
+		Severity:   "error",
+		Message:    tunnelProvisionErrorMessage(err),
+		Retryable:  true,
+		ObservedAt: time.Now().UTC(),
+	})
 }
 
 func (s *Server) unprovisionClientRelayTunnel(stored StoredTunnel, reason string) {
@@ -250,6 +289,15 @@ func (s *Server) handleClientOpenedDataStream(openClient *ClientConn, openStream
 	targetStream, err := s.openRelayStreamToTarget(targetClient, stored)
 	if err != nil {
 		log.Printf("⚠️ client relay open target stream failed: %v", err)
+		s.unifiedRuntime.recordServerIssue(stored.ID, protocol.TunnelIssue{
+			Code:       protocol.TunnelIssueCodeTargetStreamOpenFailed,
+			Scope:      "transport",
+			ClientID:   stored.Target.ClientID,
+			Severity:   "error",
+			Message:    fmt.Sprintf("failed to open target client data stream: %v", err),
+			Retryable:  true,
+			ObservedAt: time.Now().UTC(),
+		})
 		_ = s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateError, err.Error())
 		return
 	}

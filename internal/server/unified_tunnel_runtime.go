@@ -9,8 +9,9 @@ import (
 )
 
 type unifiedTunnelRuntimeRegistry struct {
-	mu      sync.RWMutex
-	reports map[string]runtimeReportFact
+	mu           sync.RWMutex
+	reports      map[string]runtimeReportFact
+	serverIssues map[string][]protocol.TunnelIssue
 }
 
 type runtimeReportFact struct {
@@ -20,7 +21,10 @@ type runtimeReportFact struct {
 }
 
 func newUnifiedTunnelRuntimeRegistry() *unifiedTunnelRuntimeRegistry {
-	return &unifiedTunnelRuntimeRegistry{reports: make(map[string]runtimeReportFact)}
+	return &unifiedTunnelRuntimeRegistry{
+		reports:      make(map[string]runtimeReportFact),
+		serverIssues: make(map[string][]protocol.TunnelIssue),
+	}
 }
 
 func (r *unifiedTunnelRuntimeRegistry) recordReport(clientID string, report protocol.TunnelRuntimeReport, observedAt time.Time) {
@@ -35,16 +39,60 @@ func (r *unifiedTunnelRuntimeRegistry) recordReport(clientID string, report prot
 	r.mu.Unlock()
 }
 
+func (r *unifiedTunnelRuntimeRegistry) clearTunnelIssues(tunnelID string) {
+	if r == nil || tunnelID == "" {
+		return
+	}
+	r.mu.Lock()
+	delete(r.serverIssues, tunnelID)
+	delete(r.reports, runtimeReportKey(tunnelID, protocol.DataStreamRoleIngress))
+	delete(r.reports, runtimeReportKey(tunnelID, protocol.DataStreamRoleTarget))
+	r.mu.Unlock()
+}
+
+func (r *unifiedTunnelRuntimeRegistry) clearServerIssues(tunnelID string) {
+	if r == nil || tunnelID == "" {
+		return
+	}
+	r.mu.Lock()
+	delete(r.serverIssues, tunnelID)
+	r.mu.Unlock()
+}
+
+func (r *unifiedTunnelRuntimeRegistry) recordServerIssue(tunnelID string, issue protocol.TunnelIssue) {
+	if r == nil || tunnelID == "" || issue.Code == "" || issue.Message == "" {
+		return
+	}
+	if issue.Severity == "" {
+		issue.Severity = "error"
+	}
+	if issue.ObservedAt.IsZero() {
+		issue.ObservedAt = time.Now().UTC()
+	} else {
+		issue.ObservedAt = issue.ObservedAt.UTC()
+	}
+	r.mu.Lock()
+	r.serverIssues[tunnelID] = []protocol.TunnelIssue{issue}
+	r.mu.Unlock()
+}
+
 func (r *unifiedTunnelRuntimeRegistry) issuesForStoredTunnel(stored StoredTunnel, online bool) []protocol.TunnelIssue {
-	if r == nil || !online || stored.Revision <= 0 {
+	if r == nil || !online || stored.Revision <= 0 || stored.DesiredState == protocol.ProxyDesiredStateStopped {
 		return nil
 	}
-	issues := make([]protocol.TunnelIssue, 0, 2)
+	issues := make([]protocol.TunnelIssue, 0, 3)
+	r.mu.RLock()
+	issues = append(issues, r.serverIssues[stored.ID]...)
+	r.mu.RUnlock()
 	if stored.Ingress.Location == tunnelEndpointLocationClient {
 		issues = append(issues, r.issueForRole(stored, protocol.DataStreamRoleIngress)...)
 	}
 	issues = append(issues, r.issueForRole(stored, protocol.DataStreamRoleTarget)...)
 	return issues
+}
+
+func (r *unifiedTunnelRuntimeRegistry) hasIssuesForStoredTunnel(stored StoredTunnel, online bool) bool {
+	return len(r.issuesForStoredTunnel(stored, online)) > 0
 }
 
 func (r *unifiedTunnelRuntimeRegistry) issueForRole(stored StoredTunnel, role string) []protocol.TunnelIssue {
@@ -80,7 +128,7 @@ func (r *unifiedTunnelRuntimeRegistry) issueForRole(stored StoredTunnel, role st
 		return nil
 	}
 	return []protocol.TunnelIssue{{
-		Code:       "runtime_report",
+		Code:       protocol.TunnelIssueCodeRuntimeReport,
 		Scope:      scope,
 		ClientID:   expectedClientID,
 		Severity:   "error",

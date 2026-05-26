@@ -63,6 +63,38 @@ func (s *UDPProxyState) removeSession(key string) bool {
 	return false
 }
 
+func (s *UDPProxyState) removeOldestSession() bool {
+	if s == nil {
+		return false
+	}
+	var oldestKey string
+	var oldestAt int64
+	s.sessions.Range(func(key, value any) bool {
+		sess, ok := value.(*UDPSession)
+		if !ok {
+			if keyString, ok := key.(string); ok {
+				s.sessions.Delete(keyString)
+			}
+			return true
+		}
+		lastActive := sess.lastActive.Load()
+		if oldestKey == "" || lastActive < oldestAt {
+			oldestKey = key.(string)
+			oldestAt = lastActive
+		}
+		return true
+	})
+	if oldestKey == "" {
+		return false
+	}
+	if value, ok := s.sessions.Load(oldestKey); ok {
+		if sess, ok := value.(*UDPSession); ok {
+			sess.Close()
+		}
+	}
+	return s.removeSession(oldestKey)
+}
+
 func (s *UDPProxyState) storeSession(key string, sess *UDPSession) (*UDPSession, bool) {
 	actual, loaded := s.sessions.LoadOrStore(key, sess)
 	if loaded {
@@ -132,10 +164,10 @@ func (s *UDPSession) IdleDuration() time.Duration {
 
 // UDP session management constants.
 const (
-	UDPSessionTimeout   = 60 * time.Second // session idle timeout
+	UDPSessionTimeout   = 2 * time.Minute  // session idle timeout
 	UDPReaperInterval   = 10 * time.Second // reaper scan interval
-	MaxUDPSessions      = 1024             // max concurrent sessions per UDP proxy
-	MaxUDPSessionsPerIP = 128              // max concurrent sessions per source IP
+	MaxUDPSessions      = 4096             // max concurrent sessions per UDP proxy
+	MaxUDPSessionsPerIP = MaxUDPSessions   // keep the explicit total cap as the effective bound
 )
 
 func udpSourceIPKey(addr net.Addr) string {
@@ -277,9 +309,11 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			// sessionCount.Load() and the subsequent Add(1) are not atomic;
 			// this is safe because the entire function runs in a single goroutine (non-concurrent).
 			if state.sessionCount.Load() >= int64(MaxUDPSessions) {
-				log.Printf("⚠️ UDP proxy [%s] session limit reached (%d), dropping packet from %s",
-					tunnel.Config.Name, MaxUDPSessions, key)
-				continue
+				if !state.removeOldestSession() || state.sessionCount.Load() >= int64(MaxUDPSessions) {
+					log.Printf("⚠️ UDP proxy [%s] session limit reached (%d), dropping packet from %s",
+						tunnel.Config.Name, MaxUDPSessions, key)
+					continue
+				}
 			}
 			if !state.canCreateSessionForIP(ipKey) {
 				log.Printf("⚠️ UDP proxy [%s] per-IP session limit reached (%d), dropping packet from %s",

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/yamux"
+
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
@@ -66,6 +68,29 @@ func testClientRelayHeader(stored StoredTunnel) protocol.DataStreamHeader {
 		Direction:    protocol.DataStreamDirectionIngressToTarget,
 		Transport:    protocol.ActualTransportServerRelay,
 	}
+}
+
+func newTestClientRelayDataSession(t *testing.T) (*yamux.Session, *yamux.Session) {
+	t.Helper()
+	clientPipe, serverPipe := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientPipe.Close()
+		_ = serverPipe.Close()
+	})
+	clientSession, err := mux.NewClientSession(clientPipe, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("client yamux session: %v", err)
+	}
+	serverSession, err := mux.NewServerSession(serverPipe, mux.DefaultConfig())
+	if err != nil {
+		_ = clientSession.Close()
+		t.Fatalf("server yamux session: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = clientSession.Close()
+		_ = serverSession.Close()
+	})
+	return clientSession, serverSession
 }
 
 func TestClientRelayTCPTransfersBytes(t *testing.T) {
@@ -331,5 +356,138 @@ func TestClientRelayUDPTransfersFrames(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("udp relay did not stop after streams closed")
+	}
+}
+
+func TestClientRelayProvisionTimeoutProjectsIssue(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	s.tunnels.tunnelReadyTimeout = 20 * time.Millisecond
+
+	stored := testClientRelayStoredTunnel(t)
+	stored.RuntimeState = protocol.ProxyRuntimeStateOffline
+	mustAddStableTunnel(t, s.store, stored)
+
+	targetWS, targetServerWS := newTestWebSocketPair(t)
+	defer mustClose(t, targetWS)
+	defer mustClose(t, targetServerWS)
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+
+	targetClient := &ClientConn{
+		ID:          stored.Target.ClientID,
+		conn:        targetServerWS,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: targetSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	ingressClient := &ClientConn{
+		ID:          stored.Ingress.ClientID,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: ingressSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(targetClient.ID, targetClient)
+	s.clients.Store(ingressClient.ID, ingressClient)
+
+	if err := s.reconcileClientRelayTunnel(stored); err == nil {
+		t.Fatal("provision timeout should return an error")
+	}
+	if _, ok := s.c2c.get(stored.ID); ok {
+		t.Fatal("failed provisioning should remove client relay runtime")
+	}
+	reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("reload tunnel: %v", err)
+	}
+	spec := specFromStoredTunnel(reloaded, s)
+	if spec.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("provision failure should project error, got %q", spec.RuntimeState)
+	}
+	if len(spec.Issues) != 1 || spec.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckTimeout || spec.Issues[0].ClientID != stored.Target.ClientID {
+		t.Fatalf("provision timeout issue mismatch: %+v", spec.Issues)
+	}
+}
+
+func TestClientRelayActiveReconcileIsIdempotent(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	s.tunnels.tunnelReadyTimeout = 20 * time.Millisecond
+
+	stored := testClientRelayStoredTunnel(t)
+	mustAddStableTunnel(t, s.store, stored)
+	s.c2c.set(stored)
+
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+	s.clients.Store(stored.Target.ClientID, &ClientConn{
+		ID:          stored.Target.ClientID,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: targetSession,
+		generation:  1,
+		state:       clientStateLive,
+	})
+	s.clients.Store(stored.Ingress.ClientID, &ClientConn{
+		ID:          stored.Ingress.ClientID,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: ingressSession,
+		generation:  1,
+		state:       clientStateLive,
+	})
+
+	started := time.Now()
+	if err := s.reconcileClientRelayTunnel(stored); err != nil {
+		t.Fatalf("active reconcile should be a no-op: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= s.tunnels.tunnelReadyTimeout {
+		t.Fatalf("active reconcile should not wait for provisioning ACKs, elapsed=%s", elapsed)
+	}
+}
+
+func TestClientRelayTargetStreamOpenFailureProjectsIssue(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	stored := testClientRelayStoredTunnel(t)
+	mustAddStableTunnel(t, s.store, stored)
+	s.c2c.set(stored)
+	s.clients.Store(stored.Target.ClientID, &ClientConn{
+		ID:         stored.Target.ClientID,
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	})
+	s.clients.Store(stored.Ingress.ClientID, &ClientConn{
+		ID:         stored.Ingress.ClientID,
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	})
+
+	ingressStream, relayStream := net.Pipe()
+	defer mustClose(t, ingressStream)
+	done := make(chan struct{})
+	go func() {
+		s.handleClientOpenedDataStream(&ClientConn{ID: stored.Ingress.ClientID}, relayStream, testClientRelayHeader(stored))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("target stream failure did not return")
+	}
+	reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("reload tunnel: %v", err)
+	}
+	spec := specFromStoredTunnel(reloaded, s)
+	if spec.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("target stream failure should project error, got %q", spec.RuntimeState)
+	}
+	if len(spec.Issues) != 1 || spec.Issues[0].Code != protocol.TunnelIssueCodeTargetStreamOpenFailed {
+		t.Fatalf("target stream issue mismatch: %+v", spec.Issues)
 	}
 }

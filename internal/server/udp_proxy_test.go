@@ -166,6 +166,61 @@ func TestCloseAndReopenProxyRuntime_UDP(t *testing.T) {
 	_ = sConn.Close()
 }
 
+func TestUDPProxySessionBoundsAndOldestEviction(t *testing.T) {
+	if MaxUDPSessions != 4096 {
+		t.Fatalf("UDP session cap: want 4096, got %d", MaxUDPSessions)
+	}
+	if UDPSessionTimeout != 2*time.Minute {
+		t.Fatalf("UDP session timeout: want 2m, got %s", UDPSessionTimeout)
+	}
+
+	state := &UDPProxyState{
+		sessionIPs: make(map[string]int),
+		done:       make(chan struct{}),
+	}
+	oldStream, oldPeer := net.Pipe()
+	newStream, newPeer := net.Pipe()
+	t.Cleanup(func() {
+		_ = oldStream.Close()
+		_ = oldPeer.Close()
+		_ = newStream.Close()
+		_ = newPeer.Close()
+	})
+
+	oldSession := &UDPSession{
+		srcAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10001},
+		ipKey:   "127.0.0.1",
+		stream:  oldStream,
+		done:    make(chan struct{}),
+	}
+	newSession := &UDPSession{
+		srcAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10002},
+		ipKey:   "127.0.0.1",
+		stream:  newStream,
+		done:    make(chan struct{}),
+	}
+	oldSession.lastActive.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+	newSession.lastActive.Store(time.Now().Add(-time.Second).UnixNano())
+	state.storeSession(oldSession.srcAddr.String(), oldSession)
+	state.storeSession(newSession.srcAddr.String(), newSession)
+
+	if !state.removeOldestSession() {
+		t.Fatal("expected oldest UDP session to be evicted")
+	}
+	if _, ok := state.sessions.Load(oldSession.srcAddr.String()); ok {
+		t.Fatal("oldest UDP session was not removed")
+	}
+	if _, ok := state.sessions.Load(newSession.srcAddr.String()); !ok {
+		t.Fatal("newer UDP session should remain")
+	}
+	if got := state.sessionCount.Load(); got != 1 {
+		t.Fatalf("session count: want 1, got %d", got)
+	}
+	if got := state.sessionCountForIP("127.0.0.1"); got != 1 {
+		t.Fatalf("per-IP session count: want 1, got %d", got)
+	}
+}
+
 func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	s := New(0)
 	clientID := "udp-e2e-client"

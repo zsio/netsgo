@@ -3,9 +3,12 @@ package server
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"netsgo/pkg/protocol"
 )
+
+const unifiedTunnelRetryInterval = time.Minute
 
 func (s *Server) reconcileUnifiedTunnel(tunnelID, reason string) error {
 	if strings.TrimSpace(tunnelID) == "" {
@@ -30,6 +33,36 @@ func (s *Server) reconcileStoredUnifiedTunnel(stored StoredTunnel, reason string
 		return s.reconcileServerExposeTunnel(stored)
 	default:
 		return fmt.Errorf("unsupported tunnel topology %q", stored.Topology)
+	}
+}
+
+func (s *Server) unifiedTunnelReconcileLoop() {
+	ticker := time.NewTicker(unifiedTunnelRetryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			s.reconcileRunningUnifiedTunnels("retry")
+		}
+	}
+}
+
+func (s *Server) reconcileRunningUnifiedTunnels(reason string) {
+	if s == nil || s.store == nil {
+		return
+	}
+	tunnels, err := s.store.GetAllTunnels()
+	if err != nil {
+		return
+	}
+	for _, stored := range tunnels {
+		if stored.DesiredState != protocol.ProxyDesiredStateRunning {
+			continue
+		}
+		_ = s.reconcileStoredUnifiedTunnel(stored, reason)
 	}
 }
 

@@ -570,6 +570,50 @@ func TestAPI_UnifiedTunnelUpdateUnprovisionsOldClientToClientParticipants(t *tes
 	}
 }
 
+func TestAPI_UnifiedTunnelCreatePersistsProvisionRuntimeFailure(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	s.tunnels.tunnelReadyTimeout = 20 * time.Millisecond
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "c2c-timeout-target", "install-c2c-timeout-target")
+	defer mustClose(t, targetConn)
+	ingressConn, ingressAuth := connectAndAuthWithInstallID(t, ts, "c2c-timeout-ingress", "install-c2c-timeout-ingress")
+	defer mustClose(t, ingressConn)
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+	setLiveClientDefaultCapabilities(t, s, ingressAuth.ClientID)
+
+	create := []byte(fmt.Sprintf(`{
+		"name":"c2c-provision-timeout",
+		"topology":"client_to_client",
+		"ingress":{"location":"client","client_id":"%s","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`, ingressAuth.ClientID, reserveTCPPort(t), targetAuth.ClientID))
+	createRespCh := doMuxRequestAsync(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	respondPreflight(t, ingressConn)
+	resp := awaitMuxResponse(t, createRespCh)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("client_to_client create should persist despite runtime timeout: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+	if created.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("runtime state should project provisioning error, got %q", created.RuntimeState)
+	}
+	if len(created.Issues) != 1 || created.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckTimeout || created.Issues[0].ClientID != targetAuth.ClientID {
+		t.Fatalf("created issue mismatch: %+v", created.Issues)
+	}
+	if _, err := s.store.GetTunnelByIDE(targetAuth.ClientID, created.ID); err != nil {
+		t.Fatalf("tunnel should remain persisted after runtime failure: %v", err)
+	}
+}
+
 func TestAPI_UnifiedTunnelUpdateSameIngressPortSkipsSelfPreflightConflict(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,9 +69,9 @@ func (a *clientUDPAssociation) close() {
 }
 
 const (
-	clientUDPAssociationTimeout   = 60 * time.Second
+	clientUDPAssociationTimeout   = 2 * time.Minute
 	clientUDPAssociationReapEvery = 10 * time.Second
-	clientMaxUDPAssociations      = 1024
+	clientMaxUDPAssociations      = 4096
 )
 
 func (rt *clientTunnelRuntime) close() {
@@ -106,6 +107,34 @@ func (rt *clientTunnelRuntime) removeUDPAssociation(key string) {
 			assoc.close()
 		}
 	}
+}
+
+func (rt *clientTunnelRuntime) removeOldestUDPAssociation() bool {
+	if rt == nil {
+		return false
+	}
+	var oldestKey string
+	var oldestAt int64
+	rt.udpAssociations.Range(func(key, value any) bool {
+		assoc, ok := value.(*clientUDPAssociation)
+		if !ok {
+			if keyString, ok := key.(string); ok {
+				rt.udpAssociations.Delete(keyString)
+			}
+			return true
+		}
+		lastActive := assoc.lastActive.Load()
+		if oldestKey == "" || lastActive < oldestAt {
+			oldestKey = assoc.key
+			oldestAt = lastActive
+		}
+		return true
+	})
+	if oldestKey == "" {
+		return false
+	}
+	rt.removeUDPAssociation(oldestKey)
+	return true
 }
 
 func tunnelRuntimeKey(tunnelID, role string) string {
@@ -376,27 +405,35 @@ func (c *Client) getOrCreateIngressUDPAssociation(rt *sessionRuntime, req protoc
 		return assoc, ok
 	}
 	if runtime.udpAssociationCount.Load() >= clientMaxUDPAssociations {
-		log.Printf("⚠️ tunnel UDP ingress association limit reached [%s], dropping packet from %s", req.TunnelID, key)
-		return nil, false
+		if !runtime.removeOldestUDPAssociation() || runtime.udpAssociationCount.Load() >= clientMaxUDPAssociations {
+			log.Printf("⚠️ tunnel UDP ingress association limit reached [%s], dropping packet from %s", req.TunnelID, key)
+			return nil, false
+		}
 	}
 
 	rt.dataMu.RLock()
 	session := rt.dataSession
 	rt.dataMu.RUnlock()
 	if session == nil || session.IsClosed() {
-		log.Printf("⚠️ data session unavailable for UDP tunnel ingress [%s]", req.TunnelID)
+		message := fmt.Sprintf("data session unavailable for UDP tunnel ingress [%s]", req.TunnelID)
+		log.Printf("⚠️ %s", message)
+		c.reportTunnelRuntimeError(rt, req, message)
 		return nil, false
 	}
 	stream, err := session.Open()
 	if err != nil {
-		log.Printf("⚠️ open UDP tunnel ingress stream failed [%s]: %v", req.TunnelID, err)
+		message := fmt.Sprintf("open UDP tunnel ingress stream failed [%s]: %v", req.TunnelID, err)
+		log.Printf("⚠️ %s", message)
+		c.reportTunnelRuntimeError(rt, req, message)
 		return nil, false
 	}
 
 	header := ingressDataStreamHeader(req, c.CurrentClientID())
 	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
 		_ = stream.Close()
-		log.Printf("⚠️ write UDP tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
+		message := fmt.Sprintf("write UDP tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
+		log.Printf("⚠️ %s", message)
+		c.reportTunnelRuntimeError(rt, req, message)
 		return nil, false
 	}
 
@@ -457,22 +494,60 @@ func (c *Client) handleIngressTCPConn(rt *sessionRuntime, req protocol.TunnelPro
 	session := rt.dataSession
 	rt.dataMu.RUnlock()
 	if session == nil || session.IsClosed() {
-		log.Printf("⚠️ data session unavailable for tunnel ingress [%s]", req.TunnelID)
+		message := fmt.Sprintf("data session unavailable for tunnel ingress [%s]", req.TunnelID)
+		log.Printf("⚠️ %s", message)
+		c.reportTunnelRuntimeError(rt, req, message)
 		return
 	}
 	stream, err := session.Open()
 	if err != nil {
-		log.Printf("⚠️ open tunnel ingress stream failed [%s]: %v", req.TunnelID, err)
+		message := fmt.Sprintf("open tunnel ingress stream failed [%s]: %v", req.TunnelID, err)
+		log.Printf("⚠️ %s", message)
+		c.reportTunnelRuntimeError(rt, req, message)
 		return
 	}
 	defer func() { _ = stream.Close() }()
 
 	header := ingressDataStreamHeader(req, c.CurrentClientID())
 	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
-		log.Printf("⚠️ write tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
+		message := fmt.Sprintf("write tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
+		log.Printf("⚠️ %s", message)
+		c.reportTunnelRuntimeError(rt, req, message)
 		return
 	}
 	mux.Relay(stream, conn)
+}
+
+func (c *Client) reportTunnelRuntimeError(rt *sessionRuntime, req protocol.TunnelProvisionRequest, message string) {
+	if rt == nil || req.TunnelID == "" || req.Revision <= 0 || req.Role == "" || strings.TrimSpace(message) == "" {
+		return
+	}
+	clientID := c.CurrentClientID()
+	report := protocol.TunnelRuntimeReport{
+		TunnelID: req.TunnelID,
+		Revision: req.Revision,
+		Role:     req.Role,
+		Participant: protocol.ParticipantRuntime{
+			ClientID: clientID,
+			Role:     req.Role,
+			State:    protocol.ProxyRuntimeStateError,
+			Revision: req.Revision,
+			Error:    message,
+		},
+		Transport: protocol.TransportRuntime{
+			Policy: req.Spec.TransportPolicy,
+			Actual: protocol.ActualTransportServerRelay,
+		},
+		Message: message,
+	}
+	msg, err := protocol.NewMessage(protocol.MsgTypeTunnelRuntimeReport, report)
+	if err != nil {
+		log.Printf("⚠️ build tunnel runtime report failed [%s]: %v", req.TunnelID, err)
+		return
+	}
+	if err := rt.writeJSON(msg); err != nil {
+		log.Printf("⚠️ send tunnel runtime report failed [%s]: %v", req.TunnelID, err)
+	}
 }
 
 func proxyRequestFromTunnelSpec(spec protocol.TunnelSpec) (protocol.ProxyNewRequest, error) {

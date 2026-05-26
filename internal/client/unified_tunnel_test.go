@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
@@ -60,6 +65,35 @@ func reserveClientTCPPort(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
+func newClientTestWebSocketPair(t *testing.T) (*websocket.Conn, *websocket.Conn) {
+	t.Helper()
+	serverConnCh := make(chan *websocket.Conn, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		serverConnCh <- conn
+	}))
+	t.Cleanup(ts.Close)
+
+	clientURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(clientURL, nil)
+	if err != nil {
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	select {
+	case serverConn := <-serverConnCh:
+		return clientConn, serverConn
+	case <-time.After(time.Second):
+		_ = clientConn.Close()
+		t.Fatal("timed out waiting for test websocket")
+		return nil, nil
+	}
+}
+
 func assertTCPPortAccepts(t *testing.T, addr string) {
 	t.Helper()
 	conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
@@ -67,6 +101,55 @@ func assertTCPPortAccepts(t *testing.T, addr string) {
 		t.Fatalf("listener was not reachable: %v", err)
 	}
 	mustClose(t, conn)
+}
+
+func TestClientReportsIngressRuntimeErrorWhenDataSessionUnavailable(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	c.ClientID = "ingress-client"
+	clientWS, serverWS := newClientTestWebSocketPair(t)
+	defer mustClose(t, clientWS)
+	defer mustClose(t, serverWS)
+
+	rt := &sessionRuntime{done: make(chan struct{}), conn: clientWS}
+	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleIngress, reserveClientTCPPort(t))
+	externalConn, tunnelConn := net.Pipe()
+	defer mustClose(t, externalConn)
+
+	done := make(chan struct{})
+	go func() {
+		c.handleIngressTCPConn(rt, req, tunnelConn)
+		close(done)
+	}()
+
+	if err := serverWS.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set websocket read deadline: %v", err)
+	}
+	var msg protocol.Message
+	if err := serverWS.ReadJSON(&msg); err != nil {
+		t.Fatalf("read runtime report: %v", err)
+	}
+	if msg.Type != protocol.MsgTypeTunnelRuntimeReport {
+		t.Fatalf("message type: want %s, got %s", protocol.MsgTypeTunnelRuntimeReport, msg.Type)
+	}
+	var report protocol.TunnelRuntimeReport
+	if err := msg.ParsePayload(&report); err != nil {
+		t.Fatalf("parse runtime report: %v", err)
+	}
+	if report.TunnelID != req.TunnelID || report.Revision != req.Revision || report.Role != protocol.DataStreamRoleIngress {
+		t.Fatalf("runtime report identity mismatch: %+v", report)
+	}
+	if report.Participant.ClientID != c.CurrentClientID() || report.Participant.State != protocol.ProxyRuntimeStateError {
+		t.Fatalf("runtime report participant mismatch: %+v", report.Participant)
+	}
+	if !strings.Contains(report.Message, "data session unavailable") {
+		t.Fatalf("runtime report message should explain data session failure, got %q", report.Message)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ingress connection handler did not return")
+	}
 }
 
 func assertTCPPortClosed(t *testing.T, addr string) {
@@ -414,4 +497,44 @@ func TestClientTunnelProvisionUDPIngressRelaysFramesAndUnprovisions(t *testing.T
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("udp listener still bound after unprovision")
+}
+
+func TestClientUDPAssociationBoundsAndOldestEviction(t *testing.T) {
+	if clientMaxUDPAssociations != 4096 {
+		t.Fatalf("client UDP association cap: want 4096, got %d", clientMaxUDPAssociations)
+	}
+	if clientUDPAssociationTimeout != 2*time.Minute {
+		t.Fatalf("client UDP association timeout: want 2m, got %s", clientUDPAssociationTimeout)
+	}
+
+	runtime := &clientTunnelRuntime{done: make(chan struct{})}
+	oldStream, oldPeer := net.Pipe()
+	newStream, newPeer := net.Pipe()
+	t.Cleanup(func() {
+		_ = oldStream.Close()
+		_ = oldPeer.Close()
+		_ = newStream.Close()
+		_ = newPeer.Close()
+	})
+
+	oldAssoc := newClientUDPAssociation("old", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10001}, oldStream)
+	newAssoc := newClientUDPAssociation("new", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10002}, newStream)
+	oldAssoc.lastActive.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+	newAssoc.lastActive.Store(time.Now().Add(-time.Second).UnixNano())
+	runtime.udpAssociations.Store(oldAssoc.key, oldAssoc)
+	runtime.udpAssociations.Store(newAssoc.key, newAssoc)
+	runtime.udpAssociationCount.Store(2)
+
+	if !runtime.removeOldestUDPAssociation() {
+		t.Fatal("expected oldest UDP association to be evicted")
+	}
+	if _, ok := runtime.udpAssociations.Load(oldAssoc.key); ok {
+		t.Fatal("oldest UDP association was not removed")
+	}
+	if _, ok := runtime.udpAssociations.Load(newAssoc.key); !ok {
+		t.Fatal("newer UDP association should remain")
+	}
+	if got := runtime.udpAssociationCount.Load(); got != 1 {
+		t.Fatalf("association count: want 1, got %d", got)
+	}
 }
