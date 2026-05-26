@@ -391,8 +391,8 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		} else if client, ok := s.loadLiveClient(stored.OwnerClientID); ok {
 			if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
 				_ = s.CloseProxyRuntime(client, name)
-				_ = s.notifyClientProxyClose(client, name, "deleted")
 			}
+			_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "deleted")
 		}
 	}
 
@@ -680,8 +680,8 @@ func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevisi
 	} else if client, ok := s.loadLiveClient(existing.OwnerClientID); ok {
 		if name, _, exists := findTunnelBySelector(client, existing.ID); exists {
 			_ = s.CloseProxyRuntime(client, name)
-			_ = s.notifyClientProxyClose(client, name, "updated")
 		}
+		_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(existing), "updated")
 	}
 	s.scheduleUnifiedTunnelReconcile(stored, "updated")
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {

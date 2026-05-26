@@ -590,6 +590,102 @@ func TestAPI_UnifiedTunnelUpdateRequiresExpectedRevisionAndHardDelete(t *testing
 	}
 }
 
+func TestAPI_UnifiedTunnelUpdateUnprovisionsOldServerExposeTarget(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "server-expose-update-target", "install-server-expose-update-target")
+	defer mustClose(t, targetConn)
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+
+	create := []byte(fmt.Sprintf(`{
+		"name":"server-expose-update",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`, reserveTCPPort(t), targetAuth.ClientID))
+	createResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("server_expose create: want 201, got %d body=%s", createResp.Code, createResp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, createResp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+	initialProvision := ackTunnelProvision(t, targetConn)
+	if initialProvision.TunnelID != created.ID || initialProvision.Revision != created.Revision || initialProvision.Role != protocol.DataStreamRoleTarget {
+		t.Fatalf("initial provision mismatch: %+v", initialProvision)
+	}
+
+	update := []byte(fmt.Sprintf(`{"expected_revision":%d,"spec":{
+		"name":"server-expose-update",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":2222}},
+		"transport_policy":"server_relay_only"
+	}}`, created.Revision, reserveTCPPort(t), targetAuth.ClientID))
+	updateResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodPut, "/api/tunnels/"+created.ID, token, update)
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("server_expose update: want 200, got %d body=%s", updateResp.Code, updateResp.Body.String())
+	}
+
+	unprovision := readTunnelUnprovision(t, targetConn)
+	if unprovision.TunnelID != created.ID || unprovision.Revision != created.Revision || unprovision.Role != protocol.DataStreamRoleTarget || unprovision.Reason != "updated" {
+		t.Fatalf("old target unprovision mismatch: %+v", unprovision)
+	}
+}
+
+func TestAPI_UnifiedTunnelDeleteUnprovisionsServerExposeTarget(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "server-expose-delete-target", "install-server-expose-delete-target")
+	defer mustClose(t, targetConn)
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+
+	create := []byte(fmt.Sprintf(`{
+		"name":"server-expose-delete",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`, reserveTCPPort(t), targetAuth.ClientID))
+	createResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("server_expose create: want 201, got %d body=%s", createResp.Code, createResp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, createResp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+	initialProvision := ackTunnelProvision(t, targetConn)
+	if initialProvision.TunnelID != created.ID || initialProvision.Revision != created.Revision || initialProvision.Role != protocol.DataStreamRoleTarget {
+		t.Fatalf("initial provision mismatch: %+v", initialProvision)
+	}
+
+	deleteResp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodDelete, "/api/tunnels/"+created.ID, token, nil)
+	if deleteResp.Code != http.StatusNoContent {
+		t.Fatalf("server_expose delete: want 204, got %d body=%s", deleteResp.Code, deleteResp.Body.String())
+	}
+
+	unprovision := readTunnelUnprovision(t, targetConn)
+	if unprovision.TunnelID != created.ID || unprovision.Revision != created.Revision || unprovision.Role != protocol.DataStreamRoleTarget || unprovision.Reason != "deleted" {
+		t.Fatalf("delete target unprovision mismatch: %+v", unprovision)
+	}
+	if _, err := s.store.GetTunnelByIDE(targetAuth.ClientID, created.ID); !errors.Is(err, ErrTunnelNotFound) {
+		t.Fatalf("deleted tunnel should be hard-deleted, got err=%v", err)
+	}
+}
+
 func TestAPI_UnifiedTunnelUpdateUnprovisionsOldClientToClientParticipants(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)
