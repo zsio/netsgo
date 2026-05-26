@@ -486,6 +486,47 @@ func TestAPI_UnifiedTunnelUpdateRequiresExpectedRevisionAndHardDelete(t *testing
 	if staleResp.Code != http.StatusConflict {
 		t.Fatalf("stale update: want 409, got %d body=%s", staleResp.Code, staleResp.Body.String())
 	}
+	var staleBody struct {
+		ErrorCode       string `json:"error_code"`
+		Code            string `json:"code"`
+		Field           string `json:"field"`
+		CurrentRevision int64  `json:"current_revision"`
+	}
+	if err := mustDecodeJSON(t, staleResp.Body, &staleBody); err != nil {
+		t.Fatalf("failed to decode stale revision error: %v", err)
+	}
+	if staleBody.ErrorCode != protocol.TunnelMutationErrorCodeRevisionConflict ||
+		staleBody.Code != protocol.TunnelMutationErrorCodeRevisionConflict ||
+		staleBody.Field != "expected_revision" ||
+		staleBody.CurrentRevision != created.Revision {
+		t.Fatalf("stale revision error mismatch: %+v", staleBody)
+	}
+
+	missingRevisionResp := doMuxRequest(t, handler, http.MethodPut, "/api/tunnels/"+created.ID, token, []byte(`{"spec":{
+		"name":"revise-me",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":22004}},
+		"target":{"location":"client","client_id":"`+record.ID+`","type":"tcp_service","config":{"ip":"127.0.0.1","port":2222}},
+		"transport_policy":"server_relay_only"
+	}}`))
+	if missingRevisionResp.Code != http.StatusBadRequest {
+		t.Fatalf("missing expected revision: want 400, got %d body=%s", missingRevisionResp.Code, missingRevisionResp.Body.String())
+	}
+	staleBody = struct {
+		ErrorCode       string `json:"error_code"`
+		Code            string `json:"code"`
+		Field           string `json:"field"`
+		CurrentRevision int64  `json:"current_revision"`
+	}{}
+	if err := mustDecodeJSON(t, missingRevisionResp.Body, &staleBody); err != nil {
+		t.Fatalf("failed to decode missing revision error: %v", err)
+	}
+	if staleBody.ErrorCode != protocol.TunnelMutationErrorCodeRevisionConflict ||
+		staleBody.Code != protocol.TunnelMutationErrorCodeRevisionConflict ||
+		staleBody.Field != "expected_revision" ||
+		staleBody.CurrentRevision != created.Revision {
+		t.Fatalf("missing revision error mismatch: %+v", staleBody)
+	}
 
 	validUpdate := []byte(`{"expected_revision":1,"spec":{
 		"name":"revise-me",

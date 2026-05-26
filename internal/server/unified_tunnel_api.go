@@ -335,18 +335,18 @@ func (s *Server) handleUpdateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if req.ExpectedRevision <= 0 {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "expected_revision is required"})
+		encodeJSON(w, http.StatusBadRequest, revisionConflictPayload("expected_revision is required", current.Revision))
 		return
 	}
 	if req.ExpectedRevision != current.Revision {
-		encodeJSON(w, http.StatusConflict, map[string]any{"error": errTunnelRevisionConflict.Error(), "error_code": "revision_conflict", "current_revision": current.Revision})
+		encodeJSON(w, http.StatusConflict, revisionConflictPayload(errTunnelRevisionConflict.Error(), current.Revision))
 		return
 	}
 
 	updated, err := s.updateUnifiedStoredTunnel(current, req.ExpectedRevision, req.Spec)
 	if err != nil {
 		if errors.Is(err, ErrTunnelRevisionConflict) {
-			encodeJSON(w, http.StatusConflict, map[string]any{"error": errTunnelRevisionConflict.Error(), "error_code": "revision_conflict"})
+			encodeJSON(w, http.StatusConflict, revisionConflictPayload(errTunnelRevisionConflict.Error(), 0))
 			return
 		}
 		status, payload := tunnelMutationErrorStatusAndBody(err)
@@ -354,6 +354,24 @@ func (s *Server) handleUpdateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "tunnel": specFromStoredTunnel(updated, s)})
+}
+
+func revisionConflictPayload(message string, currentRevision int64) map[string]any {
+	if message == "" {
+		message = errTunnelRevisionConflict.Error()
+	}
+	payload := map[string]any{
+		"success":    false,
+		"error":      message,
+		"message":    message,
+		"error_code": protocol.TunnelMutationErrorCodeRevisionConflict,
+		"code":       protocol.TunnelMutationErrorCodeRevisionConflict,
+		"field":      "expected_revision",
+	}
+	if currentRevision > 0 {
+		payload["current_revision"] = currentRevision
+	}
+	return payload
 }
 
 func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Request) {
