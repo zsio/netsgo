@@ -9,6 +9,7 @@ import {
   buildTunnelMutationPayload,
   buildTunnelViewModel,
   getTunnelActionAvailability,
+  getTunnelMutationErrorMessage,
   getTunnelMutationFieldError,
 } from './tunnel-model';
 
@@ -375,6 +376,20 @@ describe('tunnel-model', () => {
       field: 'ingress.config.bind_ip',
       message: 'bind_ip must be a valid IPv4 address',
       code: 'invalid_bind_ip',
+    });
+  });
+
+  test('unsupported_endpoint_type 使用统一可展示文案', () => {
+    const error = new ApiError(400, 'Bad Request', 'unsupported target type "static_file"', {
+      field: 'target.type',
+      code: 'unsupported_endpoint_type',
+    });
+
+    expect(getTunnelMutationErrorMessage(error)).toBe('该目标类型暂未支持，当前仅支持 TCP/UDP 服务。');
+    expect(getTunnelMutationFieldError(error)).toEqual({
+      field: 'target.type',
+      message: '该目标类型暂未支持，当前仅支持 TCP/UDP 服务。',
+      code: 'unsupported_endpoint_type',
     });
   });
 

@@ -257,6 +257,7 @@ export function getTunnelMutationErrorMessage(error: unknown) {
         return '隧道元数据已删除，仅保留历史流量记录。';
       case 'unknown_target_type':
       case 'unsupported_target_type':
+      case 'unsupported_endpoint_type':
         return '该目标类型暂未支持，当前仅支持 TCP/UDP 服务。';
       case 'direct_transport_unavailable':
         return '当前节点暂不支持 P2P 直连传输，请先选择 Server 中继。';

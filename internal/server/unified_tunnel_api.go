@@ -481,11 +481,7 @@ func validateUnifiedEndpointCombination(topology string, ingress, target endpoin
 		return newProxyRequestValidationError(fmt.Errorf("target.client_id is required"), "target.client_id", "missing_client_id", http.StatusBadRequest)
 	}
 	if target.Type != tunnelTargetTypeTCPService && target.Type != tunnelTargetTypeUDPService {
-		code := "unsupported_target_type"
-		if target.Type == "unix_socket" || target.Type == "static_file" || target.Type == "serial_device" {
-			code = "future_target_type"
-		}
-		return newProxyRequestValidationError(fmt.Errorf("unsupported target type %q", target.Type), "target.type", code, http.StatusBadRequest)
+		return newProxyRequestValidationError(fmt.Errorf("unsupported target type %q", target.Type), "target.type", protocol.TunnelMutationErrorCodeUnsupportedEndpointType, http.StatusBadRequest)
 	}
 
 	switch topology {
@@ -497,7 +493,7 @@ func validateUnifiedEndpointCombination(topology string, ingress, target endpoin
 			return newProxyRequestValidationError(fmt.Errorf("server ingress cannot include client_id"), "ingress.client_id", "invalid_client_id", http.StatusBadRequest)
 		}
 		if ingress.Type != tunnelIngressTypeTCPListen && ingress.Type != tunnelIngressTypeUDPListen && ingress.Type != tunnelIngressTypeHTTPHost {
-			return newProxyRequestValidationError(fmt.Errorf("unsupported ingress type %q", ingress.Type), "ingress.type", "unsupported_ingress_type", http.StatusBadRequest)
+			return newProxyRequestValidationError(fmt.Errorf("unsupported ingress type %q", ingress.Type), "ingress.type", protocol.TunnelMutationErrorCodeUnsupportedEndpointType, http.StatusBadRequest)
 		}
 	case tunnelTopologyClientToClient:
 		if ingress.Location != tunnelEndpointLocationClient {
@@ -510,10 +506,10 @@ func validateUnifiedEndpointCombination(topology string, ingress, target endpoin
 			return newProxyRequestValidationError(fmt.Errorf("ingress and target clients must differ"), "ingress.client_id", protocol.TunnelMutationErrorCodeSameIngressAndTargetClient, http.StatusBadRequest)
 		}
 		if ingress.Type == tunnelIngressTypeHTTPHost {
-			return newProxyRequestValidationError(fmt.Errorf("client_to_client does not support http_host ingress"), "ingress.type", "unsupported_ingress_type", http.StatusBadRequest)
+			return newProxyRequestValidationError(fmt.Errorf("client_to_client does not support http_host ingress"), "ingress.type", protocol.TunnelMutationErrorCodeUnsupportedEndpointType, http.StatusBadRequest)
 		}
 		if ingress.Type != tunnelIngressTypeTCPListen && ingress.Type != tunnelIngressTypeUDPListen {
-			return newProxyRequestValidationError(fmt.Errorf("unsupported ingress type %q", ingress.Type), "ingress.type", "unsupported_ingress_type", http.StatusBadRequest)
+			return newProxyRequestValidationError(fmt.Errorf("unsupported ingress type %q", ingress.Type), "ingress.type", protocol.TunnelMutationErrorCodeUnsupportedEndpointType, http.StatusBadRequest)
 		}
 	default:
 		return newProxyRequestValidationError(fmt.Errorf("unsupported topology %q", topology), "topology", protocol.TunnelMutationErrorCodeUnsupportedTopology, http.StatusBadRequest)
@@ -568,7 +564,7 @@ func decodeListenEndpointConfig(endpoint endpointSpecAPI, topology string) (ingr
 		}
 		return ingressEndpointConfigAPI{BindIP: cfg.BindIP, Port: cfg.Port}, nil
 	default:
-		return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("unsupported ingress type %q", endpoint.Type), "ingress.type", "unsupported_ingress_type", http.StatusBadRequest)
+		return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("unsupported ingress type %q", endpoint.Type), "ingress.type", protocol.TunnelMutationErrorCodeUnsupportedEndpointType, http.StatusBadRequest)
 	}
 }
 

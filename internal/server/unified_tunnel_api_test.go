@@ -315,7 +315,7 @@ func TestAPI_UnifiedTunnelRejectsFutureTargetsAndDirectPolicies(t *testing.T) {
 	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
 		t.Fatalf("failed to decode future target error: %v", err)
 	}
-	if body.ErrorCode != "future_target_type" || body.Field != "target.type" {
+	if body.ErrorCode != protocol.TunnelMutationErrorCodeUnsupportedEndpointType || body.Field != "target.type" {
 		t.Fatalf("future target error mismatch: %+v", body)
 	}
 	if _, ok := s.store.GetTunnel(record.ID, "future-target"); ok {
