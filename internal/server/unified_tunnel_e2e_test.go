@@ -67,6 +67,61 @@ func TestUnifiedClientToClientTCPEndToEndWithRealClients(t *testing.T) {
 	}
 }
 
+func TestUnifiedClientToClientUDPEndToEndWithRealClients(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	ts := newIPv4HTTPTestServer(t, s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetAddr, targetPort := startTestUDPEchoService(t)
+	targetClient := startUnifiedE2EClient(t, s, ts.URL, "install-e2e-c2c-udp-target")
+	ingressClient := startUnifiedE2EClient(t, s, ts.URL, "install-e2e-c2c-udp-ingress")
+	targetID := waitForUnifiedE2EClientReady(t, s, targetClient)
+	ingressID := waitForUnifiedE2EClientReady(t, s, ingressClient)
+	ingressPort := reserveUDPPort(t)
+
+	create := []byte(fmt.Sprintf(`{
+		"name":"e2e-c2c-udp",
+		"topology":"client_to_client",
+		"ingress":{"location":"client","client_id":"%s","type":"udp_listen","config":{"bind_ip":"127.0.0.1","port":%d}},
+		"target":{"location":"client","client_id":"%s","type":"udp_service","config":{"ip":"%s","port":%d}},
+		"transport_policy":"server_relay_only"
+	}`, ingressID, ingressPort, targetID, targetAddr, targetPort))
+	resp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("client_to_client create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+	waitForUnifiedTunnelRuntimeState(t, s, token, created.ID, tunnelRuntimeStateActive)
+
+	conn, err := net.DialTimeout("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(ingressPort)), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial client UDP ingress listener: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set client UDP ingress deadline: %v", err)
+	}
+
+	payload := []byte("client-to-client udp payload")
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatalf("write UDP ingress payload: %v", err)
+	}
+	got := make([]byte, 1024)
+	n, err := conn.Read(got)
+	if err != nil {
+		t.Fatalf("read echoed UDP payload through c2c tunnel: %v", err)
+	}
+	if string(got[:n]) != string(payload) {
+		t.Fatalf("echoed UDP payload mismatch: got %q want %q", got[:n], payload)
+	}
+}
+
 func startUnifiedE2EClient(t *testing.T, s *Server, serverURL, installID string) *clientpkg.Client {
 	t.Helper()
 	c := clientpkg.New(serverURL, "test-key")
@@ -164,6 +219,29 @@ func startTestTCPEchoService(t *testing.T) (string, int) {
 	}()
 
 	addr := ln.Addr().(*net.TCPAddr)
+	return addr.IP.String(), addr.Port
+}
+
+func startTestUDPEchoService(t *testing.T) (string, int) {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen UDP echo service: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	go func() {
+		buf := make([]byte, 64*1024)
+		for {
+			n, addr, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = conn.WriteTo(buf[:n], addr)
+		}
+	}()
+
+	addr := conn.LocalAddr().(*net.UDPAddr)
 	return addr.IP.String(), addr.Port
 }
 
