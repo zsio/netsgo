@@ -122,3 +122,54 @@ func TestRestoreTunnelsReconcilesNonOwnerClientRelayParticipant(t *testing.T) {
 		t.Fatalf("related reconcile should record provisioning issue after control write failure, got %+v", spec.Issues)
 	}
 }
+
+func TestRestoreTunnelsReconcilesRunningErrorTunnel(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	stored := testStoredC2CTunnelForReconcile(
+		"error-c2c",
+		"error-c2c",
+		protocol.ProxyDesiredStateRunning,
+		protocol.ProxyRuntimeStateError,
+		22025,
+	)
+	stored.Error = "old persisted failure"
+	mustAddStableTunnel(t, s.store, stored)
+
+	caps := protocol.DefaultClientCapabilities()
+	_, ingressSession := newTestClientRelayDataSession(t)
+	_, targetSession := newTestClientRelayDataSession(t)
+	targetClient := &ClientConn{
+		ID:          stored.Target.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		dataSession: targetSession,
+		generation:  1,
+		state:       clientStateLive,
+		proxies:     make(map[string]*ProxyTunnel),
+	}
+	ingressClient := &ClientConn{
+		ID:          stored.Ingress.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		dataSession: ingressSession,
+		generation:  1,
+		state:       clientStateLive,
+		proxies:     make(map[string]*ProxyTunnel),
+	}
+	s.clients.Store(targetClient.ID, targetClient)
+	s.clients.Store(ingressClient.ID, ingressClient)
+
+	s.restoreTunnels(targetClient)
+
+	got, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("load restored tunnel: %v", err)
+	}
+	spec := specFromStoredTunnel(got, s)
+	if len(spec.Issues) == 0 || spec.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckRejected {
+		t.Fatalf("running/error restore should attempt fresh reconcile and record current issue, state=%q issues=%+v", got.RuntimeState, spec.Issues)
+	}
+	if got.Error == "old persisted failure" {
+		t.Fatal("running/error restore reused stale persisted runtime error")
+	}
+}
