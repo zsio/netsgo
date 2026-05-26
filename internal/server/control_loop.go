@@ -239,8 +239,40 @@ func (s *Server) handleTunnelRuntimeReportMessage(client *ClientConn, msg protoc
 		return
 	}
 
+	stored, ok, err := s.findStoredTunnelByID(report.TunnelID)
+	if err != nil {
+		log.Printf("⚠️ Ignoring tunnel runtime report [%s]: failed to load tunnel %q: %v", client.ID, report.TunnelID, err)
+		return
+	}
+	if !ok {
+		log.Printf("⚠️ Ignoring tunnel runtime report [%s]: unknown tunnel_id=%s role=%s revision=%d", client.ID, report.TunnelID, report.Role, report.Revision)
+		return
+	}
+	if stored.Revision != report.Revision {
+		log.Printf("⚠️ Ignoring stale tunnel runtime report [%s]: tunnel_id=%s role=%s report_revision=%d current_revision=%d", client.ID, report.TunnelID, report.Role, report.Revision, stored.Revision)
+		return
+	}
+	if !runtimeReportMatchesStoredTunnel(client.ID, stored, report) {
+		log.Printf("⚠️ Ignoring tunnel runtime report with unexpected role/client [%s]: tunnel_id=%s role=%s revision=%d", client.ID, report.TunnelID, report.Role, report.Revision)
+		return
+	}
+
 	s.unifiedRuntime.recordReport(client.ID, report, time.Now())
+	s.emitTunnelChanged(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "runtime_report")
 	log.Printf("📩 Received tunnel runtime report [%s]: tunnel_id=%s role=%s revision=%d message=%q", client.ID, report.TunnelID, report.Role, report.Revision, report.Message)
+}
+
+func runtimeReportMatchesStoredTunnel(clientID string, stored StoredTunnel, report protocol.TunnelRuntimeReport) bool {
+	switch report.Role {
+	case protocol.DataStreamRoleTarget:
+		return clientID != "" && clientID == stored.Target.ClientID
+	case protocol.DataStreamRoleIngress:
+		return stored.Ingress.Location == tunnelEndpointLocationClient &&
+			clientID != "" &&
+			clientID == stored.Ingress.ClientID
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleTunnelPreflightResponseMessage(client *ClientConn, msg protocol.Message) {

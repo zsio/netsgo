@@ -121,6 +121,7 @@ type TunnelIssue struct {
 // Stable tunnel issue codes emitted by server/client runtime paths.
 const (
 	TunnelIssueCodeRuntimeReport          = "runtime_report"
+	TunnelIssueCodeCapabilityNotSupported = "capability_not_supported"
 	TunnelIssueCodeIngressPortInUse       = "ingress_port_in_use"
 	TunnelIssueCodeIngressListenFailed    = "ingress_listen_failed"
 	TunnelIssueCodeIngressRouteFailed     = "ingress_route_failed"

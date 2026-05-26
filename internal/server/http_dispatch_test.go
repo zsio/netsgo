@@ -275,7 +275,7 @@ func TestDispatch_HTTPTunnel_ManagementAPI_Blocked(t *testing.T) {
 	}
 }
 
-func TestDispatch_HTTPTunnel_UnavailableStatuses_Return503(t *testing.T) {
+func TestDispatch_HTTPTunnel_PersistedInactiveStatusesDoNotRegisterHost(t *testing.T) {
 	testCases := []struct {
 		name   string
 		status string
@@ -302,10 +302,44 @@ func TestDispatch_HTTPTunnel_UnavailableStatuses_Return503(t *testing.T) {
 
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
-			if w.Code != http.StatusServiceUnavailable {
-				t.Fatalf("HTTP tunnel declared but not servicable should return 503, got %d", w.Code)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("inactive HTTP tunnel should not register host: want 404, got %d", w.Code)
 			}
 		})
+	}
+}
+
+func TestDispatch_HTTPTunnel_LiveClientWithoutDataDoesNotRegisterHost(t *testing.T) {
+	s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
+	client := &ClientConn{
+		ID:         "client-http",
+		Info:       protocol.ClientInfo{Hostname: "client-http.local"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	client.proxies["app-http"] = &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			Name:         "app-http",
+			Type:         protocol.ProxyTypeHTTP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    3000,
+			Domain:       "app.example.com",
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateExposed,
+		},
+		done: make(chan struct{}),
+	}
+	s.clients.Store(client.ID, client)
+
+	req := newManagementRequest(http.MethodGet, "http://app.example.com/", "app.example.com", nil)
+	w := httptest.NewRecorder()
+
+	s.StartHTTPOnly().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("HTTP tunnel without data channel should not register host: want 404, got %d", w.Code)
 	}
 }
 

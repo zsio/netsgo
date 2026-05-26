@@ -295,11 +295,19 @@ describe('TunnelListTable', () => {
     expect(disabledMarkup).not.toContain('title="速率趋势"');
   });
 
-  test('显示统一隧道运行 issues 数量与详情', () => {
+  test('显示统一隧道运行 issues 摘要与详情', () => {
     const markup = renderTable([
       createTunnel({
         runtime_state: 'error',
         issues: [
+          {
+            code: 'provision_ack_timeout',
+            scope: 'target_client',
+            severity: 'error',
+            message: '目标客户端确认超时',
+            retryable: true,
+            observed_at: '2026-05-24T01:00:00Z',
+          },
           {
             code: 'ingress_port_in_use',
             scope: 'ingress_client',
@@ -312,8 +320,9 @@ describe('TunnelListTable', () => {
       }),
     ]);
 
-    expect(markup).toContain('当前 1 个运行问题');
+    expect(markup).toContain('入口端口已被占用 +1');
     expect(markup).toContain('error: 入口端口已被占用');
+    expect(markup).toContain('error: 目标客户端确认超时');
     expect(markup).toContain('lucide-circle-question-mark');
   });
 

@@ -112,6 +112,14 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 		}
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
 	}
+	if issues := s.capabilityIssuesForStoredTunnel(stored); len(issues) > 0 {
+		s.unifiedRuntime.clearTunnelIssues(stored.ID)
+		if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
+			_ = s.CloseProxyRuntime(client, name)
+			_ = s.notifyClientProxyClose(client, name, "capability_not_supported")
+		}
+		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateError, issues[0].Message)
+	}
 
 	if name, tunnel, exists := findTunnelBySelector(client, stored.ID); exists {
 		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && serverExposeRuntimeHeld(tunnel) {

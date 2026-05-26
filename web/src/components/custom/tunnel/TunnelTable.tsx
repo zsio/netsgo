@@ -48,6 +48,7 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
     <>
       <TunnelListTable
         tunnels={tunnels}
+        clients={clients}
         title="下属隧道"
         icon={<ArrowRightLeft className="h-5 w-5 text-primary" />}
         showClient={false}

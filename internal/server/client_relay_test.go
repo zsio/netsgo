@@ -371,11 +371,13 @@ func TestClientRelayProvisionTimeoutProjectsIssue(t *testing.T) {
 	targetWS, targetServerWS := newTestWebSocketPair(t)
 	defer mustClose(t, targetWS)
 	defer mustClose(t, targetServerWS)
+	caps := protocol.DefaultClientCapabilities()
 	_, targetSession := newTestClientRelayDataSession(t)
 	_, ingressSession := newTestClientRelayDataSession(t)
 
 	targetClient := &ClientConn{
 		ID:          stored.Target.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
 		conn:        targetServerWS,
 		proxies:     make(map[string]*ProxyTunnel),
 		dataSession: targetSession,
@@ -384,6 +386,7 @@ func TestClientRelayProvisionTimeoutProjectsIssue(t *testing.T) {
 	}
 	ingressClient := &ClientConn{
 		ID:          stored.Ingress.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
 		proxies:     make(map[string]*ProxyTunnel),
 		dataSession: ingressSession,
 		generation:  1,
@@ -420,10 +423,12 @@ func TestClientRelayActiveReconcileIsIdempotent(t *testing.T) {
 	mustAddStableTunnel(t, s.store, stored)
 	s.c2c.set(stored)
 
+	caps := protocol.DefaultClientCapabilities()
 	_, targetSession := newTestClientRelayDataSession(t)
 	_, ingressSession := newTestClientRelayDataSession(t)
 	s.clients.Store(stored.Target.ClientID, &ClientConn{
 		ID:          stored.Target.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
 		proxies:     make(map[string]*ProxyTunnel),
 		dataSession: targetSession,
 		generation:  1,
@@ -431,6 +436,7 @@ func TestClientRelayActiveReconcileIsIdempotent(t *testing.T) {
 	})
 	s.clients.Store(stored.Ingress.ClientID, &ClientConn{
 		ID:          stored.Ingress.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
 		proxies:     make(map[string]*ProxyTunnel),
 		dataSession: ingressSession,
 		generation:  1,
@@ -443,6 +449,53 @@ func TestClientRelayActiveReconcileIsIdempotent(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed >= s.tunnels.tunnelReadyTimeout {
 		t.Fatalf("active reconcile should not wait for provisioning ACKs, elapsed=%s", elapsed)
+	}
+}
+
+func TestClientRelayCapabilityLossProjectsErrorWithoutProvision(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	stored := testClientRelayStoredTunnel(t)
+	mustAddStableTunnel(t, s.store, stored)
+	s.c2c.set(stored)
+
+	targetCaps := protocol.DefaultClientCapabilities()
+	ingressCaps := protocol.ClientCapabilities{}
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+	s.clients.Store(stored.Target.ClientID, &ClientConn{
+		ID:          stored.Target.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &targetCaps},
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: targetSession,
+		generation:  1,
+		state:       clientStateLive,
+	})
+	s.clients.Store(stored.Ingress.ClientID, &ClientConn{
+		ID:          stored.Ingress.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &ingressCaps},
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: ingressSession,
+		generation:  1,
+		state:       clientStateLive,
+	})
+
+	if err := s.reconcileClientRelayTunnel(stored); err != nil {
+		t.Fatalf("capability loss should project error without provisioning failure: %v", err)
+	}
+	if _, ok := s.c2c.get(stored.ID); ok {
+		t.Fatal("capability loss should release client relay runtime")
+	}
+	reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("reload tunnel: %v", err)
+	}
+	spec := specFromStoredTunnel(reloaded, s)
+	if spec.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("capability loss should project error, got %q", spec.RuntimeState)
+	}
+	if len(spec.Issues) != 1 || spec.Issues[0].Code != protocol.TunnelIssueCodeCapabilityNotSupported || spec.Issues[0].ClientID != stored.Ingress.ClientID {
+		t.Fatalf("capability issue mismatch: %+v", spec.Issues)
 	}
 }
 

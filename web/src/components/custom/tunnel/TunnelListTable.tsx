@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils';
 import {
   useResumeTunnel, useStopTunnel, useDeleteTunnel,
 } from '@/hooks/use-tunnel-mutations';
-import type { ProxyConfig } from '@/types';
+import type { Client, ProxyConfig } from '@/types';
 import { formatBytes, formatNetSpeed } from '@/lib/format';
 
 // 扩展的隧道条目，可以附带归属节点信息
@@ -40,6 +40,8 @@ type Traffic24hState = 'loading' | 'error' | 'ready';
 interface TunnelListTableProps {
   /** 隧道列表 */
   tunnels: TunnelEntry[];
+  /** 可用于创建/编辑时选择参与客户端 */
+  clients?: Client[];
   /** 表格标题 */
   title: string;
   /** 标题图标 */
@@ -79,6 +81,7 @@ function compareTunnelsByCreatedAtDesc(a: TunnelEntry, b: TunnelEntry) {
 
 export function TunnelListTable({
   tunnels,
+  clients,
   title,
   icon,
   showClient = false,
@@ -287,6 +290,7 @@ export function TunnelListTable({
           <TunnelDialog
             mode="edit"
             tunnel={editTarget}
+            clients={clients}
             open={editTarget !== null}
             onOpenChange={(v) => { if (!v) setEditTarget(null); }}
           />
@@ -527,7 +531,12 @@ function TunnelStatusBadge({
     status.key === 'error' && 'bg-destructive/10 text-destructive border-destructive/20',
   );
 
-  const issueItems = issues ?? [];
+  const issueItems = sortTunnelIssues(issues ?? []);
+  const primaryIssue = issueItems[0];
+  const additionalIssueCount = Math.max(0, issueItems.length - 1);
+  const issueSummary = primaryIssue
+    ? `${primaryIssue.message}${additionalIssueCount > 0 ? ` +${additionalIssueCount}` : ''}`
+    : '';
   const tooltipLines = issueItems.length > 0
     ? issueItems.map((issue) => `${issue.severity}: ${issue.message}`)
     : error
@@ -539,8 +548,8 @@ function TunnelStatusBadge({
       <Badge variant="outline" className={cn(badgeClassName, 'px-2 sm:px-2.5')} aria-label={status.label}>
         <span className={dotClassName} />
         <span className="hidden sm:inline">{status.label}</span>
-        {issueItems.length > 0 && (
-          <span className="rounded bg-background/70 px-1 font-mono text-[10px]">{issueItems.length}</span>
+        {additionalIssueCount > 0 && (
+          <span className="rounded bg-background/70 px-1 font-mono text-[10px]">+{additionalIssueCount}</span>
         )}
         {tooltipLines.length > 0 && (
           <Tooltip>
@@ -555,12 +564,25 @@ function TunnelStatusBadge({
           </Tooltip>
         )}
       </Badge>
-      {issueItems.length > 0 && (
-        <p className="hidden text-[11px] text-destructive sm:block">当前 {issueItems.length} 个运行问题</p>
+      {issueSummary && (
+        <p className="hidden max-w-[18rem] truncate text-[11px] text-destructive sm:block">{issueSummary}</p>
       )}
       {status.description && issueItems.length === 0 && (status.key !== 'error' || !error) && (
         <p className="hidden text-[11px] text-muted-foreground sm:block">{status.description}</p>
       )}
     </div>
   );
+}
+
+function sortTunnelIssues(issues: NonNullable<TunnelEntry['issues']>) {
+  return [...issues].sort((a, b) => tunnelIssuePriority(a.code) - tunnelIssuePriority(b.code));
+}
+
+function tunnelIssuePriority(code: string) {
+  if (code.includes('offline') || code.includes('data_channel')) return 0;
+  if (code.includes('capability')) return 1;
+  if (code.startsWith('ingress_')) return 2;
+  if (code.startsWith('provision_')) return 3;
+  if (code.includes('stream') || code === 'runtime_report') return 4;
+  return 5;
 }

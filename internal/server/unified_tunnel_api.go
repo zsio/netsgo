@@ -1147,7 +1147,7 @@ func specFromStoredTunnel(stored StoredTunnel, s *Server) tunnelSpecAPI {
 	}
 	spec.RuntimeState = computedRuntime
 	spec.Error = ""
-	spec.Issues = s.unifiedRuntime.issuesForStoredTunnel(stored, requiredTunnelClientsReady(stored, s))
+	spec.Issues = s.issuesForStoredTunnel(stored)
 	spec.Participants = tunnelParticipantsAPI{
 		Ingress: participantRuntimeAPI{ClientID: stored.Ingress.ClientID, Role: "ingress", State: participantStateForSpecRuntime(stored.Ingress.ClientID, computedRuntime), Revision: stored.Revision},
 		Target:  participantRuntimeAPI{ClientID: stored.Target.ClientID, Role: "target", State: participantStateForSpecRuntime(stored.Target.ClientID, computedRuntime), Revision: stored.Revision},
@@ -1167,6 +1167,9 @@ func computedRuntimeStateForStoredTunnel(stored StoredTunnel, s *Server) string 
 	}
 	if !requiredTunnelClientsReady(stored, s) {
 		return protocol.ProxyRuntimeStateOffline
+	}
+	if len(s.capabilityIssuesForStoredTunnel(stored)) > 0 {
+		return protocol.ProxyRuntimeStateError
 	}
 	if s.unifiedRuntime.hasIssuesForStoredTunnel(stored, true) {
 		return protocol.ProxyRuntimeStateError
@@ -1190,6 +1193,50 @@ func computedRuntimeStateForStoredTunnel(stored StoredTunnel, s *Server) string 
 		}
 	}
 	return protocol.ProxyRuntimeStatePending
+}
+
+func (s *Server) issuesForStoredTunnel(stored StoredTunnel) []protocol.TunnelIssue {
+	if stored.DesiredState == protocol.ProxyDesiredStateStopped || !requiredTunnelClientsReady(stored, s) {
+		return nil
+	}
+	if issues := s.capabilityIssuesForStoredTunnel(stored); len(issues) > 0 {
+		return issues
+	}
+	return s.unifiedRuntime.issuesForStoredTunnel(stored, true)
+}
+
+func (s *Server) capabilityIssuesForStoredTunnel(stored StoredTunnel) []protocol.TunnelIssue {
+	if stored.DesiredState == protocol.ProxyDesiredStateStopped {
+		return nil
+	}
+	issues := make([]protocol.TunnelIssue, 0, 2)
+	if stored.Target.ClientID != "" {
+		target, ok := s.registeredClientInfo(stored.Target.ClientID)
+		if !ok || !clientSupportsTargetType(target.Info.Capabilities, stored.Target.Type) {
+			issues = append(issues, capabilityIssue("target_client", stored.Target.ClientID, stored.Target.Type, "服务来源客户端不支持当前目标服务类型"))
+		}
+	}
+	if stored.Ingress.Location == tunnelEndpointLocationClient && stored.Ingress.ClientID != "" {
+		ingress, ok := s.registeredClientInfo(stored.Ingress.ClientID)
+		if !ok || !clientSupportsIngressType(ingress.Info.Capabilities, stored.Ingress.Type) {
+			issues = append(issues, capabilityIssue("ingress_client", stored.Ingress.ClientID, stored.Ingress.Type, "访问入口客户端不支持当前入口类型"))
+		}
+	}
+	return issues
+}
+
+func capabilityIssue(scope, clientID, endpointType, message string) protocol.TunnelIssue {
+	details, _ := json.Marshal(map[string]string{"endpoint_type": endpointType})
+	return protocol.TunnelIssue{
+		Code:       protocol.TunnelIssueCodeCapabilityNotSupported,
+		Scope:      scope,
+		ClientID:   clientID,
+		Severity:   "error",
+		Message:    message,
+		Retryable:  true,
+		ObservedAt: time.Now().UTC(),
+		Details:    details,
+	}
 }
 
 func runtimeStateForProxyConfig(runtimeState string) string {

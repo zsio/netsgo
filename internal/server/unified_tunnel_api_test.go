@@ -940,10 +940,11 @@ func TestAPI_UnifiedTunnelProjectionRequiresExposedClientRelayRuntime(t *testing
 	stored := testClientRelayStoredTunnel(t)
 	stored.RuntimeState = protocol.ProxyRuntimeStatePending
 	mustAddStableTunnel(t, s.store, stored)
+	caps := protocol.DefaultClientCapabilities()
 	_, ingressSession := newTestClientRelayDataSession(t)
 	_, targetSession := newTestClientRelayDataSession(t)
-	s.clients.Store(stored.Ingress.ClientID, &ClientConn{ID: stored.Ingress.ClientID, state: clientStateLive, dataSession: ingressSession})
-	s.clients.Store(stored.Target.ClientID, &ClientConn{ID: stored.Target.ClientID, state: clientStateLive, dataSession: targetSession})
+	s.clients.Store(stored.Ingress.ClientID, &ClientConn{ID: stored.Ingress.ClientID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: ingressSession})
+	s.clients.Store(stored.Target.ClientID, &ClientConn{ID: stored.Target.ClientID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: targetSession})
 	s.c2c.set(stored)
 
 	spec := specFromStoredTunnel(stored, s)
@@ -985,8 +986,9 @@ func TestAPI_UnifiedTunnelProjectsRuntimeReportIssuesFromMemory(t *testing.T) {
 
 	_, targetSession := newTestClientRelayDataSession(t)
 	_, ingressSession := newTestClientRelayDataSession(t)
-	s.clients.Store(target.ID, &ClientConn{ID: target.ID, state: clientStateLive, dataSession: targetSession})
-	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, state: clientStateLive, dataSession: ingressSession})
+	caps := protocol.DefaultClientCapabilities()
+	s.clients.Store(target.ID, &ClientConn{ID: target.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: targetSession})
+	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: ingressSession})
 	s.unifiedRuntime.recordReport(ingress.ID, protocol.TunnelRuntimeReport{
 		TunnelID: created.ID,
 		Revision: created.Revision,
@@ -1007,6 +1009,108 @@ func TestAPI_UnifiedTunnelProjectsRuntimeReportIssuesFromMemory(t *testing.T) {
 	}
 	if got.Issues[0].Scope != "ingress_client" || got.Issues[0].ClientID != ingress.ID || got.Issues[0].Message != "ingress listener failed" {
 		t.Fatalf("unexpected runtime issue: %+v", got.Issues[0])
+	}
+}
+
+func TestServer_TunnelRuntimeReportIgnoresStaleRevision(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	stored := testClientRelayStoredTunnel(t)
+	mustAddStableTunnel(t, s.store, stored)
+
+	caps := protocol.DefaultClientCapabilities()
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+	s.clients.Store(stored.Target.ClientID, &ClientConn{ID: stored.Target.ClientID, Info: protocol.ClientInfo{Capabilities: &caps}, generation: 1, state: clientStateLive, dataSession: targetSession})
+	ingressClient := &ClientConn{ID: stored.Ingress.ClientID, Info: protocol.ClientInfo{Capabilities: &caps}, generation: 1, state: clientStateLive, dataSession: ingressSession}
+	s.clients.Store(stored.Ingress.ClientID, ingressClient)
+
+	msg, err := protocol.NewMessage(protocol.MsgTypeTunnelRuntimeReport, protocol.TunnelRuntimeReport{
+		TunnelID: stored.ID,
+		Revision: stored.Revision - 1,
+		Role:     protocol.DataStreamRoleIngress,
+		Message:  "stale listener failure",
+	})
+	if err != nil {
+		t.Fatalf("build runtime report: %v", err)
+	}
+
+	s.handleTunnelRuntimeReportMessage(ingressClient, *msg)
+
+	spec := specFromStoredTunnel(stored, s)
+	if len(spec.Issues) != 0 {
+		t.Fatalf("stale runtime report should not project issues, got %+v", spec.Issues)
+	}
+}
+
+func TestServer_TunnelRuntimeReportIgnoresWrongRoleClient(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	stored := testClientRelayStoredTunnel(t)
+	mustAddStableTunnel(t, s.store, stored)
+
+	caps := protocol.DefaultClientCapabilities()
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+	targetClient := &ClientConn{ID: stored.Target.ClientID, Info: protocol.ClientInfo{Capabilities: &caps}, generation: 1, state: clientStateLive, dataSession: targetSession}
+	s.clients.Store(stored.Target.ClientID, targetClient)
+	s.clients.Store(stored.Ingress.ClientID, &ClientConn{ID: stored.Ingress.ClientID, Info: protocol.ClientInfo{Capabilities: &caps}, generation: 1, state: clientStateLive, dataSession: ingressSession})
+
+	msg, err := protocol.NewMessage(protocol.MsgTypeTunnelRuntimeReport, protocol.TunnelRuntimeReport{
+		TunnelID: stored.ID,
+		Revision: stored.Revision,
+		Role:     protocol.DataStreamRoleIngress,
+		Message:  "wrong client listener failure",
+	})
+	if err != nil {
+		t.Fatalf("build runtime report: %v", err)
+	}
+
+	s.handleTunnelRuntimeReportMessage(targetClient, *msg)
+
+	spec := specFromStoredTunnel(stored, s)
+	if len(spec.Issues) != 0 {
+		t.Fatalf("wrong-role runtime report should not project issues, got %+v", spec.Issues)
+	}
+}
+
+func TestAPI_UnifiedTunnelCapabilityLossProjectsError(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	target := createUnifiedAPITestClient(t, s, "install-capability-loss-target", "capability-loss-target")
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, unifiedCreatePayload("capability-loss", target.ID, reserveTCPPort(t)))
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("server_expose create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+
+	noCaps := protocol.ClientCapabilities{}
+	_, targetSession := newTestClientRelayDataSession(t)
+	s.clients.Store(target.ID, &ClientConn{
+		ID:          target.ID,
+		Info:        protocol.ClientInfo{Capabilities: &noCaps},
+		dataSession: targetSession,
+		generation:  1,
+		state:       clientStateLive,
+	})
+
+	getResp := doMuxRequest(t, handler, http.MethodGet, "/api/tunnels/"+created.ID, token, nil)
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("GET tunnel: want 200, got %d body=%s", getResp.Code, getResp.Body.String())
+	}
+	var got tunnelSpecAPI
+	if err := mustDecodeJSON(t, getResp.Body, &got); err != nil {
+		t.Fatalf("decode tunnel: %v", err)
+	}
+	if got.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("capability loss should project error, got %q", got.RuntimeState)
+	}
+	if len(got.Issues) != 1 || got.Issues[0].Code != protocol.TunnelIssueCodeCapabilityNotSupported || got.Issues[0].ClientID != target.ID {
+		t.Fatalf("capability issue mismatch: %+v", got.Issues)
 	}
 }
 
@@ -1539,8 +1643,9 @@ func TestUnifiedRuntimeReportIgnoresNonServerRelayTransport(t *testing.T) {
 	}
 	_, targetSession := newTestClientRelayDataSession(t)
 	_, ingressSession := newTestClientRelayDataSession(t)
-	s.clients.Store(target.ID, &ClientConn{ID: target.ID, state: clientStateLive, dataSession: targetSession})
-	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, state: clientStateLive, dataSession: ingressSession})
+	caps := protocol.DefaultClientCapabilities()
+	s.clients.Store(target.ID, &ClientConn{ID: target.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: targetSession})
+	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: ingressSession})
 	s.unifiedRuntime.recordReport(ingress.ID, protocol.TunnelRuntimeReport{
 		TunnelID: created.ID,
 		Revision: created.Revision,

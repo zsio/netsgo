@@ -109,14 +109,16 @@ func doAuthWithInfo(t *testing.T, conn *websocket.Conn, hostname, key string) pr
 
 func doAuthWithInstallID(t *testing.T, conn *websocket.Conn, hostname, installID, key string) protocol.AuthResponse {
 	t.Helper()
+	caps := protocol.DefaultClientCapabilities()
 	authReq := protocol.AuthRequest{
 		Key:       key,
 		InstallID: installID,
 		Client: protocol.ClientInfo{
-			Hostname: hostname,
-			OS:       "linux",
-			Arch:     "amd64",
-			Version:  "0.1.0",
+			Hostname:     hostname,
+			OS:           "linux",
+			Arch:         "amd64",
+			Version:      "0.1.0",
+			Capabilities: &caps,
 		},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
@@ -3096,9 +3098,10 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	var err error
 	s.store = newTestTunnelStore(t)
 
+	caps := protocol.DefaultClientCapabilities()
 	record, err := s.auth.adminStore.GetOrCreateClient(
 		"install-restore-post-ack-fail",
-		protocol.ClientInfo{Hostname: "restore-post-ack-fail"},
+		protocol.ClientInfo{Hostname: "restore-post-ack-fail", Capabilities: &caps},
 		"127.0.0.1:12345",
 	)
 	if err != nil {

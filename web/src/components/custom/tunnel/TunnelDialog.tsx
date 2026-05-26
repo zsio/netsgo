@@ -40,6 +40,7 @@ interface TunnelDialogCreateProps {
 interface TunnelDialogEditProps {
   mode: 'edit';
   tunnel: TunnelDialogEditData | null;
+  clients?: Client[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -55,6 +56,7 @@ const typeOptions: { value: ProxyType; label: string }[] = [
 interface TunnelFormState {
   name: string;
   topology: TunnelTopology;
+  targetClientId: string;
   ingressClientId: string;
   bindIp: string;
   type: ProxyType;
@@ -71,6 +73,7 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
     return {
       name: props.tunnel.name,
       topology: props.tunnel.topology ?? 'server_expose',
+      targetClientId: props.tunnel.target?.client_id ?? props.tunnel.owner_client_id ?? props.tunnel.client_id ?? props.tunnel.clientId,
       ingressClientId: props.tunnel.ingress?.client_id ?? '',
       bindIp: props.tunnel.ingress?.type === 'tcp_listen' || props.tunnel.ingress?.type === 'udp_listen'
         ? props.tunnel.ingress.config.bind_ip
@@ -88,6 +91,7 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
   return {
     name: '',
     topology: 'server_expose',
+    targetClientId: props.mode === 'create' ? props.clientId : '',
     ingressClientId: '',
     bindIp: '127.0.0.1',
     type: 'tcp',
@@ -158,6 +162,7 @@ function TunnelDialogForm({
   const initialForm = getInitialFormState(props);
   const [name, setName] = useState(initialForm.name);
   const [topology, setTopology] = useState<TunnelTopology>(initialForm.topology);
+  const [targetClientId, setTargetClientId] = useState(initialForm.targetClientId);
   const [ingressClientId, setIngressClientId] = useState(initialForm.ingressClientId);
   const [bindIp, setBindIp] = useState(initialForm.bindIp);
   const [type, setType] = useState<ProxyType>(initialForm.type);
@@ -168,12 +173,13 @@ function TunnelDialogForm({
   const [ingressBps, setIngressBps] = useState(initialForm.ingressBps);
   const [egressBps, setEgressBps] = useState(initialForm.egressBps);
 
-  const clients = props.mode === 'create' ? (props.clients ?? []) : [];
-  const sourceClient = props.mode === 'create'
-    ? clients.find((client) => client.id === props.clientId)
-    : undefined;
-  const ingressClientOptions = clients.filter((client) => client.id !== (props.mode === 'create' ? props.clientId : ''));
-  const selectedIngressClientId = ingressClientId || ingressClientOptions[0]?.id || '';
+  const clients = props.clients ?? [];
+  const selectedTargetClientId = targetClientId || (props.mode === 'create' ? props.clientId : props.tunnel?.target?.client_id ?? props.tunnel?.owner_client_id ?? props.tunnel?.clientId ?? '');
+  const sourceClient = clients.find((client) => client.id === selectedTargetClientId);
+  const ingressClientOptions = clients.filter((client) => client.id !== selectedTargetClientId);
+  const selectedIngressClientId = ingressClientId && ingressClientId !== selectedTargetClientId
+    ? ingressClientId
+    : ingressClientOptions[0]?.id || '';
   const isClientToClient = topology === 'client_to_client';
   const isHttp = type === 'http';
   const selectClassName = cn(
@@ -210,16 +216,16 @@ function TunnelDialogForm({
 
       updateTunnel.mutate(
         {
-          clientId: tunnel.clientId,
+          clientId: selectedTargetClientId,
           tunnelId: tunnel.id,
           expected_revision: tunnel.revision,
-          topology: tunnel.topology,
-          ingress_client_id: tunnel.ingress?.client_id,
-          bind_ip: tunnel.ingress?.type === 'tcp_listen' || tunnel.ingress?.type === 'udp_listen'
+          topology,
+          ingress_client_id: isClientToClient ? selectedIngressClientId : undefined,
+          bind_ip: isClientToClient
             ? bindIp
             : undefined,
           name,
-          type: tunnel.type,
+          type,
           local_ip: localIp,
           local_port: parsedLocalPort,
           remote_port: parsedRemotePort,
@@ -242,7 +248,7 @@ function TunnelDialogForm({
 
     createTunnel.mutate(
       {
-        clientId: props.clientId,
+        clientId: selectedTargetClientId,
         topology,
         ingress_client_id: isClientToClient ? selectedIngressClientId : undefined,
         bind_ip: isClientToClient ? bindIp : undefined,
@@ -276,14 +282,17 @@ function TunnelDialogForm({
   const isValid = isEdit
     ? Boolean(
       name.trim()
+      && selectedTargetClientId
       && localPort
       && Number.parseInt(localPort, 10) > 0
+      && (isClientToClient ? selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
       && (isHttp ? domain.trim() : parsedRemotePort > 0)
       && parsedIngressBps !== null
       && parsedEgressBps !== null,
     )
     : Boolean(
       name.trim()
+      && selectedTargetClientId
       && localPort
       && Number.parseInt(localPort, 10) > 0
       && (isClientToClient ? selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
@@ -298,7 +307,7 @@ function TunnelDialogForm({
         <DialogTitle>{isEdit ? '编辑隧道' : '创建代理隧道'}</DialogTitle>
         {props.mode === 'edit' && (
           <DialogDescription>
-            {`修改隧道「${props.tunnel?.name}」的名称和映射配置。协议类型不可变更。`}
+            {`修改隧道「${props.tunnel?.name}」的名称、拓扑和映射配置。`}
           </DialogDescription>
         )}
       </DialogHeader>
@@ -316,54 +325,71 @@ function TunnelDialogForm({
         </div>
 
         {/* 协议类型 */}
-        {!isEdit && (
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">隧道拓扑</label>
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                type="button"
-                variant={topology === 'server_expose' ? 'default' : 'outline'}
-                onClick={() => setTopology('server_expose')}
-              >
-                Server 暴露
-              </Button>
-              <Button
-                type="button"
-                variant={topology === 'client_to_client' ? 'default' : 'outline'}
-                onClick={() => {
-                  setTopology('client_to_client');
-                  if (type === 'http') setType('tcp');
-                }}
-              >
-                客户端互访
-              </Button>
-            </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">隧道拓扑</label>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              type="button"
+              variant={topology === 'server_expose' ? 'default' : 'outline'}
+              onClick={() => setTopology('server_expose')}
+            >
+              Server 暴露
+            </Button>
+            <Button
+              type="button"
+              variant={topology === 'client_to_client' ? 'default' : 'outline'}
+              onClick={() => {
+                setTopology('client_to_client');
+                if (type === 'http') setType('tcp');
+              }}
+            >
+              客户端互访
+            </Button>
           </div>
-        )}
+        </div>
 
-        {isClientToClient && !isEdit && (
-          <div className="grid grid-cols-2 gap-3">
+        {(isClientToClient || clients.length > 1) && (
+          <div className={cn('grid gap-3', isClientToClient ? 'grid-cols-2' : 'grid-cols-1')}>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">服务来源客户端</label>
-              <Input
-                value={sourceClient ? getClientDisplayName(sourceClient) : props.mode === 'create' ? props.clientId : ''}
-                disabled
-              />
+              {clients.length > 0 ? (
+                <select
+                  className={selectClassName}
+                  value={selectedTargetClientId}
+                  onChange={(e) => {
+                    const nextTargetClientId = e.target.value;
+                    setTargetClientId(nextTargetClientId);
+                    if (ingressClientId === nextTargetClientId) {
+                      setIngressClientId('');
+                    }
+                  }}
+                >
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {getClientDisplayName(client)}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Input value={sourceClient ? getClientDisplayName(sourceClient) : selectedTargetClientId} disabled />
+              )}
             </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">访问入口客户端</label>
-              <select
-                className={selectClassName}
-                value={selectedIngressClientId}
-                onChange={(e) => setIngressClientId(e.target.value)}
-              >
-                {ingressClientOptions.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {getClientDisplayName(client)}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {isClientToClient && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">访问入口客户端</label>
+                <select
+                  className={selectClassName}
+                  value={selectedIngressClientId}
+                  onChange={(e) => setIngressClientId(e.target.value)}
+                >
+                  {ingressClientOptions.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {getClientDisplayName(client)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         )}
 
@@ -376,8 +402,7 @@ function TunnelDialogForm({
                 type="button"
                 variant={type === opt.value ? 'default' : 'outline'}
                 className="flex-1"
-                onClick={() => !isEdit && setType(opt.value)}
-                disabled={isEdit}
+                onClick={() => setType(opt.value)}
               >
                 {opt.label}
               </Button>

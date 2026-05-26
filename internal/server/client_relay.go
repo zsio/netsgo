@@ -80,6 +80,11 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 		s.unifiedRuntime.clearServerIssues(stored.ID)
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
 	}
+	if issues := s.capabilityIssuesForStoredTunnel(stored); len(issues) > 0 {
+		s.unprovisionClientRelayTunnel(stored, "capability_not_supported")
+		s.unifiedRuntime.clearTunnelIssues(stored.ID)
+		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateError, issues[0].Message)
+	}
 
 	if active, ok := s.c2c.get(stored.ID); ok && active.Revision == stored.Revision &&
 		(stored.RuntimeState == protocol.ProxyRuntimeStateExposed || stored.RuntimeState == protocol.TunnelRuntimeStateActive) &&

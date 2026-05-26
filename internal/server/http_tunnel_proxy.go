@@ -73,6 +73,7 @@ type httpTunnelRoute struct {
 func (r httpTunnelRoute) serviceable() bool {
 	return r.client != nil &&
 		r.client.isLive() &&
+		clientHasDataSession(r.client) &&
 		isTunnelExposed(r.config)
 }
 
@@ -204,25 +205,6 @@ func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool, error)
 	if ok {
 		return serverRoute, true, nil
 	}
-	if s.store == nil {
-		return httpTunnelRoute{}, false, nil
-	}
-
-	allTunnels, err := s.store.GetAllTunnels()
-	if err != nil {
-		return httpTunnelRoute{}, false, fmt.Errorf("load persisted tunnels for HTTP route matching: %w", err)
-	}
-	for _, stored := range allTunnels {
-		if stored.Type != protocol.ProxyTypeHTTP {
-			continue
-		}
-		if canonicalHost(stored.Domain) != canonical {
-			continue
-		}
-		return httpTunnelRoute{
-			config: storedTunnelToProxyConfig(stored),
-		}, true, nil
-	}
 
 	return httpTunnelRoute{}, false, nil
 }
@@ -239,10 +221,14 @@ func (s *Server) findRuntimeHTTPRoute(host string) (httpTunnelRoute, bool) {
 			if canonicalHost(tunnel.Config.Domain) != host {
 				return true
 			}
-			route = httpTunnelRoute{
+			candidate := httpTunnelRoute{
 				config: tunnel.Config,
 				client: client,
 			}
+			if !candidate.serviceable() {
+				return true
+			}
+			route = candidate
 			found = true
 			return false
 		})
