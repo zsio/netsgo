@@ -1147,7 +1147,7 @@ func specFromStoredTunnel(stored StoredTunnel, s *Server) tunnelSpecAPI {
 	}
 	spec.RuntimeState = computedRuntime
 	spec.Error = ""
-	spec.Issues = s.unifiedRuntime.issuesForStoredTunnel(stored, requiredTunnelClientsOnline(stored, s))
+	spec.Issues = s.unifiedRuntime.issuesForStoredTunnel(stored, requiredTunnelClientsReady(stored, s))
 	spec.Participants = tunnelParticipantsAPI{
 		Ingress: participantRuntimeAPI{ClientID: stored.Ingress.ClientID, Role: "ingress", State: participantStateForSpecRuntime(stored.Ingress.ClientID, computedRuntime), Revision: stored.Revision},
 		Target:  participantRuntimeAPI{ClientID: stored.Target.ClientID, Role: "target", State: participantStateForSpecRuntime(stored.Target.ClientID, computedRuntime), Revision: stored.Revision},
@@ -1165,7 +1165,7 @@ func computedRuntimeStateForStoredTunnel(stored StoredTunnel, s *Server) string 
 	if stored.DesiredState == protocol.ProxyDesiredStateStopped {
 		return protocol.ProxyRuntimeStateIdle
 	}
-	if !requiredTunnelClientsOnline(stored, s) {
+	if !requiredTunnelClientsReady(stored, s) {
 		return protocol.ProxyRuntimeStateOffline
 	}
 	if s.unifiedRuntime.hasIssuesForStoredTunnel(stored, true) {
@@ -1214,6 +1214,22 @@ func requiredTunnelClientsOnline(stored StoredTunnel, s *Server) bool {
 	}
 	if stored.Ingress.Location == tunnelEndpointLocationClient && stored.Ingress.ClientID != "" && !s.isClientOnline(stored.Ingress.ClientID) {
 		return false
+	}
+	return true
+}
+
+func requiredTunnelClientsReady(stored StoredTunnel, s *Server) bool {
+	if stored.Target.ClientID != "" {
+		client, ok := s.loadLiveClient(stored.Target.ClientID)
+		if !ok || !clientHasDataSession(client) {
+			return false
+		}
+	}
+	if stored.Ingress.Location == tunnelEndpointLocationClient && stored.Ingress.ClientID != "" {
+		client, ok := s.loadLiveClient(stored.Ingress.ClientID)
+		if !ok || !clientHasDataSession(client) {
+			return false
+		}
 	}
 	return true
 }

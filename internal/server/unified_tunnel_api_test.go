@@ -940,8 +940,10 @@ func TestAPI_UnifiedTunnelProjectionRequiresExposedClientRelayRuntime(t *testing
 	stored := testClientRelayStoredTunnel(t)
 	stored.RuntimeState = protocol.ProxyRuntimeStatePending
 	mustAddStableTunnel(t, s.store, stored)
-	s.clients.Store(stored.Ingress.ClientID, &ClientConn{ID: stored.Ingress.ClientID, state: clientStateLive})
-	s.clients.Store(stored.Target.ClientID, &ClientConn{ID: stored.Target.ClientID, state: clientStateLive})
+	_, ingressSession := newTestClientRelayDataSession(t)
+	_, targetSession := newTestClientRelayDataSession(t)
+	s.clients.Store(stored.Ingress.ClientID, &ClientConn{ID: stored.Ingress.ClientID, state: clientStateLive, dataSession: ingressSession})
+	s.clients.Store(stored.Target.ClientID, &ClientConn{ID: stored.Target.ClientID, state: clientStateLive, dataSession: targetSession})
 	s.c2c.set(stored)
 
 	spec := specFromStoredTunnel(stored, s)
@@ -981,8 +983,10 @@ func TestAPI_UnifiedTunnelProjectsRuntimeReportIssuesFromMemory(t *testing.T) {
 		t.Fatalf("decode created tunnel: %v", err)
 	}
 
-	s.clients.Store(target.ID, &ClientConn{ID: target.ID, state: clientStateLive})
-	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, state: clientStateLive})
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+	s.clients.Store(target.ID, &ClientConn{ID: target.ID, state: clientStateLive, dataSession: targetSession})
+	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, state: clientStateLive, dataSession: ingressSession})
 	s.unifiedRuntime.recordReport(ingress.ID, protocol.TunnelRuntimeReport{
 		TunnelID: created.ID,
 		Revision: created.Revision,
@@ -1533,8 +1537,10 @@ func TestUnifiedRuntimeReportIgnoresNonServerRelayTransport(t *testing.T) {
 	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
 		t.Fatalf("decode created tunnel: %v", err)
 	}
-	s.clients.Store(target.ID, &ClientConn{ID: target.ID, state: clientStateLive})
-	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, state: clientStateLive})
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+	s.clients.Store(target.ID, &ClientConn{ID: target.ID, state: clientStateLive, dataSession: targetSession})
+	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, state: clientStateLive, dataSession: ingressSession})
 	s.unifiedRuntime.recordReport(ingress.ID, protocol.TunnelRuntimeReport{
 		TunnelID: created.ID,
 		Revision: created.Revision,

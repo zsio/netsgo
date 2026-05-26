@@ -446,7 +446,7 @@ func TestClientRelayActiveReconcileIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestClientRelayTargetStreamOpenFailureProjectsIssue(t *testing.T) {
+func TestClientRelayTargetDataOfflineProjectsOffline(t *testing.T) {
 	s := New(0)
 	s.store = newTestTunnelStore(t)
 
@@ -484,10 +484,10 @@ func TestClientRelayTargetStreamOpenFailureProjectsIssue(t *testing.T) {
 		t.Fatalf("reload tunnel: %v", err)
 	}
 	spec := specFromStoredTunnel(reloaded, s)
-	if spec.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("target stream failure should project error, got %q", spec.RuntimeState)
+	if spec.RuntimeState != protocol.ProxyRuntimeStateOffline {
+		t.Fatalf("target data channel loss should project offline, got %q", spec.RuntimeState)
 	}
-	if len(spec.Issues) != 1 || spec.Issues[0].Code != protocol.TunnelIssueCodeTargetStreamOpenFailed {
-		t.Fatalf("target stream issue mismatch: %+v", spec.Issues)
+	if len(spec.Issues) != 0 {
+		t.Fatalf("target data channel loss should suppress transport issues, got %+v", spec.Issues)
 	}
 }
