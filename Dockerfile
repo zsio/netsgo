@@ -1,5 +1,17 @@
 # syntax=docker/dockerfile:1.7
 
+FROM alpine:3.21 AS dev-tools
+
+RUN apk add --no-cache ca-certificates curl jq
+
+WORKDIR /app
+
+COPY test/e2e/scripts /opt/netsgo-e2e
+
+RUN chmod +x /opt/netsgo-e2e/*.sh
+
+ENTRYPOINT ["/bin/sh"]
+
 FROM --platform=$BUILDPLATFORM golang:1.25.10-bookworm AS builder
 
 ARG TARGETOS
