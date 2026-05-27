@@ -51,7 +51,7 @@ CMD ["server"]
 
 FROM alpine:3.21 AS e2e
 
-RUN apk add --no-cache ca-certificates curl jq
+RUN apk add --no-cache ca-certificates curl jq socat
 
 WORKDIR /app
 

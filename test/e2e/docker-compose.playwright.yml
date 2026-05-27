@@ -1,0 +1,108 @@
+x-netsgo-image: &netsgo-image
+  image: netsgo-e2e:local
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: e2e
+
+services:
+  server:
+    <<: *netsgo-image
+    hostname: playwright-server
+    command:
+      - server
+      - --port
+      - "8080"
+      - --allow-loopback-management-host
+      - --init-admin-username
+      - ${NETSGO_ADMIN_USER:-admin}
+      - --init-admin-password
+      - ${NETSGO_ADMIN_PASS:-password123}
+      - --init-server-addr
+      - ${NETSGO_SERVER_ADDR:-http://panel.playwright.local}
+      - --tls-mode
+      - off
+    ports:
+      - "${PLAYWRIGHT_SERVER_PORT:-19180}:8080"
+    volumes:
+      - netsgo-playwright-server-data:/var/lib/netsgo
+
+  client-key:
+    <<: *netsgo-image
+    hostname: playwright-client-key
+    entrypoint:
+      - /bin/sh
+      - /opt/netsgo-e2e/create-client-key.sh
+    environment:
+      NETSGO_BOOTSTRAP_BASE_URL: http://server:8080
+      NETSGO_ADMIN_USER: ${NETSGO_ADMIN_USER:-admin}
+      NETSGO_ADMIN_PASS: ${NETSGO_ADMIN_PASS:-password123}
+      NETSGO_CLIENT_KEY_FILE: /shared/client.key
+      NETSGO_ADMIN_TOKEN_FILE: /shared/admin.token
+      NETSGO_READY_FILE: /shared/client-key.ready
+      NETSGO_BOOTSTRAP_WAIT_TIMEOUT: ${NETSGO_BOOTSTRAP_WAIT_TIMEOUT:-180}
+      NETSGO_MANAGEMENT_HOST: ${NETSGO_MANAGEMENT_HOST:-panel.playwright.local}
+    volumes:
+      - netsgo-playwright-shared:/shared
+    depends_on:
+      - server
+
+  tcp-backend:
+    image: hashicorp/http-echo:1.0.0
+    hostname: playwright-tcp-backend
+    command:
+      - -text=playwright tcp c2c response
+      - -listen=:18083
+
+  udp-backend:
+    <<: *netsgo-image
+    hostname: playwright-udp-backend
+    entrypoint:
+      - /bin/sh
+      - -c
+      - while true; do socat -T30 UDP4-RECVFROM:18084,fork,reuseaddr SYSTEM:'printf playwright-udp-c2c-response'; done
+
+  source-client:
+    <<: *netsgo-image
+    hostname: ${NETSGO_SOURCE_CLIENT_HOSTNAME:-playwright-source-client}
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - /opt/netsgo-e2e/run-client.sh
+    environment:
+      NETSGO_SERVER: http://server:8080
+      NETSGO_CLIENT_KEY_FILE: /shared/client.key
+      NETSGO_CLIENT_KEY_WAIT_TIMEOUT: ${NETSGO_CLIENT_KEY_WAIT_TIMEOUT:-180}
+    volumes:
+      - netsgo-playwright-source-data:/var/lib/netsgo
+      - netsgo-playwright-shared:/shared
+    depends_on:
+      - client-key
+      - tcp-backend
+      - udp-backend
+
+  ingress-client:
+    <<: *netsgo-image
+    hostname: ${NETSGO_INGRESS_CLIENT_HOSTNAME:-playwright-ingress-client}
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - /opt/netsgo-e2e/run-client.sh
+    environment:
+      NETSGO_SERVER: http://server:8080
+      NETSGO_CLIENT_KEY_FILE: /shared/client.key
+      NETSGO_CLIENT_KEY_WAIT_TIMEOUT: ${NETSGO_CLIENT_KEY_WAIT_TIMEOUT:-180}
+    ports:
+      - "${PLAYWRIGHT_TCP_INGRESS_PORT:-19190}:18090"
+      - "${PLAYWRIGHT_UDP_INGRESS_PORT:-19191}:18091/udp"
+    volumes:
+      - netsgo-playwright-ingress-data:/var/lib/netsgo
+      - netsgo-playwright-shared:/shared
+    depends_on:
+      - client-key
+
+volumes:
+  netsgo-playwright-ingress-data:
+  netsgo-playwright-server-data:
+  netsgo-playwright-shared:
+  netsgo-playwright-source-data:

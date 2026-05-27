@@ -1,18 +1,32 @@
-# Unified Tunnel 统一运行态实施计划（未实现）
+# Unified Tunnel 统一运行态实施计划（已实施）
 
 日期：2026-05-22
 
+实施状态更新：2026-05-27
+
+本文最初记录的是下一轮实施计划。当前分支已按该计划完成统一隧道运行态、server-expose
+迁入统一机制、client-to-client TCP/UDP server-relay 数据面、统一 preflight /
+provision / unprovision / runtime report、Web 创建和展示入口，以及对应的后端、前端、
+Docker 和 Playwright E2E 验证入口。
+
+当前仍明确不支持 peer-direct、NAT traversal、HTTP client-to-client、目标服务健康检查、
+主动探测用户后端服务、`unix_socket`、`static_file`、`serial_device` 和多节点控制面。
+这些边界是产品语义，不是遗漏实现。
+
 ## 状态声明
 
-本文描述下一轮要一次性实现的统一隧道运行态和 client-to-client 能力，不代表当前版本已经支持这些能力。
+本文描述 unified tunnel 工作的实施范围、语义和验收依据。历史上它描述“下一轮要一次性实现”的能力；
+当前代码以实现和测试为准。
 
-当前可用能力仍以 `server_expose + server_relay_only` 为主：
+当前可用能力包括 `server_expose + server_relay_only` 和
+`client_to_client + server_relay_only`：
 
 - 外部用户连接服务端上的 TCP、UDP 或 HTTP 入口。
 - 服务端通过目标客户端的数据通道中转流量。
 - 目标客户端连接自己本地或局域网内的 TCP/UDP 服务。
+- client-to-client 的访问入口客户端监听本地 TCP/UDP 入口，经服务端中继到服务来源客户端可访问的目标服务。
 
-下一轮不是只补一个 client-to-client 分支，而是把现有 server-expose 和新增 client-to-client 合成一套机制：
+这次实现不是只补一个 client-to-client 分支，而是把现有 server-expose 和新增 client-to-client 合成一套机制：
 
 - 一套 `TunnelSpec`
 - 一套 desired/runtime 状态模型

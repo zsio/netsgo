@@ -151,6 +151,15 @@ jobs:
         run: make test-e2e-nginx
       - name: Run E2E Caddy
         run: make test-e2e-caddy
+      - uses: oven-sh/setup-bun@v2
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+      - name: Install Playwright browser
+        working-directory: web
+        run: bunx playwright install --with-deps chromium
+      - name: Run Playwright client-to-client E2E
+        run: make test-playwright-e2e
 
   cross-build:
     runs-on: ubuntu-latest

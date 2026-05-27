@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -464,6 +465,83 @@ func TestClientRelayUDPTransfersFrames(t *testing.T) {
 	}
 
 	assertClientRelayTrafficBucket(t, s, trafficStore, stored, uint64(len(payload)), uint64(len(response)))
+}
+
+type writeFailConn struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newWriteFailConn() *writeFailConn {
+	return &writeFailConn{closed: make(chan struct{})}
+}
+
+func (c *writeFailConn) Read(_ []byte) (int, error) {
+	<-c.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (c *writeFailConn) Write(_ []byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
+func (c *writeFailConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *writeFailConn) LocalAddr() net.Addr                { return nil }
+func (c *writeFailConn) RemoteAddr() net.Addr               { return nil }
+func (c *writeFailConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *writeFailConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *writeFailConn) SetWriteDeadline(_ time.Time) error { return nil }
+
+func TestClientRelayTargetStreamOpenFailureProjectsIssue(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	stored := testClientRelayStoredTunnel(t)
+	mustAddStableTunnel(t, s.store, stored)
+	s.c2c.set(stored)
+
+	targetSession, err := mux.NewServerSession(newWriteFailConn(), mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("target session: %v", err)
+	}
+	defer mustClose(t, targetSession)
+	s.clients.Store(stored.Target.ClientID, &ClientConn{
+		ID:          stored.Target.ClientID,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: targetSession,
+		generation:  1,
+		state:       clientStateLive,
+	})
+
+	ingressStream, relayStream := net.Pipe()
+	defer mustClose(t, ingressStream)
+	done := make(chan struct{})
+	go func() {
+		s.handleClientOpenedDataStream(&ClientConn{ID: stored.Ingress.ClientID}, relayStream, testClientRelayHeader(stored))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("target stream open failure did not return")
+	}
+
+	issues := s.unifiedRuntime.issuesForStoredTunnel(stored, true)
+	if len(issues) != 1 || issues[0].Code != protocol.TunnelIssueCodeTargetStreamOpenFailed {
+		t.Fatalf("target stream open issue mismatch: %+v", issues)
+	}
+	reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("reload tunnel: %v", err)
+	}
+	if reloaded.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("target stream open failure should persist runtime error, got %q", reloaded.RuntimeState)
+	}
 }
 
 func TestClientRelayProvisionTimeoutProjectsIssue(t *testing.T) {

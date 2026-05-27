@@ -15,6 +15,7 @@ coverage
 coverage_func.txt
 *.prof
 *.pprof
+test-results/
 
 # IDE
 .idea/

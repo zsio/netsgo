@@ -80,14 +80,14 @@ export const futureOnlyTargetTypes = ['unix_socket', 'static_file', 'serial_devi
 
 const transportPolicyLabels = {
   server_relay_only: 'Server 中继',
-  direct_preferred: 'P2P 优先',
-  direct_only: '仅 P2P',
+  direct_preferred: 'P2P 优先（未开放）',
+  direct_only: '仅 P2P（未开放）',
 } as const satisfies Record<TransportPolicy, string>;
 
 const actualTransportLabels = {
   unknown: '未建立',
   server_relay: 'Server 中继',
-  peer_direct: 'P2P 直连',
+  peer_direct: 'P2P 直连（未开放）',
   turn_relay: 'TURN 中继',
 } as const satisfies Record<ActualTransport, string>;
 

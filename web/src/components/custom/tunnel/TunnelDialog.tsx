@@ -359,6 +359,7 @@ function TunnelDialogForm({
         <div className="space-y-1.5">
           <label className="text-sm font-medium">隧道名称</label>
           <Input
+            aria-label="隧道名称"
             placeholder="例如 ssh-dev"
             value={name}
             onChange={(e) => {
@@ -405,6 +406,7 @@ function TunnelDialogForm({
               <label className="text-sm font-medium">服务来源客户端</label>
               {clients.length > 0 ? (
                 <select
+                  aria-label="服务来源客户端"
                   className={selectClassName}
                   value={selectedTargetClientId}
                   onChange={(e) => {
@@ -431,6 +433,7 @@ function TunnelDialogForm({
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">访问入口客户端</label>
                 <select
+                  aria-label="访问入口客户端"
                   className={selectClassName}
                   value={selectedIngressClientId}
                   onChange={(e) => {
@@ -480,6 +483,7 @@ function TunnelDialogForm({
           <div className="space-y-1.5">
             <label className="text-sm font-medium">{isClientToClient ? '目标服务地址' : '本地 IP'}</label>
             <Input
+              aria-label={isClientToClient ? '目标服务地址' : '本地 IP'}
               placeholder="127.0.0.1"
               value={localIp}
               onChange={(e) => {
@@ -492,6 +496,7 @@ function TunnelDialogForm({
           <div className="space-y-1.5">
             <label className="text-sm font-medium">{isClientToClient ? '目标服务端口' : '本地端口'}</label>
             <Input
+              aria-label={isClientToClient ? '目标服务端口' : '本地端口'}
               type="number"
               placeholder="e.g. 22"
               value={localPort}
@@ -510,6 +515,7 @@ function TunnelDialogForm({
           <div className="space-y-1.5">
             <label className="text-sm font-medium">业务域名</label>
             <Input
+              aria-label="业务域名"
               placeholder="e.g. app.example.com"
               value={domain}
               onChange={(e) => {
@@ -531,6 +537,7 @@ function TunnelDialogForm({
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">入口监听地址</label>
                 <Input
+                  aria-label="入口监听地址"
                   placeholder="127.0.0.1 / 0.0.0.0"
                   value={bindIp}
                   onChange={(e) => {
@@ -547,6 +554,7 @@ function TunnelDialogForm({
             <div className="space-y-1.5">
               <label className="text-sm font-medium">{isClientToClient ? '入口监听端口' : '公网端口'}</label>
               <Input
+                aria-label={isClientToClient ? '入口监听端口' : '公网端口'}
                 type="number"
                 placeholder="e.g. 18080"
                 value={remotePort}
@@ -577,6 +585,7 @@ function TunnelDialogForm({
             <label className="text-sm font-medium">入站限速</label>
             <InputGroup>
               <InputGroupInput
+                aria-label="入站限速"
                 type="number"
                 step="any"
                 placeholder="0"
@@ -597,6 +606,7 @@ function TunnelDialogForm({
             <label className="text-sm font-medium">出站限速</label>
             <InputGroup>
               <InputGroupInput
+                aria-label="出站限速"
                 type="number"
                 step="any"
                 placeholder="0"

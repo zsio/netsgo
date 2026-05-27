@@ -231,7 +231,7 @@ describe('TunnelListTable', () => {
     expect(markup).toContain('拓扑 / 传输');
     expect(markup).toContain('Client ↔ Client');
     expect(markup).toContain('入口 client-a / 目标 client-b');
-    expect(markup).toContain('P2P 优先 · Server 中继');
+    expect(markup).toContain('P2P 优先（未开放） · Server 中继');
     expect(markup).toContain('已回退中继');
     expect(markup).toContain('入口绑定到通配地址，会暴露给入口 Client 所在网络。');
   });

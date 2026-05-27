@@ -331,7 +331,7 @@ describe('tunnel-model', () => {
     expect(view.destinationLabel).toBe('127.0.0.1:22');
     expect(view.topologyLabel).toBe('Client ↔ Client');
     expect(view.participantLabel).toBe('入口 client-a / 目标 client-b');
-    expect(view.transportLabel).toBe('P2P 优先 · P2P 直连');
+    expect(view.transportLabel).toBe('P2P 优先（未开放） · P2P 直连（未开放）');
     expect(view.p2pLabel).toBe('已直连');
     expect(view.ingressWarning).toBe('入口绑定到通配地址，会暴露给入口 Client 所在网络。');
   });
