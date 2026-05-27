@@ -106,9 +106,9 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
         ? props.tunnel.ingress.config.bind_ip
         : '127.0.0.1',
       type: props.tunnel.type,
-      localIp: props.tunnel.local_ip || '127.0.0.1',
-      localPort: String(props.tunnel.local_port || ''),
-      remotePort: String(props.tunnel.remote_port || ''),
+      localIp: getInitialTargetHost(props.tunnel),
+      localPort: String(getInitialTargetPort(props.tunnel) || ''),
+      remotePort: String(getInitialIngressPort(props.tunnel) || ''),
       domain: props.tunnel.domain || '',
       ingressBps: bpsToMbpsInput(props.tunnel.ingress_bps),
       egressBps: bpsToMbpsInput(props.tunnel.egress_bps),
@@ -129,6 +129,27 @@ function getInitialFormState(props: TunnelDialogProps): TunnelFormState {
     ingressBps: '',
     egressBps: '',
   };
+}
+
+function getInitialIngressPort(tunnel: TunnelDialogEditData) {
+  if (tunnel.ingress?.type === 'tcp_listen' || tunnel.ingress?.type === 'udp_listen') {
+    return tunnel.ingress.config.port;
+  }
+  return tunnel.remote_port;
+}
+
+function getInitialTargetHost(tunnel: TunnelDialogEditData) {
+  if (tunnel.target?.type === 'tcp_service' || tunnel.target?.type === 'udp_service') {
+    return tunnel.target.config.ip || '127.0.0.1';
+  }
+  return tunnel.local_ip || '127.0.0.1';
+}
+
+function getInitialTargetPort(tunnel: TunnelDialogEditData) {
+  if (tunnel.target?.type === 'tcp_service' || tunnel.target?.type === 'udp_service') {
+    return tunnel.target.config.port;
+  }
+  return tunnel.local_port;
 }
 
 function getFormKey(props: TunnelDialogProps, open: boolean) {

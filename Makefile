@@ -1,4 +1,4 @@
-.PHONY: build build-web build-go build-desktop-sidecar build-desktop clean docs dev-server dev-client dev-bench dev-web test test-race lint test-e2e-nginx test-e2e-caddy test-playwright-e2e bench-data soak-data compose-stack-up compose-stack-logs compose-stack-down compose-stack-clean test-compose-stack test-compose-stack-nginx test-compose-stack-caddy
+.PHONY: build build-web build-go build-desktop-sidecar build-desktop clean docs dev-server dev-client dev-bench dev-web test test-race lint test-e2e-nginx test-e2e-caddy test-playwright-e2e test-playwright-e2e-smoke test-playwright-e2e-full test-playwright-e2e-run bench-data soak-data compose-stack-up compose-stack-logs compose-stack-down compose-stack-clean test-compose-stack test-compose-stack-nginx test-compose-stack-caddy
 
 # 编译输出目录
 BIN_DIR=bin
@@ -86,6 +86,8 @@ PLAYWRIGHT_PROJECT ?= netsgo-playwright
 PLAYWRIGHT_SERVER_PORT ?= 19180
 PLAYWRIGHT_TCP_INGRESS_PORT ?= 19190
 PLAYWRIGHT_UDP_INGRESS_PORT ?= 19191
+PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT ?= 19192
+PLAYWRIGHT_TCP_EDIT_INGRESS_PORT ?= 19193
 PLAYWRIGHT_COMPOSE := $(CURDIR)/test/e2e/docker-compose.playwright.yml
 
 # 启动服务端（-tags dev 跳过 go:embed，使用 Vite 独立前端）
@@ -132,24 +134,37 @@ test-e2e-nginx:
 test-e2e-caddy:
 	NETSGO_E2E_PROXY=caddy NETSGO_E2E_COMPOSE_FILE=$(CURDIR)/test/e2e/docker-compose.caddy.yml go test -tags=e2e ./test/e2e -run TestProxyE2E -count=1
 
-test-playwright-e2e: build-web
+test-playwright-e2e: test-playwright-e2e-smoke
+
+test-playwright-e2e-smoke: PLAYWRIGHT_ARGS=--grep @smoke
+test-playwright-e2e-smoke: test-playwright-e2e-run
+
+test-playwright-e2e-full: test-playwright-e2e-run
+
+test-playwright-e2e-run: build-web
 	@set -e; \
 	cleanup() { \
 		PLAYWRIGHT_SERVER_PORT=$(PLAYWRIGHT_SERVER_PORT) \
 		PLAYWRIGHT_TCP_INGRESS_PORT=$(PLAYWRIGHT_TCP_INGRESS_PORT) \
 		PLAYWRIGHT_UDP_INGRESS_PORT=$(PLAYWRIGHT_UDP_INGRESS_PORT) \
+		PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT=$(PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT) \
+		PLAYWRIGHT_TCP_EDIT_INGRESS_PORT=$(PLAYWRIGHT_TCP_EDIT_INGRESS_PORT) \
 		docker compose -f $(PLAYWRIGHT_COMPOSE) -p $(PLAYWRIGHT_PROJECT) down -v --remove-orphans; \
 	}; \
 	trap cleanup EXIT; \
 	PLAYWRIGHT_SERVER_PORT=$(PLAYWRIGHT_SERVER_PORT) \
 	PLAYWRIGHT_TCP_INGRESS_PORT=$(PLAYWRIGHT_TCP_INGRESS_PORT) \
 	PLAYWRIGHT_UDP_INGRESS_PORT=$(PLAYWRIGHT_UDP_INGRESS_PORT) \
+	PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT=$(PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT) \
+	PLAYWRIGHT_TCP_EDIT_INGRESS_PORT=$(PLAYWRIGHT_TCP_EDIT_INGRESS_PORT) \
 	docker compose -f $(PLAYWRIGHT_COMPOSE) -p $(PLAYWRIGHT_PROJECT) up -d --build --remove-orphans; \
 	cd web && \
 	NETSGO_E2E_BASE_URL=http://127.0.0.1:$(PLAYWRIGHT_SERVER_PORT) \
 	PLAYWRIGHT_TCP_INGRESS_PORT=$(PLAYWRIGHT_TCP_INGRESS_PORT) \
 	PLAYWRIGHT_UDP_INGRESS_PORT=$(PLAYWRIGHT_UDP_INGRESS_PORT) \
-	bun run e2e:playwright || status=$$?; \
+	PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT=$(PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT) \
+	PLAYWRIGHT_TCP_EDIT_INGRESS_PORT=$(PLAYWRIGHT_TCP_EDIT_INGRESS_PORT) \
+	bun run e2e:playwright $(if $(PLAYWRIGHT_ARGS),-- $(PLAYWRIGHT_ARGS),) || status=$$?; \
 	if [ "$${status:-0}" -ne 0 ]; then \
 		docker compose -f $(PLAYWRIGHT_COMPOSE) -p $(PLAYWRIGHT_PROJECT) ps; \
 		docker compose -f $(PLAYWRIGHT_COMPOSE) -p $(PLAYWRIGHT_PROJECT) logs --no-color --tail 200; \

@@ -138,6 +138,7 @@ export function TunnelListTable({
           <button
             className="p-1.5 hover:bg-primary/10 rounded text-primary"
             title="速率趋势"
+            aria-label="速率趋势"
             onClick={() => setSpeedTarget(tunnel)}
           >
             <Activity className="h-4 w-4" />
@@ -147,6 +148,7 @@ export function TunnelListTable({
           <button
             className="p-1.5 hover:bg-emerald-500/10 rounded text-emerald-500"
             title="启动"
+            aria-label="启动"
             onClick={() => resumeTunnel.mutate(args(tunnel.clientId, tunnel.id), {
               onSuccess: () => toast.success(`隧道「${tunnel.name}」已启动`),
               onError: (err) => toast.error((err as Error).message),
@@ -159,6 +161,7 @@ export function TunnelListTable({
           <button
             className="p-1.5 hover:bg-slate-500/10 rounded text-slate-500"
             title="停止"
+            aria-label="停止"
             onClick={() => stopTunnel.mutate(args(tunnel.clientId, tunnel.id), {
               onSuccess: () => toast.success(`隧道「${tunnel.name}」已停止`),
               onError: (err) => toast.error((err as Error).message),
@@ -171,6 +174,7 @@ export function TunnelListTable({
           <button
             className="p-1.5 hover:bg-blue-500/10 rounded text-blue-500"
             title="编辑"
+            aria-label="编辑"
             onClick={() => setEditTarget(tunnel)}
           >
             <Pencil className="h-4 w-4" />
@@ -180,6 +184,7 @@ export function TunnelListTable({
           <button
             className="p-1.5 hover:bg-destructive/10 rounded text-destructive"
             title="删除"
+            aria-label="删除"
             onClick={() => setDeleteTarget({ id: tunnel.id, name: tunnel.name, clientId: tunnel.clientId })}
           >
             <Trash2 className="h-4 w-4" />

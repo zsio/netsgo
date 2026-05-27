@@ -95,6 +95,8 @@ services:
     ports:
       - "${PLAYWRIGHT_TCP_INGRESS_PORT:-19190}:18090"
       - "${PLAYWRIGHT_UDP_INGRESS_PORT:-19191}:18091/udp"
+      - "${PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT:-19192}:18092"
+      - "${PLAYWRIGHT_TCP_EDIT_INGRESS_PORT:-19193}:18093"
     volumes:
       - netsgo-playwright-ingress-data:/var/lib/netsgo
       - netsgo-playwright-shared:/shared

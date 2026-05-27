@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: '.',
   testMatch: '**/*.pw.ts',
   timeout: 180_000,
+  workers: 1,
   expect: {
     timeout: 15_000,
   },
