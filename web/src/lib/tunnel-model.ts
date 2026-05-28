@@ -444,13 +444,17 @@ function getTunnelIngressLabel(tunnel: ProxyConfig) {
     : `:${tunnel.remote_port}`;
 }
 
+function getServiceTargetHost(target: TunnelTarget) {
+  return target.config.ip || target.config.host || '';
+}
+
 function getTunnelTargetLabel(tunnel: ProxyConfig) {
   const target = tunnel.target;
   if (target) {
     switch (target.type) {
       case 'tcp_service':
       case 'udp_service':
-        return `${target.config.ip}:${target.config.port}`;
+        return `${getServiceTargetHost(target)}:${target.config.port}`;
     }
   }
 

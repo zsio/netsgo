@@ -106,7 +106,8 @@ export interface HttpHostConfig {
 }
 
 export interface TcpServiceConfig {
-  ip: string;
+  ip?: string;
+  host?: string;
   port: number;
 }
 

@@ -140,7 +140,7 @@ function getInitialIngressPort(tunnel: TunnelDialogEditData) {
 
 function getInitialTargetHost(tunnel: TunnelDialogEditData) {
   if (tunnel.target?.type === 'tcp_service' || tunnel.target?.type === 'udp_service') {
-    return tunnel.target.config.ip || '127.0.0.1';
+    return tunnel.target.config.ip || tunnel.target.config.host || '127.0.0.1';
   }
   return tunnel.local_ip || '127.0.0.1';
 }

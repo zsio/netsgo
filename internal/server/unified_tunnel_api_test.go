@@ -277,12 +277,19 @@ func TestAPI_UnifiedTunnelCreateDerivesOwnerAndListsByClientRole(t *testing.T) {
 	if listResp.Code != http.StatusOK {
 		t.Fatalf("GET owner tunnels: want 200, got %d body=%s", listResp.Code, listResp.Body.String())
 	}
-	var ownerList []tunnelSpecAPI
+	var ownerList []protocol.ProxyConfig
 	if err := mustDecodeJSON(t, listResp.Body, &ownerList); err != nil {
 		t.Fatalf("failed to decode owner list: %v", err)
 	}
 	if len(ownerList) != 1 || ownerList[0].ID != created.ID {
 		t.Fatalf("owner list mismatch: %+v", ownerList)
+	}
+	ownerView := ownerList[0]
+	if ownerView.Type != protocol.ProxyTypeTCP || ownerView.LocalIP != "127.0.0.1" || ownerView.LocalPort != 22 || ownerView.RemotePort != 22001 {
+		t.Fatalf("owner list should return ProxyConfig shape, got %+v", ownerView)
+	}
+	if ownerView.Capabilities == nil {
+		t.Fatalf("owner list should include action capabilities")
 	}
 
 	ingressResp := doMuxRequest(t, handler, http.MethodGet, "/api/clients/"+record.ID+"/tunnels?role=ingress", token, nil)

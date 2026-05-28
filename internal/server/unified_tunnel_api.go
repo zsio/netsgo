@@ -262,19 +262,50 @@ func (s *Server) handleClientTunnels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tunnels, err := s.allUnifiedTunnelSpecs()
+	tunnels, err := s.allUnifiedTunnelProxyConfigs()
 	if err != nil {
 		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 
-	filtered := make([]tunnelSpecAPI, 0, len(tunnels))
+	filtered := make([]protocol.ProxyConfig, 0, len(tunnels))
 	for _, tunnel := range tunnels {
-		if unifiedTunnelMatchesClientRole(tunnel, clientID, role) {
+		if unifiedTunnelProxyConfigMatchesClientRole(tunnel, clientID, role) {
 			filtered = append(filtered, tunnel)
 		}
 	}
 	encodeJSON(w, http.StatusOK, filtered)
+}
+
+func unifiedTunnelProxyConfigMatchesClientRole(tunnel protocol.ProxyConfig, clientID, role string) bool {
+	ownerClientID := tunnel.OwnerClientID
+	if ownerClientID == "" {
+		ownerClientID = tunnel.ClientID
+	}
+	ingressClientID := ""
+	if tunnel.Ingress != nil && tunnel.Ingress.Location == tunnelEndpointLocationClient {
+		ingressClientID = tunnel.Ingress.ClientID
+	}
+	targetClientID := tunnel.ClientID
+	if tunnel.Target != nil && tunnel.Target.Location == tunnelEndpointLocationClient {
+		targetClientID = tunnel.Target.ClientID
+		if targetClientID == "" {
+			targetClientID = tunnel.ClientID
+		}
+	}
+
+	switch role {
+	case "owner":
+		return ownerClientID == clientID
+	case "ingress":
+		return ingressClientID == clientID
+	case "target":
+		return targetClientID == clientID
+	case "related":
+		return ownerClientID == clientID || ingressClientID == clientID || targetClientID == clientID
+	default:
+		return false
+	}
 }
 
 func unifiedTunnelMatchesClientRole(tunnel tunnelSpecAPI, clientID, role string) bool {
@@ -1279,6 +1310,54 @@ func (s *Server) allUnifiedTunnelSpecs() ([]tunnelSpecAPI, error) {
 	})
 
 	tunnels := make([]tunnelSpecAPI, 0, len(byID))
+	for _, tunnel := range byID {
+		tunnels = append(tunnels, tunnel)
+	}
+	sort.Slice(tunnels, func(i, j int) bool {
+		if !tunnels[i].CreatedAt.Equal(tunnels[j].CreatedAt) {
+			return tunnels[i].CreatedAt.After(tunnels[j].CreatedAt)
+		}
+		return tunnels[i].Name < tunnels[j].Name
+	})
+	return tunnels, nil
+}
+
+func (s *Server) allUnifiedTunnelProxyConfigs() ([]protocol.ProxyConfig, error) {
+	byID := map[string]protocol.ProxyConfig{}
+	appendConfig := func(config protocol.ProxyConfig, online bool) {
+		view := proxyConfigForClientView(config, online)
+		if view.ID == "" {
+			view.ID = view.Name
+		}
+		if _, exists := byID[view.ID]; exists {
+			return
+		}
+		byID[view.ID] = view
+	}
+
+	if s.store != nil {
+		stored, err := s.store.GetAllTunnels()
+		if err != nil {
+			return nil, err
+		}
+		for _, tunnel := range stored {
+			view := s.storedTunnelViewConfig(tunnel)
+			if view.ID == "" {
+				view.ID = view.Name
+			}
+			byID[view.ID] = view
+		}
+	}
+
+	s.RangeClients(func(_ string, client *ClientConn) bool {
+		online := client.isLive()
+		for _, config := range client.ProxyConfigsSnapshot() {
+			appendConfig(config, online)
+		}
+		return true
+	})
+
+	tunnels := make([]protocol.ProxyConfig, 0, len(byID))
 	for _, tunnel := range byID {
 		tunnels = append(tunnels, tunnel)
 	}

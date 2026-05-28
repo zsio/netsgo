@@ -336,6 +336,25 @@ describe('tunnel-model', () => {
     expect(view.ingressWarning).toBe('入口绑定到通配地址，会暴露给入口 Client 所在网络。');
   });
 
+  test('host-backed 目标配置使用 host 字段展示目标地址', () => {
+    const view = buildTunnelViewModel(
+      createTunnel({
+        target: {
+          location: 'client',
+          client_id: 'client-b',
+          type: 'tcp_service',
+          config: {
+            host: 'legacy.internal',
+            port: 22,
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(view.destinationLabel).toBe('legacy.internal:22');
+  });
+
   test('带宽字段通过共享 payload builder 统一透传', () => {
     expect(
       buildTunnelMutationPayload({
