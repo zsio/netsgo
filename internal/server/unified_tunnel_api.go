@@ -308,30 +308,6 @@ func unifiedTunnelProxyConfigMatchesClientRole(tunnel protocol.ProxyConfig, clie
 	}
 }
 
-func unifiedTunnelMatchesClientRole(tunnel tunnelSpecAPI, clientID, role string) bool {
-	ingressClientID := ""
-	if tunnel.Ingress.Location == tunnelEndpointLocationClient {
-		ingressClientID = tunnel.Ingress.ClientID
-	}
-	targetClientID := ""
-	if tunnel.Target.Location == tunnelEndpointLocationClient {
-		targetClientID = tunnel.Target.ClientID
-	}
-
-	switch role {
-	case "owner":
-		return tunnel.OwnerClientID == clientID
-	case "ingress":
-		return ingressClientID == clientID
-	case "target":
-		return targetClientID == clientID
-	case "related":
-		return tunnel.OwnerClientID == clientID || ingressClientID == clientID || targetClientID == clientID
-	default:
-		return false
-	}
-}
-
 func (s *Server) handleCreateUnifiedTunnel(w http.ResponseWriter, r *http.Request) {
 	var req tunnelCreateRequestAPI
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
