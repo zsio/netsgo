@@ -414,8 +414,22 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 		t.Fatalf("unexpected UDP echo reply: want %q, got %q", payload, reply[:n])
 	}
 
-	s.flushTrafficObservations()
-	result := mustQueryWithResolution(t, trafficStore, clientID, tunnelName, time.Now().Add(-time.Minute), time.Now().Add(time.Minute), TrafficResolutionMinute)
+	var result TrafficQueryResult
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.flushTrafficObservations()
+		result = mustQueryWithResolution(t, trafficStore, clientID, tunnelName, time.Now().Add(-time.Minute), time.Now().Add(time.Minute), TrafficResolutionMinute)
+		if len(result.Items) == 1 && len(result.Items[0].Points) == 1 {
+			point := result.Items[0].Points[0]
+			if point.IngressBytes == uint64(len(payload)) && point.EgressBytes == uint64(len(payload)) {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(result.Items) != 1 {
 		for i, item := range result.Items {
 			t.Logf("traffic item %d: id=%q name=%q type=%q points=%+v", i, item.TunnelID, item.TunnelName, item.TunnelType, item.Points)
