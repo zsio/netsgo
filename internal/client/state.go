@@ -2,8 +2,8 @@ package client
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"

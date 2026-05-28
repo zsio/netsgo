@@ -433,56 +433,6 @@ func (s *Server) updateManagedTunnelWithRevision(client *ClientConn, selector st
 	return config, nil
 }
 
-func (s *Server) restoreManagedTunnel(client *ClientConn, stored StoredTunnel) error {
-	tunnel, err := s.prepareProxyTunnelWithExclusions(
-		client,
-		stored.ProxyNewRequest,
-		protocol.ProxyDesiredStateRunning,
-		protocol.ProxyRuntimeStatePending,
-		stored.Name,
-		client.ID,
-		stored.CreatedAt,
-	)
-	if err != nil {
-		return err
-	}
-	tunnel.Config.Revision = stored.Revision
-	if err := s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, ""); err != nil {
-		s.removeTunnelRuntime(client, stored.Name)
-		return err
-	}
-	s.emitTunnelChanged(client.ID, tunnel.Config, "pending")
-
-	if _, err := s.waitForTunnelProvisionAck(client, s.prepareTunnelProvisionRequest(client, tunnel)); err != nil {
-		if errors.Is(err, errTunnelProvisionAckCancelled) {
-			return err
-		}
-		s.markPendingTunnelErrorIfCurrent(client, stored.Name, tunnelProvisionErrorMessage(err))
-		return err
-	}
-
-	if !s.isCurrentGeneration(client.ID, client.generation) {
-		return errTunnelProvisionAckCancelled
-	}
-
-	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
-		s.failRestoredTunnelAfterReady(client, stored, err.Error())
-		return err
-	}
-	if err := s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, ""); err != nil {
-		s.failRestoredTunnelAfterReady(client, stored, err.Error())
-		return err
-	}
-
-	updated, err := s.mustGetTunnel(client, stored.Name)
-	if err != nil {
-		s.failRestoredTunnelAfterReady(client, stored, err.Error())
-		return err
-	}
-	s.emitTunnelChanged(client.ID, updated.Config, "restored")
-	return nil
-}
-
 func (s *Server) mustGetTunnel(client *ClientConn, name string) (*ProxyTunnel, error) {
 	client.proxyMu.RLock()
 	defer client.proxyMu.RUnlock()

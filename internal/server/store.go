@@ -913,10 +913,11 @@ func normalizeUnifiedTunnelSpec(t *StoredTunnel) {
 	if t.Target.Type == "" || t.Target.Location == "" || isEmptyEndpointConfig(t.Target.Config) {
 		t.Target = legacyTargetSpec(t)
 	}
-	if t.Topology == TunnelTopologyServerExpose {
+	switch t.Topology {
+	case TunnelTopologyServerExpose:
 		t.Ingress.Location = "server"
 		t.Ingress.ClientID = ""
-	} else if t.Topology == TunnelTopologyClientToClient {
+	case TunnelTopologyClientToClient:
 		t.Ingress.Location = "client"
 	}
 	t.Target.Location = "client"

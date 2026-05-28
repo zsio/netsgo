@@ -138,12 +138,7 @@ func sameClientIngressResource(current EndpointSpec, next endpointSpecAPI, curre
 	if current.Type != protocol.IngressTypeTCPListen && current.Type != protocol.IngressTypeUDPListen {
 		return false
 	}
-	currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI{
-		Location: current.Location,
-		ClientID: current.ClientID,
-		Type:     current.Type,
-		Config:   current.Config,
-	}, currentTopology)
+	currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI(current), currentTopology)
 	if err != nil {
 		return false
 	}

@@ -92,32 +92,6 @@ func ackTunnelProvision(t *testing.T, conn interface {
 	return req
 }
 
-func ackLegacyProxyProvision(t *testing.T, conn interface {
-	SetReadDeadline(time.Time) error
-	ReadJSON(any) error
-	WriteJSON(any) error
-}) protocol.ProxyProvisionRequest {
-	t.Helper()
-	msg := readControlMessageOfType(t, conn, protocol.MsgTypeProxyProvision)
-	var req protocol.ProxyProvisionRequest
-	if err := msg.ParsePayload(&req); err != nil {
-		t.Fatalf("parse legacy proxy provision payload: %v", err)
-	}
-	ack, err := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-		Name:              req.Name,
-		ProvisionRevision: req.ProvisionRevision,
-		Accepted:          true,
-		Message:           "ok",
-	})
-	if err != nil {
-		t.Fatalf("build legacy proxy provision ack: %v", err)
-	}
-	if err := conn.WriteJSON(ack); err != nil {
-		t.Fatalf("write legacy proxy provision ack: %v", err)
-	}
-	return req
-}
-
 func setLiveClientDefaultCapabilities(t *testing.T, s *Server, clientID string) {
 	t.Helper()
 	value, ok := s.clients.Load(clientID)

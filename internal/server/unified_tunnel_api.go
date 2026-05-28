@@ -404,76 +404,6 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) proxyRequestFromUnifiedCreate(req tunnelCreateRequestAPI, existingID string) (protocol.ProxyNewRequest, string, error) {
-	if strings.TrimSpace(req.ID) != "" {
-		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("id is server-owned and cannot be submitted"), "id", "server_owned_field", http.StatusBadRequest)
-	}
-	if req.Revision != 0 {
-		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("revision is server-owned and cannot be submitted"), "revision", "server_owned_field", http.StatusBadRequest)
-	}
-	if strings.TrimSpace(req.OwnerClientID) != "" {
-		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("owner_client_id is server-derived and cannot be submitted"), "owner_client_id", "server_owned_field", http.StatusBadRequest)
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("tunnel name is required"), protocol.TunnelMutationFieldName, "", http.StatusBadRequest)
-	}
-
-	if req.TransportPolicy == "" {
-		req.TransportPolicy = tunnelTransportPolicyServerRelayOnly
-	}
-	if req.TransportPolicy != tunnelTransportPolicyServerRelayOnly && req.TransportPolicy != tunnelTransportPolicyDirectPreferred && req.TransportPolicy != tunnelTransportPolicyDirectOnly {
-		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("unsupported transport_policy %q", req.TransportPolicy), "transport_policy", "unsupported_transport_policy", http.StatusBadRequest)
-	}
-	if req.TransportPolicy != tunnelTransportPolicyServerRelayOnly {
-		return protocol.ProxyNewRequest{}, "", newProxyRequestValidationError(fmt.Errorf("transport policy %q requires direct transport support, which is not available in this build", req.TransportPolicy), "transport_policy", protocol.TunnelMutationErrorCodeDirectTransportUnavailable, http.StatusBadRequest)
-	}
-
-	ownerClientID, err := deriveUnifiedTunnelOwner(req.Topology, req.Ingress, req.Target)
-	if err != nil {
-		return protocol.ProxyNewRequest{}, "", err
-	}
-	if err := validateUnifiedEndpointCombination(req.Topology, req.Ingress, req.Target); err != nil {
-		return protocol.ProxyNewRequest{}, "", err
-	}
-	if err := s.validateUnifiedClientsAndCapabilities(req); err != nil {
-		return protocol.ProxyNewRequest{}, "", err
-	}
-
-	ingressConfig, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
-	if err != nil {
-		return protocol.ProxyNewRequest{}, "", err
-	}
-	targetConfig, err := decodeServiceEndpointConfig(req.Target)
-	if err != nil {
-		return protocol.ProxyNewRequest{}, "", err
-	}
-
-	proxyType := ""
-	switch req.Ingress.Type {
-	case tunnelIngressTypeTCPListen:
-		proxyType = protocol.ProxyTypeTCP
-	case tunnelIngressTypeUDPListen:
-		proxyType = protocol.ProxyTypeUDP
-	case tunnelIngressTypeHTTPHost:
-		proxyType = protocol.ProxyTypeHTTP
-	}
-
-	proxyReq := protocol.ProxyNewRequest{
-		ID:                existingID,
-		Name:              strings.TrimSpace(req.Name),
-		Type:              proxyType,
-		LocalIP:           targetConfig.IP,
-		LocalPort:         targetConfig.Port,
-		RemotePort:        ingressConfig.Port,
-		Domain:            ingressConfig.Domain,
-		BandwidthSettings: req.BandwidthSettings,
-	}
-	if proxyType == protocol.ProxyTypeHTTP {
-		proxyReq.RemotePort = 0
-	}
-	return proxyReq, ownerClientID, nil
-}
-
 func deriveUnifiedTunnelOwner(topology string, ingress, target endpointSpecAPI) (string, error) {
 	switch topology {
 	case tunnelTopologyServerExpose:
@@ -923,7 +853,7 @@ func sameUnifiedIngressResource(current EndpointSpec, next endpointSpecAPI, curr
 	}
 	switch current.Type {
 	case tunnelIngressTypeHTTPHost:
-		currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI{Location: current.Location, ClientID: current.ClientID, Type: current.Type, Config: current.Config}, currentTopology)
+		currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI(current), currentTopology)
 		if err != nil {
 			return false
 		}
@@ -933,7 +863,7 @@ func sameUnifiedIngressResource(current EndpointSpec, next endpointSpecAPI, curr
 		}
 		return canonicalHost(currentCfg.Domain) == canonicalHost(nextCfg.Domain)
 	case tunnelIngressTypeTCPListen, tunnelIngressTypeUDPListen:
-		currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI{Location: current.Location, ClientID: current.ClientID, Type: current.Type, Config: current.Config}, currentTopology)
+		currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI(current), currentTopology)
 		if err != nil {
 			return false
 		}
@@ -1267,16 +1197,6 @@ func specFromStoredTunnelConfig(config protocol.ProxyConfig, s *Server) tunnelSp
 		}
 	}
 	return unifiedSpecFromProxyConfig(proxyConfigForClientView(config, s.isClientOnline(config.ClientID)))
-}
-
-func requiredTunnelClientsOnline(stored StoredTunnel, s *Server) bool {
-	if stored.Target.ClientID != "" && !s.isClientOnline(stored.Target.ClientID) {
-		return false
-	}
-	if stored.Ingress.Location == tunnelEndpointLocationClient && stored.Ingress.ClientID != "" && !s.isClientOnline(stored.Ingress.ClientID) {
-		return false
-	}
-	return true
 }
 
 func requiredTunnelClientsReady(stored StoredTunnel, s *Server) bool {

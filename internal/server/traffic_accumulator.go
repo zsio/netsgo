@@ -181,10 +181,6 @@ func trafficAccumulatorHashString(hash uint32, value string) uint32 {
 	return hash
 }
 
-func (s *Server) recordTraffic(clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
-	s.recordTrafficAt(time.Now(), clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
-}
-
 func (s *Server) recordTunnelTraffic(clientID string, config protocol.ProxyConfig, ingressBytes, egressBytes uint64) {
 	s.recordTunnelTrafficAt(time.Now(), clientID, config, ingressBytes, egressBytes)
 }
