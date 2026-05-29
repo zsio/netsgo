@@ -248,8 +248,7 @@ func (c *Client) handleTunnelUnprovision(req protocol.TunnelUnprovisionRequest) 
 		key := tunnelRuntimeKey(req.TunnelID, protocol.DataStreamRoleIngress)
 		if value, ok := c.tunnels.Load(key); ok {
 			runtime, isRuntime := value.(*clientTunnelRuntime)
-			stale := isRuntime && req.Revision > 0 && runtime.revision > 0 && req.Revision != runtime.revision
-			if !stale && c.tunnels.CompareAndDelete(key, value) && isRuntime {
+			if isRuntime && tunnelUnprovisionCoversRevision(req.Revision, runtime.revision) && c.tunnels.CompareAndDelete(key, value) {
 				runtime.close()
 			}
 		}
@@ -285,7 +284,15 @@ func proxyUnprovisionMatchesRevision(value any, revision int64) bool {
 	if !ok {
 		return false
 	}
-	return revision <= 0 || proxy.ProvisionRevision == 0 || uint64(revision) == proxy.ProvisionRevision
+	return proxyUnprovisionCoversRevision(revision, proxy.ProvisionRevision)
+}
+
+func tunnelUnprovisionCoversRevision(requestRevision, runtimeRevision int64) bool {
+	return requestRevision <= 0 || runtimeRevision <= 0 || requestRevision >= runtimeRevision
+}
+
+func proxyUnprovisionCoversRevision(requestRevision int64, provisionRevision uint64) bool {
+	return requestRevision <= 0 || provisionRevision == 0 || uint64(requestRevision) >= provisionRevision
 }
 
 func (c *Client) startIngressTunnelRuntime(rt *sessionRuntime, req protocol.TunnelProvisionRequest) error {
@@ -464,7 +471,14 @@ func (c *Client) getOrCreateIngressUDPAssociation(rt *sessionRuntime, req protoc
 		return nil, false
 	}
 
-	header := ingressDataStreamHeader(req, c.CurrentClientID())
+	header, err := ingressDataStreamHeader(req, c.CurrentClientID())
+	if err != nil {
+		_ = stream.Close()
+		message := fmt.Sprintf("build UDP tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
+		log.Printf("⚠️ %s", message)
+		c.reportTunnelRuntimeError(rt, req, message)
+		return nil, false
+	}
 	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
 		_ = stream.Close()
 		message := fmt.Sprintf("write UDP tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
@@ -504,12 +518,16 @@ func (c *Client) readIngressUDPAssociationReplies(runtime *clientTunnelRuntime, 
 	}
 }
 
-func ingressDataStreamHeader(req protocol.TunnelProvisionRequest, openClientID string) protocol.DataStreamHeader {
+func ingressDataStreamHeader(req protocol.TunnelProvisionRequest, openClientID string) (protocol.DataStreamHeader, error) {
+	streamID, err := protocol.NewDataStreamID()
+	if err != nil {
+		return protocol.DataStreamHeader{}, err
+	}
 	header := protocol.DataStreamHeader{
 		Kind:         protocol.DataStreamHeaderKindTunnelStream,
 		TunnelID:     req.TunnelID,
 		Revision:     req.Revision,
-		StreamID:     protocol.NewDataStreamID(),
+		StreamID:     streamID,
 		OpenClientID: openClientID,
 		SourceRole:   protocol.DataStreamRoleIngress,
 		TargetRole:   protocol.DataStreamRoleTarget,
@@ -517,10 +535,7 @@ func ingressDataStreamHeader(req protocol.TunnelProvisionRequest, openClientID s
 		Transport:    protocol.ActualTransportServerRelay,
 		OpenToken:    "server-relay",
 	}
-	if header.StreamID == "" {
-		header.StreamID = fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return header
+	return header, nil
 }
 
 func (c *Client) handleIngressTCPConn(rt *sessionRuntime, req protocol.TunnelProvisionRequest, conn net.Conn) {
@@ -544,7 +559,13 @@ func (c *Client) handleIngressTCPConn(rt *sessionRuntime, req protocol.TunnelPro
 	}
 	defer func() { _ = stream.Close() }()
 
-	header := ingressDataStreamHeader(req, c.CurrentClientID())
+	header, err := ingressDataStreamHeader(req, c.CurrentClientID())
+	if err != nil {
+		message := fmt.Sprintf("build tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
+		log.Printf("⚠️ %s", message)
+		c.reportTunnelRuntimeError(rt, req, message)
+		return
+	}
 	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
 		message := fmt.Sprintf("write tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
 		log.Printf("⚠️ %s", message)

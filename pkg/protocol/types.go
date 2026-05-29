@@ -47,6 +47,8 @@ const (
 	ParticipantStateProvisionPending  = "provision_pending"
 	ParticipantStateProvisionRejected = "provision_rejected"
 	ParticipantStateReady             = "ready"
+	ParticipantStateIdle              = "idle"
+	ParticipantStateError             = "error"
 	ParticipantStateListening         = "listening"
 	ParticipantStateListenFailed      = "listen_failed"
 	ParticipantStateTargetReady       = "target_ready"
@@ -291,7 +293,7 @@ type ProxyConfig struct {
 	TransportPolicy   string              `json:"transport_policy,omitempty"`
 	ActualTransport   string              `json:"actual_transport,omitempty"`
 	P2P               *P2PState           `json:"p2p,omitempty"`
-	Issues            *[]TunnelIssue      `json:"issues,omitempty"`
+	Issues            []TunnelIssue       `json:"issues,omitempty"`
 	Participants      *TunnelParticipants `json:"participants,omitempty"`
 	Transport         *TransportRuntime   `json:"transport,omitempty"`
 	BandwidthSettings                     // 聚合带宽限制（payload bytes/sec，0 = unlimited）

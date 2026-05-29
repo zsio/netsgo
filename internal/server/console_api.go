@@ -232,8 +232,7 @@ func (s *Server) storedTunnelViewConfig(stored StoredTunnel) protocol.ProxyConfi
 	config.ActualTransport = spec.ActualTransport
 	config.TransportPolicy = spec.TransportPolicy
 	if len(spec.Issues) > 0 {
-		issues := append([]protocol.TunnelIssue(nil), spec.Issues...)
-		config.Issues = &issues
+		config.Issues = append([]protocol.TunnelIssue(nil), spec.Issues...)
 	}
 	config.Capabilities = spec.Capabilities
 	config.P2P = &protocol.P2PState{State: spec.P2P.State, Error: spec.P2P.Error, SessionID: spec.P2P.SessionID}

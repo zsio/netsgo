@@ -691,6 +691,13 @@ func TestAPI_UnifiedTunnelDeleteUnprovisionsServerExposeTarget(t *testing.T) {
 	if unprovision.TunnelID != created.ID || unprovision.Revision != created.Revision || unprovision.Role != protocol.DataStreamRoleTarget || unprovision.Reason != "deleted" {
 		t.Fatalf("delete target unprovision mismatch: %+v", unprovision)
 	}
+	live, ok := s.loadLiveClient(targetAuth.ClientID)
+	if !ok {
+		t.Fatal("target client should remain live")
+	}
+	if _, _, exists := findTunnelBySelector(live, created.ID); exists {
+		t.Fatal("delete should remove server-expose runtime from live client")
+	}
 	if _, err := s.store.GetTunnelByIDE(targetAuth.ClientID, created.ID); !errors.Is(err, ErrTunnelNotFound) {
 		t.Fatalf("deleted tunnel should be hard-deleted, got err=%v", err)
 	}
@@ -1039,7 +1046,7 @@ func TestAPI_UnifiedTunnelServerExposeProvisionTimeoutProjectsIssue(t *testing.T
 			if projected.Topology != tunnelTopologyServerExpose || projected.Ingress == nil || projected.Target == nil {
 				t.Fatalf("/api/clients tunnel should keep unified metadata: %+v", projected)
 			}
-			if projected.Issues == nil || len(*projected.Issues) != 1 || (*projected.Issues)[0].Code != protocol.TunnelIssueCodeProvisionAckTimeout {
+			if len(projected.Issues) != 1 || projected.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckTimeout {
 				t.Fatalf("/api/clients tunnel should keep unified issues: %+v", projected.Issues)
 			}
 			return
@@ -1316,6 +1323,62 @@ func TestAPI_UnifiedTunnelProjectionRequiresExposedClientRelayRuntime(t *testing
 	spec = specFromStoredTunnel(stored, s)
 	if spec.RuntimeState != tunnelRuntimeStateActive || spec.ActualTransport != protocol.ActualTransportServerRelay {
 		t.Fatalf("exposed C2C route should project active server relay, got state=%q transport=%q", spec.RuntimeState, spec.ActualTransport)
+	}
+}
+
+func TestAPI_UnifiedTunnelListKeepsSameNameLiveTunnelsWithoutIDs(t *testing.T) {
+	s := New(0)
+	now := time.Now().UTC()
+	s.clients.Store("client-a", &ClientConn{
+		ID:    "client-a",
+		state: clientStateLive,
+		proxies: map[string]*ProxyTunnel{"web": {
+			Config: protocol.ProxyConfig{
+				Name:         "web",
+				Type:         protocol.ProxyTypeTCP,
+				LocalIP:      "127.0.0.1",
+				LocalPort:    8080,
+				RemotePort:   18080,
+				ClientID:     "client-a",
+				CreatedAt:    now,
+				DesiredState: protocol.ProxyDesiredStateRunning,
+				RuntimeState: protocol.ProxyRuntimeStateExposed,
+			},
+			done: make(chan struct{}),
+		}},
+	})
+	s.clients.Store("client-b", &ClientConn{
+		ID:    "client-b",
+		state: clientStateLive,
+		proxies: map[string]*ProxyTunnel{"web": {
+			Config: protocol.ProxyConfig{
+				Name:         "web",
+				Type:         protocol.ProxyTypeTCP,
+				LocalIP:      "127.0.0.1",
+				LocalPort:    8081,
+				RemotePort:   18081,
+				ClientID:     "client-b",
+				CreatedAt:    now.Add(time.Second),
+				DesiredState: protocol.ProxyDesiredStateRunning,
+				RuntimeState: protocol.ProxyRuntimeStateExposed,
+			},
+			done: make(chan struct{}),
+		}},
+	})
+
+	specs, err := s.allUnifiedTunnelSpecs()
+	if err != nil {
+		t.Fatalf("list unified tunnels: %v", err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("same-name live tunnels without ids should not be collapsed, got %d: %+v", len(specs), specs)
+	}
+	seen := map[string]bool{}
+	for _, spec := range specs {
+		seen[spec.OwnerClientID] = true
+	}
+	if !seen["client-a"] || !seen["client-b"] {
+		t.Fatalf("same-name live tunnels should include both clients, got %+v", specs)
 	}
 }
 

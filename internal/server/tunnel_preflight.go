@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -104,7 +105,7 @@ func (s *Server) preflightClientIngress(req tunnelCreateRequestAPI, existingID s
 	if err != nil {
 		code := protocol.TunnelMutationErrorCodeIngressPreflightRejected
 		status := http.StatusBadGateway
-		if err == errTunnelPreflightTimeout {
+		if errors.Is(err, errTunnelPreflightTimeout) {
 			code = protocol.TunnelMutationErrorCodeIngressPreflightTimeout
 			status = http.StatusGatewayTimeout
 		}

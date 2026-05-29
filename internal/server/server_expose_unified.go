@@ -134,3 +134,30 @@ func (s *Server) notifyServerExposeTargetUnprovision(client *ClientConn, config 
 	}
 	return s.notifyClientProxyClose(client, config.Name, reason)
 }
+
+func (s *Server) unprovisionServerExposeTunnel(stored StoredTunnel, reason string, removeRuntime bool) error {
+	if stored.Topology != TunnelTopologyServerExpose && stored.Topology != "" {
+		return nil
+	}
+	clientID := stored.OwnerClientID
+	if clientID == "" {
+		clientID = stored.ClientID
+	}
+	client, ok := s.loadLiveClient(clientID)
+	if !ok {
+		return nil
+	}
+
+	var errs []error
+	if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
+		if removeRuntime {
+			s.removeTunnelRuntime(client, name)
+		} else if err := s.CloseProxyRuntime(client, name); err != nil {
+			errs = append(errs, fmt.Errorf("close server runtime: %w", err))
+		}
+	}
+	if err := s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), reason); err != nil {
+		errs = append(errs, fmt.Errorf("notify target client %s: %w", clientID, err))
+	}
+	return errors.Join(errs...)
+}

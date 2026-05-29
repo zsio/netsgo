@@ -74,6 +74,11 @@ func isTunnelExposed(config protocol.ProxyConfig) bool {
 		config.RuntimeState == protocol.ProxyRuntimeStateExposed
 }
 
+func isActiveRuntimeState(runtimeState string) bool {
+	return runtimeState == protocol.ProxyRuntimeStateExposed ||
+		runtimeState == protocol.TunnelRuntimeStateActive
+}
+
 func isTunnelOffline(config protocol.ProxyConfig) bool {
 	return config.DesiredState == protocol.ProxyDesiredStateRunning &&
 		config.RuntimeState == protocol.ProxyRuntimeStateOffline

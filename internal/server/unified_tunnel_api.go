@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -218,7 +219,8 @@ func (s *Server) stopUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI)
 	stored.DesiredState = protocol.ProxyDesiredStateStopped
 	stored.RuntimeState = protocol.ProxyRuntimeStateIdle
 	if err := s.reconcileStoredUnifiedTunnel(stored, "stop"); err != nil {
-		_ = err
+		encodeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
+		return
 	}
 	config, err := s.stopOfflineManagedTunnel(current.OwnerClientID, current.ID)
 	if err != nil {
@@ -392,23 +394,45 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID); err == nil {
-		if stored.Topology == TunnelTopologyClientToClient {
-			s.unprovisionClientRelayTunnel(stored, "deleted")
-		} else if client, ok := s.loadLiveClient(stored.OwnerClientID); ok {
-			if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
-				_ = s.CloseProxyRuntime(client, name)
-			}
-			_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "deleted")
-		}
-	}
-
-	if err := s.deleteOfflineManagedTunnel(current.OwnerClientID, current.ID); err != nil {
+	stored, err := s.loadOfflineManagedTunnelBySelector(current.OwnerClientID, current.ID)
+	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
+	if stored.Topology == TunnelTopologyClientToClient {
+		if err := s.unprovisionClientRelayTunnel(stored, "deleted"); err != nil {
+			encodeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
+			return
+		}
+	} else if err := s.unprovisionServerExposeTunnel(stored, "deleted", true); err != nil {
+		encodeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
+		return
+	}
+	s.unifiedRuntime.clearTunnelIssues(stored.ID)
+
+	if err := s.deleteStoredUnifiedTunnel(stored); err != nil {
+		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteStoredUnifiedTunnel(stored StoredTunnel) error {
+	if s.store == nil {
+		return fmt.Errorf("tunnel store not initialized")
+	}
+	clientID := stored.OwnerClientID
+	if clientID == "" {
+		clientID = stored.ClientID
+	}
+	if err := s.store.RemoveTunnelByID(clientID, stored.ID); err != nil {
+		return err
+	}
+	deletedConfig := storedTunnelToProxyConfig(stored)
+	setProxyConfigStates(&deletedConfig, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
+	s.emitTunnelChanged(clientID, deletedConfig, "deleted")
+	return nil
 }
 
 func deriveUnifiedTunnelOwner(topology string, ingress, target endpointSpecAPI) (string, error) {
@@ -549,7 +573,7 @@ func decodeStrictEndpointConfig(raw json.RawMessage, target any) error {
 	if len(raw) == 0 {
 		raw = []byte(`{}`)
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err
@@ -609,16 +633,16 @@ func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevisi
 	}
 	stored.Error = ""
 
-	if err := s.store.ReplaceTunnelByID(current.OwnerClientID, current.ID, expectedRevision, stored); err != nil {
+	if existing.Topology == TunnelTopologyClientToClient {
+		if err := s.unprovisionClientRelayTunnel(existing, "updated"); err != nil {
+			return StoredTunnel{}, err
+		}
+	} else if err := s.unprovisionServerExposeTunnel(existing, "updated", true); err != nil {
 		return StoredTunnel{}, err
 	}
-	if existing.Topology == TunnelTopologyClientToClient {
-		s.unprovisionClientRelayTunnel(existing, "updated")
-	} else if client, ok := s.loadLiveClient(existing.OwnerClientID); ok {
-		if name, _, exists := findTunnelBySelector(client, existing.ID); exists {
-			_ = s.CloseProxyRuntime(client, name)
-		}
-		_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(existing), "updated")
+
+	if err := s.store.ReplaceTunnelByID(current.OwnerClientID, current.ID, expectedRevision, stored); err != nil {
+		return StoredTunnel{}, err
 	}
 	s.scheduleUnifiedTunnelReconcile(stored, "updated")
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
@@ -1126,7 +1150,7 @@ func computedRuntimeStateForStoredTunnel(stored StoredTunnel, s *Server) string 
 		return protocol.ProxyRuntimeStateError
 	}
 	if stored.Topology == TunnelTopologyClientToClient {
-		if _, ok := s.c2c.get(stored.ID); ok && (stored.RuntimeState == protocol.ProxyRuntimeStateExposed || stored.RuntimeState == protocol.TunnelRuntimeStateActive) {
+		if _, ok := s.c2c.get(stored.ID); ok && isActiveRuntimeState(stored.RuntimeState) {
 			return tunnelRuntimeStateActive
 		}
 		return protocol.ProxyRuntimeStatePending
@@ -1222,21 +1246,18 @@ func requiredTunnelClientsReady(stored StoredTunnel, s *Server) bool {
 	return true
 }
 
-func participantStateForSpecRuntime(clientID, runtimeState string) string {
-	if clientID == "" && runtimeState == protocol.ProxyRuntimeStateOffline {
-		return "server"
-	}
+func participantStateForSpecRuntime(_ string, runtimeState string) string {
 	switch runtimeState {
 	case tunnelRuntimeStateActive, protocol.ProxyRuntimeStateExposed:
-		return "ready"
+		return protocol.ParticipantStateReady
 	case protocol.ProxyRuntimeStatePending:
-		return "provision_pending"
+		return protocol.ParticipantStateProvisionPending
 	case protocol.ProxyRuntimeStateOffline:
-		return "offline"
+		return protocol.ParticipantStateOffline
 	case protocol.ProxyRuntimeStateIdle:
-		return "idle"
+		return protocol.ParticipantStateIdle
 	case protocol.ProxyRuntimeStateError:
-		return "error"
+		return protocol.ParticipantStateError
 	default:
 		return runtimeState
 	}
@@ -1250,17 +1271,25 @@ func mustRawJSON(v any) json.RawMessage {
 	return data
 }
 
+func unifiedTunnelViewKey(id, clientID, name string) string {
+	if strings.TrimSpace(id) != "" {
+		return "id:" + id
+	}
+	return "client:" + clientID + ":name:" + name
+}
+
 func (s *Server) allUnifiedTunnelSpecs() ([]tunnelSpecAPI, error) {
 	byID := map[string]tunnelSpecAPI{}
 	appendConfig := func(config protocol.ProxyConfig, online bool) {
 		view := proxyConfigForClientView(config, online)
+		key := unifiedTunnelViewKey(view.ID, view.ClientID, view.Name)
 		if view.ID == "" {
 			view.ID = view.Name
 		}
-		if _, exists := byID[view.ID]; exists {
+		if _, exists := byID[key]; exists {
 			return
 		}
-		byID[view.ID] = unifiedSpecFromProxyConfig(view)
+		byID[key] = unifiedSpecFromProxyConfig(view)
 	}
 
 	if s.store != nil {
@@ -1270,10 +1299,11 @@ func (s *Server) allUnifiedTunnelSpecs() ([]tunnelSpecAPI, error) {
 		}
 		for _, tunnel := range stored {
 			spec := specFromStoredTunnel(tunnel, s)
+			key := unifiedTunnelViewKey(spec.ID, spec.OwnerClientID, spec.Name)
 			if spec.ID == "" {
 				spec.ID = spec.Name
 			}
-			byID[spec.ID] = spec
+			byID[key] = spec
 		}
 	}
 
@@ -1302,13 +1332,14 @@ func (s *Server) allUnifiedTunnelProxyConfigs() ([]protocol.ProxyConfig, error) 
 	byID := map[string]protocol.ProxyConfig{}
 	appendConfig := func(config protocol.ProxyConfig, online bool) {
 		view := proxyConfigForClientView(config, online)
+		key := unifiedTunnelViewKey(view.ID, view.ClientID, view.Name)
 		if view.ID == "" {
 			view.ID = view.Name
 		}
-		if _, exists := byID[view.ID]; exists {
+		if _, exists := byID[key]; exists {
 			return
 		}
-		byID[view.ID] = view
+		byID[key] = view
 	}
 
 	if s.store != nil {
@@ -1318,10 +1349,11 @@ func (s *Server) allUnifiedTunnelProxyConfigs() ([]protocol.ProxyConfig, error) 
 		}
 		for _, tunnel := range stored {
 			view := s.storedTunnelViewConfig(tunnel)
+			key := unifiedTunnelViewKey(view.ID, view.ClientID, view.Name)
 			if view.ID == "" {
 				view.ID = view.Name
 			}
-			byID[view.ID] = view
+			byID[key] = view
 		}
 	}
 

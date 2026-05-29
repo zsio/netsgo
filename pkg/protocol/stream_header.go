@@ -13,7 +13,7 @@ import (
 
 const (
 	DataStreamHeaderKindTunnelStream = "tunnel_stream"
-	DataStreamHeaderMagic            = "NGSH"
+	DataStreamHeaderMagic            = "NGDS"
 	DataStreamHeaderVersion          = byte(1)
 	DataStreamHeaderMaxLen           = 16 * 1024
 	DataStreamHeaderMaxStringLen     = 1024
@@ -42,12 +42,12 @@ type DataStreamHeader struct {
 	ServerAuthorized bool   `json:"server_authorized,omitempty"`
 }
 
-func NewDataStreamID() string {
+func NewDataStreamID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return ""
+		return "", fmt.Errorf("generate data stream id: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(raw[:])
+	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
 }
 
 func EncodeDataStreamHeader(w io.Writer, header DataStreamHeader) error {

@@ -77,6 +77,20 @@ func TestDecodeDataStreamHeaderRejectsMalformedFrames(t *testing.T) {
 	}
 }
 
+func TestDecodeDataStreamHeaderRejectsLegacyStreamHeaderMagic(t *testing.T) {
+	valid := validTestDataStreamHeader()
+	validBytes, err := WriteDataStreamHeaderToBytes(valid)
+	if err != nil {
+		t.Fatalf("encode valid header: %v", err)
+	}
+	legacyMagic := append([]byte(nil), validBytes...)
+	copy(legacyMagic[:4], StreamHeaderMagic)
+
+	if _, err := DecodeDataStreamHeader(bytes.NewReader(legacyMagic)); err == nil {
+		t.Fatal("expected legacy stream header magic to be rejected")
+	}
+}
+
 func TestValidateDataStreamHeaderRejectsInvalidFields(t *testing.T) {
 	tests := []struct {
 		name   string

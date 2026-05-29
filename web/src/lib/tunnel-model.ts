@@ -432,10 +432,10 @@ function getTunnelIngressLabel(tunnel: ProxyConfig) {
   if (ingress) {
     switch (ingress.type) {
       case 'http_host':
-        return ingress.config.domain || '(未声明域名)';
+        return ingress.config?.domain || '(未声明域名)';
       case 'tcp_listen':
       case 'udp_listen':
-        return `${ingress.config.bind_ip}:${ingress.config.port}`;
+        return `${ingress.config?.bind_ip || '0.0.0.0'}:${ingress.config?.port ?? 0}`;
     }
   }
 
@@ -445,7 +445,7 @@ function getTunnelIngressLabel(tunnel: ProxyConfig) {
 }
 
 function getServiceTargetHost(target: TunnelTarget) {
-  return target.config.ip || target.config.host || '';
+  return target.config?.ip || target.config?.host || '';
 }
 
 function getTunnelTargetLabel(tunnel: ProxyConfig) {
@@ -454,7 +454,7 @@ function getTunnelTargetLabel(tunnel: ProxyConfig) {
     switch (target.type) {
       case 'tcp_service':
       case 'udp_service':
-        return `${getServiceTargetHost(target)}:${target.config.port}`;
+        return `${getServiceTargetHost(target)}:${target.config?.port ?? 0}`;
     }
   }
 
@@ -469,7 +469,7 @@ function getIngressWarning(tunnel: ProxyConfig) {
   if (ingress.type !== 'tcp_listen' && ingress.type !== 'udp_listen') {
     return undefined;
   }
-  const bindIP = ingress.config.bind_ip.trim();
+  const bindIP = ingress.config?.bind_ip?.trim() ?? '';
   if (bindIP === '0.0.0.0' || bindIP === '::') {
     return '入口绑定到通配地址，会暴露给入口 Client 所在网络。';
   }

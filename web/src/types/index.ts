@@ -77,14 +77,11 @@ export type ActualTransport = "unknown" | "server_relay" | "peer_direct" | "turn
 export type P2PStateValue = "idle" | "gathering" | "checking" | "connected" | "failed" | "fallback" | "closed";
 export type ParticipantRole = "ingress" | "target";
 export type ParticipantState =
-  | "pending"
-  | "provisioning"
-  | "listening"
-  | "target_ready"
+  | "provision_pending"
+  | "ready"
   | "offline"
-  | "error"
-  | "unprovisioning"
-  | "unprovisioned";
+  | "idle"
+  | "error";
 export type TunnelClientRole = "owner" | "ingress" | "target" | "related";
 export type ProxyDesiredState = "running" | "stopped";
 export type ProxyRuntimeState = "pending" | "exposed" | "active" | "offline" | "idle" | "error";

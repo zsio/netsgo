@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -38,8 +39,27 @@ func (s *Server) reconcileStoredUnifiedTunnel(stored StoredTunnel, reason string
 }
 
 func (s *Server) scheduleUnifiedTunnelReconcile(stored StoredTunnel, reason string) {
+	if s == nil {
+		return
+	}
+	if s.done != nil {
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+	}
 	go func() {
-		_ = s.reconcileStoredUnifiedTunnel(stored, reason)
+		if s.done != nil {
+			select {
+			case <-s.done:
+				return
+			default:
+			}
+		}
+		if err := s.reconcileStoredUnifiedTunnel(stored, reason); err != nil {
+			log.Printf("⚠️ unified tunnel reconcile failed: id=%s name=%s topology=%s reason=%s err=%v", stored.ID, stored.Name, stored.Topology, reason, err)
+		}
 	}()
 }
 
@@ -77,26 +97,21 @@ func (s *Server) findStoredTunnelByID(tunnelID string) (StoredTunnel, bool, erro
 	if s.store == nil {
 		return StoredTunnel{}, false, fmt.Errorf("tunnel store not initialized")
 	}
-	tunnels, err := s.store.GetAllTunnels()
+	stored, err := s.store.GetTunnelByID(tunnelID)
+	if errors.Is(err, ErrTunnelNotFound) {
+		return StoredTunnel{}, false, nil
+	}
 	if err != nil {
 		return StoredTunnel{}, false, err
 	}
-	for _, stored := range tunnels {
-		if stored.ID == tunnelID {
-			return stored, true, nil
-		}
-	}
-	return StoredTunnel{}, false, nil
+	return stored, true, nil
 }
 
 func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 	if stored.DesiredState == protocol.ProxyDesiredStateStopped {
 		s.unifiedRuntime.clearTunnelIssues(stored.ID)
-		if client, ok := s.loadLiveClient(stored.OwnerClientID); ok {
-			if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
-				_ = s.CloseProxyRuntime(client, name)
-				_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "stopped")
-			}
+		if err := s.unprovisionServerExposeTunnel(stored, "stopped", false); err != nil {
+			return err
 		}
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateIdle, "")
 	}
@@ -105,18 +120,16 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 	if !ok || !clientHasDataSession(client) {
 		s.unifiedRuntime.clearTunnelIssues(stored.ID)
 		if ok {
-			if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
-				_ = s.CloseProxyRuntime(client, name)
-				_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "participant_offline")
+			if err := s.unprovisionServerExposeTunnel(stored, "participant_offline", false); err != nil {
+				log.Printf("⚠️ failed to unprovision server-expose tunnel %s after participant offline: %v", stored.ID, err)
 			}
 		}
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateOffline, "")
 	}
 	if issues := s.capabilityIssuesForStoredTunnel(stored); len(issues) > 0 {
 		s.unifiedRuntime.clearTunnelIssues(stored.ID)
-		if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
-			_ = s.CloseProxyRuntime(client, name)
-			_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "capability_not_supported")
+		if err := s.unprovisionServerExposeTunnel(stored, "capability_not_supported", false); err != nil {
+			log.Printf("⚠️ failed to unprovision server-expose tunnel %s after capability loss: %v", stored.ID, err)
 		}
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateError, issues[0].Message)
 	}
@@ -125,7 +138,9 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && serverExposeRuntimeHeld(tunnel) {
 			if s.unifiedRuntime.hasIssuesForStoredTunnel(stored, true) {
 				s.removeTunnelRuntime(client, name)
-				_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "retrying_after_runtime_issue")
+				if err := s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "retrying_after_runtime_issue"); err != nil {
+					log.Printf("⚠️ failed to unprovision server-expose target %s after runtime issue: %v", stored.ID, err)
+				}
 			} else {
 				s.unifiedRuntime.clearServerIssues(stored.ID)
 				return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
@@ -136,8 +151,9 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 		}
 		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateStopped {
 			s.unifiedRuntime.clearTunnelIssues(stored.ID)
-			_ = s.CloseProxyRuntime(client, name)
-			_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "stopped")
+			if err := s.unprovisionServerExposeTunnel(stored, "stopped", false); err != nil {
+				return err
+			}
 			return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateIdle, "")
 		}
 		if isTunnelExposed(tunnel.Config) && !serverExposeRuntimeHeld(tunnel) {
@@ -266,7 +282,9 @@ func (s *Server) releaseUnifiedRuntimeForClient(clientID string) {
 	}
 	for _, stored := range tunnels {
 		if stored.OwnerClientID == clientID || stored.Target.ClientID == clientID || stored.Ingress.ClientID == clientID {
-			s.unprovisionClientRelayTunnel(stored, "participant_session_released")
+			if err := s.unprovisionClientRelayTunnel(stored, "participant_session_released"); err != nil {
+				log.Printf("⚠️ failed to release unified runtime for client %s tunnel %s: %v", clientID, stored.ID, err)
+			}
 		}
 	}
 }

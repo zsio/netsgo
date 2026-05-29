@@ -269,7 +269,7 @@ func TestRoundTrip_ProxyConfig(t *testing.T) {
 		t.Fatalf("Unmarshal 失败: %v", err)
 	}
 
-	if restored != original {
+	if !reflect.DeepEqual(restored, original) {
 		t.Errorf("ProxyConfig 不匹配: 期望 %+v, 得到 %+v", original, restored)
 	}
 }

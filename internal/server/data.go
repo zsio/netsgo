@@ -218,9 +218,13 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 	}
 	var header protocol.DataStreamHeader
 	if ok {
-		header = dataStreamHeaderForServerRelay(client, tunnel, proxyName)
+		header, err = dataStreamHeaderForServerRelay(client, tunnel, proxyName)
 	}
 	client.proxyMu.Unlock()
+	if err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
 	if !ok {
 		_ = stream.Close()
 		return nil, fmt.Errorf("proxy tunnel %q not found", proxyName)
@@ -238,14 +242,14 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 	return stream, nil
 }
 
-func dataStreamHeaderForServerRelay(client *ClientConn, tunnel *ProxyTunnel, fallbackName string) protocol.DataStreamHeader {
+func dataStreamHeaderForServerRelay(client *ClientConn, tunnel *ProxyTunnel, fallbackName string) (protocol.DataStreamHeader, error) {
 	tunnelID := tunnel.Config.ID
 	if tunnelID == "" {
 		tunnelID = fallbackName
 	}
-	streamID := protocol.NewDataStreamID()
-	if streamID == "" {
-		streamID = generateUUID()
+	streamID, err := protocol.NewDataStreamID()
+	if err != nil {
+		return protocol.DataStreamHeader{}, err
 	}
 	return protocol.DataStreamHeader{
 		Kind:             protocol.DataStreamHeaderKindTunnelStream,
@@ -258,5 +262,5 @@ func dataStreamHeaderForServerRelay(client *ClientConn, tunnel *ProxyTunnel, fal
 		Direction:        protocol.DataStreamDirectionIngressToTarget,
 		Transport:        protocol.ActualTransportServerRelay,
 		ServerAuthorized: true,
-	}
+	}, nil
 }

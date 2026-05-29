@@ -310,6 +310,33 @@ func TestClientTunnelUnprovisionIgnoresStaleIngressRevision(t *testing.T) {
 	assertTCPPortClosed(t, addr)
 }
 
+func TestClientTunnelUnprovisionNewerRevisionClosesOlderIngressRuntime(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleIngress, reserveClientTCPPort(t))
+
+	ack := c.handleTunnelProvision(&sessionRuntime{}, req)
+	if !ack.Accepted {
+		t.Fatalf("ingress provision rejected: %s", ack.Message)
+	}
+
+	var cfg struct {
+		BindIP string `json:"bind_ip"`
+		Port   int    `json:"port"`
+	}
+	if err := json.Unmarshal(req.Spec.Ingress.Config, &cfg); err != nil {
+		t.Fatalf("decode ingress config: %v", err)
+	}
+	addr := net.JoinHostPort(cfg.BindIP, strconv.Itoa(cfg.Port))
+	assertTCPPortAccepts(t, addr)
+
+	c.handleTunnelUnprovision(protocol.TunnelUnprovisionRequest{
+		TunnelID: req.TunnelID,
+		Revision: req.Revision + 1,
+		Role:     protocol.DataStreamRoleIngress,
+	})
+	assertTCPPortClosed(t, addr)
+}
+
 func TestClientTunnelUnprovisionIgnoresStaleTargetRevision(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
@@ -335,6 +362,25 @@ func TestClientTunnelUnprovisionIgnoresStaleTargetRevision(t *testing.T) {
 	})
 	if _, ok := c.proxies.Load(req.TunnelID); ok {
 		t.Fatal("current target unprovision did not delete proxy")
+	}
+}
+
+func TestClientTunnelUnprovisionNewerRevisionDeletesOlderTargetProxy(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
+
+	ack := c.handleTunnelProvision(&sessionRuntime{}, req)
+	if !ack.Accepted {
+		t.Fatalf("target provision rejected: %s", ack.Message)
+	}
+
+	c.handleTunnelUnprovision(protocol.TunnelUnprovisionRequest{
+		TunnelID: req.TunnelID,
+		Revision: req.Revision + 1,
+		Role:     protocol.DataStreamRoleTarget,
+	})
+	if _, ok := c.proxies.Load(req.TunnelID); ok {
+		t.Fatal("newer target unprovision did not delete older proxy")
 	}
 }
 

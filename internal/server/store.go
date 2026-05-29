@@ -850,6 +850,21 @@ func (s *TunnelStore) GetTunnelByIDE(clientID, id string) (StoredTunnel, error) 
 	return tunnel, nil
 }
 
+// GetTunnelByID looks up a single tunnel by stable id.
+func (s *TunnelStore) GetTunnelByID(id string) (StoredTunnel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tunnel, err := scanStoredTunnel(s.db.QueryRow(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE id = ?`, id))
+	if err == sql.ErrNoRows {
+		return StoredTunnel{}, ErrTunnelNotFound
+	}
+	if err != nil {
+		return StoredTunnel{}, err
+	}
+	return tunnel, nil
+}
+
 // GetTunnel looks up a single tunnel by stable client_id and name.
 //
 // This is a best-effort compatibility wrapper for non-authoritative display or
