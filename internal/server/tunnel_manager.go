@@ -276,33 +276,30 @@ func (s *Server) updateManagedTunnelWithRevision(client *ClientConn, selector st
 	if !ok {
 		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", selector)
 	}
-	if tunnel.Config.ID == "" {
-		tunnel.Config.ID = generateUUID()
-		if s.store != nil {
-			if stored, err := s.store.GetTunnelE(client.ID, name); err == nil {
-				tunnel.Config.ID = stored.ID
-				if tunnel.Config.CreatedAt.IsZero() {
-					tunnel.Config.CreatedAt = stored.CreatedAt
-				}
-			} else if !errors.Is(err, ErrTunnelNotFound) {
-				return protocol.ProxyConfig{}, err
-			}
-		}
-	}
-	if tunnel.Config.CreatedAt.IsZero() {
-		tunnel.Config.CreatedAt = time.Now().UTC()
-	}
-	if newName == "" {
-		newName = tunnel.Config.Name
+	if err := s.ensureManagedTunnelIdentity(client, name, tunnel, selector); err != nil {
+		return protocol.ProxyConfig{}, err
 	}
 
-	previousRuntime := tunnel.Config.RuntimeState
-	tunnelWasProvisioned := tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning &&
-		(tunnel.Config.RuntimeState == protocol.ProxyRuntimeStateExposed || tunnel.Config.RuntimeState == protocol.ProxyRuntimeStatePending || tunnel.Config.RuntimeState == protocol.ProxyRuntimeStateError)
-	tunnelWasExposed := isTunnelExposed(tunnel.Config)
-	tunnelType := tunnel.Config.Type
+	client.proxyMu.RLock()
+	current, exists := client.proxies[name]
+	if !exists || current != tunnel {
+		client.proxyMu.RUnlock()
+		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", selector)
+	}
+	currentConfig := tunnel.Config
+	client.proxyMu.RUnlock()
+
+	if newName == "" {
+		newName = currentConfig.Name
+	}
+
+	previousRuntime := currentConfig.RuntimeState
+	tunnelWasProvisioned := currentConfig.DesiredState == protocol.ProxyDesiredStateRunning &&
+		(currentConfig.RuntimeState == protocol.ProxyRuntimeStateExposed || currentConfig.RuntimeState == protocol.ProxyRuntimeStatePending || currentConfig.RuntimeState == protocol.ProxyRuntimeStateError)
+	tunnelWasExposed := isTunnelExposed(currentConfig)
+	tunnelType := currentConfig.Type
 	req := protocol.ProxyNewRequest{
-		ID:                tunnel.Config.ID,
+		ID:                currentConfig.ID,
 		Name:              newName,
 		Type:              tunnelType,
 		LocalIP:           localIP,
@@ -320,8 +317,12 @@ func (s *Server) updateManagedTunnelWithRevision(client *ClientConn, selector st
 	if req.Name != name {
 		client.proxyMu.RLock()
 		existing := client.proxies[req.Name]
+		existingID := ""
+		if existing != nil {
+			existingID = existing.Config.ID
+		}
 		client.proxyMu.RUnlock()
-		if existing != nil && existing.Config.ID != req.ID {
+		if existing != nil && existingID != req.ID {
 			return protocol.ProxyConfig{}, newProxyRequestValidationError(fmt.Errorf("tunnel name %q already exists", req.Name), protocol.TunnelMutationFieldName, "", http.StatusConflict)
 		}
 	}
@@ -330,15 +331,15 @@ func (s *Server) updateManagedTunnelWithRevision(client *ClientConn, selector st
 	if s.store != nil {
 		if expectedRevision > 0 {
 			var err error
-			updatedStored, err = s.store.UpdateTunnelByIDWithRevision(client.ID, tunnel.Config.ID, expectedRevision, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS)
+			updatedStored, err = s.store.UpdateTunnelByIDWithRevision(client.ID, req.ID, expectedRevision, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS)
 			if err != nil {
 				return protocol.ProxyConfig{}, err
 			}
 		} else {
-			if err := s.store.UpdateTunnelByID(client.ID, tunnel.Config.ID, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS); err != nil {
+			if err := s.store.UpdateTunnelByID(client.ID, req.ID, req.Name, req.LocalIP, req.LocalPort, req.RemotePort, req.Domain, req.IngressBPS, req.EgressBPS); err != nil {
 				return protocol.ProxyConfig{}, err
 			}
-			if stored, err := s.store.GetTunnelByIDE(client.ID, tunnel.Config.ID); err == nil {
+			if stored, err := s.store.GetTunnelByIDE(client.ID, req.ID); err == nil {
 				updatedStored = stored
 			} else if !errors.Is(err, ErrTunnelNotFound) {
 				return protocol.ProxyConfig{}, err
@@ -353,8 +354,8 @@ func (s *Server) updateManagedTunnelWithRevision(client *ClientConn, selector st
 
 	// Update the tunnel configuration in runtime memory.
 	client.proxyMu.Lock()
-	current, exists := client.proxies[name]
-	if !exists || current != tunnel {
+	runtimeTunnel, exists := client.proxies[name]
+	if !exists || runtimeTunnel != tunnel {
 		client.proxyMu.Unlock()
 		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", selector)
 	}
@@ -431,6 +432,51 @@ func (s *Server) updateManagedTunnelWithRevision(client *ClientConn, selector st
 	}
 	s.emitTunnelChanged(client.ID, config, "updated")
 	return config, nil
+}
+
+func (s *Server) ensureManagedTunnelIdentity(client *ClientConn, name string, tunnel *ProxyTunnel, selector string) error {
+	client.proxyMu.RLock()
+	current, exists := client.proxies[name]
+	if !exists || current != tunnel {
+		client.proxyMu.RUnlock()
+		return fmt.Errorf("tunnel %q not found", selector)
+	}
+	needsID := current.Config.ID == ""
+	needsCreatedAt := current.Config.CreatedAt.IsZero()
+	client.proxyMu.RUnlock()
+	if !needsID && !needsCreatedAt {
+		return nil
+	}
+
+	id := generateUUID()
+	var createdAt time.Time
+	if needsID && s.store != nil {
+		if stored, err := s.store.GetTunnelE(client.ID, name); err == nil {
+			if stored.ID != "" {
+				id = stored.ID
+			}
+			createdAt = stored.CreatedAt
+		} else if !errors.Is(err, ErrTunnelNotFound) {
+			return err
+		}
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+
+	client.proxyMu.Lock()
+	defer client.proxyMu.Unlock()
+	current, exists = client.proxies[name]
+	if !exists || current != tunnel {
+		return fmt.Errorf("tunnel %q not found", selector)
+	}
+	if current.Config.ID == "" {
+		current.Config.ID = id
+	}
+	if current.Config.CreatedAt.IsZero() {
+		current.Config.CreatedAt = createdAt
+	}
+	return nil
 }
 
 func (s *Server) mustGetTunnel(client *ClientConn, name string) (*ProxyTunnel, error) {

@@ -1186,11 +1186,15 @@ func computedRuntimeStateForStoredTunnel(stored StoredTunnel, s *Server) string 
 	}
 	if stored.Topology == TunnelTopologyServerExpose || stored.Topology == "" {
 		if client, ok := s.loadLiveClient(stored.OwnerClientID); ok {
-			if _, tunnel, exists := findTunnelBySelector(client, stored.ID); exists {
-				if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && serverExposeRuntimeHeld(tunnel) {
+			if name, tunnel, exists := findTunnelBySelector(client, stored.ID); exists {
+				config, runtimeHeld, stillExists := serverExposeTunnelSnapshot(client, name, tunnel)
+				if !stillExists {
+					return protocol.ProxyRuntimeStatePending
+				}
+				if config.DesiredState == protocol.ProxyDesiredStateRunning && runtimeHeld {
 					return tunnelRuntimeStateActive
 				}
-				if tunnel.Config.RuntimeState == protocol.ProxyRuntimeStatePending {
+				if config.RuntimeState == protocol.ProxyRuntimeStatePending {
 					return protocol.ProxyRuntimeStatePending
 				}
 			}

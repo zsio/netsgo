@@ -210,7 +210,11 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 	}
 
 	if name, tunnel, exists := findTunnelBySelector(client, stored.ID); exists {
-		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && serverExposeRuntimeHeld(tunnel) {
+		config, runtimeHeld, stillExists := serverExposeTunnelSnapshot(client, name, tunnel)
+		if !stillExists {
+			return nil
+		}
+		if config.DesiredState == protocol.ProxyDesiredStateRunning && runtimeHeld {
 			if s.unifiedRuntime.hasIssuesForStoredTunnel(stored, true) {
 				s.removeTunnelRuntime(client, name)
 				if err := s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "retrying_after_runtime_issue"); err != nil {
@@ -221,17 +225,17 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 				return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
 			}
 		}
-		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateRunning && tunnel.Config.RuntimeState == protocol.ProxyRuntimeStatePending {
+		if config.DesiredState == protocol.ProxyDesiredStateRunning && config.RuntimeState == protocol.ProxyRuntimeStatePending {
 			return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStatePending, "")
 		}
-		if tunnel.Config.DesiredState == protocol.ProxyDesiredStateStopped {
+		if config.DesiredState == protocol.ProxyDesiredStateStopped {
 			s.unifiedRuntime.clearTunnelIssues(stored.ID)
 			if err := s.unprovisionServerExposeTunnel(stored, "stopped", false); err != nil {
 				return err
 			}
 			return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateIdle, "")
 		}
-		if isTunnelExposed(tunnel.Config) && !serverExposeRuntimeHeld(tunnel) {
+		if isTunnelExposed(config) && !runtimeHeld {
 			s.removeTunnelRuntime(client, name)
 		}
 	}
@@ -245,11 +249,22 @@ func (s *Server) reconcileServerExposeTunnel(stored StoredTunnel) error {
 	return nil
 }
 
-func serverExposeRuntimeHeld(tunnel *ProxyTunnel) bool {
-	if tunnel == nil || !isTunnelExposed(tunnel.Config) {
+func serverExposeTunnelSnapshot(client *ClientConn, name string, tunnel *ProxyTunnel) (protocol.ProxyConfig, bool, bool) {
+	client.proxyMu.RLock()
+	defer client.proxyMu.RUnlock()
+	current := client.proxies[name]
+	if current == nil || current != tunnel {
+		return protocol.ProxyConfig{}, false, false
+	}
+	config := current.Config
+	return config, serverExposeRuntimeHeld(current, config), true
+}
+
+func serverExposeRuntimeHeld(tunnel *ProxyTunnel, config protocol.ProxyConfig) bool {
+	if tunnel == nil || !isTunnelExposed(config) {
 		return false
 	}
-	switch tunnel.Config.Type {
+	switch config.Type {
 	case protocol.ProxyTypeHTTP:
 		return true
 	case protocol.ProxyTypeUDP:

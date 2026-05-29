@@ -21,12 +21,12 @@ func (s *Server) restoreUnifiedServerExposeTunnel(client *ClientConn, stored Sto
 	if err != nil {
 		return err
 	}
-	s.applyStoredServerExposeConfig(client, tunnel, stored, protocol.ProxyRuntimeStatePending, "")
+	config := s.applyStoredServerExposeConfig(client, tunnel, stored, protocol.ProxyRuntimeStatePending, "")
 	if err := s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, ""); err != nil {
 		s.removeTunnelRuntime(client, stored.Name)
 		return err
 	}
-	s.emitTunnelChanged(client.ID, tunnel.Config, "pending")
+	s.emitTunnelChanged(client.ID, config, "pending")
 
 	req := protocol.TunnelProvisionRequest{
 		TunnelID: stored.ID,
@@ -60,14 +60,14 @@ func (s *Server) restoreUnifiedServerExposeTunnel(client *ClientConn, stored Sto
 		s.failUnifiedServerExposeAfterProvision(client, stored, err.Error())
 		return err
 	}
-	s.applyStoredServerExposeConfig(client, updated, stored, protocol.ProxyRuntimeStateExposed, "")
-	s.emitTunnelChanged(client.ID, updated.Config, "restored")
+	config = s.applyStoredServerExposeConfig(client, updated, stored, protocol.ProxyRuntimeStateExposed, "")
+	s.emitTunnelChanged(client.ID, config, "restored")
 	return nil
 }
 
-func (s *Server) applyStoredServerExposeConfig(client *ClientConn, tunnel *ProxyTunnel, stored StoredTunnel, runtimeState, message string) {
+func (s *Server) applyStoredServerExposeConfig(client *ClientConn, tunnel *ProxyTunnel, stored StoredTunnel, runtimeState, message string) protocol.ProxyConfig {
 	if tunnel == nil {
-		return
+		return protocol.ProxyConfig{}
 	}
 	config := storedTunnelToProxyConfig(stored)
 	setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, runtimeState, message)
@@ -82,6 +82,7 @@ func (s *Server) applyStoredServerExposeConfig(client *ClientConn, tunnel *Proxy
 	tunnel.runtime.Revision = uint64(stored.Revision)
 	updateTunnelRuntimeFromConfig(tunnel, client.ID, message, time.Now())
 	client.proxyMu.Unlock()
+	return config
 }
 
 func (s *Server) failUnifiedServerExposeAfterProvision(client *ClientConn, stored StoredTunnel, message string) {

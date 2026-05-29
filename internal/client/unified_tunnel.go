@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -475,8 +476,8 @@ func isTemporaryPacketReadError(err error) bool {
 	if err == nil {
 		return false
 	}
-	netErr, ok := err.(net.Error)
-	return ok && (netErr.Timeout() || netErr.Temporary())
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (c *Client) failIngressTunnelRuntime(rt *sessionRuntime, req protocol.TunnelProvisionRequest, runtime *clientTunnelRuntime, message string) {
