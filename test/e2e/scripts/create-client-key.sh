@@ -3,7 +3,7 @@ set -eu
 
 BASE_URL="${NETSGO_BOOTSTRAP_BASE_URL:-http://server:8080}"
 ADMIN_USER="${NETSGO_ADMIN_USER:-admin}"
-ADMIN_PASS="${NETSGO_ADMIN_PASS:-password123}"
+ADMIN_PASS="${NETSGO_ADMIN_PASS:?NETSGO_ADMIN_PASS is required}"
 CLIENT_KEY_FILE="${NETSGO_CLIENT_KEY_FILE:-/shared/client.key}"
 ADMIN_TOKEN_FILE="${NETSGO_ADMIN_TOKEN_FILE:-/shared/admin.token}"
 READY_FILE="${NETSGO_READY_FILE:-/shared/client-key.ready}"

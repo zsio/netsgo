@@ -305,8 +305,6 @@ func TestClient_HandleStream_RejectsStaleRevisionAndWrongRoles(t *testing.T) {
 	valid.Revision = 3
 	for name, mutate := range map[string]func(*protocol.DataStreamHeader){
 		"stale revision": func(header *protocol.DataStreamHeader) { header.Revision = 2 },
-		"wrong source":   func(header *protocol.DataStreamHeader) { header.SourceRole = protocol.DataStreamRoleTarget },
-		"wrong target":   func(header *protocol.DataStreamHeader) { header.TargetRole = protocol.DataStreamRoleIngress },
 		"wrong transport": func(header *protocol.DataStreamHeader) {
 			header.Transport = protocol.ActualTransportPeerDirect
 			header.ServerAuthorized = true

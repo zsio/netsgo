@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -15,6 +16,24 @@ import (
 
 	"netsgo/pkg/protocol"
 )
+
+func TestDecodeStrictEndpointConfigRejectsComplexConfig(t *testing.T) {
+	var serviceCfg serviceConfigAPI
+	if err := decodeStrictEndpointConfig(json.RawMessage(`{"host":"127.0.0.1","port":8080}`), &serviceCfg); err != nil {
+		t.Fatalf("valid config should decode: %v", err)
+	}
+
+	oversized := json.RawMessage(`{"host":"` + strings.Repeat("a", unifiedEndpointConfigMaxBytes) + `","port":8080}`)
+	if err := decodeStrictEndpointConfig(oversized, &serviceCfg); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized config should be rejected, got %v", err)
+	}
+
+	deep := strings.Repeat(`{"nested":`, unifiedEndpointConfigMaxDepth+1) + `0` + strings.Repeat(`}`, unifiedEndpointConfigMaxDepth+1)
+	var target map[string]any
+	if err := decodeStrictEndpointConfig(json.RawMessage(deep), &target); err == nil || !strings.Contains(err.Error(), "nesting depth") {
+		t.Fatalf("deep config should be rejected, got %v", err)
+	}
+}
 
 func readControlMessageOfType(t *testing.T, conn interface {
 	SetReadDeadline(time.Time) error

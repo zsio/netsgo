@@ -40,6 +40,9 @@ const (
 	tunnelP2PStateIdle = protocol.P2PStateIdle
 
 	tunnelRuntimeStateActive = protocol.TunnelRuntimeStateActive
+
+	unifiedEndpointConfigMaxBytes = 16 * 1024
+	unifiedEndpointConfigMaxDepth = 16
 )
 
 var errTunnelRevisionConflict = errors.New("tunnel revision conflict")
@@ -582,6 +585,9 @@ func decodeStrictEndpointConfig(raw json.RawMessage, target any) error {
 	if len(raw) == 0 {
 		raw = []byte(`{}`)
 	}
+	if err := validateEndpointConfigComplexity(raw); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -592,6 +598,36 @@ func decodeStrictEndpointConfig(raw json.RawMessage, target any) error {
 		return fmt.Errorf("config must contain a single JSON object")
 	}
 	return nil
+}
+
+func validateEndpointConfigComplexity(raw json.RawMessage) error {
+	if len(raw) > unifiedEndpointConfigMaxBytes {
+		return fmt.Errorf("config exceeds %d bytes", unifiedEndpointConfigMaxBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	depth := 0
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		delim, ok := token.(json.Delim)
+		if !ok {
+			continue
+		}
+		switch delim {
+		case '{', '[':
+			depth++
+			if depth > unifiedEndpointConfigMaxDepth {
+				return fmt.Errorf("config nesting depth exceeds %d", unifiedEndpointConfigMaxDepth)
+			}
+		case '}', ']':
+			depth--
+		}
+	}
 }
 
 func (s *Server) createUnifiedStoredTunnel(req tunnelCreateRequestAPI) (StoredTunnel, error) {
@@ -773,6 +809,23 @@ func normalizedIngressConfigRaw(endpointType string, cfg ingressEndpointConfigAP
 	return mustRawJSON(tcpListenConfigAPI{BindIP: cfg.BindIP, Port: cfg.Port})
 }
 
+func ingressResourceCandidateFromUnifiedRequest(req tunnelCreateRequestAPI, id string) (StoredTunnel, error) {
+	cfg, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
+	if err != nil {
+		return StoredTunnel{}, err
+	}
+	return StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{ID: id},
+		Topology:        req.Topology,
+		Ingress: EndpointSpec{
+			Location: req.Ingress.Location,
+			ClientID: req.Ingress.ClientID,
+			Type:     req.Ingress.Type,
+			Config:   normalizedIngressConfigRaw(req.Ingress.Type, cfg),
+		},
+	}, nil
+}
+
 func (s *Server) validateUnifiedClientsAndCapabilities(req tunnelCreateRequestAPI) error {
 	target, ok := s.registeredClientInfo(req.Target.ClientID)
 	if !ok {
@@ -814,21 +867,16 @@ func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequest
 		hasCurrent = ok
 	}
 
-	tunnels, err := s.store.GetAllTunnels()
+	candidate, err := ingressResourceCandidateFromUnifiedRequest(req, excludeID)
+	if err != nil {
+		return err
+	}
+	conflict, ok, err := s.store.findIngressResourceConflict(candidate, excludeID)
 	if err != nil {
 		return fmt.Errorf("failed to check ingress resource conflicts: %w", err)
 	}
-	for _, existing := range tunnels {
-		if existing.ID == excludeID {
-			continue
-		}
-		conflicts, err := unifiedIngressResourcesConflict(req, existing)
-		if err != nil {
-			return err
-		}
-		if conflicts {
-			return newProxyRequestValidationError(fmt.Errorf("ingress resource conflicts with tunnel %q", existing.Name), "ingress.config.port", protocol.TunnelMutationErrorCodeIngressResourceConflict, http.StatusConflict)
-		}
+	if ok {
+		return newProxyRequestValidationError(fmt.Errorf("ingress resource conflicts with tunnel %q", conflict.Name), ingressResourceConflictField(req.Ingress.Type), protocol.TunnelMutationErrorCodeIngressResourceConflict, http.StatusConflict)
 	}
 
 	if req.Topology != tunnelTopologyServerExpose || req.Ingress.Location != tunnelEndpointLocationServer {
@@ -854,31 +902,14 @@ func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequest
 	return s.preflightServerIngressResource(req)
 }
 
-func unifiedIngressResourcesConflict(req tunnelCreateRequestAPI, existing StoredTunnel) (bool, error) {
-	if existing.Ingress.Location != req.Ingress.Location || existing.Ingress.Type != req.Ingress.Type {
-		return false, nil
-	}
-	switch req.Ingress.Type {
+func ingressResourceConflictField(ingressType string) string {
+	switch ingressType {
 	case tunnelIngressTypeHTTPHost:
-		return false, nil
+		return protocol.TunnelMutationFieldDomain
 	case tunnelIngressTypeTCPListen, tunnelIngressTypeUDPListen:
-		want, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
-		if err != nil {
-			return false, err
-		}
-		got, err := decodeListenEndpointConfig(endpointSpecAPI{Location: existing.Ingress.Location, ClientID: existing.Ingress.ClientID, Type: existing.Ingress.Type, Config: existing.Ingress.Config}, existing.Topology)
-		if err != nil {
-			return false, err
-		}
-		if want.Port <= 0 || got.Port != want.Port {
-			return false, nil
-		}
-		if req.Ingress.Location == tunnelEndpointLocationClient {
-			return existing.Ingress.ClientID == req.Ingress.ClientID && ipv4BindConflicts(got.BindIP, want.BindIP), nil
-		}
-		return req.Ingress.Location == tunnelEndpointLocationServer, nil
+		return "ingress.config.port"
 	default:
-		return false, nil
+		return "ingress.config"
 	}
 }
 
@@ -957,12 +988,6 @@ func (s *Server) preflightServerIngressResource(req tunnelCreateRequestAPI) erro
 	}
 	_ = ln.Close()
 	return nil
-}
-
-func ipv4BindConflicts(a, b string) bool {
-	a = strings.TrimSpace(a)
-	b = strings.TrimSpace(b)
-	return a == b || a == "0.0.0.0" || b == "0.0.0.0"
 }
 
 func (s *Server) registeredClientInfo(clientID string) (RegisteredClient, bool) {

@@ -177,11 +177,25 @@ func ValidateDataStreamHeader(header DataStreamHeader) error {
 			return fmt.Errorf("data stream header %s is too long", field.name)
 		}
 	}
-	if header.SourceRole != "" && !isKnownDataStreamRole(header.SourceRole) {
+	if header.SourceRole == "" {
+		return fmt.Errorf("data stream header source_role is required")
+	}
+	if !isKnownDataStreamRole(header.SourceRole) {
 		return fmt.Errorf("unsupported data stream source_role %q", header.SourceRole)
 	}
-	if header.TargetRole != "" && !isKnownDataStreamRole(header.TargetRole) {
+	if header.TargetRole == "" {
+		return fmt.Errorf("data stream header target_role is required")
+	}
+	if !isKnownDataStreamRole(header.TargetRole) {
 		return fmt.Errorf("unsupported data stream target_role %q", header.TargetRole)
+	}
+	if header.Direction == DataStreamDirectionIngressToTarget {
+		if header.SourceRole != DataStreamRoleServer && header.SourceRole != DataStreamRoleIngress {
+			return fmt.Errorf("data stream header source_role %q is invalid for direction %q", header.SourceRole, header.Direction)
+		}
+		if header.TargetRole != DataStreamRoleTarget {
+			return fmt.Errorf("data stream header target_role %q is invalid for direction %q", header.TargetRole, header.Direction)
+		}
 	}
 	return nil
 }

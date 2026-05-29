@@ -19,7 +19,7 @@ services:
       - --init-admin-username
       - ${NETSGO_ADMIN_USER:-admin}
       - --init-admin-password
-      - ${NETSGO_ADMIN_PASS:-password123}
+      - ${NETSGO_ADMIN_PASS:?NETSGO_ADMIN_PASS is required}
       - --init-server-addr
       - ${NETSGO_SERVER_ADDR:-http://panel.playwright.local}
       - --tls-mode
@@ -38,7 +38,7 @@ services:
     environment:
       NETSGO_BOOTSTRAP_BASE_URL: http://server:8080
       NETSGO_ADMIN_USER: ${NETSGO_ADMIN_USER:-admin}
-      NETSGO_ADMIN_PASS: ${NETSGO_ADMIN_PASS:-password123}
+      NETSGO_ADMIN_PASS: ${NETSGO_ADMIN_PASS:?NETSGO_ADMIN_PASS is required}
       NETSGO_CLIENT_KEY_FILE: /shared/client.key
       NETSGO_ADMIN_TOKEN_FILE: /shared/admin.token
       NETSGO_READY_FILE: /shared/client-key.ready

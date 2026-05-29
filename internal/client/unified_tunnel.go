@@ -159,6 +159,18 @@ func (rt *clientTunnelRuntime) removeTCPConn(conn net.Conn) {
 	rt.tcpConns.Delete(conn)
 }
 
+func (rt *clientTunnelRuntime) packetConnForWrite() (net.PacketConn, bool) {
+	if rt == nil {
+		return nil, false
+	}
+	rt.runMu.Lock()
+	defer rt.runMu.Unlock()
+	if rt.closing || rt.packetConn == nil {
+		return nil, false
+	}
+	return rt.packetConn, true
+}
+
 func (rt *clientTunnelRuntime) removeUDPAssociation(key string) {
 	if rt == nil || key == "" {
 		return
@@ -442,6 +454,10 @@ func (c *Client) acceptIngressUDP(rt *sessionRuntime, req protocol.TunnelProvisi
 			case <-runtime.done:
 				return
 			default:
+				if isTemporaryPacketReadError(err) {
+					log.Printf("⚠️ temporary UDP ingress read error [%s]: %v", req.TunnelID, err)
+					continue
+				}
 				message := fmt.Sprintf("tunnel UDP ingress read failed [%s]: %v", req.TunnelID, err)
 				log.Printf("⚠️ %s", message)
 				c.failIngressTunnelRuntime(rt, req, runtime, message)
@@ -453,6 +469,14 @@ func (c *Client) acceptIngressUDP(rt *sessionRuntime, req protocol.TunnelProvisi
 		copy(payload, buf[:n])
 		c.handleIngressUDPDatagram(rt, req, runtime, srcAddr, payload)
 	}
+}
+
+func isTemporaryPacketReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	netErr, ok := err.(net.Error)
+	return ok && (netErr.Timeout() || netErr.Temporary())
 }
 
 func (c *Client) failIngressTunnelRuntime(rt *sessionRuntime, req protocol.TunnelProvisionRequest, runtime *clientTunnelRuntime, message string) {
@@ -587,10 +611,32 @@ func (c *Client) readIngressUDPAssociationReplies(runtime *clientTunnelRuntime, 
 		}
 		payload, err := mux.ReadUDPFrame(assoc.stream)
 		if err != nil {
+			select {
+			case <-runtime.done:
+				return
+			case <-assoc.done:
+				return
+			default:
+			}
+			log.Printf("⚠️ read UDP tunnel ingress reply failed [%s src=%s]: %v", runtime.tunnelID, assoc.srcAddr, err)
 			return
 		}
 		assoc.touch()
-		_, _ = runtime.packetConn.WriteTo(payload, assoc.srcAddr)
+		packetConn, ok := runtime.packetConnForWrite()
+		if !ok {
+			return
+		}
+		if _, err := packetConn.WriteTo(payload, assoc.srcAddr); err != nil {
+			select {
+			case <-runtime.done:
+				return
+			case <-assoc.done:
+				return
+			default:
+			}
+			log.Printf("⚠️ write UDP tunnel ingress reply failed [%s src=%s]: %v", runtime.tunnelID, assoc.srcAddr, err)
+			return
+		}
 	}
 }
 

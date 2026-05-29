@@ -34,9 +34,17 @@ export type ClientToClientTunnelInput = {
   ingressPort: string;
 };
 
+function requiredEnv(name: string) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is required for Playwright E2E`);
+  }
+  return value;
+}
+
 export const e2eConfig = {
   adminUser: process.env.NETSGO_ADMIN_USER ?? 'admin',
-  adminPass: process.env.NETSGO_ADMIN_PASS ?? 'password123',
+  adminPass: requiredEnv('NETSGO_ADMIN_PASS'),
   sourceHostname: process.env.NETSGO_SOURCE_CLIENT_HOSTNAME ?? 'playwright-source-client',
   ingressHostname: process.env.NETSGO_INGRESS_CLIENT_HOSTNAME ?? 'playwright-ingress-client',
   tcpIngressHostPort: Number.parseInt(process.env.PLAYWRIGHT_TCP_INGRESS_PORT ?? '19190', 10),

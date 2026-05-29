@@ -100,7 +100,11 @@ func TestValidateDataStreamHeaderRejectsInvalidFields(t *testing.T) {
 		{name: "non positive revision", mutate: func(h *DataStreamHeader) { h.Revision = 0 }},
 		{name: "unknown transport", mutate: func(h *DataStreamHeader) { h.Transport = "server_relayish" }},
 		{name: "unknown direction", mutate: func(h *DataStreamHeader) { h.Direction = "backwards" }},
+		{name: "missing source role", mutate: func(h *DataStreamHeader) { h.SourceRole = "" }},
+		{name: "missing target role", mutate: func(h *DataStreamHeader) { h.TargetRole = "" }},
 		{name: "unknown role", mutate: func(h *DataStreamHeader) { h.SourceRole = "attacker" }},
+		{name: "wrong source role for direction", mutate: func(h *DataStreamHeader) { h.SourceRole = DataStreamRoleTarget }},
+		{name: "wrong target role for direction", mutate: func(h *DataStreamHeader) { h.TargetRole = DataStreamRoleIngress }},
 		{name: "long token", mutate: func(h *DataStreamHeader) { h.OpenToken = strings.Repeat("x", DataStreamHeaderMaxTokenLen+1) }},
 	}
 

@@ -23,7 +23,7 @@ import { bpsToMbpsInput, parseMbpsInputToBps } from '@/lib/format';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { cn } from '@/lib/utils';
-import type { Client, ProxyType, ProxyConfig, TunnelTopology } from '@/types';
+import type { Client, PortRange, ProxyType, ProxyConfig, TunnelTopology } from '@/types';
 
 /** 编辑模式下传入的隧道数据 */
 export interface TunnelDialogEditData extends ProxyConfig {
@@ -163,6 +163,20 @@ function getFormKey(props: TunnelDialogProps, open: boolean) {
   return `create:${props.clientId}:${open ? 'open' : 'closed'}`;
 }
 
+function isPortAllowedByRanges(port: number, ranges: PortRange[] | undefined) {
+  if (!ranges || ranges.length === 0) {
+    return true;
+  }
+  return ranges.some((range) => port >= range.start && port <= range.end);
+}
+
+function formatPortRanges(ranges: PortRange[] | undefined) {
+  if (!ranges || ranges.length === 0) {
+    return '无限制';
+  }
+  return ranges.map((range) => range.start === range.end ? range.start : `${range.start}-${range.end}`).join(', ');
+}
+
 export function TunnelDialog(props: TunnelDialogProps) {
   const isEdit = props.mode === 'edit';
 
@@ -269,6 +283,13 @@ function TunnelDialogForm({
       return;
     }
 
+    if (!isClientToClient && !isHttp && !isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)) {
+      const message = `公网端口必须在允许范围内：${formatPortRanges(status?.allowed_ports)}`;
+      setFieldError({ field: 'remote_port', message, code: 'port_not_allowed' });
+      toast.error(message);
+      return;
+    }
+
     if (props.mode === 'edit') {
       const tunnel = props.tunnel;
       if (!tunnel) return;
@@ -349,6 +370,7 @@ function TunnelDialogForm({
     && Number.parseInt(localPort, 10) > 0
     && (isClientToClient ? selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
     && (isHttp ? domain.trim() : parsedRemotePort > 0)
+    && (isClientToClient || isHttp || isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports))
     && parsedIngressBps !== null
     && parsedEgressBps !== null,
   );
@@ -581,9 +603,7 @@ function TunnelDialogForm({
                   可用端口范围：
                   {status?.allowed_ports === undefined
                     ? '加载中…'
-                    : status.allowed_ports.length > 0
-                      ? status.allowed_ports.map(p => p.start === p.end ? p.start : `${p.start}-${p.end}`).join(', ')
-                      : '无限制'}
+                    : formatPortRanges(status.allowed_ports)}
                 </p>
               )}
             </div>

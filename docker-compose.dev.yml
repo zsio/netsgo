@@ -33,7 +33,7 @@ services:
       GOCACHE: /root/.cache/go-build
       GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
       NETSGO_DEV_ADMIN_USER: ${NETSGO_DEV_ADMIN_USER:-admin}
-      NETSGO_DEV_ADMIN_PASS: ${NETSGO_DEV_ADMIN_PASS:-password123}
+      NETSGO_DEV_ADMIN_PASS: ${NETSGO_DEV_ADMIN_PASS:?NETSGO_DEV_ADMIN_PASS is required}
       NETSGO_DEV_SERVER_ADDR: ${NETSGO_DEV_SERVER_ADDR:-http://localhost:5173}
     ports:
       - "${NETSGO_DEV_SERVER_PORT:-9527}:9527"
@@ -78,7 +78,7 @@ services:
     environment:
       NETSGO_BOOTSTRAP_BASE_URL: http://server:9527
       NETSGO_ADMIN_USER: ${NETSGO_DEV_ADMIN_USER:-admin}
-      NETSGO_ADMIN_PASS: ${NETSGO_DEV_ADMIN_PASS:-password123}
+      NETSGO_ADMIN_PASS: ${NETSGO_DEV_ADMIN_PASS:?NETSGO_DEV_ADMIN_PASS is required}
       NETSGO_CLIENT_KEY_FILE: /shared/client.key
       NETSGO_ADMIN_TOKEN_FILE: /shared/admin.token
       NETSGO_READY_FILE: /shared/client-key.ready

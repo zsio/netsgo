@@ -168,6 +168,14 @@ func (s *TunnelStore) maybeFailSave() error {
 
 const tunnelSelectColumns = `id, client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, created_at, desired_state, runtime_state, error, hostname, binding, revision, topology, owner_client_id, ingress_location, ingress_client_id, ingress_type, ingress_config, target_location, target_client_id, target_type, target_config, transport_policy, actual_transport, p2p_state, p2p_error, p2p_session_id, created_by_user_id, updated_at`
 
+func prefixedTunnelSelectColumns(prefix string) string {
+	columns := strings.Split(tunnelSelectColumns, ", ")
+	for i, column := range columns {
+		columns[i] = prefix + column
+	}
+	return strings.Join(columns, ", ")
+}
+
 func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 	var tunnel StoredTunnel
 	var createdAt, updatedAt string
@@ -1137,6 +1145,54 @@ func checkTunnelIngressResourceConflictTx(tx *sql.Tx, tunnel StoredTunnel) error
 		return err
 	}
 	return fmt.Errorf("ingress resource conflict: %s", existing)
+}
+
+func (s *TunnelStore) findIngressResourceConflict(candidate StoredTunnel, excludeID string) (StoredTunnel, bool, error) {
+	keys := tunnelIngressConflictKeys(candidate)
+	patterns := tunnelIngressConflictPatterns(candidate)
+	if len(keys) == 0 && len(patterns) == 0 {
+		return StoredTunnel{}, false, nil
+	}
+
+	clauses := make([]string, 0, len(keys)+len(patterns))
+	args := make([]any, 0, len(keys)+len(patterns)+1)
+	if len(keys) > 0 {
+		placeholders := make([]string, 0, len(keys))
+		for _, key := range keys {
+			placeholders = append(placeholders, "?")
+			args = append(args, key)
+		}
+		clauses = append(clauses, "l.resource_key IN ("+strings.Join(placeholders, ",")+")")
+	}
+	for _, pattern := range patterns {
+		clauses = append(clauses, "l.resource_key LIKE ?")
+		args = append(args, pattern)
+	}
+	if excludeID == "" {
+		excludeID = candidate.ID
+	}
+
+	query := `SELECT ` + prefixedTunnelSelectColumns("t.") + `
+FROM tunnel_resource_locks l
+JOIN tunnels t ON t.id = l.tunnel_id
+WHERE (` + strings.Join(clauses, " OR ") + `)`
+	if excludeID != "" {
+		query += ` AND l.tunnel_id <> ?`
+		args = append(args, excludeID)
+	}
+	query += ` ORDER BY t.created_at DESC, t.name LIMIT 1`
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	conflict, err := scanStoredTunnel(s.db.QueryRow(query, args...))
+	if err == sql.ErrNoRows {
+		return StoredTunnel{}, false, nil
+	}
+	if err != nil {
+		return StoredTunnel{}, false, err
+	}
+	return conflict, true, nil
 }
 
 func tunnelIngressConflictPatterns(tunnel StoredTunnel) []string {

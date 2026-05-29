@@ -122,11 +122,12 @@ func (a *trafficAccumulator) Drain() []TrafficDelta {
 	for i := range a.shards {
 		shard := &a.shards[i]
 		shard.mu.Lock()
-		for _, delta := range shard.pending {
-			deltas = append(deltas, delta)
-		}
+		pending := shard.pending
 		shard.pending = make(map[trafficAccumulatorKey]TrafficDelta)
 		shard.mu.Unlock()
+		for _, delta := range pending {
+			deltas = append(deltas, delta)
+		}
 	}
 
 	sort.Slice(deltas, func(i, j int) bool {
