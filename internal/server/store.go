@@ -22,19 +22,19 @@ var ErrTunnelNotFound = errors.New("tunnel not found")
 var ErrTunnelRevisionConflict = errors.New("tunnel revision conflict")
 
 const (
-	TunnelTopologyServerExpose       = "server_expose"
-	TunnelTopologyClientToClient     = "client_to_client"
-	TunnelIngressTypeTCPListen       = "tcp_listen"
-	TunnelIngressTypeUDPListen       = "udp_listen"
-	TunnelIngressTypeHTTPHost        = "http_host"
-	TunnelTargetTypeTCPService       = "tcp_service"
-	TunnelTargetTypeUDPService       = "udp_service"
-	TunnelTransportServerRelayOnly   = "server_relay_only"
-	TunnelTransportDirectPreferred   = "direct_preferred"
-	TunnelTransportDirectOnly        = "direct_only"
-	TunnelActualTransportUnknown     = "unknown"
-	TunnelActualTransportServerRelay = "server_relay"
-	TunnelP2PStateIdle               = "idle"
+	TunnelTopologyServerExpose       = protocol.TunnelTopologyServerExpose
+	TunnelTopologyClientToClient     = protocol.TunnelTopologyClientToClient
+	TunnelIngressTypeTCPListen       = protocol.IngressTypeTCPListen
+	TunnelIngressTypeUDPListen       = protocol.IngressTypeUDPListen
+	TunnelIngressTypeHTTPHost        = protocol.IngressTypeHTTPHost
+	TunnelTargetTypeTCPService       = protocol.TargetTypeTCPService
+	TunnelTargetTypeUDPService       = protocol.TargetTypeUDPService
+	TunnelTransportServerRelayOnly   = protocol.TransportPolicyServerRelayOnly
+	TunnelTransportDirectPreferred   = protocol.TransportPolicyDirectPreferred
+	TunnelTransportDirectOnly        = protocol.TransportPolicyDirectOnly
+	TunnelActualTransportUnknown     = protocol.ActualTransportUnknown
+	TunnelActualTransportServerRelay = protocol.ActualTransportServerRelay
+	TunnelP2PStateIdle               = protocol.P2PStateIdle
 )
 
 // StoredTunnel is a tunnel configuration persisted to storage.

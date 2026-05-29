@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"netsgo/pkg/protocol"
@@ -12,18 +13,86 @@ import (
 
 const unifiedTunnelRetryInterval = time.Minute
 
+type unifiedTunnelReconcileRegistry struct {
+	mu      sync.Mutex
+	entries map[string]*unifiedTunnelReconcileEntry
+}
+
+type unifiedTunnelReconcileEntry struct {
+	running bool
+	dirty   bool
+}
+
+func newUnifiedTunnelReconcileRegistry() *unifiedTunnelReconcileRegistry {
+	return &unifiedTunnelReconcileRegistry{entries: make(map[string]*unifiedTunnelReconcileEntry)}
+}
+
+func (r *unifiedTunnelReconcileRegistry) run(tunnelID string, reconcile func() error) error {
+	if r == nil {
+		return reconcile()
+	}
+	var lastErr error
+	for {
+		r.mu.Lock()
+		entry := r.entries[tunnelID]
+		if entry == nil {
+			entry = &unifiedTunnelReconcileEntry{}
+			r.entries[tunnelID] = entry
+		}
+		if entry.running {
+			entry.dirty = true
+			r.mu.Unlock()
+			return nil
+		}
+		entry.running = true
+		entry.dirty = false
+		r.mu.Unlock()
+
+		if err := reconcile(); err != nil {
+			lastErr = err
+		} else {
+			lastErr = nil
+		}
+
+		r.mu.Lock()
+		if entry.dirty {
+			entry.dirty = false
+			r.mu.Unlock()
+			continue
+		}
+		entry.running = false
+		delete(r.entries, tunnelID)
+		r.mu.Unlock()
+		return lastErr
+	}
+}
+
+func (s *Server) unifiedReconcileRegistry() *unifiedTunnelReconcileRegistry {
+	if s == nil {
+		return nil
+	}
+	return s.unifiedReconcile
+}
+
 func (s *Server) reconcileUnifiedTunnel(tunnelID, reason string) error {
-	if strings.TrimSpace(tunnelID) == "" {
+	tunnelID = strings.TrimSpace(tunnelID)
+	if tunnelID == "" {
 		return fmt.Errorf("tunnel id is required for unified reconcile")
 	}
-	stored, ok, err := s.findStoredTunnelByID(tunnelID)
-	if err != nil {
-		return err
+	reconcile := func() error {
+		stored, ok, err := s.findStoredTunnelByID(tunnelID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrTunnelNotFound
+		}
+		return s.reconcileStoredUnifiedTunnel(stored, reason)
 	}
-	if !ok {
-		return ErrTunnelNotFound
+	if registry := s.unifiedReconcileRegistry(); registry != nil {
+		return registry.run(tunnelID, reconcile)
 	}
-	return s.reconcileStoredUnifiedTunnel(stored, reason)
+	return reconcile()
 }
 
 func (s *Server) reconcileStoredUnifiedTunnel(stored StoredTunnel, reason string) error {
@@ -42,6 +111,10 @@ func (s *Server) scheduleUnifiedTunnelReconcile(stored StoredTunnel, reason stri
 	if s == nil {
 		return
 	}
+	tunnelID := strings.TrimSpace(stored.ID)
+	if tunnelID == "" {
+		return
+	}
 	if s.done != nil {
 		select {
 		case <-s.done:
@@ -57,7 +130,7 @@ func (s *Server) scheduleUnifiedTunnelReconcile(stored StoredTunnel, reason stri
 			default:
 			}
 		}
-		if err := s.reconcileStoredUnifiedTunnel(stored, reason); err != nil {
+		if err := s.reconcileUnifiedTunnel(tunnelID, reason); err != nil {
 			log.Printf("⚠️ unified tunnel reconcile failed: id=%s name=%s topology=%s reason=%s err=%v", stored.ID, stored.Name, stored.Topology, reason, err)
 		}
 	}()
@@ -89,7 +162,9 @@ func (s *Server) reconcileRunningUnifiedTunnels(reason string) {
 		if stored.DesiredState != protocol.ProxyDesiredStateRunning {
 			continue
 		}
-		_ = s.reconcileStoredUnifiedTunnel(stored, reason)
+		if err := s.reconcileUnifiedTunnel(stored.ID, reason); err != nil {
+			log.Printf("⚠️ unified tunnel retry failed: id=%s name=%s topology=%s reason=%s err=%v", stored.ID, stored.Name, stored.Topology, reason, err)
+		}
 	}
 }
 
@@ -249,7 +324,9 @@ func (s *Server) reconcileTunnelsForClient(clientID, reason string) {
 	}
 	for _, stored := range tunnels {
 		if stored.OwnerClientID == clientID || stored.Target.ClientID == clientID || stored.Ingress.ClientID == clientID {
-			_ = s.reconcileStoredUnifiedTunnel(stored, reason)
+			if err := s.reconcileUnifiedTunnel(stored.ID, reason); err != nil {
+				log.Printf("⚠️ unified tunnel reconcile for client failed: client=%s id=%s name=%s reason=%s err=%v", clientID, stored.ID, stored.Name, reason, err)
+			}
 		}
 	}
 }
@@ -267,7 +344,9 @@ func (s *Server) reconcileNonOwnerTunnelsForClient(clientID, reason string) {
 			continue
 		}
 		if stored.Target.ClientID == clientID || stored.Ingress.ClientID == clientID {
-			_ = s.reconcileStoredUnifiedTunnel(stored, reason)
+			if err := s.reconcileUnifiedTunnel(stored.ID, reason); err != nil {
+				log.Printf("⚠️ related unified tunnel reconcile for client failed: client=%s id=%s name=%s reason=%s err=%v", clientID, stored.ID, stored.Name, reason, err)
+			}
 		}
 	}
 }

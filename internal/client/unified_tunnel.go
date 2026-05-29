@@ -20,7 +20,12 @@ type clientTunnelRuntime struct {
 	role                string
 	listener            net.Listener
 	packetConn          net.PacketConn
+	wg                  sync.WaitGroup
+	runMu               sync.Mutex
+	closing             bool
+	tcpConns            sync.Map
 	udpAssociations     sync.Map
+	udpAssociationMu    sync.Mutex
 	udpAssociationCount atomic.Int64
 	done                chan struct{}
 	once                sync.Once
@@ -63,6 +68,7 @@ func (a *clientUDPAssociation) close() {
 	a.closeOnce.Do(func() {
 		close(a.done)
 		if a.stream != nil {
+			_ = a.stream.SetDeadline(time.Now())
 			_ = a.stream.Close()
 		}
 	})
@@ -78,6 +84,17 @@ func (rt *clientTunnelRuntime) close() {
 	if rt == nil {
 		return
 	}
+	rt.shutdown()
+	rt.wg.Wait()
+}
+
+func (rt *clientTunnelRuntime) shutdown() {
+	if rt == nil {
+		return
+	}
+	rt.runMu.Lock()
+	rt.closing = true
+	rt.runMu.Unlock()
 	rt.once.Do(func() {
 		close(rt.done)
 		if rt.listener != nil {
@@ -86,6 +103,13 @@ func (rt *clientTunnelRuntime) close() {
 		if rt.packetConn != nil {
 			_ = rt.packetConn.Close()
 		}
+		rt.tcpConns.Range(func(key, value any) bool {
+			if conn, ok := value.(net.Conn); ok {
+				_ = conn.Close()
+			}
+			rt.tcpConns.Delete(key)
+			return true
+		})
 		rt.udpAssociations.Range(func(key, value any) bool {
 			if assoc, ok := value.(*clientUDPAssociation); ok {
 				assoc.close()
@@ -95,6 +119,44 @@ func (rt *clientTunnelRuntime) close() {
 		})
 		rt.udpAssociationCount.Store(0)
 	})
+}
+
+func (rt *clientTunnelRuntime) run(fn func()) bool {
+	if rt == nil || fn == nil {
+		return false
+	}
+	rt.runMu.Lock()
+	if rt.closing {
+		rt.runMu.Unlock()
+		return false
+	}
+	rt.wg.Add(1)
+	rt.runMu.Unlock()
+	go func() {
+		defer rt.wg.Done()
+		fn()
+	}()
+	return true
+}
+
+func (rt *clientTunnelRuntime) trackTCPConn(conn net.Conn) bool {
+	if rt == nil || conn == nil {
+		return false
+	}
+	rt.runMu.Lock()
+	defer rt.runMu.Unlock()
+	if rt.closing {
+		return false
+	}
+	rt.tcpConns.Store(conn, conn)
+	return true
+}
+
+func (rt *clientTunnelRuntime) removeTCPConn(conn net.Conn) {
+	if rt == nil || conn == nil {
+		return
+	}
+	rt.tcpConns.Delete(conn)
 }
 
 func (rt *clientTunnelRuntime) removeUDPAssociation(key string) {
@@ -340,9 +402,9 @@ func (c *Client) startIngressTunnelRuntime(rt *sessionRuntime, req protocol.Tunn
 	}
 	switch req.Spec.Ingress.Type {
 	case protocol.IngressTypeTCPListen:
-		go c.acceptIngressTCP(rt, req, runtime)
+		runtime.run(func() { c.acceptIngressTCP(rt, req, runtime) })
 	case protocol.IngressTypeUDPListen:
-		go c.acceptIngressUDP(rt, req, runtime)
+		runtime.run(func() { c.acceptIngressUDP(rt, req, runtime) })
 	}
 	return nil
 }
@@ -361,12 +423,16 @@ func (c *Client) acceptIngressTCP(rt *sessionRuntime, req protocol.TunnelProvisi
 				return
 			}
 		}
-		go c.handleIngressTCPConn(rt, req, conn)
+		if !runtime.trackTCPConn(conn) {
+			_ = conn.Close()
+			return
+		}
+		go c.handleIngressTCPConn(rt, req, runtime, conn)
 	}
 }
 
 func (c *Client) acceptIngressUDP(rt *sessionRuntime, req protocol.TunnelProvisionRequest, runtime *clientTunnelRuntime) {
-	go c.reapIngressUDPAssociations(runtime)
+	runtime.run(func() { c.reapIngressUDPAssociations(runtime) })
 
 	buf := make([]byte, mux.MaxUDPPayload)
 	for {
@@ -396,7 +462,7 @@ func (c *Client) failIngressTunnelRuntime(rt *sessionRuntime, req protocol.Tunne
 	}
 	key := tunnelRuntimeKey(req.TunnelID, req.Role)
 	c.tunnels.CompareAndDelete(key, runtime)
-	runtime.close()
+	runtime.shutdown()
 }
 
 func (c *Client) reapIngressUDPAssociations(runtime *clientTunnelRuntime) {
@@ -443,6 +509,13 @@ func (c *Client) handleIngressUDPDatagram(rt *sessionRuntime, req protocol.Tunne
 
 func (c *Client) getOrCreateIngressUDPAssociation(rt *sessionRuntime, req protocol.TunnelProvisionRequest, runtime *clientTunnelRuntime, srcAddr net.Addr) (*clientUDPAssociation, bool) {
 	key := srcAddr.String()
+	if value, ok := runtime.udpAssociations.Load(key); ok {
+		assoc, ok := value.(*clientUDPAssociation)
+		return assoc, ok
+	}
+
+	runtime.udpAssociationMu.Lock()
+	defer runtime.udpAssociationMu.Unlock()
 	if value, ok := runtime.udpAssociations.Load(key); ok {
 		assoc, ok := value.(*clientUDPAssociation)
 		return assoc, ok
@@ -495,7 +568,10 @@ func (c *Client) getOrCreateIngressUDPAssociation(rt *sessionRuntime, req protoc
 		return assoc, ok
 	}
 	runtime.udpAssociationCount.Add(1)
-	go c.readIngressUDPAssociationReplies(runtime, assoc)
+	if !runtime.run(func() { c.readIngressUDPAssociationReplies(runtime, assoc) }) {
+		runtime.removeUDPAssociation(key)
+		return nil, false
+	}
 	return assoc, true
 }
 
@@ -538,8 +614,11 @@ func ingressDataStreamHeader(req protocol.TunnelProvisionRequest, openClientID s
 	return header, nil
 }
 
-func (c *Client) handleIngressTCPConn(rt *sessionRuntime, req protocol.TunnelProvisionRequest, conn net.Conn) {
-	defer func() { _ = conn.Close() }()
+func (c *Client) handleIngressTCPConn(rt *sessionRuntime, req protocol.TunnelProvisionRequest, runtime *clientTunnelRuntime, conn net.Conn) {
+	defer func() {
+		runtime.removeTCPConn(conn)
+		_ = conn.Close()
+	}()
 
 	rt.dataMu.RLock()
 	session := rt.dataSession

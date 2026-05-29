@@ -114,10 +114,11 @@ func TestClientReportsIngressRuntimeErrorWhenDataSessionUnavailable(t *testing.T
 	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleIngress, reserveClientTCPPort(t))
 	externalConn, tunnelConn := net.Pipe()
 	defer mustClose(t, externalConn)
+	runtime := &clientTunnelRuntime{done: make(chan struct{})}
 
 	done := make(chan struct{})
 	go func() {
-		c.handleIngressTCPConn(rt, req, tunnelConn)
+		c.handleIngressTCPConn(rt, req, runtime, tunnelConn)
 		close(done)
 	}()
 

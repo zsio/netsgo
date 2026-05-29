@@ -72,7 +72,16 @@ func (r *unifiedTunnelRuntimeRegistry) recordServerIssue(tunnelID string, issue 
 		issue.ObservedAt = issue.ObservedAt.UTC()
 	}
 	r.mu.Lock()
-	r.serverIssues[tunnelID] = []protocol.TunnelIssue{issue}
+	issues := append([]protocol.TunnelIssue(nil), r.serverIssues[tunnelID]...)
+	for idx := range issues {
+		if sameTunnelIssueIdentity(issues[idx], issue) {
+			issues[idx] = issue
+			r.serverIssues[tunnelID] = issues
+			r.mu.Unlock()
+			return
+		}
+	}
+	r.serverIssues[tunnelID] = append(issues, issue)
 	r.mu.Unlock()
 }
 
@@ -83,11 +92,13 @@ func (r *unifiedTunnelRuntimeRegistry) issuesForStoredTunnel(stored StoredTunnel
 	issues := make([]protocol.TunnelIssue, 0, 3)
 	r.mu.RLock()
 	issues = append(issues, r.serverIssues[stored.ID]...)
+	ingressFact, ingressOK := r.reports[runtimeReportKey(stored.ID, protocol.DataStreamRoleIngress)]
+	targetFact, targetOK := r.reports[runtimeReportKey(stored.ID, protocol.DataStreamRoleTarget)]
 	r.mu.RUnlock()
 	if stored.Ingress.Location == tunnelEndpointLocationClient {
-		issues = append(issues, r.issueForRole(stored, protocol.DataStreamRoleIngress)...)
+		issues = append(issues, issueForRuntimeReportFact(stored, protocol.DataStreamRoleIngress, ingressFact, ingressOK)...)
 	}
-	issues = append(issues, r.issueForRole(stored, protocol.DataStreamRoleTarget)...)
+	issues = append(issues, issueForRuntimeReportFact(stored, protocol.DataStreamRoleTarget, targetFact, targetOK)...)
 	return issues
 }
 
@@ -95,10 +106,11 @@ func (r *unifiedTunnelRuntimeRegistry) hasIssuesForStoredTunnel(stored StoredTun
 	return len(r.issuesForStoredTunnel(stored, online)) > 0
 }
 
-func (r *unifiedTunnelRuntimeRegistry) issueForRole(stored StoredTunnel, role string) []protocol.TunnelIssue {
-	r.mu.RLock()
-	fact, ok := r.reports[runtimeReportKey(stored.ID, role)]
-	r.mu.RUnlock()
+func sameTunnelIssueIdentity(a, b protocol.TunnelIssue) bool {
+	return a.Code == b.Code && a.Scope == b.Scope && a.ClientID == b.ClientID
+}
+
+func issueForRuntimeReportFact(stored StoredTunnel, role string, fact runtimeReportFact, ok bool) []protocol.TunnelIssue {
 	if !ok || fact.report.Revision != stored.Revision || fact.report.Role != role {
 		return nil
 	}

@@ -178,6 +178,53 @@ describe('buildAggregatedTrafficRates', () => {
     });
   });
 
+  test('filters by tunnel id when traffic metadata includes stable ids', () => {
+    const data: ClientTrafficResponse = {
+      resolution: 'minute',
+      items: [
+        {
+          tunnel_id: 'tun-a',
+          tunnel_name: 'api',
+          tunnel_type: 'tcp',
+          points: [
+            {
+              bucket_start: isoAt(59),
+              ingress_bytes: 300,
+              egress_bytes: 120,
+              total_bytes: 420,
+            },
+          ],
+        },
+        {
+          tunnel_id: 'tun-b',
+          tunnel_name: 'api',
+          tunnel_type: 'tcp',
+          points: [
+            {
+              bucket_start: isoAt(59),
+              ingress_bytes: 900,
+              egress_bytes: 600,
+              total_bytes: 1500,
+            },
+          ],
+        },
+      ],
+    };
+
+    const points = buildAggregatedTrafficRates(
+      data,
+      '1h',
+      [{ id: 'tun-a', name: 'api', type: 'tcp' }],
+      Date.UTC(2026, 3, 19, 11, 0, 0),
+    );
+
+    expect(points.at(-1)).toEqual({
+      timestamp: Date.UTC(2026, 3, 19, 10, 59, 0),
+      inRate: 5,
+      outRate: 2,
+    });
+  });
+
   test('keeps historical tunnel data when no tunnel filter is provided', () => {
     const data: ClientTrafficResponse = {
       resolution: 'minute',

@@ -11,6 +11,8 @@ services:
     hostname: playwright-server
     command:
       - server
+      - --data-dir
+      - /var/lib/netsgo
       - --port
       - "8080"
       - --allow-loopback-management-host

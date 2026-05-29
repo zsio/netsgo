@@ -159,7 +159,6 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("🔌 data channel disconnected: Client [%s] generation=%d", clientID, generation)
-	s.releaseUnifiedRuntimeForClient(clientID)
 	s.invalidateLogicalSessionIfCurrent(clientID, generation, "data_session_closed")
 }
 

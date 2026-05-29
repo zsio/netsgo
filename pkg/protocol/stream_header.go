@@ -124,6 +124,9 @@ func WriteDataStreamHeaderToBytes(header DataStreamHeader) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// ValidateDataStreamHeader verifies only the structural invariants of the
+// header. ServerAuthorized is a caller-provided trust bit; data-plane callers
+// must still authorize the stream against the current session and tunnel state.
 func ValidateDataStreamHeader(header DataStreamHeader) error {
 	if header.Kind != DataStreamHeaderKindTunnelStream {
 		return fmt.Errorf("unsupported data stream header kind %q", header.Kind)

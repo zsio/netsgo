@@ -5,6 +5,7 @@ KEY_FILE="${NETSGO_CLIENT_KEY_FILE:-/shared/client.key}"
 SERVER_ADDR="${NETSGO_SERVER:-http://proxy}"
 WAIT_TIMEOUT="${NETSGO_CLIENT_KEY_WAIT_TIMEOUT:-180}"
 TLS_SKIP_VERIFY="${NETSGO_TLS_SKIP_VERIFY:-false}"
+DATA_DIR="${NETSGO_DATA_DIR:-/var/lib/netsgo}"
 
 end_ts="$(expr "$(date +%s)" + "${WAIT_TIMEOUT}")"
 while [ ! -s "${KEY_FILE}" ]; do
@@ -21,7 +22,7 @@ if [ -z "${api_key}" ]; then
 	exit 1
 fi
 
-set -- /usr/local/bin/netsgo client --server "${SERVER_ADDR}" --key "${api_key}"
+set -- /usr/local/bin/netsgo client --data-dir "${DATA_DIR}" --server "${SERVER_ADDR}" --key "${api_key}"
 if [ "${TLS_SKIP_VERIFY}" = "true" ]; then
 	set -- "$@" --tls-skip-verify
 fi

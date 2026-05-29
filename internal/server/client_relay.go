@@ -124,7 +124,7 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 	}
 
 	s.unifiedRuntime.clearTunnelIssues(stored.ID)
-	s.c2c.set(stored)
+	s.c2c.delete(stored.ID)
 	if err := s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStatePending, ""); err != nil {
 		return err
 	}
@@ -155,6 +155,7 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 		return err
 	}
 	s.unifiedRuntime.clearTunnelIssues(stored.ID)
+	s.c2c.set(stored)
 	return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
 }
 

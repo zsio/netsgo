@@ -980,7 +980,11 @@ func dataStreamHeaderMatchesProxyConfig(header protocol.DataStreamHeader, cfg pr
 
 func (c *Client) proxyForDataStreamHeader(header protocol.DataStreamHeader) (string, protocol.ProxyNewRequest, bool) {
 	if val, ok := c.proxies.Load(header.TunnelID); ok {
-		cfg := val.(protocol.ProxyNewRequest)
+		cfg, ok := val.(protocol.ProxyNewRequest)
+		if !ok {
+			log.Printf("⚠️ invalid proxy cache entry for tunnel %s: %T", header.TunnelID, val)
+			return "", protocol.ProxyNewRequest{}, false
+		}
 		return cfg.Name, cfg, true
 	}
 

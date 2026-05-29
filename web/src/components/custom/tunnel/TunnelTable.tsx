@@ -7,6 +7,7 @@ import { useClientTraffic } from '@/hooks/use-client-traffic';
 import { useClientTunnelsByRole } from '@/hooks/use-tunnel-mutations';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
+import { getTrafficSeriesKey, getTunnelSeriesKey } from '@/lib/tunnel-traffic-keys';
 
 interface TunnelTableProps {
   client: Client;
@@ -27,7 +28,7 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
 
     for (const item of trafficData?.items ?? []) {
       totals.set(
-        `${item.tunnel_type}:${item.tunnel_name}`,
+        getTrafficSeriesKey(item),
         item.points.reduce((sum, point) => sum + point.total_bytes, 0),
       );
     }
@@ -41,7 +42,7 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
     clientId: client.id,
     clientName: getClientDisplayName(client),
     clientOnline: client.online,
-    traffic24hBytes: trafficData ? (traffic24hByTunnel.get(`${proxy.type}:${proxy.name}`) ?? 0) : undefined,
+    traffic24hBytes: trafficData ? (traffic24hByTunnel.get(getTunnelSeriesKey(proxy)) ?? 0) : undefined,
   }));
 
   return (

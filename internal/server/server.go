@@ -48,6 +48,7 @@ type Server struct {
 	publicIPMu                  sync.RWMutex    // protects public IP cache
 	tunnels                     *TunnelRegistry // tunnel provision wait and timeout
 	unifiedRuntime              *unifiedTunnelRuntimeRegistry
+	unifiedReconcile            *unifiedTunnelReconcileRegistry
 	c2c                         *clientRelayRegistry
 	releaseIndexCache           *releaseIndexCache
 	updateCapabilityCache       *updateCapabilityCache // cached server install capability for status API
@@ -90,6 +91,7 @@ func New(port int) *Server {
 		sessions:           newSessionManager(),
 		tunnels:            newTunnelRegistry(),
 		unifiedRuntime:     newUnifiedTunnelRuntimeRegistry(),
+		unifiedReconcile:   newUnifiedTunnelReconcileRegistry(),
 		c2c:                newClientRelayRegistry(),
 		startTime:          time.Now(),
 		done:               make(chan struct{}),

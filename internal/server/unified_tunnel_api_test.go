@@ -1382,41 +1382,57 @@ func TestAPI_UnifiedTunnelListKeepsSameNameLiveTunnelsWithoutIDs(t *testing.T) {
 	}
 }
 
+func addUnifiedC2CTestTunnel(t *testing.T, s *Server, name, ingressClientID, targetClientID string, ingressPort int) StoredTunnel {
+	t.Helper()
+	req := tunnelCreateRequestAPI{
+		Name:            name,
+		Topology:        tunnelTopologyClientToClient,
+		TransportPolicy: tunnelTransportPolicyServerRelayOnly,
+		Ingress: endpointSpecAPI{
+			Location: tunnelEndpointLocationClient,
+			ClientID: ingressClientID,
+			Type:     tunnelIngressTypeTCPListen,
+			Config:   mustRawJSON(tcpListenConfigAPI{BindIP: "127.0.0.1", Port: ingressPort}),
+		},
+		Target: endpointSpecAPI{
+			Location: tunnelEndpointLocationClient,
+			ClientID: targetClientID,
+			Type:     tunnelTargetTypeTCPService,
+			Config:   mustRawJSON(serviceConfigAPI{IP: "127.0.0.1", Port: 22}),
+		},
+	}
+	stored, err := s.storedTunnelFromUnifiedRequest(req, "")
+	if err != nil {
+		t.Fatalf("build stored tunnel: %v", err)
+	}
+	if err := s.store.AddTunnel(stored); err != nil {
+		t.Fatalf("add stored tunnel: %v", err)
+	}
+	return stored
+}
+
 func TestAPI_UnifiedTunnelProjectsRuntimeReportIssuesFromMemory(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
 	target := createUnifiedAPITestClient(t, s, "install-issue-target", "issue-target")
 	ingress := createUnifiedAPITestClient(t, s, "install-issue-ingress", "issue-ingress")
-	body := []byte(`{
-		"name":"issue-c2c",
-		"topology":"client_to_client",
-		"ingress":{"location":"client","client_id":"` + ingress.ID + `","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":24001}},
-		"target":{"location":"client","client_id":"` + target.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
-		"transport_policy":"server_relay_only"
-	}`)
-	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, body)
-	if resp.Code != http.StatusCreated {
-		t.Fatalf("client_to_client create: want 201, got %d body=%s", resp.Code, resp.Body.String())
-	}
-	var created tunnelSpecAPI
-	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
-		t.Fatalf("decode created tunnel: %v", err)
-	}
+	stored := addUnifiedC2CTestTunnel(t, s, "issue-c2c", ingress.ID, target.ID, 24001)
 
 	_, targetSession := newTestClientRelayDataSession(t)
 	_, ingressSession := newTestClientRelayDataSession(t)
 	caps := protocol.DefaultClientCapabilities()
 	s.clients.Store(target.ID, &ClientConn{ID: target.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: targetSession})
 	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: ingressSession})
+	s.unifiedRuntime.clearServerIssues(stored.ID)
 	s.unifiedRuntime.recordReport(ingress.ID, protocol.TunnelRuntimeReport{
-		TunnelID: created.ID,
-		Revision: created.Revision,
+		TunnelID: stored.ID,
+		Revision: stored.Revision,
 		Role:     protocol.DataStreamRoleIngress,
 		Message:  "ingress listener failed",
 	}, time.Date(2026, 5, 24, 1, 0, 0, 0, time.UTC))
 
-	getResp := doMuxRequest(t, handler, http.MethodGet, "/api/tunnels/"+created.ID, token, nil)
+	getResp := doMuxRequest(t, handler, http.MethodGet, "/api/tunnels/"+stored.ID, token, nil)
 	if getResp.Code != http.StatusOK {
 		t.Fatalf("GET tunnel: want 200, got %d body=%s", getResp.Code, getResp.Body.String())
 	}
@@ -1424,11 +1440,15 @@ func TestAPI_UnifiedTunnelProjectsRuntimeReportIssuesFromMemory(t *testing.T) {
 	if err := mustDecodeJSON(t, getResp.Body, &got); err != nil {
 		t.Fatalf("decode tunnel: %v", err)
 	}
-	if len(got.Issues) != 1 {
-		t.Fatalf("expected one runtime issue, got %+v", got.Issues)
+	foundRuntimeIssue := false
+	for _, issue := range got.Issues {
+		if issue.Scope == "ingress_client" && issue.ClientID == ingress.ID && issue.Message == "ingress listener failed" {
+			foundRuntimeIssue = true
+			break
+		}
 	}
-	if got.Issues[0].Scope != "ingress_client" || got.Issues[0].ClientID != ingress.ID || got.Issues[0].Message != "ingress listener failed" {
-		t.Fatalf("unexpected runtime issue: %+v", got.Issues[0])
+	if !foundRuntimeIssue {
+		t.Fatalf("expected projected runtime report issue, got %+v", got.Issues)
 	}
 }
 
@@ -2104,29 +2124,16 @@ func TestUnifiedRuntimeReportIgnoresNonServerRelayTransport(t *testing.T) {
 
 	target := createUnifiedAPITestClient(t, s, "install-report-transport-target", "report-transport-target")
 	ingress := createUnifiedAPITestClient(t, s, "install-report-transport-ingress", "report-transport-ingress")
-	body := []byte(`{
-		"name":"report-transport-c2c",
-		"topology":"client_to_client",
-		"ingress":{"location":"client","client_id":"` + ingress.ID + `","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":24011}},
-		"target":{"location":"client","client_id":"` + target.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
-		"transport_policy":"server_relay_only"
-	}`)
-	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, body)
-	if resp.Code != http.StatusCreated {
-		t.Fatalf("client_to_client create: want 201, got %d body=%s", resp.Code, resp.Body.String())
-	}
-	var created tunnelSpecAPI
-	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
-		t.Fatalf("decode created tunnel: %v", err)
-	}
+	stored := addUnifiedC2CTestTunnel(t, s, "report-transport-c2c", ingress.ID, target.ID, 24011)
 	_, targetSession := newTestClientRelayDataSession(t)
 	_, ingressSession := newTestClientRelayDataSession(t)
 	caps := protocol.DefaultClientCapabilities()
 	s.clients.Store(target.ID, &ClientConn{ID: target.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: targetSession})
 	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: ingressSession})
+	s.unifiedRuntime.clearServerIssues(stored.ID)
 	s.unifiedRuntime.recordReport(ingress.ID, protocol.TunnelRuntimeReport{
-		TunnelID: created.ID,
-		Revision: created.Revision,
+		TunnelID: stored.ID,
+		Revision: stored.Revision,
 		Role:     protocol.DataStreamRoleIngress,
 		Message:  "peer-direct failure should not project",
 		Transport: protocol.TransportRuntime{
@@ -2134,7 +2141,7 @@ func TestUnifiedRuntimeReportIgnoresNonServerRelayTransport(t *testing.T) {
 		},
 	}, time.Now())
 
-	getResp := doMuxRequest(t, handler, http.MethodGet, "/api/tunnels/"+created.ID, token, nil)
+	getResp := doMuxRequest(t, handler, http.MethodGet, "/api/tunnels/"+stored.ID, token, nil)
 	if getResp.Code != http.StatusOK {
 		t.Fatalf("GET tunnel: want 200, got %d body=%s", getResp.Code, getResp.Body.String())
 	}
@@ -2142,7 +2149,22 @@ func TestUnifiedRuntimeReportIgnoresNonServerRelayTransport(t *testing.T) {
 	if err := mustDecodeJSON(t, getResp.Body, &got); err != nil {
 		t.Fatalf("decode tunnel: %v", err)
 	}
-	if len(got.Issues) != 0 {
-		t.Fatalf("non-server-relay runtime report must not project issues, got %+v", got.Issues)
+	for _, issue := range got.Issues {
+		if issue.Code == protocol.TunnelIssueCodeRuntimeReport {
+			t.Fatalf("non-server-relay runtime report must not project runtime report issues, got %+v", got.Issues)
+		}
+	}
+}
+
+func TestDecodeServiceEndpointConfigRejectsConflictingHostAndIP(t *testing.T) {
+	_, err := decodeServiceEndpointConfig(endpointSpecAPI{
+		Type:   tunnelTargetTypeTCPService,
+		Config: mustRawJSON(map[string]any{"host": "service.internal", "ip": "127.0.0.1", "port": 8080}),
+	})
+	if err == nil {
+		t.Fatal("expected host/ip conflict to be rejected")
+	}
+	if !strings.Contains(err.Error(), "host and ip must match") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

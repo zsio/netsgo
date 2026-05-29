@@ -342,27 +342,16 @@ function TunnelDialogForm({
   const effectiveTypeOptions = isClientToClient
     ? typeOptions.filter((opt) => opt.value !== 'http')
     : typeOptions;
-  const isValid = isEdit
-    ? Boolean(
-      name.trim()
-      && selectedTargetClientId
-      && localPort
-      && Number.parseInt(localPort, 10) > 0
-      && (isClientToClient ? selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
-      && (isHttp ? domain.trim() : parsedRemotePort > 0)
-      && parsedIngressBps !== null
-      && parsedEgressBps !== null,
-    )
-    : Boolean(
-      name.trim()
-      && selectedTargetClientId
-      && localPort
-      && Number.parseInt(localPort, 10) > 0
-      && (isClientToClient ? selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
-      && (isHttp ? domain.trim() : parsedRemotePort > 0)
-      && parsedIngressBps !== null
-      && parsedEgressBps !== null,
-    );
+  const isValid = Boolean(
+    name.trim()
+    && selectedTargetClientId
+    && localPort
+    && Number.parseInt(localPort, 10) > 0
+    && (isClientToClient ? selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
+    && (isHttp ? domain.trim() : parsedRemotePort > 0)
+    && parsedIngressBps !== null
+    && parsedEgressBps !== null,
+  );
 
   return (
     <DialogContent className="sm:max-w-md">

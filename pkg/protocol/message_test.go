@@ -631,3 +631,71 @@ func TestTunnelSpecIssuesJSONRoundTrip(t *testing.T) {
 		t.Fatalf("TunnelSpec issues mismatch: %+v", got.Issues)
 	}
 }
+
+func TestUnifiedTunnelControlMessagesJSONRoundTrip(t *testing.T) {
+	endpointConfig := json.RawMessage(`{"host":"127.0.0.1","port":8080}`)
+	spec := TunnelSpec{
+		ID:                "tun-1",
+		Name:              "demo",
+		Revision:          7,
+		Topology:          TunnelTopologyClientToClient,
+		OwnerClientID:     "target-client",
+		Ingress:           EndpointSpec{Location: EndpointLocationClient, ClientID: "ingress-client", Type: IngressTypeTCPListen, Config: json.RawMessage(`{"bind_ip":"127.0.0.1","port":18080}`)},
+		Target:            EndpointSpec{Location: EndpointLocationClient, ClientID: "target-client", Type: TargetTypeTCPService, Config: endpointConfig},
+		TransportPolicy:   TransportPolicyServerRelayOnly,
+		ActualTransport:   ActualTransportServerRelay,
+		P2P:               P2PState{State: P2PStateIdle},
+		DesiredState:      TunnelDesiredStateRunning,
+		RuntimeState:      TunnelRuntimeStateActive,
+		BandwidthSettings: BandwidthSettings{IngressBPS: 1024, EgressBPS: 2048},
+	}
+	cases := []struct {
+		name  string
+		value any
+	}{
+		{name: "create request", value: TunnelCreateRequest{
+			Name:              spec.Name,
+			Topology:          spec.Topology,
+			Ingress:           spec.Ingress,
+			Target:            spec.Target,
+			TransportPolicy:   spec.TransportPolicy,
+			BandwidthSettings: spec.BandwidthSettings,
+		}},
+		{name: "create response", value: TunnelCreateResponse{TunnelID: spec.ID, Success: true, Spec: spec}},
+		{name: "provision request", value: TunnelProvisionRequest{TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleIngress, Spec: spec}},
+		{name: "provision ack", value: TunnelProvisionAck{TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleIngress, Accepted: true, Message: "ready"}},
+		{name: "unprovision request", value: TunnelUnprovisionRequest{TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleTarget, Reason: "updated"}},
+		{name: "runtime report", value: TunnelRuntimeReport{
+			TunnelID: spec.ID,
+			Revision: spec.Revision,
+			Role:     DataStreamRoleTarget,
+			Participant: ParticipantRuntime{
+				ClientID: "target-client",
+				Role:     DataStreamRoleTarget,
+				State:    ParticipantStateReady,
+				Revision: spec.Revision,
+			},
+			Transport: TransportRuntime{Policy: TransportPolicyServerRelayOnly, Actual: ActualTransportServerRelay, P2PState: P2PStateIdle},
+			Message:   "ready",
+		}},
+		{name: "preflight request", value: TunnelPreflightRequest{RequestID: "pre-1", TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleIngress, Ingress: spec.Ingress}},
+		{name: "preflight response", value: TunnelPreflightResponse{RequestID: "pre-1", TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleIngress, Accepted: true, Message: "ok"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.value)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			target := reflect.New(reflect.TypeOf(tc.value))
+			if err := json.Unmarshal(data, target.Interface()); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			got := target.Elem().Interface()
+			if !reflect.DeepEqual(got, tc.value) {
+				t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, tc.value)
+			}
+		})
+	}
+}

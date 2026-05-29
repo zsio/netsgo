@@ -11,6 +11,8 @@ services:
     hostname: compose-server
     command:
       - server
+      - --data-dir
+      - /var/lib/netsgo
       - --port
       - "8080"
       - --init-admin-username

@@ -99,7 +99,14 @@ type AuthResponse struct {
 }
 
 // TunnelCreateRequest requests creation of a unified tunnel.
-type TunnelCreateRequest = TunnelSpec
+type TunnelCreateRequest struct {
+	Name              string            `json:"name"`
+	Topology          string            `json:"topology"`
+	Ingress           EndpointSpec      `json:"ingress"`
+	Target            EndpointSpec      `json:"target"`
+	TransportPolicy   string            `json:"transport_policy"`
+	BandwidthSettings BandwidthSettings `json:"bandwidth_settings"`
+}
 
 // TunnelProvisionRequest is sent by the server to an ingress or target client.
 type TunnelProvisionRequest struct {

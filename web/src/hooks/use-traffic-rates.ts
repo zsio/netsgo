@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { getTrafficSeriesKey, getTunnelSeriesKey } from '@/lib/tunnel-traffic-keys';
 import type { ClientTrafficResponse, ClientTrafficRange, ProxyConfig } from '@/types';
 
 export interface RatePoint {
@@ -30,24 +31,19 @@ const RANGE_WINDOW_CONFIG: Record<ClientTrafficRange, { pointCount: number; buck
   },
 };
 
-function createAllowedSet(tunnels?: Pick<ProxyConfig, 'name' | 'type'>[]) {
+type TunnelTrafficFilter = Pick<ProxyConfig, 'name' | 'type'> & Partial<Pick<ProxyConfig, 'id'>>;
+
+function createAllowedSet(tunnels?: TunnelTrafficFilter[]) {
   if (!tunnels || tunnels.length === 0) {
     return null;
   }
 
-  return new Set(tunnels.map((tunnel) => `${tunnel.type}:${tunnel.name}`));
-}
-
-function getTrafficSeriesKey(item: ClientTrafficResponse['items'][number]) {
-  if (!item.tunnel_name || !item.tunnel_type) {
-    return item.tunnel_id ? `id:${item.tunnel_id}` : 'metadata_missing';
-  }
-  return `${item.tunnel_type}:${item.tunnel_name}`;
+  return new Set(tunnels.map(getTunnelSeriesKey));
 }
 
 export function hasTrafficSamples(
   data: ClientTrafficResponse | undefined,
-  tunnels?: Pick<ProxyConfig, 'name' | 'type'>[],
+  tunnels?: TunnelTrafficFilter[],
 ) {
   if (!data) {
     return false;
@@ -67,7 +63,7 @@ export function hasTrafficSamples(
 export function buildAggregatedTrafficRates(
   data: ClientTrafficResponse | undefined,
   range: ClientTrafficRange,
-  tunnels?: Pick<ProxyConfig, 'name' | 'type'>[],
+  tunnels?: TunnelTrafficFilter[],
   nowMs = Date.now(),
 ): RatePoint[] {
   if (!data) {
@@ -110,7 +106,7 @@ export function buildAggregatedTrafficRates(
 export function useAggregatedTrafficRates(
   data: ClientTrafficResponse | undefined,
   range: ClientTrafficRange,
-  tunnels?: Pick<ProxyConfig, 'name' | 'type'>[],
+  tunnels?: TunnelTrafficFilter[],
 ): RatePoint[] {
   return useMemo(() => buildAggregatedTrafficRates(data, range, tunnels), [data, range, tunnels]);
 }
