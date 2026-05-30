@@ -210,17 +210,8 @@ func (s *Server) updateStoredTunnelRuntime(stored StoredTunnel, runtimeState, me
 	if desired == "" {
 		desired = protocol.ProxyDesiredStateRunning
 	}
-	current, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
-	if errors.Is(err, ErrTunnelNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if current.Name != stored.Name || current.Revision != stored.Revision || current.DesiredState != desired {
-		return nil
-	}
-	return s.store.UpdateStates(stored.OwnerClientID, stored.Name, desired, runtimeState, message)
+	_, err := s.store.UpdateStatesIfCurrent(stored.OwnerClientID, stored.ID, stored.Revision, desired, runtimeState, message)
+	return err
 }
 
 func (s *Server) notifyClientTunnelProvision(client *ClientConn, req protocol.TunnelProvisionRequest) error {

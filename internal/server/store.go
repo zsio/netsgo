@@ -460,6 +460,35 @@ func (s *TunnelStore) UpdateStates(clientID, name, desiredState, runtimeState, e
 	return nil
 }
 
+func (s *TunnelStore) UpdateStatesIfCurrent(clientID, id string, revision int64, desiredState, runtimeState, errMsg string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalized := StoredTunnel{ClientID: clientID, Binding: TunnelBindingClientID}
+	setStoredTunnelStates(&normalized, desiredState, runtimeState, errMsg)
+	if err := s.maybeFailSave(); err != nil {
+		return false, err
+	}
+
+	storageRuntimeState := storageRuntimeStateFromProtocol(normalized.RuntimeState)
+	actualTransport := TunnelActualTransportUnknown
+	if storageRuntimeState == "active" {
+		actualTransport = TunnelActualTransportServerRelay
+	}
+	result, err := s.db.Exec(
+		`UPDATE tunnels SET desired_state = ?, runtime_state = ?, error = ?, actual_transport = ?, updated_at = ? WHERE client_id = ? AND id = ? AND revision = ? AND desired_state = ?`,
+		normalized.DesiredState, storageRuntimeState, normalized.Error, actualTransport, formatTime(time.Now().UTC()), clientID, id, revision, normalized.DesiredState,
+	)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rowsAffected > 0, nil
+}
+
 // UpdateTunnel updates the mutable tunnel configuration and persists it.
 func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) error {
 	s.mu.Lock()
