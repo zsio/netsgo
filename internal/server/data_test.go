@@ -5,10 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/hashicorp/yamux"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
@@ -454,4 +457,164 @@ func TestOpenStreamToClient_DirectOnlyRejectsServerRelay(t *testing.T) {
 	}
 
 	_ = serverSession.Close()
+}
+
+func TestAcceptClientOpenedDataStreams_WaitsForDecodeFailureHandler(t *testing.T) {
+	s := New(0)
+	clientSession, serverSession := newDataTestYamuxSessionPair(t)
+
+	var streamWG sync.WaitGroup
+	streamWG.Add(1)
+	go s.acceptClientOpenedDataStreams(&ClientConn{ID: "decode-failure-client"}, serverSession, &streamWG)
+
+	stream, err := clientSession.Open()
+	if err != nil {
+		t.Fatalf("open client stream: %v", err)
+	}
+	if _, err := stream.Write([]byte("bad")); err != nil {
+		t.Fatalf("write malformed header: %v", err)
+	}
+	mustClose(t, stream)
+
+	mustClose(t, clientSession)
+	waitForWaitGroup(t, &streamWG, time.Second)
+}
+
+func TestAcceptClientOpenedDataStreams_WaitsForActiveHandler(t *testing.T) {
+	s := New(0)
+	stored := testClientRelayStoredTunnel(t)
+	s.c2c.set(stored)
+
+	targetClientSession, targetServerSession := newDataTestYamuxSessionPair(t)
+	targetClient := &ClientConn{
+		ID:          stored.Target.ClientID,
+		proxies:     make(map[string]*ProxyTunnel),
+		generation:  1,
+		state:       clientStateLive,
+		dataSession: targetServerSession,
+	}
+	s.clients.Store(targetClient.ID, targetClient)
+
+	ingressClientSession, ingressServerSession := newDataTestYamuxSessionPair(t)
+	ingressClient := &ClientConn{
+		ID:         stored.Ingress.ClientID,
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+
+	var streamWG sync.WaitGroup
+	streamWG.Add(1)
+	go s.acceptClientOpenedDataStreams(ingressClient, ingressServerSession, &streamWG)
+
+	ingressStream, err := ingressClientSession.Open()
+	if err != nil {
+		t.Fatalf("open ingress stream: %v", err)
+	}
+	header := testClientRelayHeader(stored)
+	header.OpenToken = "test-open-token"
+	if err := protocol.EncodeDataStreamHeader(ingressStream, header); err != nil {
+		t.Fatalf("encode ingress header: %v", err)
+	}
+
+	targetStream, err := targetClientSession.Accept()
+	if err != nil {
+		t.Fatalf("accept target stream: %v", err)
+	}
+	if _, err := protocol.DecodeDataStreamHeader(targetStream); err != nil {
+		t.Fatalf("decode target header: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		streamWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("stream wait group returned while relay handler was still active")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	mustClose(t, ingressStream)
+	mustClose(t, targetStream)
+	mustClose(t, ingressClientSession)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stream wait group did not return after active handler streams were closed")
+	}
+}
+
+func TestWaitForDataStreamHandlers_TimesOut(t *testing.T) {
+	var streamWG sync.WaitGroup
+	streamWG.Add(1)
+
+	if waitForDataStreamHandlers(&streamWG, 10*time.Millisecond) {
+		t.Fatal("wait should time out while a stream handler is still active")
+	}
+
+	streamWG.Done()
+	if !waitForDataStreamHandlers(&streamWG, time.Second) {
+		t.Fatal("wait should succeed after stream handlers exit")
+	}
+}
+
+func newDataTestYamuxSessionPair(t testing.TB) (clientSession, serverSession *yamux.Session) {
+	t.Helper()
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	var serverErr atomic.Value
+	serverReady := make(chan struct{})
+	go func() {
+		var err error
+		serverSession, err = mux.NewServerSession(serverConn, mux.DefaultConfig())
+		if err != nil {
+			serverErr.Store(err)
+		}
+		close(serverReady)
+	}()
+
+	var err error
+	clientSession, err = mux.NewClientSession(clientConn, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("create client yamux session: %v", err)
+	}
+
+	select {
+	case <-serverReady:
+	case <-time.After(2 * time.Second):
+		_ = clientSession.Close()
+		t.Fatal("timed out creating server yamux session")
+	}
+	if value := serverErr.Load(); value != nil {
+		_ = clientSession.Close()
+		t.Fatalf("create server yamux session: %v", value)
+	}
+
+	t.Cleanup(func() {
+		_ = clientSession.Close()
+		_ = serverSession.Close()
+	})
+	return clientSession, serverSession
+}
+
+func waitForWaitGroup(t testing.TB, wg *sync.WaitGroup, timeout time.Duration) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		t.Fatalf("wait group did not finish within %s", timeout)
+	}
 }

@@ -38,7 +38,10 @@ const (
 	retryJitterMultiplier  = 0.5
 )
 
-var retryJitterFloat64 = rand.Float64
+var (
+	retryJitterFloat64 = rand.Float64
+	fetchPublicIPs     = netutil.FetchPublicIPs
+)
 
 // Client is the core client structure.
 type Client struct {
@@ -111,6 +114,15 @@ func (rt *sessionRuntime) writeMessage(messageType int, data []byte) error {
 		return fmt.Errorf("control channel unavailable")
 	}
 	return rt.conn.WriteMessage(messageType, data)
+}
+
+func (rt *sessionRuntime) writeControl(messageType int, data []byte, deadline time.Time) error {
+	rt.connMu.Lock()
+	defer rt.connMu.Unlock()
+	if rt.conn == nil {
+		return fmt.Errorf("control channel unavailable")
+	}
+	return rt.conn.WriteControl(messageType, data, deadline)
 }
 
 func (rt *sessionRuntime) detachConn() *websocket.Conn {
@@ -201,18 +213,23 @@ func (c *Client) setRuntimeConn(rt *sessionRuntime, conn *websocket.Conn) {
 }
 
 func (c *Client) setRuntimeDataSession(rt *sessionRuntime, session *yamux.Session) {
+	c.mu.Lock()
+	shouldMirror := c.currentRuntime == rt || c.currentRuntime == nil
+	if shouldMirror {
+		c.dataMu.Lock()
+		rt.dataMu.Lock()
+		rt.dataSession = session
+		rt.dataMu.Unlock()
+		c.dataSession = session
+		c.dataMu.Unlock()
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+
 	rt.dataMu.Lock()
 	rt.dataSession = session
 	rt.dataMu.Unlock()
-
-	c.mu.Lock()
-	shouldMirror := c.currentRuntime == rt || c.currentRuntime == nil
-	c.mu.Unlock()
-	if shouldMirror {
-		c.dataMu.Lock()
-		c.dataSession = session
-		c.dataMu.Unlock()
-	}
 }
 
 func (c *Client) runtimeForStandaloneUse() *sessionRuntime {
@@ -433,13 +450,12 @@ func (c *Client) Shutdown() {
 	c.logger().Info("client.shutdown_started", "Starting graceful client shutdown", nil)
 
 	if rt := c.getCurrentRuntime(); rt != nil {
-		_ = rt.writeMessage(
+		_ = rt.writeControl(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "client shutting down"),
+			time.Now().Add(time.Second),
 		)
 	}
-
-	time.Sleep(100 * time.Millisecond)
 
 	c.cleanup()
 
@@ -726,7 +742,7 @@ func (c *Client) handleAuthFailure(authResp protocol.AuthResponse, attemptedWith
 		c.logger().Warn("client.auth_failed", "Authentication failed", map[string]any{"code": authResp.Code, "message": message, "retryable": true})
 		return &clientRunError{
 			message: fmt.Sprintf("authentication failed (%s): %s", authResp.Code, message),
-			fatal:   true,
+			fatal:   false,
 		}
 	}
 
@@ -1103,18 +1119,30 @@ func (c *Client) refreshPublicIPsAsync() {
 	c.mu.Unlock()
 
 	go func() {
-		ipv4, ipv6 := netutil.FetchPublicIPs()
+		updateFetchedAt := false
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("⚠️ Public IP refresh panicked: %v", r)
+			}
+			c.mu.Lock()
+			if updateFetchedAt {
+				c.publicIPFetched = time.Now()
+			}
+			c.publicIPFetching = false
+			c.mu.Unlock()
+		}()
+
+		ipv4, ipv6 := fetchPublicIPs()
 
 		c.mu.Lock()
-		defer c.mu.Unlock()
 		if ipv4 != "" {
 			c.publicIPv4 = ipv4
 		}
 		if ipv6 != "" {
 			c.publicIPv6 = ipv6
 		}
-		c.publicIPFetched = time.Now()
-		c.publicIPFetching = false
+		c.mu.Unlock()
+		updateFetchedAt = true
 	}()
 }
 

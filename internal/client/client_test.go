@@ -572,16 +572,24 @@ func TestClient_RetryInterval(t *testing.T) {
 	}
 }
 
-func TestClient_RetryableAuthFailureIsFatal(t *testing.T) {
-	c := New("ws://localhost:8080", "key")
-	err := c.handleAuthFailure(protocol.AuthResponse{
-		Success:   false,
-		Code:      protocol.AuthCodeRateLimited,
-		Retryable: true,
-	}, false)
+func TestClient_RetryableAuthFailureAllowsReconnect(t *testing.T) {
+	for _, code := range []string{
+		protocol.AuthCodeRateLimited,
+		protocol.AuthCodeServerUninitialized,
+		protocol.AuthCodeConcurrentSession,
+	} {
+		t.Run(code, func(t *testing.T) {
+			c := New("ws://localhost:8080", "key")
+			err := c.handleAuthFailure(protocol.AuthResponse{
+				Success:   false,
+				Code:      code,
+				Retryable: true,
+			}, false)
 
-	if !isFatalError(err) {
-		t.Fatal("retryable auth failure should stop the client instead of reconnecting")
+			if isFatalError(err) {
+				t.Fatalf("retryable auth failure %q should allow reconnect", code)
+			}
+		})
 	}
 }
 
@@ -1008,6 +1016,41 @@ func TestClient_FailRuntime_DoesNotCloseNewRuntime(t *testing.T) {
 	}
 }
 
+func TestClient_SetRuntimeDataSession_StaleRuntimeDoesNotOverwriteMirror(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	oldRT := c.beginRuntime()
+	oldSession, oldPeer := newTestYamuxSessionPair(t)
+	defer mustClose(t, oldSession)
+	defer mustClose(t, oldPeer)
+
+	c.setRuntimeDataSession(oldRT, oldSession)
+
+	newRT := c.beginRuntime()
+	newSession, newPeer := newTestYamuxSessionPair(t)
+	defer mustClose(t, newSession)
+	defer mustClose(t, newPeer)
+	c.setRuntimeDataSession(newRT, newSession)
+
+	staleSession, stalePeer := newTestYamuxSessionPair(t)
+	defer mustClose(t, staleSession)
+	defer mustClose(t, stalePeer)
+	c.setRuntimeDataSession(oldRT, staleSession)
+
+	c.dataMu.RLock()
+	gotMirror := c.dataSession
+	c.dataMu.RUnlock()
+	if gotMirror != newSession {
+		t.Fatal("stale runtime must not overwrite the mirrored client data session")
+	}
+
+	oldRT.dataMu.RLock()
+	gotOldRuntime := oldRT.dataSession
+	oldRT.dataMu.RUnlock()
+	if gotOldRuntime != staleSession {
+		t.Fatal("stale runtime should still update its own data session")
+	}
+}
+
 func TestClient_Cleanup_WaitsForRuntimeGoroutines(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	rt := c.beginRuntime()
@@ -1032,6 +1075,56 @@ func TestClient_Cleanup_WaitsForRuntimeGoroutines(t *testing.T) {
 
 	if time.Since(start) < 50*time.Millisecond {
 		t.Fatal("cleanup should wait on the WaitGroup instead of returning immediately")
+	}
+}
+
+func TestClient_RefreshPublicIPsAsync_UpdatesCacheAndFlag(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	restore := replaceFetchPublicIPs(func() (string, string) {
+		return "203.0.113.10", "2001:db8::10"
+	})
+	defer restore()
+
+	c.refreshPublicIPsAsync()
+	waitForClientCondition(t, time.Second, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.publicIPFetching && c.publicIPv4 == "203.0.113.10" && c.publicIPv6 == "2001:db8::10" && !c.publicIPFetched.IsZero()
+	})
+}
+
+func TestClient_RefreshPublicIPsAsync_RecoversPanicAndAllowsRetry(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	var calls int
+	restore := replaceFetchPublicIPs(func() (string, string) {
+		calls++
+		if calls == 1 {
+			panic("boom")
+		}
+		return "203.0.113.20", ""
+	})
+	defer restore()
+
+	c.refreshPublicIPsAsync()
+	waitForClientCondition(t, time.Second, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.publicIPFetching
+	})
+	c.mu.Lock()
+	if !c.publicIPFetched.IsZero() {
+		t.Fatal("panic should not refresh the public IP cache timestamp")
+	}
+	c.mu.Unlock()
+
+	c.refreshPublicIPsAsync()
+	waitForClientCondition(t, time.Second, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.publicIPFetching && c.publicIPv4 == "203.0.113.20" && !c.publicIPFetched.IsZero()
+	})
+	if calls != 2 {
+		t.Fatalf("expected one retry after panic, got %d fetch calls", calls)
 	}
 }
 

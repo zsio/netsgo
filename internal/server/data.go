@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -14,6 +15,8 @@ import (
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
+
+const dataStreamDrainTimeout = 2 * time.Second
 
 func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	if !websocket.IsWebSocketUpgrade(r) {
@@ -143,9 +146,15 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 		go s.reconcileTunnelsForClient(client.ID, "data_channel_ready")
 	}
 
-	go s.acceptClientOpenedDataStreams(client, session)
+	var streamWG sync.WaitGroup
+	streamWG.Add(1)
+	go s.acceptClientOpenedDataStreams(client, session, &streamWG)
 
 	<-session.CloseChan()
+	_ = session.Close()
+	if !waitForDataStreamHandlers(&streamWG, dataStreamDrainTimeout) {
+		log.Printf("⚠️ data channel: timed out waiting for client-opened streams to close [%s] generation=%d", clientID, generation)
+	}
 
 	client.dataMu.Lock()
 	isCurrentSession := client.dataSession == session
@@ -172,13 +181,16 @@ func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) err
 	return conn.WriteMessage(websocket.BinaryMessage, []byte{status})
 }
 
-func (s *Server) acceptClientOpenedDataStreams(client *ClientConn, session *yamux.Session) {
+func (s *Server) acceptClientOpenedDataStreams(client *ClientConn, session *yamux.Session, streamWG *sync.WaitGroup) {
+	defer streamWG.Done()
 	for {
 		stream, err := session.AcceptStream()
 		if err != nil {
 			return
 		}
+		streamWG.Add(1)
 		go func() {
+			defer streamWG.Done()
 			header, err := protocol.DecodeDataStreamHeader(stream)
 			if err != nil {
 				log.Printf("⚠️ data channel: decode client-opened stream header failed [%s]: %v", client.ID, err)
@@ -187,6 +199,20 @@ func (s *Server) acceptClientOpenedDataStreams(client *ClientConn, session *yamu
 			}
 			s.handleClientOpenedDataStream(client, stream, header)
 		}()
+	}
+}
+
+func waitForDataStreamHandlers(streamWG *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		streamWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }
 

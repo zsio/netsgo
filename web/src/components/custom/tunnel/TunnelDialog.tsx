@@ -15,7 +15,6 @@ import {
 import toast from 'react-hot-toast';
 import { useCreateTunnel, useUpdateTunnel } from '@/hooks/use-tunnel-mutations';
 import {
-  currentTargetTypes,
   getTunnelMutationErrorMessage,
   getTunnelMutationFieldError,
 } from '@/lib/tunnel-model';
@@ -72,9 +71,16 @@ interface TunnelFormState {
   egressBps: string;
 }
 
-type TunnelFieldError = NonNullable<ReturnType<typeof getTunnelMutationFieldError>>;
+interface LocalFieldError {
+  field: string;
+  message: string;
+  code?: string;
+  source?: 'local' | 'server';
+}
 
-function fieldErrorMatches(error: TunnelFieldError | null, fields: readonly string[]) {
+const portErrorMessage = '端口必须在 1-65535 之间';
+
+function fieldErrorMatches(error: LocalFieldError | null, fields: readonly string[]) {
   return Boolean(error && fields.includes(error.field));
 }
 
@@ -82,7 +88,7 @@ function FieldErrorText({
   error,
   fields,
 }: {
-  error: TunnelFieldError | null;
+  error: LocalFieldError | null;
   fields: readonly string[];
 }) {
   if (!fieldErrorMatches(error, fields)) {
@@ -170,6 +176,22 @@ function isPortAllowedByRanges(port: number, ranges: PortRange[] | undefined) {
   return ranges.some((range) => port >= range.start && port <= range.end);
 }
 
+function parsePortInput(value: string) {
+  if (!/^\d+$/.test(value.trim())) {
+    return null;
+  }
+  const port = Number.parseInt(value, 10);
+  return port >= 1 && port <= 65535 ? port : null;
+}
+
+function localFieldError(field: string, message: string): LocalFieldError {
+  return { field, message, code: 'invalid_field', source: 'local' };
+}
+
+function serverFieldError(error: unknown): LocalFieldError | null {
+  return getTunnelMutationFieldError(error);
+}
+
 function formatPortRanges(ranges: PortRange[] | undefined) {
   if (!ranges || ranges.length === 0) {
     return '无限制';
@@ -234,7 +256,7 @@ function TunnelDialogForm({
   const [domain, setDomain] = useState(initialForm.domain);
   const [ingressBps, setIngressBps] = useState(initialForm.ingressBps);
   const [egressBps, setEgressBps] = useState(initialForm.egressBps);
-  const [fieldError, setFieldError] = useState<TunnelFieldError | null>(null);
+  const [fieldError, setFieldError] = useState<LocalFieldError | null>(null);
 
   const clients = props.clients ?? [];
   const selectedTargetClientId = targetClientId || (props.mode === 'create' ? props.clientId : props.tunnel?.target?.client_id ?? props.tunnel?.owner_client_id ?? props.tunnel?.clientId ?? '');
@@ -245,6 +267,9 @@ function TunnelDialogForm({
     : ingressClientOptions[0]?.id || '';
   const isClientToClient = topology === 'client_to_client';
   const isHttp = type === 'http';
+  const canUseClientToClient = ingressClientOptions.length > 0;
+  const parsedLocalPort = parsePortInput(localPort);
+  const parsedRemotePort = isHttp ? 0 : parsePortInput(remotePort);
   const selectClassName = cn(
     'h-8 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-sm outline-none transition-colors',
     'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
@@ -273,17 +298,30 @@ function TunnelDialogForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setFieldError(null);
-    const parsedLocalPort = Number.parseInt(localPort, 10);
-    const parsedRemotePort = remotePort ? Number.parseInt(remotePort, 10) : 0;
     const parsedIngressBps = parseMbpsInputToBps(ingressBps);
     const parsedEgressBps = parseMbpsInputToBps(egressBps);
+
+    if (!parsedLocalPort) {
+      setFieldError(localFieldError('local_port', portErrorMessage));
+      return;
+    }
+
+    if (!isHttp && !parsedRemotePort) {
+      setFieldError(localFieldError('remote_port', portErrorMessage));
+      return;
+    }
+
+    if (isClientToClient && !canUseClientToClient) {
+      setFieldError(localFieldError('ingress.client_id', '客户端互访需要至少两个客户端'));
+      return;
+    }
 
     if (parsedIngressBps == null || parsedEgressBps == null) {
       toast.error('带宽限制必须是非负数');
       return;
     }
 
-    if (!isClientToClient && !isHttp && !isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)) {
+    if (!isClientToClient && !isHttp && parsedRemotePort && !isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)) {
       const message = `公网端口必须在允许范围内：${formatPortRanges(status?.allowed_ports)}`;
       setFieldError({ field: 'remote_port', message, code: 'port_not_allowed' });
       toast.error(message);
@@ -296,7 +334,7 @@ function TunnelDialogForm({
 
       updateTunnel.mutate(
         {
-          clientId: selectedTargetClientId,
+          clientId: tunnel.owner_client_id ?? tunnel.client_id ?? tunnel.clientId,
           tunnelId: tunnel.id,
           expected_revision: tunnel.revision,
           topology,
@@ -308,7 +346,7 @@ function TunnelDialogForm({
           type,
           local_ip: localIp,
           local_port: parsedLocalPort,
-          remote_port: parsedRemotePort,
+          remote_port: parsedRemotePort ?? 0,
           domain,
           ingress_bps: parsedIngressBps,
           egress_bps: parsedEgressBps,
@@ -320,7 +358,7 @@ function TunnelDialogForm({
             toast.success(`隧道「${name}」已更新`);
           },
           onError: (err) => {
-            setFieldError(getTunnelMutationFieldError(err));
+            setFieldError(serverFieldError(err));
             toast.error(getTunnelMutationErrorMessage(err));
           },
         },
@@ -338,7 +376,7 @@ function TunnelDialogForm({
         type,
         local_ip: localIp,
         local_port: parsedLocalPort,
-        remote_port: parsedRemotePort,
+        remote_port: parsedRemotePort ?? 0,
         domain,
         ingress_bps: parsedIngressBps,
         egress_bps: parsedEgressBps,
@@ -350,14 +388,13 @@ function TunnelDialogForm({
           toast.success(`隧道「${name}」创建成功`);
         },
         onError: (err) => {
-          setFieldError(getTunnelMutationFieldError(err));
+          setFieldError(serverFieldError(err));
           toast.error(getTunnelMutationErrorMessage(err));
         },
       },
     );
   };
 
-  const parsedRemotePort = Number.parseInt(remotePort, 10);
   const parsedIngressBps = parseMbpsInputToBps(ingressBps);
   const parsedEgressBps = parseMbpsInputToBps(egressBps);
   const effectiveTypeOptions = isClientToClient
@@ -366,11 +403,10 @@ function TunnelDialogForm({
   const isValid = Boolean(
     name.trim()
     && selectedTargetClientId
-    && localPort
-    && Number.parseInt(localPort, 10) > 0
-    && (isClientToClient ? selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
-    && (isHttp ? domain.trim() : parsedRemotePort > 0)
-    && (isClientToClient || isHttp || isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports))
+    && parsedLocalPort !== null
+    && (isClientToClient ? canUseClientToClient && selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
+    && (isHttp ? domain.trim() : parsedRemotePort !== null)
+    && (isClientToClient || isHttp || (parsedRemotePort !== null && isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)))
     && parsedIngressBps !== null
     && parsedEgressBps !== null,
   );
@@ -420,7 +456,11 @@ function TunnelDialogForm({
             <Button
               type="button"
               variant={topology === 'client_to_client' ? 'default' : 'outline'}
+              disabled={!canUseClientToClient}
               onClick={() => {
+                if (!canUseClientToClient) {
+                  return;
+                }
                 clearMutationFeedback();
                 setTopology('client_to_client');
                 if (type === 'http') setType('tcp');
@@ -429,6 +469,11 @@ function TunnelDialogForm({
               客户端互访
             </Button>
           </div>
+          {!canUseClientToClient && (
+            <p className="text-[11px] font-medium text-destructive">
+              客户端互访需要至少两个客户端
+            </p>
+          )}
           <FieldErrorText error={fieldError} fields={['topology', 'transport_policy']} />
         </div>
 
@@ -441,6 +486,7 @@ function TunnelDialogForm({
                   aria-label="服务来源客户端"
                   className={selectClassName}
                   value={selectedTargetClientId}
+                  disabled={isEdit}
                   onChange={(e) => {
                     clearMutationFeedback();
                     const nextTargetClientId = e.target.value;
@@ -503,10 +549,6 @@ function TunnelDialogForm({
               </Button>
             ))}
           </div>
-          <p className="text-[11px] text-muted-foreground">
-            {isClientToClient ? '客户端互访当前开放 TCP / UDP，传输固定为 Server 中继。' : `当前目标类型仅开放 ${currentTargetTypes.map((targetType) => targetType === 'tcp_service' ? 'TCP 服务' : 'UDP 服务').join(' / ')}；`}
-            Unix Socket、静态文件和串口设备暂不在表单中提供。
-          </p>
           <FieldErrorText error={fieldError} fields={['target.type', 'ingress.type']} />
         </div>
 
@@ -540,6 +582,9 @@ function TunnelDialogForm({
               max={65535}
             />
             <FieldErrorText error={fieldError} fields={['target.config.port', 'local_port']} />
+            {localPort && !parsedLocalPort && (
+              <p className="text-[11px] font-medium text-destructive">{portErrorMessage}</p>
+            )}
           </div>
         </div>
 
@@ -598,6 +643,9 @@ function TunnelDialogForm({
                 max={65535}
               />
               <FieldErrorText error={fieldError} fields={['remote_port', 'ingress.config.port']} />
+              {remotePort && !parsedRemotePort && (
+                <p className="text-[11px] font-medium text-destructive">{portErrorMessage}</p>
+              )}
               {!isClientToClient && (
                 <p className="text-[11px] text-muted-foreground mt-1.5">
                   可用端口范围：

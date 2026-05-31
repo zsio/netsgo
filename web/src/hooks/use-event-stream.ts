@@ -4,6 +4,7 @@ import { useRouterState } from '@tanstack/react-router';
 import { api } from '@/lib/api';
 import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
 import { useConnectionStore } from '@/stores/connection-store';
+import type { ConnectionStatus } from '@/stores/connection-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { buildClientTrafficQueryKey } from '@/hooks/use-client-traffic';
 import type {
@@ -212,6 +213,24 @@ async function resyncConsoleSnapshot(queryClient: EventStreamQueryClient) {
   applyConsoleSnapshot(queryClient, snapshot);
 }
 
+function invalidateConsoleSnapshotQueries(queryClient: EventStreamQueryClient) {
+  queryClient.invalidateQueries({ queryKey: ['clients'] });
+  queryClient.invalidateQueries({ queryKey: ['console-summary'] });
+  queryClient.invalidateQueries({ queryKey: ['server-status'] });
+}
+
+function resyncConsoleSnapshotSafely(queryClient: EventStreamQueryClient, setStatus?: (status: ConnectionStatus) => void) {
+  return resyncConsoleSnapshot(queryClient)
+    .then(() => {
+      setStatus?.('connected');
+    })
+    .catch((error) => {
+      console.warn('Failed to resync console snapshot:', error);
+      invalidateConsoleSnapshotQueries(queryClient);
+      setStatus?.('reconnecting');
+    });
+}
+
 function applyRealtimeTraffic(queryClient: EventStreamQueryClient, client: TrafficRealtimeEvent['clients'][number]) {
   const traffic: ClientTrafficResponse = {
     resolution: client.resolution,
@@ -244,7 +263,7 @@ function getTunnelChangedClientIds(event: TunnelChangedEvent) {
   ].filter((clientId): clientId is string => Boolean(clientId))));
 }
 
-function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data: string) {
+function applyEvent(queryClient: EventStreamQueryClient, setStatus: (status: ConnectionStatus) => void, eventType: string, data: string) {
   switch (eventType) {
     case 'snapshot': {
       const parsed = parseEventPayload(data, isConsoleSnapshot);
@@ -303,7 +322,7 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
             client.id === parsed.client_id ? { ...client, info, online: true } : client,
           );
         });
-        void resyncConsoleSnapshot(queryClient);
+        void resyncConsoleSnapshotSafely(queryClient, setStatus);
       }
       return;
     case 'client_offline':
@@ -318,7 +337,7 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
             client.id === parsed.client_id ? { ...client, online: false } : client,
           ),
         );
-        void resyncConsoleSnapshot(queryClient);
+        void resyncConsoleSnapshotSafely(queryClient, setStatus);
       }
       return;
     case 'tunnel_changed':
@@ -361,7 +380,7 @@ function applyEvent(queryClient: EventStreamQueryClient, eventType: string, data
         );
         queryClient.invalidateQueries({ queryKey: ['client-tunnels'] });
         queryClient.invalidateQueries({ queryKey: ['client-traffic'] });
-        void resyncConsoleSnapshot(queryClient);
+        void resyncConsoleSnapshotSafely(queryClient, setStatus);
       }
       return;
     default:
@@ -447,11 +466,7 @@ export function useEventStream() {
           }
 
           if (isReconnect) {
-            try {
-              await resyncConsoleSnapshot(queryClient);
-            } catch {
-              // fallback to the periodic SSE snapshot safety net
-            }
+            await resyncConsoleSnapshotSafely(queryClient, setStatus);
           }
 
           hasConnected = true;
@@ -468,7 +483,7 @@ export function useEventStream() {
             }
 
             buffer += decoder.decode(value, { stream: true });
-            buffer = parseSSE(buffer, (eventType, data) => applyEvent(queryClient, eventType, data));
+            buffer = parseSSE(buffer, (eventType, data) => applyEvent(queryClient, setStatus, eventType, data));
           }
         } catch (error) {
           if (cancelled) {

@@ -1,6 +1,7 @@
 use std::env;
-use std::fs::{create_dir_all, remove_dir_all, remove_file, OpenOptions};
+use std::fs::{create_dir_all, metadata, remove_dir_all, remove_file, rename, OpenOptions};
 use std::io::{ErrorKind, Write};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,9 @@ use tauri_plugin_shell::ShellExt;
 
 const SIDECAR_EVENT_NAME: &str = "netsgo://client-sidecar-event";
 const SIDECAR_BASE_PATH: &str = "binaries/netsgo";
+const DESKTOP_LOG_MAX_ENTRY_BYTES: usize = 16 * 1024;
+const DESKTOP_LOG_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const DESKTOP_LOG_ROTATED_FILE_NAME: &str = "desktop.1.jsonl";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -123,20 +127,76 @@ fn append_desktop_log(app: tauri::AppHandle, entry: Value) -> Result<(), String>
     create_dir_all(&dir).map_err(|err| format!("create app log dir: {err}"))?;
 
     let path = dir.join("desktop.jsonl");
+    let rotated_path = dir.join(DESKTOP_LOG_ROTATED_FILE_NAME);
+    rotate_desktop_log_if_needed(&path, &rotated_path)?;
+
+    let sanitized = sanitize_log_value(entry);
+    let line = serde_json::to_string(&sanitized)
+        .map_err(|err| format!("encode app log entry: {err}"))?;
+    if line.len() > DESKTOP_LOG_MAX_ENTRY_BYTES {
+        return Err(format!(
+            "desktop log entry exceeds {} bytes",
+            DESKTOP_LOG_MAX_ENTRY_BYTES
+        ));
+    }
+
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .map_err(|err| format!("open app log file: {err}"))?;
 
-    let line =
-        serde_json::to_string(&entry).map_err(|err| format!("encode app log entry: {err}"))?;
     file.write_all(line.as_bytes())
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.flush())
         .map_err(|err| format!("write app log file: {err}"))?;
 
     Ok(())
+}
+
+fn rotate_desktop_log_if_needed(path: &Path, rotated_path: &Path) -> Result<(), String> {
+    match metadata(path) {
+        Ok(meta) if meta.len() >= DESKTOP_LOG_MAX_FILE_BYTES => {
+            match remove_file(rotated_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => return Err(format!("remove rotated app log file: {err}")),
+            }
+            rename(path, rotated_path).map_err(|err| format!("rotate app log file: {err}"))?;
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("stat app log file: {err}")),
+    }
+    Ok(())
+}
+
+fn sanitize_log_value(value: Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| {
+                    let sanitized = if is_sensitive_log_key(&key) {
+                        Value::String("[REDACTED]".into())
+                    } else {
+                        sanitize_log_value(value)
+                    };
+                    (key, sanitized)
+                })
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.into_iter().map(sanitize_log_value).collect()),
+        other => other,
+    }
+}
+
+fn is_sensitive_log_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "key" | "token" | "datatoken" | "data_token" | "authorization" | "password" | "secret"
+    ) || normalized.ends_with("_key")
+        || normalized.ends_with("_token")
 }
 
 #[tauri::command]
@@ -196,15 +256,13 @@ fn start_client_sidecar(
         }
     }
 
-    let mut args = vec!["client".to_string(), "--server".to_string(), server.clone()];
-    if let Some(key) = request
+    let sidecar_key = request
         .key
-        .as_ref()
+        .as_deref()
+        .map(str::trim)
         .filter(|value| !value.trim().is_empty())
-    {
-        args.push("--key".to_string());
-        args.push(key.trim().to_string());
-    }
+        .map(str::to_string);
+    let mut args = vec!["client".to_string(), "--server".to_string(), server.clone()];
     args.extend([
         "--data-dir".to_string(),
         request.data_dir.clone(),
@@ -213,7 +271,10 @@ fn start_client_sidecar(
     ]);
 
     let sidecar_path = resolve_sidecar_path(&app)?;
-    let command = app.shell().command(sidecar_path).args(args);
+    let mut command = app.shell().command(sidecar_path).args(args);
+    if let Some(key) = sidecar_key {
+        command = command.env("NETSGO_KEY", key);
+    }
 
     let (mut rx, child) = command
         .spawn()
@@ -446,6 +507,8 @@ fn process_sidecar_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::fs;
 
     #[test]
     fn windows_sidecar_candidates_try_exe_first() {
@@ -465,5 +528,45 @@ mod tests {
         let candidates = sidecar_relative_candidates("aarch64-apple-darwin");
 
         assert_eq!(candidates, vec!["binaries/netsgo-aarch64-apple-darwin"]);
+    }
+
+    #[test]
+    fn sanitize_log_value_redacts_nested_secrets() {
+        let sanitized = sanitize_log_value(json!({
+            "event": "desktop.test",
+            "key": "client-key",
+            "nested": {
+                "refresh_token": "token-value",
+                "safe": "kept"
+            },
+            "items": [
+                { "dataToken": "data-token" }
+            ]
+        }));
+
+        assert_eq!(sanitized["key"], "[REDACTED]");
+        assert_eq!(sanitized["nested"]["refresh_token"], "[REDACTED]");
+        assert_eq!(sanitized["nested"]["safe"], "kept");
+        assert_eq!(sanitized["items"][0]["dataToken"], "[REDACTED]");
+    }
+
+    #[test]
+    fn rotate_desktop_log_moves_oversized_current_log() {
+        let dir = std::env::temp_dir().join(format!(
+            "netsgo-desktop-log-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp log dir");
+        let path = dir.join("desktop.jsonl");
+        let rotated_path = dir.join(DESKTOP_LOG_ROTATED_FILE_NAME);
+        fs::write(&path, vec![b'x'; DESKTOP_LOG_MAX_FILE_BYTES as usize])
+            .expect("write current log");
+
+        rotate_desktop_log_if_needed(&path, &rotated_path).expect("rotate log");
+
+        assert!(!path.exists());
+        assert!(rotated_path.exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 }
