@@ -107,15 +107,6 @@ func (rt *sessionRuntime) writeJSON(v any) error {
 	return rt.conn.WriteJSON(v)
 }
 
-func (rt *sessionRuntime) writeMessage(messageType int, data []byte) error {
-	rt.connMu.Lock()
-	defer rt.connMu.Unlock()
-	if rt.conn == nil {
-		return fmt.Errorf("control channel unavailable")
-	}
-	return rt.conn.WriteMessage(messageType, data)
-}
-
 func (rt *sessionRuntime) writeControl(messageType int, data []byte, deadline time.Time) error {
 	rt.connMu.Lock()
 	defer rt.connMu.Unlock()
