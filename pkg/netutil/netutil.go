@@ -10,11 +10,13 @@ import (
 
 var publicIPProbeURLs = map[int][]string{
 	4: {
+		"https://netsgo.zs.uy/ip",
 		"https://api.ipify.org",
 		"https://ipv4.icanhazip.com",
 		"https://4.ipw.cn",
 	},
 	6: {
+		"https://netsgo.zs.uy/ip",
 		"https://api6.ipify.org",
 		"https://ipv6.icanhazip.com",
 		"https://6.ipw.cn",

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1085,7 +1086,7 @@ func TestClient_RefreshPublicIPsAsync_UpdatesCacheAndFlag(t *testing.T) {
 	})
 	defer restore()
 
-	c.refreshPublicIPsAsync()
+	c.refreshPublicIPsAsync(false)
 	waitForClientCondition(t, time.Second, func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -1105,7 +1106,7 @@ func TestClient_RefreshPublicIPsAsync_RecoversPanicAndAllowsRetry(t *testing.T) 
 	})
 	defer restore()
 
-	c.refreshPublicIPsAsync()
+	c.refreshPublicIPsAsync(false)
 	waitForClientCondition(t, time.Second, func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -1117,7 +1118,7 @@ func TestClient_RefreshPublicIPsAsync_RecoversPanicAndAllowsRetry(t *testing.T) 
 	}
 	c.mu.Unlock()
 
-	c.refreshPublicIPsAsync()
+	c.refreshPublicIPsAsync(false)
 	waitForClientCondition(t, time.Second, func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -1125,6 +1126,59 @@ func TestClient_RefreshPublicIPsAsync_RecoversPanicAndAllowsRetry(t *testing.T) 
 	})
 	if calls != 2 {
 		t.Fatalf("expected one retry after panic, got %d fetch calls", calls)
+	}
+}
+
+func TestClient_RefreshPublicIPsAsync_UsesTwoHourCacheUnlessForced(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	var calls atomic.Int32
+	restore := replaceFetchPublicIPs(func() (string, string) {
+		calls.Add(1)
+		return "203.0.113.30", ""
+	})
+	defer restore()
+
+	c.refreshPublicIPsAsync(false)
+	waitForClientCondition(t, time.Second, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.publicIPFetching && !c.publicIPFetched.IsZero()
+	})
+
+	c.refreshPublicIPsAsync(false)
+	time.Sleep(50 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("fresh public IP cache should suppress refresh, got %d fetch calls", got)
+	}
+
+	c.refreshPublicIPsAsync(true)
+	waitForClientCondition(t, time.Second, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.publicIPFetching && calls.Load() == 2
+	})
+}
+
+func TestClient_RefreshPublicIPsAsync_RecordsFailedAttempt(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	var calls atomic.Int32
+	restore := replaceFetchPublicIPs(func() (string, string) {
+		calls.Add(1)
+		return "", ""
+	})
+	defer restore()
+
+	c.refreshPublicIPsAsync(false)
+	waitForClientCondition(t, time.Second, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.publicIPFetching && !c.publicIPFetched.IsZero()
+	})
+
+	c.refreshPublicIPsAsync(false)
+	time.Sleep(50 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("failed public IP attempt should still be cached, got %d fetch calls", got)
 	}
 }
 

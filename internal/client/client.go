@@ -36,6 +36,7 @@ const (
 	retryLongInterval      = 10 * time.Second
 	retryLongIntervalAfter = 5 * time.Minute
 	retryJitterMultiplier  = 0.5
+	publicIPRefreshAfter   = 2 * time.Hour
 )
 
 var (
@@ -569,6 +570,7 @@ func (c *Client) connectAndRun() error {
 		return fmt.Errorf("failed to establish data channel: %w", err)
 	}
 	c.logger().Info("client.data_channel_established", "Data channel established", nil)
+	c.refreshPublicIPsAsync(true)
 
 	rt.wg.Add(1)
 	go func() {
@@ -1084,7 +1086,7 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 	// Public IP probing can be slow or unavailable on some networks. Do it in
 	// the background so routine health probes are never blocked by third-party
 	// probe services.
-	c.refreshPublicIPsAsync()
+	c.refreshPublicIPsAsync(false)
 	c.mu.Lock()
 	stats.PublicIPv4 = c.publicIPv4
 	stats.PublicIPv6 = c.publicIPv6
@@ -1099,10 +1101,10 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 }
 
 // refreshPublicIPsAsync fetches and caches public IPs in the background.
-// It only performs a real request if more than 5 minutes have passed since the last fetch.
-func (c *Client) refreshPublicIPsAsync() {
+// It only performs a real request if forced or if the cached result is stale.
+func (c *Client) refreshPublicIPsAsync(force bool) {
 	c.mu.Lock()
-	if c.publicIPFetching || (!c.publicIPFetched.IsZero() && time.Since(c.publicIPFetched) < 5*time.Minute) {
+	if c.publicIPFetching || (!force && !c.publicIPFetched.IsZero() && time.Since(c.publicIPFetched) < publicIPRefreshAfter) {
 		c.mu.Unlock()
 		return // Cache is still fresh.
 	}
@@ -1110,15 +1112,11 @@ func (c *Client) refreshPublicIPsAsync() {
 	c.mu.Unlock()
 
 	go func() {
-		updateFetchedAt := false
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("⚠️ Public IP refresh panicked: %v", r)
 			}
 			c.mu.Lock()
-			if updateFetchedAt {
-				c.publicIPFetched = time.Now()
-			}
 			c.publicIPFetching = false
 			c.mu.Unlock()
 		}()
@@ -1132,8 +1130,8 @@ func (c *Client) refreshPublicIPsAsync() {
 		if ipv6 != "" {
 			c.publicIPv6 = ipv6
 		}
+		c.publicIPFetched = time.Now()
 		c.mu.Unlock()
-		updateFetchedAt = true
 	}()
 }
 

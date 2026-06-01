@@ -279,7 +279,7 @@ func (s *Server) serverStatusLoop() {
 	statusTicker := time.NewTicker(10 * time.Second)
 	defer statusTicker.Stop()
 
-	publicIPTicker := time.NewTicker(5 * time.Minute)
+	publicIPTicker := time.NewTicker(2 * time.Hour)
 	defer publicIPTicker.Stop()
 
 	for {
