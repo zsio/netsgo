@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Search, Play, Pause, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft, Activity,
   ArrowDown, ArrowUp, Infinity as InfinityIcon,
@@ -21,6 +21,7 @@ import {
   type TunnelStatusPresentation,
 } from '@/lib/tunnel-model';
 import { cn } from '@/lib/utils';
+import { getClientDisplayName } from '@/lib/client-utils';
 import {
   useResumeTunnel, useStopTunnel, useDeleteTunnel,
 } from '@/hooks/use-tunnel-mutations';
@@ -46,7 +47,7 @@ interface TunnelListTableProps {
   title: string;
   /** 标题图标 */
   icon?: React.ReactNode;
-  /** 是否显示归属节点列（全网视图用） */
+  /** 是否在目标服务中显示可点击节点（全网视图用） */
   showClient?: boolean;
   /** 是否显示 24h 流量列（Client 详情页用） */
   showTraffic24h?: boolean;
@@ -62,7 +63,7 @@ interface TunnelListTableProps {
   emptyAction?: React.ReactNode;
   /** 自定义行操作渲染（如全网视图中的"管理"按钮） */
   renderRowAction?: (tunnel: TunnelEntry) => React.ReactNode;
-  /** 归属节点点击回调（全网视图用） */
+  /** 目标节点点击回调（全网视图用） */
   onClientClick?: (tunnel: TunnelEntry) => void;
 }
 
@@ -102,6 +103,7 @@ export function TunnelListTable({
   const [editTarget, setEditTarget] = useState<TunnelEntry | null>(null);
   const [speedTarget, setSpeedTarget] = useState<TunnelEntry | null>(null);
   const orderedTunnels = useMemo(() => [...tunnels].sort(compareTunnelsByCreatedAtDesc), [tunnels]);
+  const clientNameById = useMemo(() => buildClientNameMap(clients), [clients]);
 
   const filteredTunnels = useMemo(() => {
     if (!searchQuery.trim()) return orderedTunnels;
@@ -109,17 +111,23 @@ export function TunnelListTable({
     return orderedTunnels.filter(
       (tunnel) => {
         const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
+        const ingress = buildIngressPresentation(tunnel, view, clientNameById);
+        const target = buildTargetPresentation(tunnel, view, clientNameById);
 
         return (
           tunnel.name.toLowerCase().includes(q) ||
           tunnel.type.toLowerCase().includes(q) ||
           view.routeLabel.toLowerCase().includes(q) ||
+          ingress.addressLabel.toLowerCase().includes(q) ||
+          ingress.nodeLabel.toLowerCase().includes(q) ||
+          target.addressLabel.toLowerCase().includes(q) ||
+          target.nodeLabel.toLowerCase().includes(q) ||
           view.status.label.toLowerCase().includes(q) ||
           (tunnel.clientName && tunnel.clientName.toLowerCase().includes(q))
         );
       },
     );
-  }, [orderedTunnels, searchQuery]);
+  }, [clientNameById, orderedTunnels, searchQuery]);
 
   const args = (clientId: string, id: string) => ({ clientId, tunnelId: id });
 
@@ -226,16 +234,15 @@ export function TunnelListTable({
         {tunnels.length > 0 ? (
           filteredTunnels.length > 0 ? (
             <div className="overflow-x-auto [scrollbar-width:thin]">
-              <table className="min-w-[44rem] w-full table-fixed text-left text-sm">
+              <table className="min-w-[56rem] w-full table-fixed text-left text-sm">
                 <thead className="text-xs text-muted-foreground bg-muted/30 uppercase">
                   <tr>
-                    <th className="w-36 whitespace-nowrap px-4 py-3 font-medium sm:px-6">隧道名称</th>
-                    <th className="w-60 whitespace-nowrap px-4 py-3 font-medium sm:px-6">映射</th>
-                    <th className="w-40 whitespace-nowrap px-4 py-3 font-medium sm:px-6">拓扑 / 传输</th>
-                    <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">限速</th>
+                    <th className="w-40 whitespace-nowrap px-4 py-3 font-medium sm:px-6">隧道</th>
+                    <th className="w-56 whitespace-nowrap px-4 py-3 font-medium sm:px-6">入口</th>
+                    <th className="w-64 whitespace-nowrap px-4 py-3 font-medium sm:px-6">目标服务</th>
+                    <th className="w-24 whitespace-nowrap px-4 py-3 font-medium sm:px-6">限速</th>
                     {showTraffic24h && <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">24 小时流量</th>}
                     <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">状态</th>
-                    {showClient && <th className="w-36 whitespace-nowrap px-4 py-3 font-medium sm:px-6">归属节点</th>}
                     {(showActions || renderRowAction) && (
                       <th className="w-28 whitespace-nowrap px-4 py-3 text-right font-medium sm:px-6">操作</th>
                     )}
@@ -247,6 +254,7 @@ export function TunnelListTable({
                       key={tunnel.id}
                       tunnel={tunnel}
                       showClient={showClient}
+                      clientNameById={clientNameById}
                       showTraffic24h={showTraffic24h}
                       traffic24hState={traffic24hState}
                       showActions={showActions}
@@ -314,6 +322,7 @@ export function TunnelListTable({
 function TunnelTableRow({
   tunnel,
   showClient,
+  clientNameById,
   showTraffic24h,
   traffic24hState,
   showActions,
@@ -323,6 +332,7 @@ function TunnelTableRow({
 }: {
   tunnel: TunnelEntry;
   showClient: boolean;
+  clientNameById: Map<string, string>;
   showTraffic24h: boolean;
   traffic24hState: Traffic24hState;
   showActions: boolean;
@@ -331,17 +341,29 @@ function TunnelTableRow({
   renderActionButtons: (tunnel: TunnelEntry) => React.ReactNode;
 }) {
   const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
+  const ingress = buildIngressPresentation(tunnel, view, clientNameById);
+  const target = buildTargetPresentation(tunnel, view, clientNameById);
 
   return (
     <tr className="hover:bg-muted/30 transition-colors">
-      <td className="px-4 py-3 font-medium text-foreground sm:px-6"><span className="block truncate" title={tunnel.name}>{tunnel.name}</span></td>
-
-      <td className="px-4 py-3 font-mono text-xs sm:px-6">
-        <TunnelMapping tunnel={tunnel} view={view} />
+      <td className="px-4 py-3 sm:px-6">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="inline-flex shrink-0 items-center rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {getTunnelTypeLabel(tunnel)}
+          </span>
+          <span className="block min-w-0 truncate font-medium text-foreground" title={tunnel.name}>{tunnel.name}</span>
+        </div>
       </td>
 
       <td className="px-4 py-3 sm:px-6">
-        <TunnelTopologyCell view={view} />
+        <TunnelEndpointCell endpoint={ingress} warning={view.ingressWarning} />
+      </td>
+
+      <td className="px-4 py-3 sm:px-6">
+        <TunnelEndpointCell
+          endpoint={target}
+          onNodeClick={showClient && onClientClick ? () => onClientClick(tunnel) : undefined}
+        />
       </td>
 
       <td className="px-4 py-3 sm:px-6">
@@ -364,22 +386,6 @@ function TunnelTableRow({
         <TunnelStatusBadge status={view.status} error={tunnel.error} issues={tunnel.issues} />
       </td>
 
-      {showClient && (
-        <td className="px-4 py-3 text-muted-foreground sm:px-6">
-          {onClientClick ? (
-            <button
-              type="button"
-              className="cursor-pointer text-left text-muted-foreground border-b border-dashed border-muted-foreground/50 hover:text-foreground"
-              onClick={() => onClientClick(tunnel)}
-            >
-              {tunnel.clientName}
-            </button>
-          ) : (
-            tunnel.clientName
-          )}
-        </td>
-      )}
-
       {(showActions || renderRowAction) && (
         <td className="px-4 py-3 text-right sm:px-6">
           {renderRowAction ? (
@@ -391,6 +397,68 @@ function TunnelTableRow({
       )}
     </tr>
   );
+}
+
+type TunnelEndpointPresentation = {
+  nodeLabel: string;
+  addressLabel: string;
+};
+
+function buildClientNameMap(clients: Client[] | undefined) {
+  const names = new Map<string, string>();
+  for (const client of clients ?? []) {
+    names.set(client.id, getClientDisplayName(client));
+  }
+  return names;
+}
+
+function resolveClientLabel(tunnel: TunnelEntry, clientId: string | undefined, clientNameById: Map<string, string>) {
+  if (!clientId) {
+    return '未知节点';
+  }
+  if (clientNameById.has(clientId)) {
+    return clientNameById.get(clientId) ?? clientId;
+  }
+  if (clientId === tunnel.clientId && tunnel.clientName) {
+    return tunnel.clientName;
+  }
+  return compactClientId(clientId);
+}
+
+function compactClientId(clientId: string) {
+  return clientId.length > 12 ? `${clientId.slice(0, 8)}...` : clientId;
+}
+
+function buildIngressPresentation(
+  tunnel: TunnelEntry,
+  view: ReturnType<typeof buildTunnelViewModel>,
+  clientNameById: Map<string, string>,
+): TunnelEndpointPresentation {
+  const ingress = tunnel.ingress;
+  const ingressClientId = ingress?.client_id || tunnel.participants?.ingress?.client_id;
+  const isClientIngress = ingress?.location === 'client';
+
+  return {
+    nodeLabel: isClientIngress ? resolveClientLabel(tunnel, ingressClientId, clientNameById) : 'Server',
+    addressLabel: view.targetLabel,
+  };
+}
+
+function buildTargetPresentation(
+  tunnel: TunnelEntry,
+  view: ReturnType<typeof buildTunnelViewModel>,
+  clientNameById: Map<string, string>,
+): TunnelEndpointPresentation {
+  const targetClientId = tunnel.target?.client_id || tunnel.participants?.target?.client_id || tunnel.client_id;
+
+  return {
+    nodeLabel: resolveClientLabel(tunnel, targetClientId, clientNameById),
+    addressLabel: view.destinationLabel,
+  };
+}
+
+function getTunnelTypeLabel(tunnel: TunnelEntry) {
+  return tunnel.type.toUpperCase();
 }
 
 function TunnelSpeedLimit({ tunnel }: { tunnel: TunnelEntry }) {
@@ -423,88 +491,39 @@ function TunnelSpeedLimit({ tunnel }: { tunnel: TunnelEntry }) {
   );
 }
 
-function TunnelTopologyCell({ view }: { view: ReturnType<typeof buildTunnelViewModel> }) {
+function TunnelEndpointCell({
+  endpoint,
+  warning,
+  onNodeClick,
+}: {
+  endpoint: TunnelEndpointPresentation;
+  warning?: string;
+  onNodeClick?: () => void;
+}) {
   return (
     <div className="flex min-w-0 flex-col gap-1 text-xs">
-      <span className="truncate text-foreground" title={view.participantLabel}>
-        {view.topologyLabel} · {view.participantLabel}
-      </span>
-      <span className="truncate text-muted-foreground" title={`${view.transportLabel} / ${view.p2pLabel}`}>
-        {view.transportLabel} / {view.p2pLabel}
-      </span>
-      {view.ingressWarning && (
-        <span className="truncate text-amber-600" title={view.ingressWarning}>
-          {view.ingressWarning}
+      {onNodeClick ? (
+        <button
+          type="button"
+          className="inline-flex w-fit max-w-full cursor-pointer truncate border-b border-dashed border-muted-foreground/50 text-left font-medium text-foreground hover:text-primary"
+          title={endpoint.nodeLabel}
+          onClick={onNodeClick}
+        >
+          {endpoint.nodeLabel}
+        </button>
+      ) : (
+        <span className="min-w-0 truncate font-medium text-foreground" title={endpoint.nodeLabel}>
+          {endpoint.nodeLabel}
         </span>
       )}
-    </div>
-  );
-}
-
-function TunnelMapping({
-  tunnel,
-  view,
-}: {
-  tunnel: TunnelEntry;
-  view: ReturnType<typeof buildTunnelViewModel>;
-}) {
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const sourceRef = useRef<HTMLSpanElement>(null);
-  const destinationRef = useRef<HTMLSpanElement>(null);
-  const [isWrapped, setIsWrapped] = useState(false);
-  const targetLabel = view.targetLabel;
-
-  useEffect(() => {
-    const wrapper = wrapperRef.current;
-    const source = sourceRef.current;
-    const destination = destinationRef.current;
-    if (!wrapper || !source || !destination) {
-      return;
-    }
-
-    let frame = 0;
-    const measure = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        setIsWrapped(destination.offsetTop > source.offsetTop);
-      });
-    };
-
-    measure();
-
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', measure);
-      return () => {
-        cancelAnimationFrame(frame);
-        window.removeEventListener('resize', measure);
-      };
-    }
-
-    const observer = new ResizeObserver(measure);
-    observer.observe(wrapper);
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, [targetLabel, view.destinationLabel]);
-
-  return (
-    <div ref={wrapperRef} className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
-      <span ref={sourceRef} className="inline-flex items-center gap-2 min-w-0">
-        <span className="inline-flex h-6 w-11 shrink-0 items-center justify-center rounded bg-secondary text-[10px] font-mono uppercase text-secondary-foreground border border-border/50">
-          {(tunnel.ingress?.type ?? tunnel.type).toUpperCase()}
-        </span>
-        <span className="text-primary font-medium whitespace-nowrap">{targetLabel}</span>
+      <span className="block truncate font-mono text-xs text-primary" title={endpoint.addressLabel}>
+        {endpoint.addressLabel}
       </span>
-      <span ref={destinationRef} className="inline-flex items-center gap-2 min-w-0">
-        <span className={cn(
-          'inline-flex h-6 shrink-0 items-center justify-center',
-          isWrapped ? 'w-11' : 'w-4',
-        )}>
-          <ArrowRightLeft className="w-3.5 h-3.5 text-muted-foreground" />
+      {warning && (
+        <span className="truncate text-[11px] text-amber-600" title={warning}>
+          {warning}
         </span>
-        <span className="whitespace-nowrap text-foreground">{view.destinationLabel}</span>
-      </span>
+      )}
     </div>
   );
 }

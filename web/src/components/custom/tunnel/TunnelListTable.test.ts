@@ -178,7 +178,7 @@ describe('TunnelListTable', () => {
     expect(markup).not.toContain('搜索隧道...');
   });
 
-  test('合并类型与映射关系为映射列', () => {
+  test('拆分入口与目标服务，隐藏内部 endpoint 枚举', () => {
     const markup = renderTable([
       createTunnel({
         type: 'tcp',
@@ -188,17 +188,21 @@ describe('TunnelListTable', () => {
       }),
     ]);
 
-    expect(markup).toContain('映射');
+    expect(markup).toContain('入口');
+    expect(markup).toContain('目标服务');
+    expect(markup).not.toContain('链路');
+    expect(markup).not.toContain('映射');
     expect(markup).not.toContain('应用 / 类型');
     expect(markup).not.toContain('映射关系');
+    expect(markup).not.toContain('TCP_LISTEN');
     expect(markup).toContain('TCP');
+    expect(markup).not.toContain('TCP 监听');
+    expect(markup).not.toContain('TCP 服务');
     expect(markup).toContain(':10123');
     expect(markup).toContain('127.0.0.1:22');
-    expect(markup).toContain('w-11');
-    expect(markup).toContain('w-4');
   });
 
-  test('展示统一隧道拓扑、参与方、传输与 wildcard bind 警告', () => {
+  test('展示统一隧道入口、目标与 wildcard bind 警告', () => {
     const markup = renderTable([
       createTunnel({
         topology: 'client_to_client',
@@ -228,11 +232,16 @@ describe('TunnelListTable', () => {
       }),
     ]);
 
-    expect(markup).toContain('拓扑 / 传输');
-    expect(markup).toContain('Client ↔ Client');
-    expect(markup).toContain('入口 client-a / 目标 client-b');
-    expect(markup).toContain('P2P 优先（未开放） · Server 中继');
-    expect(markup).toContain('已回退中继');
+    expect(markup).not.toContain('入口节点');
+    expect(markup).not.toContain('目标节点');
+    expect(markup).not.toContain('链路');
+    expect(markup).not.toContain('Client ↔ Client');
+    expect(markup).toContain('client-a');
+    expect(markup).toContain('client-b');
+    expect(markup).toContain('0.0.0.0:10022');
+    expect(markup).toContain('127.0.0.1:22');
+    expect(markup).not.toContain('P2P 优先（未开放） · Server 中继');
+    expect(markup).not.toContain('已回退中继');
     expect(markup).toContain('入口绑定到通配地址，会暴露给入口 Client 所在网络。');
   });
 
@@ -253,11 +262,12 @@ describe('TunnelListTable', () => {
       ),
     );
 
-    expect(markup).toContain('归属节点');
+    expect(markup).toContain('目标服务');
+    expect(markup).not.toContain('归属节点');
     expect(markup).toContain('<button');
     expect(markup).toContain('edge-node');
     expect(markup).toContain('cursor-pointer');
-    expect(markup).toContain('hover:text-foreground');
+    expect(markup).toContain('hover:text-primary');
     expect(markup).not.toContain('>操作<');
   });
 

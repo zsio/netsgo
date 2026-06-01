@@ -33,6 +33,7 @@ export function DashboardTunnelTable() {
       tunnels={allTunnels}
       title="全部隧道列表"
       icon={<ArrowRightLeft className="h-5 w-5 text-primary" />}
+      clients={clients}
       showClient
       showActions={false}
       showSearch
