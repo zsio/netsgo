@@ -51,6 +51,7 @@ services:
       - /bin/sh
       - -c
       - |
+        set -e
         bun install --frozen-lockfile
         exec bun run dev -- --host 0.0.0.0
     environment:
@@ -59,7 +60,7 @@ services:
     ports:
       - "${NETSGO_DEV_WEB_PORT:-5173}:5173"
     volumes:
-      - .:/workspace
+      - ./web:/workspace/web
       - netsgo-src-dev-web-node-modules:/workspace/web/node_modules
       - netsgo-src-dev-bun-cache:/root/.bun/install/cache
     depends_on:
