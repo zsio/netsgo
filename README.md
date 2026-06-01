@@ -68,7 +68,7 @@
 长期运行最省事的方案。脚本会下载并验签 release 包，然后进入 `netsgo install` 交互式安装：
 
 ```bash
-curl -fsSL https://cnb.cool/zsio/netsgo/-/git/raw/main/scripts/install.sh | sh -s -- --channel beta
+curl -fsSL https://netsgo.zs.uy/install.sh | sh -s -- --channel beta
 ```
 
 按交互提示选择 **Server**，并填入管理员账号、访问地址等信息。安装完成后：
@@ -86,7 +86,7 @@ sudo netsgo manage
 <summary>点击展开升级命令</summary>
 
 ```bash
-curl -fsSL https://cnb.cool/zsio/netsgo/-/git/raw/main/scripts/upgrade.sh | sh -s -- --channel beta -y -f
+curl -fsSL https://netsgo.zs.uy/upgrade.sh | sh -s -- --channel beta -y -f
 ```
 
 </details>
@@ -184,7 +184,7 @@ Docker 镜像默认执行 `netsgo server`。这里通过 `NETSGO_DATA_DIR=/var/l
 在需要接入内网服务的 Linux 主机上执行：
 
 ```bash
-curl -fsSL https://cnb.cool/zsio/netsgo/-/git/raw/main/scripts/install.sh | sh -s -- --channel beta
+curl -fsSL https://netsgo.zs.uy/install.sh | sh -s -- --channel beta
 ```
 
 按交互提示选择 **Client**，并填入 Web 面板或 Server 安装完成提示中显示的服务地址（通常是 `http://` 或 `https://`）与 Client Key。
@@ -197,7 +197,7 @@ curl -fsSL https://cnb.cool/zsio/netsgo/-/git/raw/main/scripts/install.sh | sh -
 <summary>点击展开升级命令</summary>
 
 ```bash
-curl -fsSL https://cnb.cool/zsio/netsgo/-/git/raw/main/scripts/upgrade.sh | sh -s -- --channel beta -y -f
+curl -fsSL https://netsgo.zs.uy/upgrade.sh | sh -s -- --channel beta -y -f
 ```
 
 </details>
