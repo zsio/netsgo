@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import {
   Server as ServerIcon, LayoutDashboard,
-  Settings, Key,
-  LayersPlus, LogOut
+  Settings,
+  LayersPlus, Languages, LogOut
 } from 'lucide-react';
 import { Link, useMatch, useRouterState, useNavigate } from '@tanstack/react-router';
 import type { Client } from '@/types';
@@ -11,7 +11,7 @@ import { AddClientDialog } from './AddClientDialog';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { useTranslation } from 'react-i18next';
-import { LanguageSwitcher } from '@/components/custom/common/LanguageSwitcher';
+import { SUPPORTED_LOCALES, type SupportedLocale } from '@/i18n';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -44,13 +44,13 @@ interface ClientSidebarProps {
   isLoading: boolean;
 }
 
-const ADMIN_NAV = [
-  { path: '/dashboard/admin/config', nameKey: 'dashboard.serverConfig', icon: Settings },
-  { path: '/dashboard/admin/keys', nameKey: 'dashboard.keyManagement', icon: Key },
-];
+const LANGUAGE_LABEL_KEYS: Record<SupportedLocale, string> = {
+  'en-US': 'common.english',
+  'zh-CN': 'common.chinese',
+};
 
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [showAddClient, setShowAddClient] = useState(false);
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
@@ -74,6 +74,10 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const isAdmin = pathname.includes('/admin');
   const isClientPage = pathname.includes('/clients/');
   const isOverview = !currentClientId && !isAdmin && !isClientPage;
+  const currentLanguage = SUPPORTED_LOCALES.includes(i18n.resolvedLanguage as SupportedLocale)
+    ? i18n.resolvedLanguage as SupportedLocale
+    : 'en-US';
+  const nextLanguage: SupportedLocale = currentLanguage === 'en-US' ? 'zh-CN' : 'en-US';
 
   // 在线排前面，离线排后面
   const sortedClients = useMemo(() => {
@@ -204,42 +208,39 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
         </SidebarGroup>
       </SidebarContent>
 
-      {/* 底部 — 系统设置 */}
       <SidebarFooter className="pb-[calc(1rem+var(--safe-area-bottom))]">
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-[11px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em] px-2 mb-1">
-            {t('dashboard.systemSettings')}
-          </SidebarGroupLabel>
+        <SidebarGroup className="text-muted-foreground/80">
           <SidebarMenu>
-            {ADMIN_NAV.map((item) => (
-              <SidebarMenuItem key={item.path}>
-                <SidebarMenuButton
-                  asChild
-                  isActive={pathname === item.path}
-                  tooltip={t(item.nameKey)}
-                  className="data-[active=true]:bg-background data-[active=true]:shadow-[0_1px_2px_rgba(0,0,0,0.05)] data-[active=true]:border-l-[3px] data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
-                >
-                  <Link to={item.path}>
-                    <item.icon />
-                    <span>{t(item.nameKey)}</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        </SidebarGroup>
-        
-        <SidebarGroup className="mt-2 text-muted-foreground/80">
-          <div className="px-2 pb-2">
-            <LanguageSwitcher />
-          </div>
-          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={pathname === '/dashboard/admin/config'}
+                tooltip={t('dashboard.serverConfig')}
+                className="data-[active=true]:bg-background data-[active=true]:shadow-[0_1px_2px_rgba(0,0,0,0.05)] data-[active=true]:border-l-[3px] data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
+              >
+                <Link to="/dashboard/admin/config">
+                  <Settings className="h-4 w-4" />
+                  <span>{t('dashboard.serverConfig')}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip={t('common.language')}
+                className="relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
+                onClick={() => void i18n.changeLanguage(nextLanguage)}
+              >
+                <Languages className="h-4 w-4" />
+                <span>{t('common.language')}</span>
+                <span className="ml-auto text-xs">{t(LANGUAGE_LABEL_KEYS[currentLanguage])}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
             <SidebarMenuItem>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <SidebarMenuButton
                     tooltip={t('auth.logout')}
-                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    className="relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
                   >
                     <LogOut className="h-4 w-4" />
                     <span>{t('auth.logout')}</span>
