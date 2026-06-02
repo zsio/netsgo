@@ -145,7 +145,7 @@ export function TunnelListTable({
 
     return (
       <div className="flex items-center justify-end gap-1">
-        {showTraffic24h && (
+        {showTraffic24h && canStop && (
           <button
             className="p-1.5 hover:bg-primary/10 rounded text-primary"
             title={t('tunnels.rateTrend')}
@@ -153,6 +153,16 @@ export function TunnelListTable({
             onClick={() => setSpeedTarget(tunnel)}
           >
             <Activity className="h-4 w-4" />
+          </button>
+        )}
+        {canEdit && !canStop && (
+          <button
+            className="p-1.5 hover:bg-blue-500/10 rounded text-blue-500"
+            title={t('common.edit')}
+            aria-label={t('common.edit')}
+            onClick={() => setEditTarget(tunnel)}
+          >
+            <Pencil className="h-4 w-4" />
           </button>
         )}
         {canResume && (
@@ -181,7 +191,7 @@ export function TunnelListTable({
             <Pause className="h-4 w-4" />
           </button>
         )}
-        {canEdit && (
+        {canEdit && canStop && (
           <button
             className="p-1.5 hover:bg-blue-500/10 rounded text-blue-500"
             title={t('common.edit')}

@@ -40,7 +40,7 @@ export const enUS = {
     confirmLogout: 'Log out',
   },
   dashboard: {
-    overview: 'Dashboard overview',
+    overview: 'Dashboard',
     clients: 'Clients',
     addClient: 'Add client',
     addNode: 'Add node',

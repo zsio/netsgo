@@ -305,6 +305,36 @@ describe('TunnelListTable', () => {
     expect(disabledMarkup).not.toContain('title="Rate trend"');
   });
 
+  test('停止态不显示速率动作，按编辑、启动、删除顺序展示', () => {
+    const client = new QueryClient();
+    const markup = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(TunnelListTable, {
+          tunnels: [createTunnel({
+            desired_state: 'stopped',
+            runtime_state: 'stopped',
+            capabilities: {
+              can_resume: true,
+              can_stop: false,
+              can_edit: true,
+              can_delete: true,
+            },
+          })],
+          title: 'Child tunnels',
+          showActions: true,
+          showSearch: false,
+          showTraffic24h: true,
+        }),
+      ),
+    );
+
+    expect(markup).not.toContain('title="Rate trend"');
+    expect(markup.indexOf('title="Edit"')).toBeLessThan(markup.indexOf('title="Start"'));
+    expect(markup.indexOf('title="Start"')).toBeLessThan(markup.indexOf('title="Delete"'));
+  });
+
   test('显示统一隧道运行 issues 摘要与详情', () => {
     const markup = renderTable([
       createTunnel({

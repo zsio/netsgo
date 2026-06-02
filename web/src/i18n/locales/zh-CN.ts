@@ -42,7 +42,7 @@ export const zhCN = {
     confirmLogout: '确认退出',
   },
   dashboard: {
-    overview: 'Dashboard概览',
+    overview: 'Dashboard',
     clients: '客户端 / Client',
     addClient: '添加客户端',
     addNode: '添加节点',
