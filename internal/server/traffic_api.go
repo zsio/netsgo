@@ -10,12 +10,12 @@ import (
 func (s *Server) handleGetClientTraffic(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
 	if clientID == "" {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing client id"})
+		writeAPIError(w, http.StatusBadRequest, "missing_client_id", "missing client id")
 		return
 	}
 
 	if s.trafficStore == nil {
-		encodeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "traffic store unavailable"})
+		writeAPIError(w, http.StatusServiceUnavailable, "traffic_store_unavailable", "traffic store unavailable")
 		return
 	}
 
@@ -24,19 +24,19 @@ func (s *Server) handleGetClientTraffic(w http.ResponseWriter, r *http.Request) 
 	now := time.Now()
 	from, to, err := parseTrafficTimeRange(q.Get("from"), q.Get("to"), now)
 	if err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusBadRequest, "invalid_traffic_time_range", err.Error())
 		return
 	}
 
 	tunnelName := q.Get("tunnel")
 	resolution, err := parseTrafficResolution(q.Get("resolution"), from, to)
 	if err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusBadRequest, "invalid_traffic_resolution", err.Error())
 		return
 	}
 	if resolution == TrafficResolutionSecond {
 		if err := validateRealtimeTrafficTimeRange(from, to); err != nil {
-			encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			writeAPIError(w, http.StatusBadRequest, "invalid_traffic_time_range", err.Error())
 			return
 		}
 	}
@@ -50,7 +50,7 @@ func (s *Server) handleGetClientTraffic(w http.ResponseWriter, r *http.Request) 
 		result, err = s.trafficStore.QueryWithResolution(clientID, tunnelName, from, to, resolution)
 	}
 	if err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to query traffic"})
+		writeAPIError(w, http.StatusInternalServerError, "traffic_query_failed", "failed to query traffic")
 		return
 	}
 

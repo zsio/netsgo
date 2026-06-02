@@ -879,6 +879,14 @@ func encodeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 }
 
+func writeAPIError(w http.ResponseWriter, status int, code, message string) {
+	encodeJSON(w, status, apiErrorResponse{
+		Error:   message,
+		Message: message,
+		Code:    code,
+	})
+}
+
 // affectedTunnel describes a tunnel affected by a port allowlist change.
 type affectedTunnel struct {
 	ClientID     string `json:"client_id"`

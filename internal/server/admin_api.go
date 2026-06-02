@@ -48,7 +48,7 @@ func sanitizeAPIKeys(keys []APIKey) []apiKeyResponse {
 
 func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
@@ -70,12 +70,12 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
 		return
 	}
 
 	if s.auth.adminStore == nil {
-		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "admin_store_unavailable", "admin store not initialized")
 		return
 	}
 
@@ -84,20 +84,20 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		if s.auth.loginLimiter != nil {
 			s.auth.loginLimiter.RecordFailure(ip)
 		}
-		http.Error(w, `{"error":"username or password incorrect"}`, http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, "username_or_password_incorrect", "username or password incorrect")
 		return
 	}
 
 	// create session (automatically invalidates old sessions → single active session per user)
 	session, err := s.auth.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
 	if err != nil {
-		http.Error(w, `{"error":"failed to persist session"}`, http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "session_persist_failed", "failed to persist session")
 		return
 	}
 
 	token, err := s.GenerateAdminToken(session)
 	if err != nil {
-		http.Error(w, `{"error":"failed to generate token"}`, http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "token_generate_failed", "failed to generate token")
 		return
 	}
 
@@ -120,18 +120,18 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
 	info := GetSessionFromContext(r.Context())
 	if info == nil {
-		http.Error(w, `{"error":"session not found"}`, http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, "session_not_found", "session not found")
 		return
 	}
 
 	if err := s.auth.adminStore.DeleteSession(info.SessionID); err != nil {
-		http.Error(w, `{"error":"failed to persist logout"}`, http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "logout_persist_failed", "failed to persist logout")
 		return
 	}
 	slog.Info("Admin user logged out", "user", info.Username, "module", "auth")
@@ -145,7 +145,7 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 	if s.auth.adminStore == nil {
-		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "admin_store_unavailable", "admin store not initialized")
 		return
 	}
 
@@ -162,7 +162,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 			ExpiresIn   string   `json:"expires_in"` // "1h","3h","24h","168h","" or "0" means no expiry
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid body")
 			return
 		}
 
@@ -171,7 +171,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 		if req.ExpiresIn != "" && req.ExpiresIn != "0" {
 			d, err := time.ParseDuration(req.ExpiresIn)
 			if err != nil {
-				http.Error(w, `{"error":"invalid expires_in format"}`, http.StatusBadRequest)
+				writeAPIError(w, http.StatusBadRequest, "invalid_expires_in", "invalid expires_in format")
 				return
 			}
 			t := time.Now().Add(d)
@@ -183,7 +183,9 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 		key, err := s.auth.adminStore.AddAPIKey(req.Name, rawKey, req.Permissions, expiresAt)
 		if err != nil {
 			encodeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": err.Error(),
+				"error":   err.Error(),
+				"message": err.Error(),
+				"code":    "api_key_create_failed",
 			})
 			return
 		}
@@ -214,13 +216,13 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 		})
 
 	default:
-		http.Error(w, `{"error":"not allowed"}`, http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "not allowed")
 	}
 }
 
 func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 	if s.auth.adminStore == nil {
-		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "admin_store_unavailable", "admin store not initialized")
 		return
 	}
 
@@ -236,12 +238,12 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 		case "disable":
 			active = false
 		default:
-			http.Error(w, `{"error":"unknown action"}`, http.StatusNotFound)
+			writeAPIError(w, http.StatusNotFound, "unknown_action", "unknown action")
 			return
 		}
 
 		if err := s.auth.adminStore.SetAPIKeyActive(keyID, active); err != nil {
-			http.Error(w, `{"error":"key not found"}`, http.StatusNotFound)
+			writeAPIError(w, http.StatusNotFound, "api_key_not_found", "key not found")
 			return
 		}
 
@@ -255,7 +257,7 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodDelete:
 		if err := s.auth.adminStore.DeleteAPIKey(keyID); err != nil {
-			http.Error(w, `{"error":"key not found"}`, http.StatusNotFound)
+			writeAPIError(w, http.StatusNotFound, "api_key_not_found", "key not found")
 			return
 		}
 
@@ -263,7 +265,7 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
-		http.Error(w, `{"error":"not allowed"}`, http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "not allowed")
 	}
 }
 
@@ -271,7 +273,7 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 	if s.auth.adminStore == nil {
-		http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "admin_store_unavailable", "admin store not initialized")
 		return
 	}
 
@@ -279,7 +281,7 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		config, err := s.auth.adminStore.GetServerConfigE()
 		if err != nil {
-			http.Error(w, `{"error":"failed to load config"}`, http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "config_load_failed", "failed to load config")
 			return
 		}
 		if config.AllowedPorts == nil {
@@ -295,20 +297,22 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		var config ServerConfig
 		if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
-			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid body")
 			return
 		}
 
 		current, err := s.auth.adminStore.GetServerConfigE()
 		if err != nil {
-			http.Error(w, `{"error":"failed to load config"}`, http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "config_load_failed", "failed to load config")
 			return
 		}
 
 		normalizedServerAddr, err := normalizeServerAddrForConfigUpdate(config.ServerAddr, current.ServerAddr)
 		if err != nil {
 			encodeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": err.Error(),
+				"error":   err.Error(),
+				"message": err.Error(),
+				"code":    "invalid_server_addr",
 			})
 			return
 		}
@@ -318,7 +322,9 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		for _, pr := range config.AllowedPorts {
 			if pr.Start < 1 || pr.End > 65535 || pr.Start > pr.End {
 				encodeJSON(w, http.StatusBadRequest, map[string]any{
-					"error": "invalid port range: start must be >= 1, end must be <= 65535, and start <= end",
+					"error":   "invalid port range: start must be >= 1, end must be <= 65535, and start <= end",
+					"message": "invalid port range: start must be >= 1, end must be <= 65535, and start <= end",
+					"code":    "invalid_port_range",
 				})
 				return
 			}
@@ -334,12 +340,12 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		// check affected tunnels (when new allowlist is non-empty)
 		affected, err := s.findTunnelsAffectedByPortChange(config.AllowedPorts)
 		if err != nil {
-			http.Error(w, `{"error":"failed to check affected tunnels"}`, http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "affected_tunnels_check_failed", "failed to check affected tunnels")
 			return
 		}
 		conflicts, err := conflictingHTTPDomainsForServerAddr(config.ServerAddr, s)
 		if err != nil {
-			http.Error(w, `{"error":"failed to check domain conflicts"}`, http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "domain_conflict_check_failed", "failed to check domain conflicts")
 			return
 		}
 
@@ -356,6 +362,8 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		if isServerAddrLocked() && config.ServerAddr != currentServerAddr {
 			encodeJSON(w, http.StatusConflict, adminConfigUpdateResponse{
 				Error:                  "server_addr is locked by the NETSGO_SERVER_ADDR environment variable",
+				Message:                "server_addr is locked by the NETSGO_SERVER_ADDR environment variable",
+				Code:                   "server_addr_locked",
 				ServerAddrLocked:       true,
 				AffectedTunnels:        affected,
 				ConflictingHTTPTunnels: conflicts,
@@ -366,6 +374,8 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		if len(conflicts) > 0 {
 			encodeJSON(w, http.StatusConflict, adminConfigUpdateResponse{
 				Error:                  "server_addr conflicts with existing HTTP tunnel domains",
+				Message:                "server_addr conflicts with existing HTTP tunnel domains",
+				Code:                   "server_addr_conflict",
 				AffectedTunnels:        affected,
 				ConflictingHTTPTunnels: conflicts,
 			})
@@ -374,7 +384,7 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 
 		// save config
 		if err := s.auth.adminStore.UpdateServerConfig(config); err != nil {
-			http.Error(w, `{"error":"failed to update config"}`, http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "config_update_failed", "failed to update config")
 			return
 		}
 
@@ -399,6 +409,6 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		})
 
 	default:
-		http.Error(w, `{"error":"not allowed"}`, http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "not allowed")
 	}
 }

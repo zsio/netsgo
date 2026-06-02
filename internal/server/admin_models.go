@@ -92,9 +92,18 @@ type adminConfigResponse struct {
 type adminConfigUpdateResponse struct {
 	Success                bool             `json:"success,omitempty"`
 	Error                  string           `json:"error,omitempty"`
+	Message                string           `json:"message,omitempty"`
+	Code                   string           `json:"code,omitempty"`
 	ServerAddrLocked       bool             `json:"server_addr_locked,omitempty"`
 	AffectedTunnels        []affectedTunnel `json:"affected_tunnels"`
 	ConflictingHTTPTunnels []string         `json:"conflicting_http_tunnels"`
+}
+
+type apiErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Field   string `json:"field,omitempty"`
 }
 
 // tunnelMutationErrorResponse is returned by tunnel create/update HTTP APIs.

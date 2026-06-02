@@ -46,8 +46,8 @@ describe('DashboardClientTableContent', () => {
     );
 
     expect(markup.indexOf('online-host')).toBeLessThan(markup.indexOf('offline-host'));
-    expect(markup).toContain('title="查看详情"');
-    expect(markup).toContain('title="删除离线节点"');
+    expect(markup).toContain('title="View details"');
+    expect(markup).toContain('title="Delete offline node"');
   });
 
   test('renders the dashboard add-client header action when provided', () => {
@@ -59,7 +59,7 @@ describe('DashboardClientTableContent', () => {
       }),
     );
 
-    expect(markup).toContain('在线端点 (Clients)');
-    expect(markup).toContain('添加客户端');
+    expect(markup).toContain('Online endpoints (Clients)');
+    expect(markup).toContain('Add client');
   });
 });

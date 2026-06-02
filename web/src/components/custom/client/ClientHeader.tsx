@@ -8,6 +8,7 @@ import type { Client } from '@/types';
 import { formatUptime } from '@/lib/format';
 import { getClientDisplayName } from '@/lib/client-utils';
 import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
 
 interface ClientHeaderProps {
   client: Client;
@@ -20,6 +21,7 @@ const osLabels: Record<string, string> = {
 };
 
 export function ClientHeader({ client }: ClientHeaderProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
 
   const [isEditing, setIsEditing] = useState(false);
@@ -59,7 +61,7 @@ export function ClientHeader({ client }: ClientHeaderProps) {
       setIsEditing(false);
       setSaveError(null);
     } catch (err) {
-      const message = err instanceof Error ? err.message : '保存展示名失败';
+      const message = err instanceof Error ? err.message : t('clients.saveDisplayNameFailed');
       setSaveError(message);
       toast.error(message);
     } finally {
@@ -173,7 +175,7 @@ export function ClientHeader({ client }: ClientHeaderProps) {
                         size="icon"
                         className="h-7 w-7 text-muted-foreground hover:text-foreground transition-colors"
                         onClick={startEdit}
-                        title="修改展示名"
+                        title={t('clients.editDisplayName')}
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>
@@ -202,7 +204,7 @@ export function ClientHeader({ client }: ClientHeaderProps) {
                     transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
                     className="inline-flex items-center gap-2 overflow-hidden"
                   >
-                    <span className="text-xs" title="机器名">{client.info.hostname}</span>
+                    <span className="text-xs" title={t('clients.machineName')}>{client.info.hostname}</span>
                     <span>•</span>
                   </motion.span>
                 )}
@@ -213,12 +215,12 @@ export function ClientHeader({ client }: ClientHeaderProps) {
               {client.stats?.process_uptime != null && client.stats.process_uptime > 0 ? (
                 <>
                   <span>•</span>
-                  <span>运行 {formatUptime(client.stats.process_uptime)}</span>
+                  <span>{t('clients.processRunning', { uptime: formatUptime(client.stats.process_uptime) })}</span>
                 </>
               ) : client.stats?.uptime != null && (
                 <>
                   <span>•</span>
-                  <span>开机 {formatUptime(client.stats.uptime)}</span>
+                  <span>{t('clients.systemUptime', { uptime: formatUptime(client.stats.uptime) })}</span>
                 </>
               )}
             </div>

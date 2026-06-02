@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 import type { ReactNode } from 'react';
 import type { Client, ClientBandwidthSettingsResponse } from '@/types';
@@ -25,6 +26,7 @@ interface ClientBandwidthDialogProps {
 }
 
 export function ClientBandwidthDialog({ client, trigger }: ClientBandwidthDialogProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -47,7 +49,7 @@ export function ClientBandwidthDialog({ client, trigger }: ClientBandwidthDialog
     const parsedIngressBps = parseMbpsInputToBps(ingressBps);
     const parsedEgressBps = parseMbpsInputToBps(egressBps);
     if (parsedIngressBps == null || parsedEgressBps == null) {
-      toast.error('带宽限制必须是非负数');
+      toast.error(t('tunnels.bandwidthNonNegative'));
       return;
     }
 
@@ -62,9 +64,9 @@ export function ClientBandwidthDialog({ client, trigger }: ClientBandwidthDialog
       );
       await queryClient.invalidateQueries({ queryKey: ['clients'] });
       setOpen(false);
-      toast.success('客户端带宽设置已保存');
+      toast.success(t('tunnels.bandwidthSaved'));
     } catch (error) {
-      const message = error instanceof Error ? error.message : '保存失败，请稍后重试';
+      const message = error instanceof Error ? error.message : t('tunnels.bandwidthSaveFailed');
       toast.error(message);
     } finally {
       setIsSaving(false);
@@ -81,21 +83,21 @@ export function ClientBandwidthDialog({ client, trigger }: ClientBandwidthDialog
         {trigger || (
           <Button variant="outline">
             <FoldVertical className="h-4 w-4 mr-1.5" />
-            限速
+            {t('tunnels.bandwidthLimit')}
           </Button>
         )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>编辑客户端带宽</DialogTitle>
+          <DialogTitle>{t('clients.editBandwidth')}</DialogTitle>
           <DialogDescription>
-            配置当前 Client 的聚合入站与出站限速，单位为 MiB/s。
+            {t('tunnels.editClientBandwidthDescription')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">入站限速</label>
+            <label className="text-sm font-medium">{t('tunnels.ingressLimit')}</label>
             <Input
               type="number"
               min={0}
@@ -107,7 +109,7 @@ export function ClientBandwidthDialog({ client, trigger }: ClientBandwidthDialog
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">出站限速</label>
+            <label className="text-sm font-medium">{t('tunnels.egressLimit')}</label>
             <Input
               type="number"
               min={0}
@@ -121,7 +123,7 @@ export function ClientBandwidthDialog({ client, trigger }: ClientBandwidthDialog
         </div>
 
         <p className="text-[11px] text-muted-foreground">
-          留空或填写 0 表示不限速。更新在线 Client 时应立即生效。
+          {t('tunnels.bandwidthImmediateHelp')}
         </p>
 
         <DialogFooter>
@@ -131,14 +133,14 @@ export function ClientBandwidthDialog({ client, trigger }: ClientBandwidthDialog
             onClick={() => setOpen(false)}
             disabled={isSaving}
           >
-            取消
+            {t('common.cancel')}
           </Button>
           <Button
             type="button"
             onClick={handleSave}
             disabled={!isValid || isSaving}
           >
-            {isSaving ? '保存中…' : '保存修改'}
+            {isSaving ? t('common.saving') : t('tunnels.saveChanges')}
           </Button>
         </DialogFooter>
       </DialogContent>

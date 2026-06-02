@@ -151,7 +151,7 @@ func (s *Server) handleUnifiedTunnelCollection(w http.ResponseWriter, r *http.Re
 	case http.MethodPost:
 		s.handleCreateUnifiedTunnel(w, r)
 	default:
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }
 
@@ -164,18 +164,18 @@ func (s *Server) handleUnifiedTunnelItem(w http.ResponseWriter, r *http.Request)
 	case http.MethodDelete:
 		s.handleDeleteUnifiedTunnel(w, r)
 	default:
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }
 
 func (s *Server) handleUnifiedTunnelAction(w http.ResponseWriter, r *http.Request) {
 	current, ok, err := s.findUnifiedTunnelSpecByID(r.PathValue("tunnel_id"))
 	if err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "tunnel_lookup_failed", err.Error())
 		return
 	}
 	if !ok {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+		writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 		return
 	}
 
@@ -185,7 +185,7 @@ func (s *Server) handleUnifiedTunnelAction(w http.ResponseWriter, r *http.Reques
 	case "stop":
 		s.stopUnifiedTunnel(w, current)
 	default:
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown tunnel action"})
+		writeAPIError(w, http.StatusNotFound, "unknown_tunnel_action", "unknown tunnel action")
 	}
 }
 
@@ -235,7 +235,7 @@ func (s *Server) stopUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI)
 func (s *Server) handleListUnifiedTunnels(w http.ResponseWriter, _ *http.Request) {
 	tunnels, err := s.allUnifiedTunnelSpecs()
 	if err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "tunnel_list_failed", err.Error())
 		return
 	}
 	encodeJSON(w, http.StatusOK, tunnels)
@@ -244,11 +244,11 @@ func (s *Server) handleListUnifiedTunnels(w http.ResponseWriter, _ *http.Request
 func (s *Server) handleGetUnifiedTunnel(w http.ResponseWriter, r *http.Request) {
 	spec, ok, err := s.findUnifiedTunnelSpecByID(r.PathValue("tunnel_id"))
 	if err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "tunnel_lookup_failed", err.Error())
 		return
 	}
 	if !ok {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+		writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 		return
 	}
 	encodeJSON(w, http.StatusOK, spec)
@@ -261,13 +261,13 @@ func (s *Server) handleClientTunnels(w http.ResponseWriter, r *http.Request) {
 		role = "owner"
 	}
 	if role != "owner" && role != "ingress" && role != "target" && role != "related" {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "role must be owner, ingress, target, or related"})
+		writeAPIError(w, http.StatusBadRequest, "invalid_tunnel_role", "role must be owner, ingress, target, or related")
 		return
 	}
 
 	tunnels, err := s.allUnifiedTunnelProxyConfigs()
 	if err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "tunnel_list_failed", err.Error())
 		return
 	}
 
@@ -314,7 +314,7 @@ func unifiedTunnelProxyConfigMatchesClientRole(tunnel protocol.ProxyConfig, clie
 func (s *Server) handleCreateUnifiedTunnel(w http.ResponseWriter, r *http.Request) {
 	var req tunnelCreateRequestAPI
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
 		return
 	}
 
@@ -331,17 +331,17 @@ func (s *Server) handleUpdateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 	tunnelID := r.PathValue("tunnel_id")
 	current, ok, err := s.findUnifiedTunnelSpecByID(tunnelID)
 	if err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "tunnel_lookup_failed", err.Error())
 		return
 	}
 	if !ok {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+		writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 		return
 	}
 
 	var req tunnelUpdateRequestAPI
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
 		return
 	}
 	if req.ExpectedRevision <= 0 {
@@ -387,11 +387,11 @@ func revisionConflictPayload(message string, currentRevision int64) map[string]a
 func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Request) {
 	current, ok, err := s.findUnifiedTunnelSpecByID(r.PathValue("tunnel_id"))
 	if err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "tunnel_lookup_failed", err.Error())
 		return
 	}
 	if !ok {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+		writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 		return
 	}
 
@@ -402,7 +402,7 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.deleteStoredUnifiedTunnel(stored); err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "tunnel_delete_failed", err.Error())
 		return
 	}
 	s.unifiedRuntime.clearTunnelIssues(stored.ID)

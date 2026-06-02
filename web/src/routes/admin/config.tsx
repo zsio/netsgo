@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { createRoute } from '@tanstack/react-router';
+import { useTranslation, Trans } from 'react-i18next';
 import { adminRoute } from '../admin';
 import { ApiError } from '@/lib/api';
 import { useAdminConfig, useUpdateAdminConfig } from '@/hooks/use-admin-config';
@@ -42,14 +43,15 @@ type DisplayRangeRow = LocalPortRange | { isAdding: true };
 
 function AdminConfigPage() {
   const { data: config, isLoading } = useAdminConfig();
+  const { t } = useTranslation();
 
   return (
     <div className="flex flex-col gap-6 w-full pb-10">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">服务配置</h2>
+          <h2 className="text-2xl font-bold tracking-tight">{t('admin.configTitle')}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            配置服务端的基础信息与安全控制策略。
+            {t('admin.configDescription')}
           </p>
         </div>
       </div>
@@ -67,6 +69,7 @@ function AdminConfigPage() {
 }
 
 function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
+  const { t } = useTranslation();
   const updateConfig = useUpdateAdminConfig();
   const [serverAddr, setServerAddr] = useState(initialConfig.server_addr || '');
   const initialServerAddr = (initialConfig.server_addr || '').trim();
@@ -110,7 +113,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
     }
     const normalizedServerAddr = normalizeServerAddr(serverAddr);
     if (!normalizedServerAddr) {
-      toast.error('请填写有效的 Client 连接地址');
+      toast.error(t('admin.invalidClientAddress'));
       return null;
     }
 
@@ -141,11 +144,11 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
 
     // 基础校验
     if (!startVal || !endVal || startVal < 1 || endVal > 65535) {
-      toast.error('请完整填写且介于 1 - 65535 之间');
+      toast.error(t('admin.invalidPortRangeFields'));
       return;
     }
     if (startVal > endVal) {
-      toast.error('起始端口不能大于结束端口');
+      toast.error(t('admin.startPortAfterEnd'));
       return;
     }
     // 冲突重叠校验
@@ -155,7 +158,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
     });
 
     if (isOverlap) {
-      toast.error('与现有的端口规则存在重叠区间');
+      toast.error(t('admin.overlappingPortRange'));
       return;
     }
 
@@ -200,7 +203,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
 
     if (editingIndex !== null) {
       // 防止非键盘交互时触碰外层提交按钮
-      toast.error("部分规则处于编辑状态，请先保存或取消后再整体提交！");
+      toast.error(t('admin.editingRulesActive'));
       return;
     }
 
@@ -221,7 +224,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
       if (conflicts.length > 0) {
         setAffectedTunnels([]);
         setPendingServerAddr(null);
-        toast.error('当前管理地址与现有 HTTP 隧道域名冲突，保存已阻止');
+        toast.error(t('admin.serverAddrConflictToast'));
         return;
       }
 
@@ -237,9 +240,9 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
         const body = error.body as AdminConfigUpdateResponse | undefined;
         setConflictingHTTPTunnels(body?.conflicting_http_tunnels ?? []);
       }
-      const message = error instanceof Error ? error.message : '检查配置失败，请检查网络或服务端日志';
+      const message = error instanceof Error ? error.message : t('admin.configCheckFailed');
       toast.error(message);
-      console.error('检查配置失败', error);
+      console.error('config check failed', error);
     } finally {
       setChecking(false);
     }
@@ -271,9 +274,9 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
         const body = error.body as AdminConfigUpdateResponse | undefined;
         setConflictingHTTPTunnels(body?.conflicting_http_tunnels ?? []);
       }
-      const message = error instanceof Error ? error.message : '保存配置失败，请重试';
+      const message = error instanceof Error ? error.message : t('admin.configSaveFailed');
       toast.error(message);
-      console.error('保存配置失败', error);
+      console.error('config save failed', error);
     }
   };
 
@@ -297,8 +300,8 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
         {/* 行 1: 服务地址 */}
         <div className="grid grid-cols-[280px_1fr] border-b border-border/40">
           <div className="p-6 bg-muted/20">
-            <h4 className="font-semibold text-foreground">默认推荐连接地址</h4>
-            <p className="text-sm text-muted-foreground mt-1">用于配置 `server_addr`。它是 Add Client 默认展示值，不是 Client 唯一允许连接的地址。</p>
+            <h4 className="font-semibold text-foreground">{t('admin.defaultServerAddress')}</h4>
+            <p className="text-sm text-muted-foreground mt-1">{t('admin.defaultServerAddressHelp')}</p>
           </div>
           <div className="p-6">
             <div className="max-w-md">
@@ -309,20 +312,14 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                     <TooltipTrigger asChild>
                       <button
                         type="button"
-                        aria-label="连接地址已锁定"
+                        aria-label={t('admin.serverAddrLockedLabel')}
                         className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
                       >
                         <HelpCircle className="h-4 w-4" />
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side="top" className="max-w-[320px]">
-                      <p>
-                        当前连接地址由环境变量
-                        <code className="mx-1 rounded px-1.5 py-0.5">NETSGO_SERVER_ADDR</code>
-                        或服务启动参数
-                        <code className="mx-1 rounded px-1.5 py-0.5">--server-addr</code>
-                        指定，当前实例以该值为准，服务配置页面不能直接修改。
-                      </p>
+                      <p>{t('admin.serverAddrLockedTooltip')}</p>
                     </TooltipContent>
                   </Tooltip>
                 ) : null}
@@ -340,7 +337,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
               <p className="text-xs text-muted-foreground mt-2">{SERVER_ADDR_HELP_TEXT}</p>
               {initialServerAddrIsLegacy && serverAddr.trim() === initialServerAddr && (
                 <p className="text-xs text-amber-600 mt-2">
-                  当前保存值来自旧版本格式。本次可以先仅修改端口规则；如果要修改服务地址，请改成完整的 HTTP(S) URL。
+                  {t('admin.legacyServerAddrWarning')}
                 </p>
               )}
 
@@ -349,9 +346,9 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                   <div className="flex items-start gap-2 text-destructive">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                     <div className="flex flex-col gap-1">
-                      <p className="font-medium">保存已阻止：`server_addr` 与现有 HTTP 隧道域名冲突</p>
+                      <p className="font-medium">{t('admin.serverAddrConflictTitle')}</p>
                       <p className="text-xs text-destructive/80">
-                        请先调整管理地址或相关 HTTP 隧道域名，再重新提交。
+                        {t('admin.serverAddrConflictHelp')}
                       </p>
                       <div className="flex flex-wrap gap-2 mt-1">
                         {conflictingHTTPTunnels.map((tunnel) => (
@@ -374,23 +371,23 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
         {/* 行 2: 端口范围 */}
         <div className="grid grid-cols-[280px_1fr] border-b border-border/40">
           <div className="p-6 bg-muted/20">
-            <h4 className="font-semibold text-foreground">穿透端口范围</h4>
-            <p className="text-sm text-muted-foreground mt-1">管控放行区间的流量端口。</p>
+            <h4 className="font-semibold text-foreground">{t('admin.portRanges')}</h4>
+            <p className="text-sm text-muted-foreground mt-1">{t('admin.portRangesHelp')}</p>
           </div>
           <div className="p-6 flex flex-col items-start min-h-[160px]">
             {displayRanges.length === 0 ? (
               <div className="text-sm text-muted-foreground p-3 border border-red-500/30 bg-red-500/10 text-red-600 rounded-md inline-flex items-center gap-2 mb-4 w-full max-w-2xl">
                 <ShieldAlert className="w-4 h-4" />
-                警告：未设置任何过滤规则，所有的端口均开放穿透许可。
+                {t('admin.openPortsWarning')}
               </div>
             ) : (
               <div className="bg-card border border-border/60 rounded-md overflow-hidden mb-4 w-full max-w-2xl">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/40 border-b border-border/50 text-left text-muted-foreground">
                     <tr>
-                      <th className="py-2.5 px-4 font-medium w-[30%]">起始端口</th>
-                      <th className="py-2.5 px-4 font-medium w-[30%]">结束端口</th>
-                      <th className="py-2.5 px-4 text-right w-[40%]">操作</th>
+                      <th className="py-2.5 px-4 font-medium w-[30%]">{t('admin.startPort')}</th>
+                      <th className="py-2.5 px-4 font-medium w-[30%]">{t('admin.endPort')}</th>
+                      <th className="py-2.5 px-4 text-right w-[40%]">{t('admin.actions')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/30 relative">
@@ -432,10 +429,10 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                                   />
                                 </td>
                                 <td className="py-2 px-4 text-right flex items-center justify-end gap-1.5 h-full pt-3">
-                                  <TableActionIconButton type="button" label="保存" tone="success" onClick={saveEdit}>
+                                  <TableActionIconButton type="button" label={t('common.save')} tone="success" onClick={saveEdit}>
                                     <Check className="w-3.5 h-3.5" />
                                   </TableActionIconButton>
-                                  <TableActionIconButton type="button" label="取消" tone="neutral" onClick={cancelEdit}>
+                                  <TableActionIconButton type="button" label={t('common.cancel')} tone="neutral" onClick={cancelEdit}>
                                     <X className="w-3.5 h-3.5" />
                                   </TableActionIconButton>
                                 </td>
@@ -448,7 +445,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                                   <td className="py-2 px-4 text-right flex items-center justify-end gap-1">
                                     <TableActionIconButton
                                       type="button"
-                                      label="编辑"
+                                      label={t('common.edit')}
                                       tone="primary"
                                       disabled={editingIndex !== null}
                                       onClick={() => startEdit(index)}
@@ -457,7 +454,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                                     </TableActionIconButton>
                                     <TableActionIconButton
                                       type="button"
-                                      label="删除"
+                                      label={t('common.delete')}
                                       tone="destructive"
                                       disabled={editingIndex !== null}
                                       onClick={() => removePortRange(index)}
@@ -485,7 +482,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
               disabled={editingIndex !== null}
               className="gap-2 shrink-0 border-dashed"
             >
-              <Plus className="w-3.5 h-3.5" /> 添加端口范围
+              <Plus className="w-3.5 h-3.5" /> {t('admin.addPortRange')}
             </Button>
           </div>
         </div>
@@ -501,12 +498,12 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                 transition={{ duration: 0.2 }}
                 className="text-sm text-emerald-500 font-medium flex items-center gap-1.5"
               >
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span> 已成功应用修改
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span> {t('admin.configSaved')}
               </motion.div>
             )}
           </AnimatePresence>
           <Button type="submit" disabled={updateConfig.isPending || checking || editingIndex !== null} className="min-w-32 shadow-sm">
-            {checking ? '校验中...' : updateConfig.isPending ? '保存中...' : '提交全局配置'}
+            {checking ? t('common.checking') : updateConfig.isPending ? t('common.saving') : t('admin.submitGlobalConfig')}
           </Button>
         </div>
       </form>
@@ -524,9 +521,13 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
             <AlertDialogMedia className="bg-amber-500/10">
               <AlertTriangle className="text-amber-500" />
             </AlertDialogMedia>
-            <AlertDialogTitle>端口范围变更影响提示</AlertDialogTitle>
+            <AlertDialogTitle>{t('admin.affectedPortsTitle')}</AlertDialogTitle>
             <AlertDialogDescription>
-              以下 <span className="font-semibold text-foreground">{affectedTunnels.length}</span> 条现有隧道的端口不在新的允许范围内，保存后这些隧道将被标记为异常并停止转发。
+              <Trans
+                i18nKey="admin.affectedPortsDescription"
+                values={{ count: affectedTunnels.length }}
+                components={{ strong: <span className="font-semibold text-foreground" /> }}
+              />
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -535,10 +536,10 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
             <table className="w-full text-sm min-w-[400px]">
               <thead>
                 <tr className="border-b border-border/40 text-muted-foreground">
-                  <th className="text-left py-2 px-3 font-medium">节点</th>
-                  <th className="text-left py-2 px-3 font-medium">隧道</th>
-                  <th className="text-right py-2 px-3 font-medium">端口</th>
-                  <th className="text-right py-2 px-3 font-medium">状态</th>
+                  <th className="text-left py-2 px-3 font-medium">{t('admin.node')}</th>
+                  <th className="text-left py-2 px-3 font-medium">{t('tunnels.tunnel')}</th>
+                  <th className="text-right py-2 px-3 font-medium">{t('tunnels.publicPort')}</th>
+                  <th className="text-right py-2 px-3 font-medium">{t('tunnels.status')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -567,14 +568,14 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
           </div>
 
           <AlertDialogFooter>
-            <AlertDialogCancel>返回修改</AlertDialogCancel>
+            <AlertDialogCancel>{t('admin.returnToEdit')}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => doSave(pendingServerAddr ?? undefined)}
               disabled={updateConfig.isPending}
             >
               <AlertTriangle className="w-3.5 h-3.5 mr-1.5" />
-              {updateConfig.isPending ? '强行断开并保存...' : '确认强行保存'}
+              {updateConfig.isPending ? t('admin.forceSaving') : t('admin.forceSave')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

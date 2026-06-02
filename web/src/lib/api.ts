@@ -7,6 +7,7 @@
  */
 
 import { useAuthStore } from '@/stores/auth-store';
+import { i18n } from '@/i18n';
 import type {
   ProxyConfig,
   TunnelClientRole,
@@ -18,6 +19,8 @@ import type {
 class ApiError extends Error {
   status: number;
   statusText: string;
+  code?: string;
+  field?: string;
   body?: unknown;
 
   constructor(
@@ -25,13 +28,36 @@ class ApiError extends Error {
     statusText: string,
     message?: string,
     body?: unknown,
+    code?: string,
+    field?: string,
   ) {
-    super(message || `API Error: ${status} ${statusText}`);
+    super(localizeApiErrorMessage(code, message) || `API Error: ${status} ${statusText}`);
     this.name = "ApiError";
     this.status = status;
     this.statusText = statusText;
+    this.code = code;
+    this.field = field;
     this.body = body;
   }
+}
+
+interface ApiErrorBody {
+  error?: string;
+  message?: string;
+  code?: string;
+  error_code?: string;
+  field?: string;
+}
+
+function localizeApiErrorMessage(code?: string, fallback?: string) {
+  if (!code) return fallback;
+  const translated = i18n.t(`errors.${code}`, { defaultValue: '' });
+  return translated || fallback;
+}
+
+function normalizeErrorBody(value: unknown): ApiErrorBody | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  return value as ApiErrorBody;
 }
 
 async function request<T>(
@@ -59,21 +85,28 @@ async function request<T>(
     const bodyText = await res.text().catch(() => "");
     let errorBody: unknown;
     let errorMessage = bodyText || undefined;
+    let errorCode: string | undefined;
+    let errorField: string | undefined;
     try {
       if (bodyText) {
         const json = JSON.parse(bodyText);
         errorBody = json;
-        if (json && typeof json.error === 'string') {
-          errorMessage = json.error;
-        } else if (json && typeof json.message === 'string') {
-          errorMessage = json.message;
+        const normalized = normalizeErrorBody(json);
+        if (normalized) {
+          errorCode = normalized.code || normalized.error_code;
+          errorField = normalized.field;
+          if (typeof normalized.message === 'string') {
+            errorMessage = normalized.message;
+          } else if (typeof normalized.error === 'string') {
+            errorMessage = normalized.error;
+          }
         }
       }
     } catch {
       // not JSON, fallback to raw string
     }
 
-    throw new ApiError(res.status, res.statusText, errorMessage, errorBody);
+    throw new ApiError(res.status, res.statusText, errorMessage, errorBody, errorCode, errorField);
   }
 
   // 204 No Content

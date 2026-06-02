@@ -13,7 +13,7 @@ import (
 func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
 	if clientID == "" {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing client id"})
+		writeAPIError(w, http.StatusBadRequest, "missing_client_id", "missing client id")
 		return
 	}
 
@@ -21,17 +21,17 @@ func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request)
 		DisplayName string `json:"display_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
 		return
 	}
 
 	if s.auth.adminStore == nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "admin store unavailable"})
+		writeAPIError(w, http.StatusInternalServerError, "admin_store_unavailable", "admin store unavailable")
 		return
 	}
 
 	if err := s.auth.adminStore.UpdateClientDisplayName(clientID, req.DisplayName); err != nil {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusNotFound, "client_not_found", err.Error())
 		return
 	}
 
@@ -54,7 +54,7 @@ func validateBandwidthSettings(settings protocol.BandwidthSettings) error {
 func (s *Server) handleUpdateBandwidthSettings(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
 	if clientID == "" {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing client id"})
+		writeAPIError(w, http.StatusBadRequest, "missing_client_id", "missing client id")
 		return
 	}
 
@@ -63,11 +63,11 @@ func (s *Server) handleUpdateBandwidthSettings(w http.ResponseWriter, r *http.Re
 		EgressBPS  *int64 `json:"egress_bps"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
 		return
 	}
 	if req.IngressBPS == nil || req.EgressBPS == nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "ingress_bps and egress_bps are required"})
+		writeAPIError(w, http.StatusBadRequest, "bandwidth_fields_required", "ingress_bps and egress_bps are required")
 		return
 	}
 
@@ -76,28 +76,28 @@ func (s *Server) handleUpdateBandwidthSettings(w http.ResponseWriter, r *http.Re
 		EgressBPS:  *req.EgressBPS,
 	}
 	if err := validateBandwidthSettings(settings); err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusBadRequest, "invalid_bandwidth_settings", err.Error())
 		return
 	}
 
 	if s.auth.adminStore == nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "admin store unavailable"})
+		writeAPIError(w, http.StatusInternalServerError, "admin_store_unavailable", "admin store unavailable")
 		return
 	}
 
 	if err := s.auth.adminStore.UpdateClientBandwidthSettings(clientID, settings); err != nil {
 		switch {
 		case errors.Is(err, ErrRegisteredClientNotFound):
-			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+			writeAPIError(w, http.StatusNotFound, "client_not_found", "client not found")
 		default:
-			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			writeAPIError(w, http.StatusInternalServerError, "client_bandwidth_update_failed", err.Error())
 		}
 		return
 	}
 
 	if current, ok := s.clients.Load(clientID); ok {
 		if err := current.(*ClientConn).SetBandwidthSettings(settings); err != nil {
-			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			writeAPIError(w, http.StatusInternalServerError, "client_bandwidth_apply_failed", err.Error())
 			return
 		}
 	}
@@ -111,43 +111,43 @@ func (s *Server) handleUpdateBandwidthSettings(w http.ResponseWriter, r *http.Re
 func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("id")
 	if clientID == "" {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing client id"})
+		writeAPIError(w, http.StatusBadRequest, "missing_client_id", "missing client id")
 		return
 	}
 	if s.auth.adminStore == nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": "admin store unavailable"})
+		writeAPIError(w, http.StatusInternalServerError, "admin_store_unavailable", "admin store unavailable")
 		return
 	}
 	if value, ok := s.clients.Load(clientID); ok {
 		client := value.(*ClientConn)
 		if client.getState() != clientStateClosing {
-			encodeJSON(w, http.StatusConflict, map[string]any{"error": "client is online and cannot be deleted"})
+			writeAPIError(w, http.StatusConflict, "client_online_delete_forbidden", "client is online and cannot be deleted")
 			return
 		}
 	}
 	if _, ok := s.auth.adminStore.GetRegisteredClient(clientID); !ok {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+		writeAPIError(w, http.StatusNotFound, "client_not_found", "client not found")
 		return
 	}
 
 	if s.store != nil {
 		if err := s.store.DeleteTunnelsByClientID(clientID); err != nil {
-			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			writeAPIError(w, http.StatusInternalServerError, "client_tunnels_delete_failed", err.Error())
 			return
 		}
 	}
 	if s.trafficStore != nil {
 		if err := s.trafficStore.EvictClient(clientID); err != nil {
-			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			writeAPIError(w, http.StatusInternalServerError, "client_traffic_delete_failed", err.Error())
 			return
 		}
 	}
 	if err := s.auth.adminStore.DeleteRegisteredClient(clientID); err != nil {
 		switch {
 		case errors.Is(err, ErrRegisteredClientNotFound):
-			encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+			writeAPIError(w, http.StatusNotFound, "client_not_found", "client not found")
 		default:
-			encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			writeAPIError(w, http.StatusInternalServerError, "client_delete_failed", err.Error())
 		}
 		return
 	}
@@ -205,7 +205,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	var req protocol.ProxyNewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
 		return
 	}
 	// Tunnel IDs are server-owned stable identifiers. Ignore any client-supplied
@@ -244,13 +244,13 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.resumeOfflineManagedTunnel(clientID, tunnelSelector); err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+				writeAPIError(w, http.StatusNotFound, "client_not_found", "client not found")
 			case errors.Is(err, errManagedTunnelNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+				writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 			case err.Error() == "only stopped or error tunnels can be resumed":
-				encodeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+				writeAPIError(w, http.StatusBadRequest, "tunnel_resume_not_allowed", err.Error())
 			default:
-				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				writeAPIError(w, http.StatusInternalServerError, "tunnel_resume_failed", err.Error())
 			}
 			return
 		}
@@ -261,11 +261,11 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 
 	tunnelName, tunnel, exists := findTunnelBySelector(client, tunnelSelector)
 	if !exists {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+		writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 		return
 	}
 	if !canResumeTunnel(tunnel.Config) {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "only stopped/idle or running/error tunnels can be resumed"})
+		writeAPIError(w, http.StatusBadRequest, "tunnel_resume_not_allowed", "only stopped/idle or running/error tunnels can be resumed")
 		return
 	}
 
@@ -278,7 +278,7 @@ func (s *Server) handleResumeTunnel(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &rejected):
 			status = http.StatusBadGateway
 		}
-		encodeJSON(w, status, map[string]any{"error": err.Error()})
+		writeAPIError(w, status, "tunnel_resume_failed", err.Error())
 		return
 	}
 
@@ -294,11 +294,11 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.stopOfflineManagedTunnel(clientID, tunnelSelector); err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+				writeAPIError(w, http.StatusNotFound, "client_not_found", "client not found")
 			case errors.Is(err, errManagedTunnelNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+				writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 			default:
-				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				writeAPIError(w, http.StatusInternalServerError, "tunnel_stop_failed", err.Error())
 			}
 			return
 		}
@@ -309,12 +309,12 @@ func (s *Server) handleStopTunnel(w http.ResponseWriter, r *http.Request) {
 
 	tunnelName, _, exists := findTunnelBySelector(client, tunnelSelector)
 	if !exists {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+		writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 		return
 	}
 
 	if err := s.stopManagedTunnel(client, tunnelName); err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "tunnel_stop_failed", err.Error())
 		return
 	}
 
@@ -330,11 +330,11 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		if err := s.deleteOfflineManagedTunnel(clientID, tunnelSelector); err != nil {
 			switch {
 			case errors.Is(err, errManagedTunnelClientNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+				writeAPIError(w, http.StatusNotFound, "client_not_found", "client not found")
 			case errors.Is(err, errManagedTunnelNotFound):
-				encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+				writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 			default:
-				encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				writeAPIError(w, http.StatusInternalServerError, "tunnel_delete_failed", err.Error())
 			}
 			return
 		}
@@ -345,7 +345,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 
 	tunnelName, tunnel, exists := findTunnelBySelector(client, tunnelSelector)
 	if !exists {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+		writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 		return
 	}
 
@@ -355,7 +355,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.deleteManagedTunnel(client, tunnelName); err != nil {
-		encodeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "tunnel_delete_failed", err.Error())
 		return
 	}
 
@@ -371,6 +371,8 @@ func tunnelDeleteBlockedErrorBody(config protocol.ProxyConfig) map[string]any {
 	}
 	return map[string]any{
 		"error":      message,
+		"message":    message,
+		"code":       protocol.TunnelMutationErrorCodeTunnelBusy,
 		"error_code": protocol.TunnelMutationErrorCodeTunnelBusy,
 	}
 }
@@ -389,7 +391,7 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		EgressBPS  int64  `json:"egress_bps"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		encodeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -414,13 +416,16 @@ func (s *Server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	_, tunnel, exists := findTunnelBySelector(client, tunnelSelector)
 	if !exists {
-		encodeJSON(w, http.StatusNotFound, map[string]any{"error": "tunnel not found"})
+		writeAPIError(w, http.StatusNotFound, "tunnel_not_found", "tunnel not found")
 		return
 	}
 
 	if !canEditOrDeleteLiveTunnel(tunnel.Config) {
+		message := fmt.Sprintf("tunnel is currently in state %s/%s; only stopped/idle or running/error tunnels can be edited", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
 		encodeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": fmt.Sprintf("tunnel is currently in state %s/%s; only stopped/idle or running/error tunnels can be edited", tunnel.Config.DesiredState, tunnel.Config.RuntimeState),
+			"error":   message,
+			"message": message,
+			"code":    protocol.TunnelMutationErrorCodeTunnelBusy,
 		})
 		return
 	}

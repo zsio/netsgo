@@ -1,10 +1,12 @@
 import { createRootRoute, Outlet } from '@tanstack/react-router';
 import { useEventStream } from '@/hooks/use-event-stream';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { useDocumentLanguage } from '@/i18n/use-document-language';
 
 function RootLayout() {
   // 在根布局启动 SSE 连接（全局唯一）
   useEventStream();
+  useDocumentLanguage();
 
   return (
     <TooltipProvider>

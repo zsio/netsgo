@@ -23,6 +23,8 @@ import { useServerStatus } from '@/hooks/use-server-status';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { cn } from '@/lib/utils';
 import type { Client, PortRange, ProxyType, ProxyConfig, TunnelTopology } from '@/types';
+import { i18n } from '@/i18n';
+import { useTranslation } from 'react-i18next';
 
 /** 编辑模式下传入的隧道数据 */
 export interface TunnelDialogEditData extends ProxyConfig {
@@ -77,8 +79,6 @@ interface LocalFieldError {
   code?: string;
   source?: 'local' | 'server';
 }
-
-const portErrorMessage = '端口必须在 1-65535 之间';
 
 function fieldErrorMatches(error: LocalFieldError | null, fields: readonly string[]) {
   return Boolean(error && fields.includes(error.field));
@@ -194,12 +194,13 @@ function serverFieldError(error: unknown): LocalFieldError | null {
 
 function formatPortRanges(ranges: PortRange[] | undefined) {
   if (!ranges || ranges.length === 0) {
-    return '无限制';
+    return i18n.t('tunnels.unrestricted');
   }
   return ranges.map((range) => range.start === range.end ? range.start : `${range.start}-${range.end}`).join(', ');
 }
 
 export function TunnelDialog(props: TunnelDialogProps) {
+  const { t } = useTranslation();
   const isEdit = props.mode === 'edit';
 
   // --- 弹窗开关 ---
@@ -218,7 +219,7 @@ export function TunnelDialog(props: TunnelDialogProps) {
           {(props as TunnelDialogCreateProps).trigger ?? (
             <Button>
               <GitBranchPlus className="h-4 w-4 mr-1.5" />
-              添加隧道
+              {t('tunnels.addTunnel')}
             </Button>
           )}
         </DialogTrigger>
@@ -242,6 +243,7 @@ function TunnelDialogForm({
   open: boolean;
   setOpen: (open: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const isEdit = props.mode === 'edit';
   const initialForm = getInitialFormState(props);
   const [name, setName] = useState(initialForm.name);
@@ -279,6 +281,7 @@ function TunnelDialogForm({
   const createTunnel = useCreateTunnel();
   const updateTunnel = useUpdateTunnel();
   const mutation = isEdit ? updateTunnel : createTunnel;
+  const portErrorMessage = t('tunnels.portInvalid');
 
   const clearMutationFeedback = () => {
     if (fieldError) {
@@ -312,17 +315,17 @@ function TunnelDialogForm({
     }
 
     if (isClientToClient && !canUseClientToClient) {
-      setFieldError(localFieldError('ingress.client_id', '客户端互访需要至少两个客户端'));
+      setFieldError(localFieldError('ingress.client_id', t('tunnels.c2cRequiresTwoClients')));
       return;
     }
 
     if (parsedIngressBps == null || parsedEgressBps == null) {
-      toast.error('带宽限制必须是非负数');
+      toast.error(t('tunnels.bandwidthNonNegative'));
       return;
     }
 
     if (!isClientToClient && !isHttp && parsedRemotePort && !isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)) {
-      const message = `公网端口必须在允许范围内：${formatPortRanges(status?.allowed_ports)}`;
+      const message = t('tunnels.portMustBeAllowed', { ranges: formatPortRanges(status?.allowed_ports) });
       setFieldError({ field: 'remote_port', message, code: 'port_not_allowed' });
       toast.error(message);
       return;
@@ -355,7 +358,7 @@ function TunnelDialogForm({
           onSuccess: () => {
             setFieldError(null);
             setOpen(false);
-            toast.success(`隧道「${name}」已更新`);
+            toast.success(t('tunnels.updated', { name }));
           },
           onError: (err) => {
             setFieldError(serverFieldError(err));
@@ -385,7 +388,7 @@ function TunnelDialogForm({
         onSuccess: () => {
           setFieldError(null);
           setOpen(false);
-          toast.success(`隧道「${name}」创建成功`);
+          toast.success(t('tunnels.created', { name }));
         },
         onError: (err) => {
           setFieldError(serverFieldError(err));
@@ -414,10 +417,10 @@ function TunnelDialogForm({
   return (
     <DialogContent className="sm:max-w-md">
       <DialogHeader>
-        <DialogTitle>{isEdit ? '编辑隧道' : '创建代理隧道'}</DialogTitle>
+        <DialogTitle>{isEdit ? t('tunnels.editTitle') : t('tunnels.createTitle')}</DialogTitle>
         {props.mode === 'edit' && (
           <DialogDescription>
-            {`修改隧道「${props.tunnel?.name}」的名称、拓扑和映射配置。`}
+            {t('tunnels.editDescription', { name: props.tunnel?.name ?? '' })}
           </DialogDescription>
         )}
       </DialogHeader>
@@ -425,10 +428,10 @@ function TunnelDialogForm({
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* 隧道名称 */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium">隧道名称</label>
+          <label className="text-sm font-medium">{t('tunnels.name')}</label>
           <Input
-            aria-label="隧道名称"
-            placeholder="例如 ssh-dev"
+            aria-label={t('tunnels.name')}
+            placeholder={t('tunnels.namePlaceholder')}
             value={name}
             onChange={(e) => {
               clearMutationFeedback();
@@ -441,7 +444,7 @@ function TunnelDialogForm({
 
         {/* 协议类型 */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium">隧道拓扑</label>
+          <label className="text-sm font-medium">{t('tunnels.topology')}</label>
           <div className="grid grid-cols-2 gap-2">
             <Button
               type="button"
@@ -451,7 +454,7 @@ function TunnelDialogForm({
                 setTopology('server_expose');
               }}
             >
-              Server 暴露
+              {t('tunnels.serverExpose')}
             </Button>
             <Button
               type="button"
@@ -466,12 +469,12 @@ function TunnelDialogForm({
                 if (type === 'http') setType('tcp');
               }}
             >
-              客户端互访
+              {t('tunnels.clientToClient')}
             </Button>
           </div>
           {!canUseClientToClient && (
             <p className="text-[11px] font-medium text-destructive">
-              客户端互访需要至少两个客户端
+              {t('tunnels.c2cRequiresTwoClients')}
             </p>
           )}
           <FieldErrorText error={fieldError} fields={['topology', 'transport_policy']} />
@@ -480,10 +483,10 @@ function TunnelDialogForm({
         {(isClientToClient || clients.length > 1) && (
           <div className={cn('grid gap-3', isClientToClient ? 'grid-cols-2' : 'grid-cols-1')}>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">服务来源客户端</label>
+              <label className="text-sm font-medium">{t('tunnels.sourceClient')}</label>
               {clients.length > 0 ? (
                 <select
-                  aria-label="服务来源客户端"
+                  aria-label={t('tunnels.sourceClient')}
                   className={selectClassName}
                   value={selectedTargetClientId}
                   disabled={isEdit}
@@ -509,9 +512,9 @@ function TunnelDialogForm({
             </div>
             {isClientToClient && (
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">访问入口客户端</label>
+                <label className="text-sm font-medium">{t('tunnels.ingressClient')}</label>
                 <select
-                  aria-label="访问入口客户端"
+                  aria-label={t('tunnels.ingressClient')}
                   className={selectClassName}
                   value={selectedIngressClientId}
                   onChange={(e) => {
@@ -532,7 +535,7 @@ function TunnelDialogForm({
         )}
 
         <div className="space-y-1.5">
-          <label className="text-sm font-medium">协议类型</label>
+          <label className="text-sm font-medium">{t('tunnels.protocolType')}</label>
           <div className="flex gap-2">
             {effectiveTypeOptions.map((opt) => (
               <Button
@@ -555,9 +558,9 @@ function TunnelDialogForm({
         {/* 本地地址 */}
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">{isClientToClient ? '目标服务地址' : '本地 IP'}</label>
+            <label className="text-sm font-medium">{isClientToClient ? t('tunnels.targetAddress') : t('tunnels.localIp')}</label>
             <Input
-              aria-label={isClientToClient ? '目标服务地址' : '本地 IP'}
+              aria-label={isClientToClient ? t('tunnels.targetAddress') : t('tunnels.localIp')}
               placeholder="127.0.0.1"
               value={localIp}
               onChange={(e) => {
@@ -568,9 +571,9 @@ function TunnelDialogForm({
             <FieldErrorText error={fieldError} fields={['target.config.ip', 'target.config.host', 'target.config', 'local_ip']} />
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">{isClientToClient ? '目标服务端口' : '本地端口'}</label>
+            <label className="text-sm font-medium">{isClientToClient ? t('tunnels.targetPort') : t('tunnels.localPort')}</label>
             <Input
-              aria-label={isClientToClient ? '目标服务端口' : '本地端口'}
+              aria-label={isClientToClient ? t('tunnels.targetPort') : t('tunnels.localPort')}
               type="number"
               placeholder="e.g. 22"
               value={localPort}
@@ -590,9 +593,9 @@ function TunnelDialogForm({
 
         {isHttp ? (
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">业务域名</label>
+            <label className="text-sm font-medium">{t('tunnels.domain')}</label>
             <Input
-              aria-label="业务域名"
+              aria-label={t('tunnels.domain')}
               placeholder="e.g. app.example.com"
               value={domain}
               onChange={(e) => {
@@ -605,16 +608,16 @@ function TunnelDialogForm({
             />
             <FieldErrorText error={fieldError} fields={['domain', 'ingress.config.domain']} />
             <p className="text-[11px] text-muted-foreground mt-1.5">
-              HTTP 隧道按域名分流，不再使用公网端口作为用户输入。
+              {t('tunnels.httpDomainHelp')}
             </p>
           </div>
         ) : (
           <div className={cn('grid gap-3', isClientToClient ? 'grid-cols-2' : 'grid-cols-1')}>
             {isClientToClient && (
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">入口监听地址</label>
+                <label className="text-sm font-medium">{t('tunnels.bindAddress')}</label>
                 <Input
-                  aria-label="入口监听地址"
+                  aria-label={t('tunnels.bindAddress')}
                   placeholder="127.0.0.1 / 0.0.0.0"
                   value={bindIp}
                   onChange={(e) => {
@@ -629,9 +632,9 @@ function TunnelDialogForm({
               </div>
             )}
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">{isClientToClient ? '入口监听端口' : '公网端口'}</label>
+              <label className="text-sm font-medium">{isClientToClient ? t('tunnels.bindPort') : t('tunnels.publicPort')}</label>
               <Input
-                aria-label={isClientToClient ? '入口监听端口' : '公网端口'}
+                aria-label={isClientToClient ? t('tunnels.bindPort') : t('tunnels.publicPort')}
                 type="number"
                 placeholder="e.g. 18080"
                 value={remotePort}
@@ -648,9 +651,9 @@ function TunnelDialogForm({
               )}
               {!isClientToClient && (
                 <p className="text-[11px] text-muted-foreground mt-1.5">
-                  可用端口范围：
+                  {t('tunnels.portRangeAllowed')}
                   {status?.allowed_ports === undefined
-                    ? '加载中…'
+                    ? t('common.loading')
                     : formatPortRanges(status.allowed_ports)}
                 </p>
               )}
@@ -660,10 +663,10 @@ function TunnelDialogForm({
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">入站限速</label>
+            <label className="text-sm font-medium">{t('tunnels.ingressLimit')}</label>
             <InputGroup>
               <InputGroupInput
-                aria-label="入站限速"
+                aria-label={t('tunnels.ingressLimit')}
                 type="number"
                 step="any"
                 placeholder="0"
@@ -681,10 +684,10 @@ function TunnelDialogForm({
             <FieldErrorText error={fieldError} fields={['ingress_bps', 'bandwidth_settings.ingress_bps']} />
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">出站限速</label>
+            <label className="text-sm font-medium">{t('tunnels.egressLimit')}</label>
             <InputGroup>
               <InputGroupInput
-                aria-label="出站限速"
+                aria-label={t('tunnels.egressLimit')}
                 type="number"
                 step="any"
                 placeholder="0"
@@ -703,7 +706,7 @@ function TunnelDialogForm({
           </div>
         </div>
         <p className="text-[11px] text-muted-foreground -mt-1">
-          留空或填写 0 表示不限速。
+          {t('tunnels.bandwidthHelp')}
         </p>
 
         {mutation.isError && (
@@ -720,7 +723,7 @@ function TunnelDialogForm({
               variant="outline"
               onClick={() => setOpen(false)}
             >
-              取消
+              {t('common.cancel')}
             </Button>
           )}
           <Button
@@ -728,8 +731,8 @@ function TunnelDialogForm({
             disabled={!isValid || mutation.isPending}
           >
             {mutation.isPending
-              ? (isEdit ? '保存中…' : '创建中…')
-              : (isEdit ? '保存修改' : '创建隧道')}
+              ? (isEdit ? t('tunnels.updating') : t('tunnels.creating'))
+              : (isEdit ? t('tunnels.saveChanges') : t('tunnels.createTunnel'))}
           </Button>
         </DialogFooter>
       </form>

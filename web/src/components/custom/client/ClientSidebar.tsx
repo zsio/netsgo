@@ -10,6 +10,8 @@ import { getClientDisplayName } from '@/lib/client-utils';
 import { AddClientDialog } from './AddClientDialog';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { useTranslation } from 'react-i18next';
+import { LanguageSwitcher } from '@/components/custom/common/LanguageSwitcher';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,11 +45,12 @@ interface ClientSidebarProps {
 }
 
 const ADMIN_NAV = [
-  { path: '/dashboard/admin/config', name: '服务配置', icon: Settings },
-  { path: '/dashboard/admin/keys', name: 'Key 管理', icon: Key },
+  { path: '/dashboard/admin/config', nameKey: 'dashboard.serverConfig', icon: Settings },
+  { path: '/dashboard/admin/keys', nameKey: 'dashboard.keyManagement', icon: Key },
 ];
 
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
+  const { t } = useTranslation();
   const [showAddClient, setShowAddClient] = useState(false);
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
@@ -111,7 +114,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
               >
                 <Link to="/dashboard">
                   <LayoutDashboard className="h-4 w-4" />
-                  <span>Dashboard概览</span>
+                  <span>{t('dashboard.overview')}</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -121,15 +124,15 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
         {/* 客户端列表 */}
         <SidebarGroup className="group/clients mt-4">
           <SidebarGroupLabel className="text-[11px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em] px-2 mb-1 transition-colors group-hover/clients:text-muted-foreground/70">
-            客户端 / Client
+            {t('dashboard.clients')}
           </SidebarGroupLabel>
           <SidebarGroupAction 
             onClick={() => setShowAddClient(true)} 
-            title="添加客户端"
+            title={t('dashboard.addClient')}
             className="top-4 cursor-pointer text-muted-foreground hover:text-foreground"
           >
             <LayersPlus />
-            <span className="sr-only">添加客户端</span>
+            <span className="sr-only">{t('dashboard.addClient')}</span>
           </SidebarGroupAction>
           <SidebarGroupContent className='mt-1'>
             {isLoading ? (
@@ -150,10 +153,10 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                   </div>
                   
                   <h3 className="text-sm font-medium text-foreground mb-1">
-                    添加节点
+                    {t('dashboard.addNode')}
                   </h3>
                   <p className="text-[11px] text-muted-foreground text-center">
-                    生成连接密钥并查看连接命令
+                    {t('dashboard.addNodeDescription')}
                   </p>
                 </button>
               </div>
@@ -205,7 +208,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
       <SidebarFooter className="pb-[calc(1rem+var(--safe-area-bottom))]">
         <SidebarGroup>
           <SidebarGroupLabel className="text-[11px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em] px-2 mb-1">
-            系统设置
+            {t('dashboard.systemSettings')}
           </SidebarGroupLabel>
           <SidebarMenu>
             {ADMIN_NAV.map((item) => (
@@ -213,12 +216,12 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                 <SidebarMenuButton
                   asChild
                   isActive={pathname === item.path}
-                  tooltip={item.name}
+                  tooltip={t(item.nameKey)}
                   className="data-[active=true]:bg-background data-[active=true]:shadow-[0_1px_2px_rgba(0,0,0,0.05)] data-[active=true]:border-l-[3px] data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
                 >
                   <Link to={item.path}>
                     <item.icon />
-                    <span>{item.name}</span>
+                    <span>{t(item.nameKey)}</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -227,28 +230,31 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
         </SidebarGroup>
         
         <SidebarGroup className="mt-2 text-muted-foreground/80">
+          <div className="px-2 pb-2">
+            <LanguageSwitcher />
+          </div>
           <SidebarMenu>
             <SidebarMenuItem>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <SidebarMenuButton
-                    tooltip="退出登录"
+                    tooltip={t('auth.logout')}
                     className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                   >
                     <LogOut className="h-4 w-4" />
-                    <span>退出登录</span>
+                    <span>{t('auth.logout')}</span>
                   </SidebarMenuButton>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
-                    <AlertDialogTitle>确认退出？</AlertDialogTitle>
+                    <AlertDialogTitle>{t('auth.logoutTitle')}</AlertDialogTitle>
                     <AlertDialogDescription>
-                      退出后需要重新登录才能访问控制台。
+                      {t('auth.logoutDescription')}
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
-                    <AlertDialogCancel>取消</AlertDialogCancel>
-                    <AlertDialogAction onClick={handleLogout}>确认退出</AlertDialogAction>
+                    <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleLogout}>{t('auth.confirmLogout')}</AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>

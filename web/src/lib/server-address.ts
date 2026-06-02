@@ -1,7 +1,7 @@
 const SERVER_ADDR_PROTOCOLS = new Set(['http:', 'https:']);
 
-export const SERVER_ADDR_PLACEHOLDER = '例如: https://tunnel.example.com';
-export const SERVER_ADDR_HELP_TEXT = '仅支持 http://、https://。请输入基础连接地址，不要包含路径、查询参数、锚点或用户信息。推荐通过 nginx/caddy 等反向代理启用 HTTPS。';
+export const SERVER_ADDR_PLACEHOLDER = 'e.g. https://tunnel.example.com';
+export const SERVER_ADDR_HELP_TEXT = 'Only http:// and https:// are supported. Enter a base connection address without path, query, fragment, or user info. HTTPS through nginx/caddy or another reverse proxy is recommended.';
 
 type ServerAddrHostKind = 'domain' | 'ip' | 'localhost' | 'local';
 
@@ -37,15 +37,15 @@ function hasUserInfo(raw: string) {
 
 function validateParsedServerAddr(raw: string, url: URL) {
   if (!isSupportedServerAddrProtocol(url.protocol)) {
-    return '仅支持 http://、https://';
+    return 'Only http:// and https:// are supported.';
   }
 
   if ((url.pathname && url.pathname !== '/') || url.search || url.hash) {
-    return '请输入基础连接地址，不要包含路径、查询参数或锚点';
+    return 'Enter a base connection address without path, query, or fragment.';
   }
 
   if (hasUserInfo(raw) || url.username || url.password) {
-    return '请输入基础连接地址，不要包含用户信息';
+    return 'Enter a base connection address without user info.';
   }
 
   const hostname = url.hostname.toLowerCase();
@@ -63,7 +63,7 @@ function validateParsedServerAddr(raw: string, url: URL) {
     ));
 
     if (!isFQDN) {
-      return '主机名必须是 FQDN、localhost、IPv4 或 IPv6 字面量';
+      return 'Hostname must be an FQDN, localhost, IPv4, or IPv6 literal.';
     }
   }
 
@@ -73,12 +73,12 @@ function validateParsedServerAddr(raw: string, url: URL) {
 function parseValidatedServerAddr(value: string) {
   const trimmed = value.trim();
   if (!trimmed) {
-    return { error: '请填写有效的 Client 连接地址' as const };
+    return { error: 'Enter a valid Client connection address.' as const };
   }
 
   const url = parseServerAddr(trimmed);
   if (!url) {
-    return { error: '请输入有效的完整 URL（需包含 http:// 或 https://）' as const };
+    return { error: 'Enter a valid full URL that includes http:// or https://.' as const };
   }
 
   const error = validateParsedServerAddr(trimmed, url);

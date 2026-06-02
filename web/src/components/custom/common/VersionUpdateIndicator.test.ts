@@ -37,7 +37,7 @@ function renderIndicator(target: VersionCheckTarget, data?: VersionCheckResult) 
     createElement(
       QueryClientProvider,
       { client },
-      createElement(VersionUpdateIndicator, { target, label: '服务端版本' }),
+      createElement(VersionUpdateIndicator, { target, label: 'Server version' }),
     ),
   );
 }
@@ -78,7 +78,7 @@ describe('VersionUpdateIndicator', () => {
       }),
     }));
 
-    expect(markup).toContain('在 Server 所在机器执行以下命令升级');
+    expect(markup).toContain('Run the following command on the Server machine to upgrade');
     expect(markup).toContain('scripts/upgrade.sh');
     expect(markup).toContain('--source cnb --channel stable -y');
     expect(markup).toContain('--source github --channel stable -y');

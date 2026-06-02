@@ -1,4 +1,5 @@
 import { ApiError } from '@/lib/api';
+import { i18n } from '@/i18n';
 import type {
   ActualTransport,
   BandwidthSettings,
@@ -79,26 +80,26 @@ export const currentTargetTypes = ['tcp_service', 'udp_service'] as const satisf
 export const futureOnlyTargetTypes = ['unix_socket', 'static_file', 'serial_device'] as const;
 
 const transportPolicyLabels = {
-  server_relay_only: 'Server 中继',
-  direct_preferred: 'P2P 优先（未开放）',
-  direct_only: '仅 P2P（未开放）',
+  server_relay_only: 'Server relay',
+  direct_preferred: 'P2P preferred (unavailable)',
+  direct_only: 'P2P only (unavailable)',
 } as const satisfies Record<TransportPolicy, string>;
 
 const actualTransportLabels = {
-  unknown: '未建立',
-  server_relay: 'Server 中继',
-  peer_direct: 'P2P 直连（未开放）',
-  turn_relay: 'TURN 中继',
+  unknown: 'Not established',
+  server_relay: 'Server relay',
+  peer_direct: 'P2P direct (unavailable)',
+  turn_relay: 'TURN relay',
 } as const satisfies Record<ActualTransport, string>;
 
 const p2pStateLabels = {
-  idle: '未启用',
-  gathering: '收集候选',
-  checking: '连通性检查',
-  connected: '已直连',
-  failed: '直连失败',
-  fallback: '已回退中继',
-  closed: '已关闭',
+  idle: 'Disabled',
+  gathering: 'Gathering candidates',
+  checking: 'Checking connectivity',
+  connected: 'Direct connected',
+  failed: 'Direct failed',
+  fallback: 'Fell back to relay',
+  closed: 'Closed',
 } as const satisfies Record<P2PStateValue, string>;
 
 export function buildTunnelMutationPayload(input: TunnelMutationPayloadInput) {
@@ -107,7 +108,7 @@ export function buildTunnelMutationPayload(input: TunnelMutationPayloadInput) {
   const remotePort = input.remote_port ?? 0;
 
   if (input.type !== 'http' && (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535)) {
-    throw new Error('TCP/UDP 隧道必须填写明确的公网端口');
+    throw new Error(i18n.t('errors.tcp_udp_remote_port_required'));
   }
 
   return {
@@ -160,15 +161,15 @@ export function buildClientToClientTunnelSpecCreateRequest(
   input: ClientToClientTunnelSpecMutationInput,
 ): TunnelCreateRequest {
   if (input.type === 'http') {
-    throw new Error('Client-to-Client 暂不支持 HTTP 入口');
+    throw new Error(i18n.t('errors.client_to_client_http_unsupported'));
   }
   if (input.ingressClientId === input.targetClientId) {
-    throw new Error('访问入口客户端不能与服务来源客户端相同');
+    throw new Error(i18n.t('errors.client_to_client_same_participant'));
   }
   const payload = buildTunnelMutationPayload(input);
   const bindIP = input.bind_ip.trim();
   if (!bindIP) {
-    throw new Error('Client-to-Client 入口监听地址必填');
+    throw new Error(i18n.t('errors.client_to_client_bind_ip_required'));
   }
   const target: TunnelTarget = input.type === 'udp'
     ? {
@@ -250,17 +251,17 @@ export function getTunnelMutationErrorMessage(error: unknown) {
     const body = error.body as TunnelMutationErrorResponse | undefined;
     switch (body?.code ?? body?.error_code) {
       case 'server_addr_conflict':
-        return '该域名与当前管理地址冲突，请改用其他业务域名。';
+        return i18n.t('errors.server_addr_conflict');
       case 'http_tunnel_conflict':
-        return '该域名已被其他 HTTP 隧道占用，请更换域名后重试。';
+        return i18n.t('errors.http_tunnel_conflict');
       case 'metadata_missing':
-        return '隧道元数据已删除，仅保留历史流量记录。';
+        return i18n.t('errors.metadata_missing');
       case 'unknown_target_type':
       case 'unsupported_target_type':
       case 'unsupported_endpoint_type':
-        return '该目标类型暂未支持，当前仅支持 TCP/UDP 服务。';
+        return i18n.t('errors.unsupported_endpoint_type');
       case 'direct_transport_unavailable':
-        return '当前节点暂不支持 P2P 直连传输，请先选择 Server 中继。';
+        return i18n.t('errors.direct_transport_unavailable');
       default:
         return error.message;
     }
@@ -270,7 +271,7 @@ export function getTunnelMutationErrorMessage(error: unknown) {
     return error.message;
   }
 
-  return '提交失败，请稍后重试';
+  return i18n.t('errors.generic');
 }
 
 export function getTunnelMutationFieldError(error: unknown) {
@@ -325,30 +326,30 @@ function resolveTunnelStatusFromStates(
     case 'pending':
       return {
         key: 'pending',
-        label: '等待建立',
-        description: '等待 Client 建立公网入口',
+        label: 'Pending',
+        description: 'Waiting for the client to expose the ingress',
       };
     case 'exposed':
     case 'active':
       return {
         key: 'exposed',
-        label: '已建立',
+        label: 'Active',
       };
     case 'offline':
       return {
         key: 'offline',
-        label: '客户端离线',
+        label: 'Client offline',
       };
     case 'idle':
       return {
         key: 'stopped',
-        label: '已停止',
+        label: 'Stopped',
       };
     case 'error':
       return {
         key: 'error',
-        label: '异常',
-        description: error || '隧道运行异常',
+        label: 'Error',
+        description: error || 'Tunnel runtime error',
       };
     default:
       return {
@@ -399,7 +400,7 @@ function getTopologyLabel(topology: TunnelTopology | undefined) {
       return 'Client ↔ Client';
     case 'server_expose':
     case undefined:
-      return 'Server 暴露';
+      return 'Server expose';
     default:
       return topology;
   }
@@ -409,9 +410,9 @@ function getParticipantLabel(tunnel: ProxyConfig) {
   const ingressClient = tunnel.ingress?.client_id || tunnel.participants?.ingress?.client_id;
   const targetClient = tunnel.target?.client_id || tunnel.participants?.target?.client_id || tunnel.client_id;
   if (tunnel.topology === 'client_to_client') {
-    return `入口 ${ingressClient || '未知'} / 目标 ${targetClient || '未知'}`;
+    return `Ingress ${ingressClient || 'unknown'} / Target ${targetClient || 'unknown'}`;
   }
-  return `目标 ${targetClient || '未知'}`;
+  return `Target ${targetClient || 'unknown'}`;
 }
 
 function getTransportLabel(tunnel: ProxyConfig) {
@@ -432,7 +433,7 @@ function getTunnelIngressLabel(tunnel: ProxyConfig) {
   if (ingress) {
     switch (ingress.type) {
       case 'http_host':
-        return ingress.config?.domain || '(未声明域名)';
+        return ingress.config?.domain || '(domain not set)';
       case 'tcp_listen':
       case 'udp_listen':
         return `${ingress.config?.bind_ip || '0.0.0.0'}:${ingress.config?.port ?? 0}`;
@@ -440,7 +441,7 @@ function getTunnelIngressLabel(tunnel: ProxyConfig) {
   }
 
   return tunnel.type === 'http'
-    ? (tunnel.domain || '(未声明域名)')
+    ? (tunnel.domain || '(domain not set)')
     : `:${tunnel.remote_port}`;
 }
 
@@ -471,7 +472,9 @@ function getIngressWarning(tunnel: ProxyConfig) {
   }
   const bindIP = ingress.config?.bind_ip?.trim() ?? '';
   if (bindIP === '0.0.0.0' || bindIP === '::') {
-    return '入口绑定到通配地址，会暴露给入口 Client 所在网络。';
+    return i18n.t('tunnels.wildcardIngressWarning', {
+      defaultValue: 'Ingress binds to a wildcard address and is exposed to the ingress client network.',
+    });
   }
   return undefined;
 }
@@ -497,7 +500,7 @@ function normalizeBandwidthLimit(value?: number): number {
     return 0;
   }
   if (!Number.isInteger(value) || value < 0) {
-    throw new Error('带宽限制必须是非负整数');
+    throw new Error(i18n.t('errors.invalid_bandwidth_limit'));
   }
   return value;
 }

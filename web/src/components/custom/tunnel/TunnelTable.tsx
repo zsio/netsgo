@@ -8,6 +8,7 @@ import { useClientTunnelsByRole } from '@/hooks/use-tunnel-mutations';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { getTrafficSeriesKey, getTunnelSeriesKey } from '@/lib/tunnel-traffic-keys';
+import { useTranslation } from 'react-i18next';
 
 interface TunnelTableProps {
   client: Client;
@@ -15,6 +16,7 @@ interface TunnelTableProps {
 }
 
 export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
+  const { t } = useTranslation();
   const [createOpen, setCreateOpen] = useState(false);
   const {
     data: trafficData,
@@ -50,7 +52,7 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
       <TunnelListTable
         tunnels={tunnels}
         clients={clients}
-        title="下属隧道"
+        title={t('dashboard.childTunnels')}
         icon={<ArrowRightLeft className="h-5 w-5 text-primary" />}
         showClient={false}
         showTraffic24h
@@ -70,7 +72,7 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
             onClick={() => setCreateOpen(true)}
           >
             <GitBranchPlus className="h-4 w-4 mr-1" />
-            添加隧道
+            {t('tunnels.addTunnel')}
           </Button>
         }
         emptyAction={
@@ -81,7 +83,7 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
             onClick={() => setCreateOpen(true)}
           >
             <GitBranchPlus className="h-4 w-4 mr-1" />
-            立即创建
+            {t('dashboard.createNow')}
           </Button>
         }
       />

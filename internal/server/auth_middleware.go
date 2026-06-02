@@ -76,19 +76,19 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		tokenString := extractToken(r)
 		if tokenString == "" {
-			http.Error(w, `{"error":"missing credentials"}`, http.StatusUnauthorized)
+			writeAPIError(w, http.StatusUnauthorized, "missing_credentials", "missing credentials")
 			return
 		}
 
 		// 🔑 核心：检查 adminStore 是否已初始化
 		if s.auth.adminStore == nil {
-			http.Error(w, `{"error":"admin store not initialized"}`, http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "admin_store_unavailable", "admin store not initialized")
 			return
 		}
 		claims := &AdminClaims{}
 		secret, err := s.auth.adminStore.GetJWTSecret()
 		if err != nil {
-			http.Error(w, `{"error":"jwt secret unavailable"}`, http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "jwt_secret_unavailable", "jwt secret unavailable")
 			return
 		}
 
@@ -100,14 +100,14 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		})
 
 		if err != nil || !token.Valid {
-			http.Error(w, `{"error":"invalid or expired token"}`, http.StatusUnauthorized)
+			writeAPIError(w, http.StatusUnauthorized, "invalid_or_expired_token", "invalid or expired token")
 			return
 		}
 
 		session := s.auth.adminStore.GetSession(claims.SessionID)
 		if session == nil {
 			// session 被删除（登出/踢出/过期）→ 401
-			http.Error(w, `{"error":"session expired or revoked"}`, http.StatusUnauthorized)
+			writeAPIError(w, http.StatusUnauthorized, "session_expired_or_revoked", "session expired or revoked")
 			return
 		}
 
@@ -115,7 +115,7 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		if r.UserAgent() != session.UserAgent {
 			slog.Warn("session UA mismatch, possible token theft",
 				"session_id", session.ID, "user", session.Username, "module", "security")
-			http.Error(w, `{"error":"session environment mismatch"}`, http.StatusUnauthorized)
+			writeAPIError(w, http.StatusUnauthorized, "session_environment_mismatch", "session environment mismatch")
 			return
 		}
 
@@ -159,7 +159,7 @@ func (s *Server) RequireAuthIfInitialized(next http.HandlerFunc) http.HandlerFun
 		initialized, err := s.auth.adminStore.IsInitializedE()
 		if err != nil {
 			log.Printf("⚠️ failed to read initialization state for auth middleware: %v", err)
-			http.Error(w, `{"error":"temporary storage failure"}`, http.StatusServiceUnavailable)
+			writeAPIError(w, http.StatusServiceUnavailable, "temporary_storage_failure", "temporary storage failure")
 			return
 		}
 		if !initialized {

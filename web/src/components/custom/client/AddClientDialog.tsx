@@ -14,16 +14,16 @@ import {
 import { useAdminConfig } from '@/hooks/use-admin-config';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
 import { useServerStatus } from '@/hooks/use-server-status';
+import { useTranslation } from 'react-i18next';
 
 import { resolveAddClientServiceAddress } from './client-service-address';
 
-/** 过期时间选项 */
 const EXPIRY_OPTIONS = [
-  { label: '1 小时', value: '1h' },
-  { label: '3 小时', value: '3h' },
-  { label: '1 天', value: '24h' },
-  { label: '7 天', value: '168h' },
-  { label: '不限制', value: '0' },
+  { labelKey: 'clients.expiry1h', value: '1h' },
+  { labelKey: 'clients.expiry3h', value: '3h' },
+  { labelKey: 'clients.expiry1d', value: '24h' },
+  { labelKey: 'clients.expiry7d', value: '168h' },
+  { labelKey: 'common.unlimited', value: '0' },
 ] as const;
 
 interface AddClientDialogProps {
@@ -32,6 +32,7 @@ interface AddClientDialogProps {
 }
 
 export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<'config' | 'result'>('config');
   const [maxUses, setMaxUses] = useState(0);
   const [expiresIn, setExpiresIn] = useState('0');
@@ -110,19 +111,18 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <LayersPlus className="h-5 w-5 text-primary" />
-            添加 Client
+            {t('clients.addTitle')}
           </DialogTitle>
           <DialogDescription>
-            生成临时连接密钥，并给出默认推荐的连接命令。命令里的 --server 使用 http(s) 服务地址，Client 会自动派生内部通道。
+            {t('clients.addDescription')}
           </DialogDescription>
         </DialogHeader>
 
         {step === 'config' && (
           <div className="space-y-5 pt-1">
-            {/* 生效次数 */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                生效次数
+                {t('clients.maxUses')}
               </label>
               <div className="flex items-center gap-2">
                 <Input
@@ -134,15 +134,14 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                   placeholder="0"
                 />
                 <span className="text-xs text-muted-foreground">
-                  {maxUses === 0 ? '无限制' : `最多可使用 ${maxUses} 次`}
+                  {maxUses === 0 ? t('clients.maxUsesUnlimited') : t('clients.maxUsesCount', { count: maxUses })}
                 </span>
               </div>
             </div>
 
-            {/* 失效时间 */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                失效时间
+                {t('clients.expiresIn')}
               </label>
               <div className="flex flex-wrap gap-2">
                 {EXPIRY_OPTIONS.map(opt => (
@@ -156,7 +155,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                         : 'bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground'
                     }`}
                   >
-                    {opt.label}
+                    {t(opt.labelKey)}
                   </button>
                 ))}
               </div>
@@ -171,19 +170,19 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
               {createKey.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  生成中...
+                  {t('clients.generating')}
                 </>
               ) : (
                 <>
                   <Key className="h-4 w-4 mr-2" />
-                  生成连接密钥
+                  {t('clients.generateKey')}
                 </>
               )}
             </Button>
 
             {createKey.isError && (
               <p className="text-xs text-destructive text-center">
-                生成失败，请重试
+                {t('clients.generateFailed')}
               </p>
             )}
           </div>
@@ -194,7 +193,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
             {/* 生成的 Key */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                连接密钥
+                {t('clients.connectionKey')}
               </label>
               <div className="flex items-center gap-2">
                 <code className="flex-1 px-3 py-2 text-xs font-mono bg-muted rounded-lg border border-border break-all select-all">
@@ -214,27 +213,27 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                 </Button>
               </div>
               <p className="text-[10px] text-muted-foreground">
-                ⚠️ 密钥仅显示一次，请妥善保存
+                {t('clients.keyOneTime')}
               </p>
             </div>
 
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                默认推荐服务地址
+                {t('clients.recommendedServiceAddress')}
               </label>
               <code className="block px-3 py-2 text-xs font-mono bg-muted rounded-lg border border-border break-all select-all">
                 {serverAddr}
               </code>
               <p className="text-[11px] text-muted-foreground">
-                这是默认推荐的服务地址；如果部署上更合适，也可以把命令里的 `--server` 换成其他可达入口。
+                {t('clients.serviceAddressHelp')}
               </p>
             </div>
 
             {adminConfig?.server_addr_locked && (
               <div className="rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-[11px] text-muted-foreground">
-                当前管理地址由环境变量 `NETSGO_SERVER_ADDR` 锁定。
+                {t('clients.serverAddrLocked')}
                 <div className="mt-1 font-mono text-foreground break-all">
-                  当前生效服务地址 = {adminConfig.effective_server_addr}
+                  {t('clients.effectiveServiceAddress', { address: adminConfig.effective_server_addr })}
                 </div>
               </div>
             )}
@@ -243,7 +242,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
                 <Terminal className="h-3.5 w-3.5" />
-                连接命令
+                {t('clients.connectionCommand')}
               </label>
               <div className="flex items-center gap-2">
                 <code className="flex-1 px-3 py-2 text-xs font-mono bg-muted rounded-lg border border-border break-all select-all">
@@ -263,7 +262,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                 </Button>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                该命令只是默认推荐写法，不代表 Client 只能连接这个管理地址。
+                {t('clients.commandHelp')}
               </p>
             </div>
 
@@ -275,14 +274,14 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                 onClick={handleReset}
               >
                 <RefreshCcw className="h-4 w-4 mr-2" />
-                再生成一个
+                {t('clients.regenerate')}
               </Button>
               <Button
                 variant="default"
                 className="flex-1"
                 onClick={() => handleOpenChange(false)}
               >
-                完成
+                {t('clients.done')}
               </Button>
             </div>
           </div>
@@ -290,12 +289,12 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
 
         {/* 使用说明 */}
         <div className="mt-2 rounded-lg bg-muted/50 border border-border/50 p-3 space-y-2">
-          <p className="text-xs font-medium text-foreground">使用说明</p>
+          <p className="text-xs font-medium text-foreground">{t('clients.instructions')}</p>
           <ol className="text-[11px] text-muted-foreground space-y-1.5 list-decimal list-inside">
-            <li>在目标机器上下载并安装 NetsGo Client</li>
-            <li>使用上方的<strong>连接命令</strong>启动 Client</li>
-            <li>如有需要，可把命令里的 <code>--server</code> 替换成任意可达的反向代理入口、域名或 IP</li>
-            <li>Client 连接成功后会自动出现在面板中</li>
+            <li>{t('clients.instructionInstall')}</li>
+            <li>{t('clients.instructionRun')}</li>
+            <li>{t('clients.instructionReplaceServer')}</li>
+            <li>{t('clients.instructionVisible')}</li>
           </ol>
         </div>
       </DialogContent>

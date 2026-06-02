@@ -53,7 +53,7 @@ describe('tunnel-model', () => {
 
     expect(view.routeLabel).toBe('app.example.com -> 127.0.0.1:3000');
     expect(view.status.key).toBe('pending');
-    expect(view.status.label).toBe('等待建立');
+    expect(view.status.label).toBe('Pending');
   });
 
   test('running + offline 时展示客户端离线', () => {
@@ -69,7 +69,7 @@ describe('tunnel-model', () => {
     );
 
     expect(view.status.key).toBe('offline');
-    expect(view.status.label).toBe('客户端离线');
+    expect(view.status.label).toBe('Client offline');
     expect(view.status.description).toBeUndefined();
   });
 
@@ -83,7 +83,7 @@ describe('tunnel-model', () => {
     );
 
     expect(view.status.key).toBe('stopped');
-    expect(view.status.label).toBe('已停止');
+    expect(view.status.label).toBe('Stopped');
   });
 
   test('动作能力直接消费 server capability projection', () => {
@@ -330,10 +330,10 @@ describe('tunnel-model', () => {
     expect(view.targetLabel).toBe('0.0.0.0:10022');
     expect(view.destinationLabel).toBe('127.0.0.1:22');
     expect(view.topologyLabel).toBe('Client ↔ Client');
-    expect(view.participantLabel).toBe('入口 client-a / 目标 client-b');
-    expect(view.transportLabel).toBe('P2P 优先（未开放） · P2P 直连（未开放）');
-    expect(view.p2pLabel).toBe('已直连');
-    expect(view.ingressWarning).toBe('入口绑定到通配地址，会暴露给入口 Client 所在网络。');
+    expect(view.participantLabel).toBe('Ingress client-a / Target client-b');
+    expect(view.transportLabel).toBe('P2P preferred (unavailable) · P2P direct (unavailable)');
+    expect(view.p2pLabel).toBe('Direct connected');
+    expect(view.ingressWarning).toBe('Ingress binds to a wildcard address and is exposed to the ingress client network.');
   });
 
   test('host-backed 目标配置使用 host 字段展示目标地址', () => {
@@ -382,7 +382,7 @@ describe('tunnel-model', () => {
       local_ip: '127.0.0.1',
       local_port: 22,
       domain: '',
-    })).toThrow('必须填写明确的公网端口');
+    })).toThrow('TCP/UDP tunnels require an explicit public port.');
   });
 
   test('API 字段错误保留字段、文案和错误码', () => {
@@ -404,10 +404,10 @@ describe('tunnel-model', () => {
       code: 'unsupported_endpoint_type',
     });
 
-    expect(getTunnelMutationErrorMessage(error)).toBe('该目标类型暂未支持，当前仅支持 TCP/UDP 服务。');
+    expect(getTunnelMutationErrorMessage(error)).toBe('This target type is not supported yet. Only TCP/UDP services are supported.');
     expect(getTunnelMutationFieldError(error)).toEqual({
       field: 'target.type',
-      message: '该目标类型暂未支持，当前仅支持 TCP/UDP 服务。',
+      message: 'This target type is not supported yet. Only TCP/UDP services are supported.',
       code: 'unsupported_endpoint_type',
     });
   });

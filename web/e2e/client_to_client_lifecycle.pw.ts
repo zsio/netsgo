@@ -34,42 +34,42 @@ test('client-to-client TCP tunnel can stop, edit, resume, and delete from the UI
 
   let row = tunnelRow(page, name);
   await expect(row).toContainText('Client ↔ Client');
-  await expect(row).toContainText('入口');
-  await expect(row).toContainText('目标');
-  await expect(row).toContainText('Server 中继');
-  await expect(row).toContainText('入口绑定到通配地址');
+  await expect(row).toContainText('Ingress');
+  await expect(row).toContainText('Target');
+  await expect(row).toContainText('Server relay');
+  await expect(row).toContainText('Ingress binds to a wildcard address');
   await captureArtifact(row, testInfo, 'client-to-client-active-row');
 
-  await clickTunnelAction(page, name, '停止');
+  await clickTunnelAction(page, name, 'Stop');
   await waitForTunnelState(page, name, 'idle');
   row = tunnelRow(page, name);
-  await expect(row).toContainText('已停止');
+  await expect(row).toContainText('Stopped');
   await expectHTTPUnavailable(page, e2eConfig.lifecycleTCPHostPort);
 
-  await clickTunnelAction(page, name, '编辑');
-  const editDialog = page.getByRole('dialog', { name: '编辑隧道' });
+  await clickTunnelAction(page, name, 'Edit');
+  const editDialog = page.getByRole('dialog', { name: 'Edit tunnel' });
   await expect(editDialog).toBeVisible();
-  await expect(editDialog.getByLabel('目标服务端口')).toHaveValue('18083');
-  await expect(editDialog.getByLabel('入口监听端口')).toHaveValue('18092');
-  await editDialog.getByLabel('入口监听端口').fill('18093');
+  await expect(editDialog.getByLabel('Target service port')).toHaveValue('18083');
+  await expect(editDialog.getByLabel('Ingress bind port')).toHaveValue('18092');
+  await editDialog.getByLabel('Ingress bind port').fill('18093');
   await captureArtifact(editDialog, testInfo, 'client-to-client-edit-dialog');
-  await editDialog.getByRole('button', { name: '保存修改' }).click();
+  await editDialog.getByRole('button', { name: 'Save changes' }).click();
   await expect(editDialog).toBeHidden({ timeout: 30_000 });
   await waitForTunnelState(page, name, 'idle');
   row = tunnelRow(page, name);
   await expect(row).toContainText('18093');
 
-  await clickTunnelAction(page, name, '启动');
+  await clickTunnelAction(page, name, 'Start');
   await waitForTunnelState(page, name, 'active');
   await expectHTTPUnavailable(page, e2eConfig.lifecycleTCPHostPort);
   await expectHTTPContains(page, e2eConfig.editedTCPHostPort, 'playwright tcp c2c response');
 
-  await clickTunnelAction(page, name, '停止');
+  await clickTunnelAction(page, name, 'Stop');
   await waitForTunnelState(page, name, 'idle');
-  await clickTunnelAction(page, name, '删除');
-  const confirmDialog = page.getByRole('dialog', { name: '删除隧道' });
-  await expect(confirmDialog).toContainText(`确认永久删除隧道「${name}」？删除后无法恢复。`);
-  await confirmDialog.getByRole('button', { name: '删除' }).click();
+  await clickTunnelAction(page, name, 'Delete');
+  const confirmDialog = page.getByRole('dialog', { name: 'Delete tunnel' });
+  await expect(confirmDialog).toContainText(`Permanently delete tunnel "${name}"? This cannot be undone.`);
+  await confirmDialog.getByRole('button', { name: 'Delete' }).click();
   await waitForTunnelMissing(page, name);
   await expectHTTPUnavailable(page, e2eConfig.editedTCPHostPort);
 });

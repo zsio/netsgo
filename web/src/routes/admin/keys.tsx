@@ -20,6 +20,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { useTranslation } from 'react-i18next';
 
 export const adminKeysRoute = createRoute({
   getParentRoute: () => adminRoute,
@@ -28,14 +29,15 @@ export const adminKeysRoute = createRoute({
 });
 
 const EXPIRY_OPTIONS = [
-  { label: '不限制', value: '' },
-  { label: '1 小时', value: '1h' },
-  { label: '3 小时', value: '3h' },
-  { label: '24 小时', value: '24h' },
-  { label: '7 天', value: '168h' },
+  { labelKey: 'common.unlimited', value: '' },
+  { labelKey: 'clients.expiry1h', value: '1h' },
+  { labelKey: 'clients.expiry3h', value: '3h' },
+  { labelKey: 'clients.expiry1d', value: '24h' },
+  { labelKey: 'clients.expiry7d', value: '168h' },
 ];
 
 function AdminKeysPage() {
+  const { t } = useTranslation();
   const { data: keys = [], isLoading } = useAdminKeys();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
@@ -79,9 +81,9 @@ function AdminKeysPage() {
   };
 
   const formatExpiry = (expiresAt?: string) => {
-    if (!expiresAt) return '永不过期';
+    if (!expiresAt) return t('admin.neverExpires');
     const d = new Date(expiresAt);
-    if (d < new Date()) return '已过期';
+    if (d < new Date()) return t('admin.expired');
     return d.toLocaleString();
   };
 
@@ -94,7 +96,7 @@ function AdminKeysPage() {
     <>
       <div className="flex flex-col gap-6 w-full">
         <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-bold tracking-tight">API Key 管理</h2>
+          <h2 className="text-2xl font-bold tracking-tight">{t('admin.keysTitle')}</h2>
           <Dialog open={isDialogOpen} onOpenChange={(open) => {
             if (!open) {
               resetDialog();
@@ -104,29 +106,29 @@ function AdminKeysPage() {
           }}>
             <DialogTrigger asChild>
               <Button className="gap-2">
-                <Key className="w-4 h-4" /> 新建 Key
+                <Key className="w-4 h-4" /> {t('admin.newKey')}
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>新建 API Key</DialogTitle>
+                <DialogTitle>{t('admin.newApiKey')}</DialogTitle>
               </DialogHeader>
               {createdRawKey ? (
                 <div className="flex flex-col gap-4 py-4">
                   <div className="bg-amber-500/10 text-amber-500 p-3 rounded-md text-sm">
-                    请立即复制并妥善保存此 Key，刷新后将无法再次查看。
+                    {t('admin.copyKeyNow')}
                   </div>
                   <div className="p-3 bg-muted font-mono text-sm break-all rounded-md select-all">
                     {createdRawKey}
                   </div>
-                  <Button onClick={resetDialog}>完成</Button>
+                  <Button onClick={resetDialog}>{t('clients.done')}</Button>
                 </div>
               ) : (
                 <form onSubmit={handleCreate} className="flex flex-col gap-4 py-4">
                   <div className="flex flex-col gap-2">
-                    <label className="text-sm font-medium">名称 / 用途</label>
+                    <label className="text-sm font-medium">{t('admin.namePurpose')}</label>
                     <Input
-                      placeholder="例如: staging-client"
+                      placeholder={t('admin.namePurposePlaceholder')}
                       value={newKeyName}
                       onChange={(e) => setNewKeyName(e.target.value)}
                       required
@@ -134,31 +136,31 @@ function AdminKeysPage() {
                     />
                   </div>
                   <div className="flex flex-col gap-2">
-                    <label className="text-sm font-medium">过期时间</label>
+                    <label className="text-sm font-medium">{t('admin.expiresAt')}</label>
                     <select
                       value={expiresIn}
                       onChange={(e) => setExpiresIn(e.target.value)}
                       className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     >
                       {EXPIRY_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
                       ))}
                     </select>
                   </div>
                   <div className="flex flex-col gap-2">
-                    <label className="text-sm font-medium">最大使用次数</label>
+                    <label className="text-sm font-medium">{t('admin.maxUses')}</label>
                     <Input
                       type="number"
                       min={0}
                       value={maxUses || ''}
                       onChange={(e) => setMaxUses(Number.parseInt(e.target.value, 10) || 0)}
-                      placeholder="0 表示不限制"
+                      placeholder={t('admin.maxUsesPlaceholder')}
                     />
-                    <p className="text-xs text-muted-foreground">每次 Client 连接将消耗一次使用次数。0 表示不限制。</p>
+                    <p className="text-xs text-muted-foreground">{t('admin.maxUsesHelp')}</p>
                   </div>
-                  <div className="text-xs text-muted-foreground">当前阶段仅支持 `connect` 权限。</div>
+                  <div className="text-xs text-muted-foreground">{t('admin.connectOnly')}</div>
                   <Button type="submit" disabled={createKey.isPending}>
-                    {createKey.isPending ? '创建中...' : '创 建'}
+                    {createKey.isPending ? t('admin.creating') : t('admin.create')}
                   </Button>
                 </form>
               )}
@@ -170,19 +172,19 @@ function AdminKeysPage() {
           <table className="w-full text-sm text-left">
             <thead className="text-xs text-muted-foreground bg-muted/50 uppercase">
               <tr>
-                <th className="px-6 py-3 font-medium">名称</th>
-                <th className="px-6 py-3 font-medium">权限</th>
-                <th className="px-6 py-3 font-medium">使用量</th>
-                <th className="px-6 py-3 font-medium">过期时间</th>
-                <th className="px-6 py-3 font-medium">状态</th>
-                <th className="px-6 py-3 font-medium text-right">操作</th>
+                <th className="px-6 py-3 font-medium">{t('admin.name')}</th>
+                <th className="px-6 py-3 font-medium">{t('admin.permissions')}</th>
+                <th className="px-6 py-3 font-medium">{t('admin.usage')}</th>
+                <th className="px-6 py-3 font-medium">{t('admin.expiresAt')}</th>
+                <th className="px-6 py-3 font-medium">{t('admin.status')}</th>
+                <th className="px-6 py-3 font-medium text-right">{t('admin.actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
               {isLoading ? (
                 <tr><td colSpan={6} className="p-4"><Skeleton className="h-10 w-full" /></td></tr>
               ) : keys.length === 0 ? (
-                <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">暂无 Client API Key</td></tr>
+                <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">{t('admin.noApiKeys')}</td></tr>
               ) : (
                 keys.map((key) => (
                   <tr key={key.id} className="hover:bg-muted/30">
@@ -198,9 +200,9 @@ function AdminKeysPage() {
                     </td>
                     <td className="px-6 py-3">
                       {key.is_active ? (
-                        <span className="text-emerald-500 font-medium">已启用</span>
+                        <span className="text-emerald-500 font-medium">{t('common.enabled')}</span>
                       ) : (
-                        <span className="text-muted-foreground">已禁用</span>
+                        <span className="text-muted-foreground">{t('common.disabled')}</span>
                       )}
                     </td>
                     <td className="px-6 py-3">
@@ -208,7 +210,7 @@ function AdminKeysPage() {
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <TableActionIconButton
-                              label={key.is_active ? '禁用 API Key' : '启用 API Key'}
+                              label={key.is_active ? t('admin.disableApiKey') : t('admin.enableApiKey')}
                               tone={key.is_active ? 'warning' : 'success'}
                               onClick={() => key.is_active ? disableKey.mutate(key.id) : enableKey.mutate(key.id)}
                             >
@@ -219,20 +221,20 @@ function AdminKeysPage() {
                               )}
                             </TableActionIconButton>
                           </TooltipTrigger>
-                          <TooltipContent>{key.is_active ? '禁用' : '启用'}</TooltipContent>
+                          <TooltipContent>{key.is_active ? t('common.disabled') : t('common.enabled')}</TooltipContent>
                         </Tooltip>
 
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <TableActionIconButton
-                              label="删除 API Key"
+                              label={t('admin.deleteApiKey')}
                               tone="destructive"
                               onClick={() => setDeleteTarget({ id: key.id, name: key.name })}
                             >
                               <Trash2 className="h-4 w-4" />
                             </TableActionIconButton>
                           </TooltipTrigger>
-                          <TooltipContent>删除</TooltipContent>
+                          <TooltipContent>{t('common.delete')}</TooltipContent>
                         </Tooltip>
                       </div>
                     </td>
@@ -246,9 +248,9 @@ function AdminKeysPage() {
 
       <ConfirmDialog
         open={deleteTarget !== null}
-        title="删除 API Key"
-        description={`确认删除 API Key「${deleteTarget?.name ?? ''}」？删除后依赖该 Key 的 Client 将无法继续认证。`}
-        confirmLabel="删除"
+        title={t('admin.deleteApiKey')}
+        description={t('admin.deleteApiKeyDescription', { name: deleteTarget?.name ?? '' })}
+        confirmLabel={t('common.delete')}
         variant="destructive"
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => {

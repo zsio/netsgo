@@ -27,6 +27,7 @@ import {
 } from '@/hooks/use-tunnel-mutations';
 import type { Client, ProxyConfig } from '@/types';
 import { formatBytes, formatNetSpeed } from '@/lib/format';
+import { useTranslation } from 'react-i18next';
 
 // 扩展的隧道条目，可以附带归属节点信息
 export interface TunnelEntry extends ProxyConfig {
@@ -95,6 +96,7 @@ export function TunnelListTable({
   renderRowAction,
   onClientClick,
 }: TunnelListTableProps) {
+  const { t } = useTranslation();
   const resumeTunnel = useResumeTunnel();
   const stopTunnel = useStopTunnel();
   const deleteTunnel = useDeleteTunnel();
@@ -145,8 +147,8 @@ export function TunnelListTable({
         {showTraffic24h && (
           <button
             className="p-1.5 hover:bg-primary/10 rounded text-primary"
-            title="速率趋势"
-            aria-label="速率趋势"
+            title={t('tunnels.rateTrend')}
+            aria-label={t('tunnels.rateTrend')}
             onClick={() => setSpeedTarget(tunnel)}
           >
             <Activity className="h-4 w-4" />
@@ -155,10 +157,10 @@ export function TunnelListTable({
         {canResume && (
           <button
             className="p-1.5 hover:bg-emerald-500/10 rounded text-emerald-500"
-            title="启动"
-            aria-label="启动"
+            title={t('tunnels.resume')}
+            aria-label={t('tunnels.resume')}
             onClick={() => resumeTunnel.mutate(args(tunnel.clientId, tunnel.id), {
-              onSuccess: () => toast.success(`隧道「${tunnel.name}」已启动`),
+              onSuccess: () => toast.success(t('tunnels.started', { name: tunnel.name })),
               onError: (err) => toast.error((err as Error).message),
             })}
           >
@@ -168,10 +170,10 @@ export function TunnelListTable({
         {canStop && (
           <button
             className="p-1.5 hover:bg-slate-500/10 rounded text-slate-500"
-            title="停止"
-            aria-label="停止"
+            title={t('tunnels.stop')}
+            aria-label={t('tunnels.stop')}
             onClick={() => stopTunnel.mutate(args(tunnel.clientId, tunnel.id), {
-              onSuccess: () => toast.success(`隧道「${tunnel.name}」已停止`),
+              onSuccess: () => toast.success(t('tunnels.stopped', { name: tunnel.name })),
               onError: (err) => toast.error((err as Error).message),
             })}
           >
@@ -181,8 +183,8 @@ export function TunnelListTable({
         {canEdit && (
           <button
             className="p-1.5 hover:bg-blue-500/10 rounded text-blue-500"
-            title="编辑"
-            aria-label="编辑"
+            title={t('common.edit')}
+            aria-label={t('common.edit')}
             onClick={() => setEditTarget(tunnel)}
           >
             <Pencil className="h-4 w-4" />
@@ -191,8 +193,8 @@ export function TunnelListTable({
         {canDelete && (
           <button
             className="p-1.5 hover:bg-destructive/10 rounded text-destructive"
-            title="删除"
-            aria-label="删除"
+            title={t('common.delete')}
+            aria-label={t('common.delete')}
             onClick={() => setDeleteTarget({ id: tunnel.id, name: tunnel.name, clientId: tunnel.clientId })}
           >
             <Trash2 className="h-4 w-4" />
@@ -221,7 +223,7 @@ export function TunnelListTable({
               <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="搜索隧道..."
+                placeholder={t('tunnels.searchPlaceholder')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="h-8 pl-8 pr-3 rounded bg-background border border-border/50 text-xs w-48 focus:outline-none focus:border-primary/50"
@@ -237,14 +239,14 @@ export function TunnelListTable({
               <table className="min-w-[56rem] w-full table-fixed text-left text-sm">
                 <thead className="text-xs text-muted-foreground bg-muted/30 uppercase">
                   <tr>
-                    <th className="w-40 whitespace-nowrap px-4 py-3 font-medium sm:px-6">隧道</th>
-                    <th className="w-56 whitespace-nowrap px-4 py-3 font-medium sm:px-6">入口</th>
-                    <th className="w-64 whitespace-nowrap px-4 py-3 font-medium sm:px-6">目标服务</th>
-                    <th className="w-24 whitespace-nowrap px-4 py-3 font-medium sm:px-6">限速</th>
-                    {showTraffic24h && <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">24 小时流量</th>}
-                    <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">状态</th>
+                    <th className="w-40 whitespace-nowrap px-4 py-3 font-medium sm:px-6">{t('tunnels.tunnel')}</th>
+                    <th className="w-56 whitespace-nowrap px-4 py-3 font-medium sm:px-6">{t('tunnels.ingress')}</th>
+                    <th className="w-64 whitespace-nowrap px-4 py-3 font-medium sm:px-6">{t('tunnels.targetService')}</th>
+                    <th className="w-24 whitespace-nowrap px-4 py-3 font-medium sm:px-6">{t('tunnels.bandwidthLimit')}</th>
+                    {showTraffic24h && <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">{t('tunnels.traffic24h')}</th>}
+                    <th className="w-28 whitespace-nowrap px-4 py-3 font-medium sm:px-6">{t('tunnels.status')}</th>
                     {(showActions || renderRowAction) && (
-                      <th className="w-28 whitespace-nowrap px-4 py-3 text-right font-medium sm:px-6">操作</th>
+                      <th className="w-28 whitespace-nowrap px-4 py-3 text-right font-medium sm:px-6">{t('tunnels.actions')}</th>
                     )}
                   </tr>
                 </thead>
@@ -269,13 +271,13 @@ export function TunnelListTable({
           ) : (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
               <Search className="h-8 w-8 mb-3 opacity-20" />
-              <p className="text-sm">未找到匹配的隧道</p>
+              <p className="text-sm">{t('tunnels.noMatches')}</p>
             </div>
           )
         ) : (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
             <ShieldCheck className="h-12 w-12 mb-4 opacity-20" />
-            <p>暂无隧道配置</p>
+            <p>{t('tunnels.empty')}</p>
             {emptyAction}
           </div>
         )}
@@ -285,14 +287,14 @@ export function TunnelListTable({
         <>
           <ConfirmDialog
             open={deleteTarget !== null}
-            title="删除隧道"
-            description={`确认永久删除隧道「${deleteTarget?.name}」？删除后无法恢复。`}
-            confirmLabel="删除"
+            title={t('tunnels.deleteTunnel')}
+            description={t('tunnels.deleteDescription', { name: deleteTarget?.name ?? '' })}
+            confirmLabel={t('common.delete')}
             variant="destructive"
             onConfirm={() => {
               if (deleteTarget) {
                 deleteTunnel.mutate(args(deleteTarget.clientId, deleteTarget.id), {
-                  onSuccess: () => toast.success(`隧道「${deleteTarget.name}」已删除`),
+                  onSuccess: () => toast.success(t('tunnels.deleted', { name: deleteTarget.name })),
                   onError: (err) => toast.error((err as Error).message),
                 });
                 setDeleteTarget(null);
@@ -340,6 +342,7 @@ function TunnelTableRow({
   onClientClick?: (tunnel: TunnelEntry) => void;
   renderActionButtons: (tunnel: TunnelEntry) => React.ReactNode;
 }) {
+  const { t } = useTranslation();
   const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
   const ingress = buildIngressPresentation(tunnel, view, clientNameById);
   const target = buildTargetPresentation(tunnel, view, clientNameById);
@@ -374,9 +377,9 @@ function TunnelTableRow({
         <td className="px-4 py-3 sm:px-6">
           <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">
             {traffic24hState === 'error'
-              ? '加载失败'
+              ? t('tunnels.trafficLoadFailed')
               : traffic24hState === 'loading'
-                ? '加载中...'
+                ? t('tunnels.loadingTraffic')
                 : formatBytes(tunnel.traffic24hBytes ?? 0)}
           </span>
         </td>
@@ -414,7 +417,7 @@ function buildClientNameMap(clients: Client[] | undefined) {
 
 function resolveClientLabel(tunnel: TunnelEntry, clientId: string | undefined, clientNameById: Map<string, string>) {
   if (!clientId) {
-    return '未知节点';
+    return '';
   }
   if (clientNameById.has(clientId)) {
     return clientNameById.get(clientId) ?? clientId;
@@ -462,12 +465,13 @@ function getTunnelTypeLabel(tunnel: TunnelEntry) {
 }
 
 function TunnelSpeedLimit({ tunnel }: { tunnel: TunnelEntry }) {
+  const { t } = useTranslation();
   const hasIngressLimit = tunnel.ingress_bps > 0;
   const hasEgressLimit = tunnel.egress_bps > 0;
 
   if (!hasIngressLimit && !hasEgressLimit) {
     return (
-      <div className="inline-flex h-6 w-8 items-center justify-center text-muted-foreground" aria-label="不限速">
+      <div className="inline-flex h-6 w-8 items-center justify-center text-muted-foreground" aria-label={t('tunnels.unlimitedBandwidth')}>
         <InfinityIcon className="h-4 w-4" />
       </div>
     );
@@ -537,6 +541,7 @@ function TunnelStatusBadge({
   error?: string;
   issues?: TunnelEntry['issues'];
 }) {
+  const { t } = useTranslation();
   const dotClassName = cn(
     'size-1.5 rounded-full',
     status.key === 'exposed' && 'bg-emerald-500',
@@ -566,12 +571,18 @@ function TunnelStatusBadge({
     : error
       ? [error]
       : [];
+  const statusLabel = t(`tunnels.status${status.key[0].toUpperCase()}${status.key.slice(1)}`, {
+    defaultValue: status.label,
+  });
+  const statusDescription = status.key === 'pending'
+    ? t('tunnels.statusPendingDescription')
+    : status.description;
 
   return (
     <div className="flex flex-col gap-1 items-start">
-      <Badge variant="outline" className={cn(badgeClassName, 'px-2 sm:px-2.5')} aria-label={status.label}>
+      <Badge variant="outline" className={cn(badgeClassName, 'px-2 sm:px-2.5')} aria-label={statusLabel}>
         <span className={dotClassName} />
-        <span className="hidden sm:inline">{status.label}</span>
+        <span className="hidden sm:inline">{statusLabel}</span>
         {additionalIssueCount > 0 && (
           <span className="rounded bg-background/70 px-1 font-mono text-[10px]">+{additionalIssueCount}</span>
         )}
@@ -591,8 +602,8 @@ function TunnelStatusBadge({
       {issueSummary && (
         <p className="hidden max-w-[18rem] truncate text-[11px] text-destructive sm:block">{issueSummary}</p>
       )}
-      {status.description && issueItems.length === 0 && (status.key !== 'error' || !error) && (
-        <p className="hidden text-[11px] text-muted-foreground sm:block">{status.description}</p>
+      {statusDescription && issueItems.length === 0 && (status.key !== 'error' || !error) && (
+        <p className="hidden text-[11px] text-muted-foreground sm:block">{statusDescription}</p>
       )}
     </div>
   );

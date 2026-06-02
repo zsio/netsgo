@@ -16,6 +16,7 @@ import { ClientBandwidthDialog } from '@/components/custom/client/ClientBandwidt
 import { Button } from '@/components/ui/button';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
+import { useTranslation } from 'react-i18next';
 
 interface ClientInfoCardProps {
   client: Client;
@@ -42,6 +43,7 @@ function ProgressBar({ value, label, total, colorClass = 'bg-primary' }: { value
 }
 
 export function ClientInfoCard({ client }: ClientInfoCardProps) {
+  const { t } = useTranslation();
   const stats = client.stats;
   const info = client.info;
   const isOnline = client.online;
@@ -79,7 +81,7 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
         <div className="flex items-center gap-2 text-sm">
           <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500' : 'bg-destructive'}`} />
           <div className="flex flex-col items-end leading-tight">
-            <span className="font-medium text-muted-foreground">{isOnline ? '在线' : '离线'}</span>
+            <span className="font-medium text-muted-foreground">{isOnline ? t('clients.online') : t('clients.offline')}</span>
           </div>
         </div>
       </div>
@@ -87,38 +89,38 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
       {/* Device Info Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 divide-y sm:divide-y-0 border-b border-border/40">
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
-          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Monitor className="w-4 h-4" />操作系统</span>
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Monitor className="w-4 h-4" />{t('clients.operatingSystem')}</span>
           <span className="font-medium text-sm">{osLabels[info.os] ?? info.os} / {info.arch}</span>
           <span className="text-xs text-muted-foreground font-mono">{client.id.slice(0, 8)}</span>
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 md:border-r border-border/40">
-          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Network className="w-4 h-4" />IP 地址</span>
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Network className="w-4 h-4" />{t('clients.ipAddress')}</span>
           <CopyableIpLine
             primary
-            title="公网 IP"
+            title={t('clients.publicIp')}
             icon={<Globe className="h-3.5 w-3.5" />}
             value={info.public_ipv4 || info.public_ipv6 || client.last_ip || '-'}
           />
           <CopyableIpLine
-            title="内网 IP"
+            title={t('clients.privateIp')}
             icon={<Wifi className="h-3.5 w-3.5" />}
             value={info.ip || '-'}
           />
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
-          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />运行时长</span>
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Clock className="w-4 h-4" />{t('clients.uptime')}</span>
           <span className="font-medium text-sm">
             {runtimeSeconds ? formatUptime(runtimeSeconds) : '-'}
           </span>
-          <span className="text-xs text-muted-foreground">启动于 {startTimeText}</span>
+          <span className="text-xs text-muted-foreground">{t('clients.startedAt', { time: startTimeText })}</span>
         </div>
         <div className="p-4 sm:p-5 flex flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Box className="w-4 h-4" />限速状态</span>
+            <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Box className="w-4 h-4" />{t('clients.bandwidth')}</span>
             <ClientBandwidthDialog
               client={client}
               trigger={
-                <Button variant="ghost" size="icon-xs" title="修改客户端限速">
+                <Button variant="ghost" size="icon-xs" title={t('clients.editBandwidth')}>
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
               }
@@ -147,7 +149,7 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
                 arch: info.arch,
                 enabled: client.online,
               }}
-              label="客户端版本"
+              label={t('clients.clientVersion')}
             />
           </span>
         </div>
@@ -161,7 +163,7 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
             <div className="flex items-center gap-2 text-foreground font-medium text-sm">
               <Cpu className="w-4 h-4 text-blue-500 shrink-0" />
               CPU
-              <span className="ml-auto text-xs text-muted-foreground font-normal">{stats.num_cpu} 核</span>
+              <span className="ml-auto text-xs text-muted-foreground font-normal">{t('clients.cpuCores', { count: stats.num_cpu })}</span>
             </div>
             <ProgressBar value={stats.cpu_usage} label="Usage" colorClass="bg-blue-500" />
           </div>
@@ -170,7 +172,7 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
           <div className="p-4 sm:p-5 flex flex-col gap-3 border-b sm:border-b lg:border-b-0 border-border/40 lg:border-r sm:[&:nth-child(2)]:border-r-0 lg:[&:nth-child(2)]:border-r">
             <div className="flex items-center gap-2 text-foreground font-medium text-sm min-w-0">
               <Database className="w-4 h-4 text-emerald-500 shrink-0" />
-              <span className="shrink-0">内存</span>
+              <span className="shrink-0">{t('clients.memory')}</span>
               <HoverCard>
                 <HoverCardTrigger asChild>
                   <span className="ml-auto text-xs text-muted-foreground font-normal cursor-help inline-flex items-center gap-1 shrink-0">
@@ -181,14 +183,14 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
                 <HoverCardContent className="w-[220px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="end">
                   <div className="flex flex-col gap-1.5">
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">堆内存</span>
+                      <span className="text-muted-foreground">{t('clients.heapMemory')}</span>
                       <span className="font-medium text-foreground">{stats.app_mem_used ? formatBytes(stats.app_mem_used) : '-'}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">进程占用</span>
+                      <span className="text-muted-foreground">{t('clients.processUsage')}</span>
                       <span className="font-medium text-foreground">{stats.app_mem_sys ? formatBytes(stats.app_mem_sys) : '-'}</span>
                     </div>
-                    <p className="text-muted-foreground/70 text-[11px] pt-1 border-t border-border/40">进程占用包含运行时、嵌入资源。</p>
+                    <p className="text-muted-foreground/70 text-[11px] pt-1 border-t border-border/40">{t('clients.processUsageHelp')}</p>
                   </div>
                 </HoverCardContent>
               </HoverCard>
@@ -205,9 +207,9 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
           <div className="p-4 sm:p-5 flex flex-col gap-3 border-b sm:border-b-0 border-border/40 sm:border-r">
             <div className="flex items-center gap-2 text-foreground font-medium text-sm">
               <HardDrive className="w-4 h-4 text-amber-500 shrink-0" />
-              <span className="shrink-0">磁盘</span>
+              <span className="shrink-0">{t('clients.disk')}</span>
               {multipleDisks && (
-                <span className="ml-auto text-xs text-muted-foreground font-normal hidden lg:inline">悬浮查看明细</span>
+                <span className="ml-auto text-xs text-muted-foreground font-normal hidden lg:inline">{t('clients.hoverForDetails')}</span>
               )}
             </div>
             {multipleDisks ? (
@@ -225,7 +227,7 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
                 <HoverCardContent className="w-[320px] p-4 flex flex-col gap-4 shadow-xl border-border/50">
                   <div className="flex items-center gap-2 text-sm font-semibold text-foreground pb-2 border-b border-border/40">
                     <HardDrive className="w-4 h-4" />
-                    所有分区明细
+                    {t('clients.allPartitions')}
                   </div>
                   <div className="flex flex-col gap-4 max-h-[300px] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     {diskPartitions.map((p, idx) => {
@@ -257,7 +259,7 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
           <div className="p-4 sm:p-5 flex flex-col gap-3">
             <div className="flex items-center gap-2 text-foreground font-medium text-sm">
               <Globe className="w-4 h-4 text-violet-500 shrink-0" />
-              网络 I/O
+              {t('clients.networkIo')}
             </div>
             <div className="flex flex-col gap-1.5 mt-auto">
               <div className="flex items-center justify-between text-xs">
@@ -271,7 +273,7 @@ export function ClientInfoCard({ client }: ClientInfoCardProps) {
                 </div>
               </div>
               <div className="text-[10px] text-muted-foreground/60">
-                累计: ↓{formatBytes(stats.net_recv)} / ↑{formatBytes(stats.net_sent)}
+                {t('clients.totalTraffic', { recv: formatBytes(stats.net_recv), sent: formatBytes(stats.net_sent) })}
               </div>
             </div>
           </div>

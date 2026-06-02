@@ -7,6 +7,8 @@ import {
 } from '@/components/ui/dialog';
 import { TrafficRateChart } from '@/components/custom/chart/TrafficRateChart';
 import type { ProxyConfig } from '@/types';
+import { useTranslation } from 'react-i18next';
+import { buildTunnelSpeedFilter } from '@/lib/tunnel-speed';
 
 interface TunnelSpeedDialogProps {
   tunnel: ProxyConfig | null;
@@ -21,6 +23,7 @@ export function TunnelSpeedDialog({
   open,
   onOpenChange,
 }: TunnelSpeedDialogProps) {
+  const { t } = useTranslation();
   if (!tunnel) return null;
 
   return (
@@ -29,11 +32,11 @@ export function TunnelSpeedDialog({
         <DialogHeader>
           <DialogTitle className="flex min-w-0 items-center gap-2 pr-8">
             <Activity className="h-5 w-5 shrink-0 text-primary" />
-            <span className="truncate">{tunnel.name} 的 24 小时速率</span>
+            <span className="truncate">{t('clients.tunnelRateTitle', { name: tunnel.name })}</span>
           </DialogTitle>
         </DialogHeader>
         <div className="min-w-0">
-          <TrafficRateChart clientId={clientId} tunnelFilter={[tunnel]} />
+          <TrafficRateChart clientId={clientId} tunnelFilter={buildTunnelSpeedFilter(tunnel)} />
         </div>
       </DialogContent>
     </Dialog>

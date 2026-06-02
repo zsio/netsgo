@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Line, LineChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { AlertCircle, Activity } from 'lucide-react';
 
@@ -54,8 +55,8 @@ function getTunnelColor(index: number) {
   return CHART_COLORS[index] ?? `hsl(${(index * 67) % 360} 72% 58%)`;
 }
 
-function getTrafficSeriesName(item: ClientTrafficResponse['items'][number]) {
-  return item.tunnel_name ?? `已删除隧道 ${item.tunnel_id ?? 'unknown'}`;
+function getTrafficSeriesName(item: ClientTrafficResponse['items'][number], t: ReturnType<typeof useTranslation>['t']) {
+  return item.tunnel_name ?? t('traffic.deletedTunnel', { id: item.tunnel_id ?? 'unknown' });
 }
 
 function formatTrafficValue(value: number, range?: ClientTrafficRange) {
@@ -63,44 +64,44 @@ function formatTrafficValue(value: number, range?: ClientTrafficRange) {
   return range === '60s' ? `${formatted}/s` : formatted;
 }
 
-function formatXAxisLabel(timestamp: number, range: ClientTrafficRange) {
+function formatXAxisLabel(timestamp: number, range: ClientTrafficRange, language: string) {
   const date = new Date(timestamp);
   if (range === '60s') {
-    return date.toLocaleString('zh-CN', { minute: '2-digit', second: '2-digit' });
+    return date.toLocaleString(language, { minute: '2-digit', second: '2-digit' });
   }
-  return date.toLocaleString('zh-CN', range === '24h'
+  return date.toLocaleString(language, range === '24h'
     ? { hour: '2-digit', minute: '2-digit' }
     : { month: 'numeric', day: 'numeric', hour: '2-digit' });
 }
 
-function formatTooltipLabel(timestamp: number, range: ClientTrafficRange) {
+function formatTooltipLabel(timestamp: number, range: ClientTrafficRange, language: string) {
   const date = new Date(timestamp);
   if (range === '60s') {
-    return date.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return date.toLocaleString(language, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
-  return date.toLocaleString('zh-CN', range === '24h'
+  return date.toLocaleString(language, range === '24h'
     ? { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }
     : { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit' });
 }
 
-function getRangeSummary(range: ClientTrafficRange) {
+function getRangeSummary(range: ClientTrafficRange, t: ReturnType<typeof useTranslation>['t']) {
   switch (range) {
     case '60s':
-      return '实时 60 秒 · 每秒采样 · 推送更新';
+      return t('traffic.range60s');
     case '24h':
-      return '最近 24 小时 · 按分钟聚合 · 自动刷新';
+      return t('traffic.range24h');
     case '7d':
-      return '最近 7 天 · 按小时聚合 · 自动刷新';
+      return t('traffic.range7d');
     default:
-      return '最近 1 小时 · 按分钟聚合 · 自动刷新';
+      return t('traffic.rangeDefault');
   }
 }
 
-function getErrorMessage(error: unknown) {
+function getErrorMessage(error: unknown, t: ReturnType<typeof useTranslation>['t']) {
   if (error instanceof Error && error.message) {
     return error.message;
   }
-  return '流量数据加载失败';
+  return t('traffic.loadFailed');
 }
 
 function buildZeroFilledTimestamps(range: ClientTrafficRange, nowMs = Date.now()) {
@@ -119,6 +120,7 @@ function buildTrafficTrendChartState(
   data: ClientTrafficResponse | undefined,
   tunnels: (Pick<ProxyConfig, 'name' | 'type'> & Partial<Pick<ProxyConfig, 'id'>>)[],
   range: ClientTrafficRange,
+  t: ReturnType<typeof useTranslation>['t'],
 ) {
   const knownTunnels = new Map<string, Pick<TunnelMeta, 'key' | 'name' | 'type'>>();
 
@@ -136,7 +138,7 @@ function buildTrafficTrendChartState(
     if (!knownTunnels.has(seriesKey)) {
       knownTunnels.set(seriesKey, {
         key: seriesKey,
-        name: getTrafficSeriesName(item),
+        name: getTrafficSeriesName(item, t),
         type: item.tunnel_type ?? 'tcp',
       });
     }
@@ -198,12 +200,13 @@ function buildTrafficTrendChartState(
 }
 
 export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
+  const { t, i18n } = useTranslation();
   const [range, setRange] = useState<ClientTrafficRange>('60s');
   const { data, isLoading, isError, error } = useClientTraffic(clientId, range);
 
   const { chartConfig, chartData, tunnelSeries } = useMemo(
-    () => buildTrafficTrendChartState(data, tunnels, range),
-    [data, tunnels, range],
+    () => buildTrafficTrendChartState(data, tunnels, range, t),
+    [data, tunnels, range, t],
   );
 
   const hasTunnels = tunnelSeries.length > 0;
@@ -215,10 +218,10 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-lg font-semibold text-foreground">
             <Activity className="h-5 w-5 text-primary" />
-            <h3>隧道流量趋势</h3>
+            <h3>{t('traffic.trendTitle')}</h3>
           </div>
           <p className="text-sm text-muted-foreground">
-            {getRangeSummary(range)} · {tunnelSeries.length} 条隧道
+            {getRangeSummary(range, t)} · {t('traffic.tunnelCount', { count: tunnelSeries.length })}
           </p>
         </div>
 
@@ -242,20 +245,20 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
 
       {!hasTunnels ? (
         <div className="flex h-72 flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/30 text-center">
-          <p className="text-sm font-medium text-foreground">当前 Client 暂无隧道</p>
-          <p className="mt-1 text-sm text-muted-foreground">创建隧道后，这里会自动展示每条隧道的流量趋势。</p>
+          <p className="text-sm font-medium text-foreground">{t('traffic.noClientTunnels')}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t('traffic.noClientTunnelsHelp')}</p>
         </div>
       ) : isLoading ? (
         <div className="h-72 animate-pulse rounded-xl border border-border/60 bg-background/30" />
       ) : isError ? (
         <div className="flex h-72 flex-col items-center justify-center rounded-xl border border-dashed border-destructive/30 bg-destructive/5 text-center">
           <AlertCircle className="mb-3 h-5 w-5 text-destructive" />
-          <p className="text-sm font-medium text-foreground">流量数据加载失败</p>
-          <p className="mt-1 max-w-md text-sm text-muted-foreground">{getErrorMessage(error)}</p>
+          <p className="text-sm font-medium text-foreground">{t('traffic.loadFailed')}</p>
+          <p className="mt-1 max-w-md text-sm text-muted-foreground">{getErrorMessage(error, t)}</p>
         </div>
       ) : !hasTrafficData ? (
         <div className="flex h-72 flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/30 text-center">
-          <p className="text-sm font-medium text-foreground">该时间范围内暂无流量数据</p>
+          <p className="text-sm font-medium text-foreground">{t('traffic.emptyRange')}</p>
         </div>
       ) : (
         <div className="h-80 w-full">
@@ -268,7 +271,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
                 tickLine={false}
                 tickMargin={12}
                 minTickGap={28}
-                tickFormatter={(value) => formatXAxisLabel(Number(value), range)}
+                tickFormatter={(value) => formatXAxisLabel(Number(value), range, i18n.language)}
               />
               <YAxis
                 axisLine={false}
@@ -284,7 +287,7 @@ export function TrafficChart({ clientId, tunnels }: TrafficChartProps) {
                     labelFormatter={(_, payload) => {
                       const timestamp = payload?.[0]?.payload?.timestamp;
                       return typeof timestamp === 'number'
-                        ? formatTooltipLabel(timestamp, range)
+                        ? formatTooltipLabel(timestamp, range, i18n.language)
                         : '';
                     }}
                     formatter={(value, name) => (

@@ -16,7 +16,7 @@ describe('server-address', () => {
     ['https://[::1]', 'https://[::1]'],
     ['https://[::1]:8443', 'https://[::1]:8443'],
     ['https://example.com/', 'https://example.com'],
-  ])('允许合法地址 %s', (input, expected) => {
+  ])('allows valid address %s', (input, expected) => {
     expect(getServerAddrValidationError(input)).toBeNull();
     expect(normalizeServerAddr(input)).toBe(expected);
   });
@@ -32,12 +32,12 @@ describe('server-address', () => {
     'https://user:pass@example.com',
     'https://@example.com',
     'http://test',
-  ])('拒绝非法地址 %s', (input) => {
+  ])('rejects invalid address %s', (input) => {
     expect(getServerAddrValidationError(input)).not.toBeNull();
     expect(normalizeServerAddr(input)).toBeNull();
   });
 
-  test('信息提取与后端规则对齐', () => {
+  test('extracts address info aligned with backend rules', () => {
     expect(getServerAddrInfo('https://example.com')?.hostKind).toBe('domain');
     expect(getServerAddrInfo('http://localhost')?.hostKind).toBe('localhost');
     expect(getServerAddrInfo('https://127.0.0.1')?.hostKind).toBe('ip');

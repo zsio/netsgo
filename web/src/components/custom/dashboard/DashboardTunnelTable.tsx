@@ -4,8 +4,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowRightLeft } from 'lucide-react';
 import { TunnelListTable, type TunnelEntry } from '@/components/custom/tunnel/TunnelListTable';
 import { getClientDisplayName } from '@/lib/client-utils';
+import { useTranslation } from 'react-i18next';
 
 export function DashboardTunnelTable() {
+  const { t } = useTranslation();
   const { data: clients, isLoading } = useClients();
   const navigate = useNavigate();
 
@@ -31,7 +33,7 @@ export function DashboardTunnelTable() {
   return (
     <TunnelListTable
       tunnels={allTunnels}
-      title="全部隧道列表"
+      title={t('dashboard.allTunnels')}
       icon={<ArrowRightLeft className="h-5 w-5 text-primary" />}
       clients={clients}
       showClient

@@ -48,21 +48,21 @@ describe('format helpers', () => {
   });
 
   test('describeFreshness 对缺失或非法时间返回未知', () => {
-    expect(describeFreshness()).toBe('时间未知');
-    expect(describeFreshness('not-a-date')).toBe('时间未知');
+    expect(describeFreshness()).toBe('Unknown time');
+    expect(describeFreshness('not-a-date')).toBe('Unknown time');
   });
 
   test('describeFreshness 在 fresh_until 过期时直接提示已过期', () => {
     const updatedAt = new Date(Date.now() - 10_000).toISOString();
     const freshUntil = new Date(Date.now() - 1_000).toISOString();
 
-    expect(describeFreshness(updatedAt, freshUntil)).toBe('可能已过期');
+    expect(describeFreshness(updatedAt, freshUntil)).toBe('May be stale');
   });
 
   test('describeFreshness 对新鲜数据返回相对时间', () => {
     const updatedAt = new Date(Date.now() - 5_000).toISOString();
     const freshUntil = new Date(Date.now() + 5_000).toISOString();
 
-    expect(describeFreshness(updatedAt, freshUntil)).toEndWith('秒前更新');
+    expect(describeFreshness(updatedAt, freshUntil)).toContain('ago');
   });
 });

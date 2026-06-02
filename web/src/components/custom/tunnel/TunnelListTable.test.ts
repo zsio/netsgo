@@ -42,7 +42,7 @@ function renderTable(tunnels: TunnelEntry[]) {
       { client },
       createElement(TunnelListTable, {
         tunnels,
-        title: '下属隧道',
+        title: 'Child tunnels',
         showActions: true,
         showSearch: false,
       }),
@@ -63,17 +63,17 @@ describe('TunnelListTable', () => {
       }),
     ]);
 
-    expect(markup).not.toContain('title="暂停"');
-    expect(markup).toContain('title="启动"');
-    expect(markup).not.toContain('title="停止"');
-    expect(markup).toContain('title="编辑"');
-    expect(markup).toContain('title="删除"');
+    expect(markup).not.toContain('title="Pause"');
+    expect(markup).toContain('title="Start"');
+    expect(markup).not.toContain('title="Stop"');
+    expect(markup).toContain('title="Edit"');
+    expect(markup).toContain('title="Delete"');
   });
 
   test('动作按钮默认直接展示，不再依赖行 hover', () => {
     const markup = renderTable([createTunnel()]);
 
-    expect(markup).toContain('title="停止"');
+    expect(markup).toContain('title="Stop"');
     expect(markup).toContain('lucide-pause');
     expect(markup).not.toContain('lucide-square');
     expect(markup).not.toContain('group-hover:opacity-100');
@@ -100,7 +100,7 @@ describe('TunnelListTable', () => {
               traffic24hBytes: 1536,
             }),
           ],
-          title: '下属隧道',
+          title: 'Child tunnels',
           showActions: false,
           showSearch: false,
           showTraffic24h: true,
@@ -109,15 +109,15 @@ describe('TunnelListTable', () => {
       ),
     );
 
-    expect(markup).toContain('24 小时流量');
+    expect(markup).toContain('24h traffic');
     expect(markup).toContain('1.5 KB');
   });
 
   test('显示隧道限速列，未配置限速时展示无限符号', () => {
     const markup = renderTable([createTunnel()]);
 
-    expect(markup).toContain('限速');
-    expect(markup).toContain('aria-label="不限速"');
+    expect(markup).toContain('Limit');
+    expect(markup).toContain('aria-label="Unlimited bandwidth"');
     expect(markup).toContain('lucide-infinity');
   });
 
@@ -166,16 +166,16 @@ describe('TunnelListTable', () => {
         { client },
         createElement(TunnelListTable, {
           tunnels: [createTunnel()],
-          title: '下属隧道',
+          title: 'Child tunnels',
           showActions: false,
           showSearch: true,
-          headerAction: createElement('button', null, '添加隧道'),
+          headerAction: createElement('button', null, 'Add tunnel'),
         }),
       ),
     );
 
-    expect(markup).toContain('添加隧道');
-    expect(markup).not.toContain('搜索隧道...');
+    expect(markup).toContain('Add tunnel');
+    expect(markup).not.toContain('Search tunnels...');
   });
 
   test('拆分入口与目标服务，隐藏内部 endpoint 枚举', () => {
@@ -188,16 +188,16 @@ describe('TunnelListTable', () => {
       }),
     ]);
 
-    expect(markup).toContain('入口');
-    expect(markup).toContain('目标服务');
-    expect(markup).not.toContain('链路');
-    expect(markup).not.toContain('映射');
-    expect(markup).not.toContain('应用 / 类型');
-    expect(markup).not.toContain('映射关系');
+    expect(markup).toContain('Ingress');
+    expect(markup).toContain('Target service');
+    expect(markup).not.toContain('Link');
+    expect(markup).not.toContain('Mapping');
+    expect(markup).not.toContain('App / Type');
+    expect(markup).not.toContain('Mapping relation');
     expect(markup).not.toContain('TCP_LISTEN');
     expect(markup).toContain('TCP');
-    expect(markup).not.toContain('TCP 监听');
-    expect(markup).not.toContain('TCP 服务');
+    expect(markup).not.toContain('TCP listen');
+    expect(markup).not.toContain('TCP service');
     expect(markup).toContain(':10123');
     expect(markup).toContain('127.0.0.1:22');
   });
@@ -232,17 +232,17 @@ describe('TunnelListTable', () => {
       }),
     ]);
 
-    expect(markup).not.toContain('入口节点');
-    expect(markup).not.toContain('目标节点');
-    expect(markup).not.toContain('链路');
+    expect(markup).not.toContain('Ingress node');
+    expect(markup).not.toContain('Target node');
+    expect(markup).not.toContain('Link');
     expect(markup).not.toContain('Client ↔ Client');
     expect(markup).toContain('client-a');
     expect(markup).toContain('client-b');
     expect(markup).toContain('0.0.0.0:10022');
     expect(markup).toContain('127.0.0.1:22');
-    expect(markup).not.toContain('P2P 优先（未开放） · Server 中继');
-    expect(markup).not.toContain('已回退中继');
-    expect(markup).toContain('入口绑定到通配地址，会暴露给入口 Client 所在网络。');
+    expect(markup).not.toContain('P2P preferred (not open) · Server relay');
+    expect(markup).not.toContain('Fell back to relay');
+    expect(markup).toContain('Ingress binds to a wildcard address and is exposed to the ingress client network.');
   });
 
   test('归属节点可按回调渲染为可点击按钮', () => {
@@ -253,7 +253,7 @@ describe('TunnelListTable', () => {
         { client },
         createElement(TunnelListTable, {
           tunnels: [createTunnel({ clientName: 'edge-node' })],
-          title: '全部隧道列表',
+          title: 'All tunnels',
           showActions: false,
           showSearch: false,
           showClient: true,
@@ -262,13 +262,13 @@ describe('TunnelListTable', () => {
       ),
     );
 
-    expect(markup).toContain('目标服务');
-    expect(markup).not.toContain('归属节点');
+    expect(markup).toContain('Target service');
+    expect(markup).not.toContain('Owner node');
     expect(markup).toContain('<button');
     expect(markup).toContain('edge-node');
     expect(markup).toContain('cursor-pointer');
     expect(markup).toContain('hover:text-primary');
-    expect(markup).not.toContain('>操作<');
+    expect(markup).not.toContain('>Actions<');
   });
 
   test('仅在详情表启用速率图标动作', () => {
@@ -279,7 +279,7 @@ describe('TunnelListTable', () => {
         { client },
         createElement(TunnelListTable, {
           tunnels: [createTunnel()],
-          title: '下属隧道',
+          title: 'Child tunnels',
           showActions: true,
           showSearch: false,
           showTraffic24h: true,
@@ -293,7 +293,7 @@ describe('TunnelListTable', () => {
         { client: new QueryClient() },
         createElement(TunnelListTable, {
           tunnels: [createTunnel()],
-          title: '全部隧道列表',
+          title: 'All tunnels',
           showActions: true,
           showSearch: false,
           showTraffic24h: false,
@@ -301,8 +301,8 @@ describe('TunnelListTable', () => {
       ),
     );
 
-    expect(enabledMarkup).toContain('title="速率趋势"');
-    expect(disabledMarkup).not.toContain('title="速率趋势"');
+    expect(enabledMarkup).toContain('title="Rate trend"');
+    expect(disabledMarkup).not.toContain('title="Rate trend"');
   });
 
   test('显示统一隧道运行 issues 摘要与详情', () => {
@@ -314,7 +314,7 @@ describe('TunnelListTable', () => {
             code: 'provision_ack_timeout',
             scope: 'target_client',
             severity: 'error',
-            message: '目标客户端确认超时',
+            message: 'target client acknowledgement timed out',
             retryable: true,
             observed_at: '2026-05-24T01:00:00Z',
           },
@@ -322,7 +322,7 @@ describe('TunnelListTable', () => {
             code: 'ingress_port_in_use',
             scope: 'ingress_client',
             severity: 'error',
-            message: '入口端口已被占用',
+            message: 'ingress port is already in use',
             retryable: true,
             observed_at: '2026-05-24T01:00:00Z',
           },
@@ -330,9 +330,9 @@ describe('TunnelListTable', () => {
       }),
     ]);
 
-    expect(markup).toContain('入口端口已被占用 +1');
-    expect(markup).toContain('error: 入口端口已被占用');
-    expect(markup).toContain('error: 目标客户端确认超时');
+    expect(markup).toContain('ingress port is already in use +1');
+    expect(markup).toContain('error: ingress port is already in use');
+    expect(markup).toContain('error: target client acknowledgement timed out');
     expect(markup).toContain('lucide-circle-question-mark');
   });
 

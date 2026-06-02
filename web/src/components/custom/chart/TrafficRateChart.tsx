@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Line, LineChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { AlertCircle } from 'lucide-react';
 
@@ -17,30 +19,25 @@ interface TrafficRateChartProps {
   tunnelFilter?: Pick<ProxyConfig, 'name' | 'type'>[];
 }
 
-const chartConfig: ChartConfig = {
-  inRate: { label: '下行', color: 'var(--chart-2)' },
-  outRate: { label: '上行', color: 'var(--chart-1)' },
-};
-
 function formatTrafficValue(value: number) {
   return formatBytes(value).replace('.0 ', ' ');
 }
 
-function formatXAxisLabel(timestamp: number) {
+function formatXAxisLabel(timestamp: number, language: string) {
   const date = new Date(timestamp);
-  return date.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleString(language, { hour: '2-digit', minute: '2-digit' });
 }
 
-function formatTooltipLabel(timestamp: number) {
+function formatTooltipLabel(timestamp: number, language: string) {
   const date = new Date(timestamp);
-  return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleString(language, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-function getErrorMessage(error: unknown) {
+function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) {
     return error.message;
   }
-  return '流量数据加载失败';
+  return fallback;
 }
 
 function getQueryTunnel(tunnelFilter: Pick<ProxyConfig, 'name' | 'type'>[] | undefined) {
@@ -48,6 +45,11 @@ function getQueryTunnel(tunnelFilter: Pick<ProxyConfig, 'name' | 'type'>[] | und
 }
 
 export function TrafficRateChart({ clientId, tunnelFilter }: TrafficRateChartProps) {
+  const { t, i18n } = useTranslation();
+  const chartConfig = useMemo<ChartConfig>(() => ({
+    inRate: { label: t('traffic.inbound'), color: 'var(--chart-2)' },
+    outRate: { label: t('traffic.outbound'), color: 'var(--chart-1)' },
+  }), [t]);
   const { data, isLoading, isError, error } = useClientTraffic(clientId, '24h', {
     tunnel: getQueryTunnel(tunnelFilter),
   });
@@ -61,12 +63,12 @@ export function TrafficRateChart({ clientId, tunnelFilter }: TrafficRateChartPro
       ) : isError ? (
         <div className="flex h-80 flex-col items-center justify-center rounded-xl border border-dashed border-destructive/30 bg-destructive/5 text-center">
           <AlertCircle className="mb-3 h-5 w-5 text-destructive" />
-          <p className="text-sm font-medium text-foreground">流量数据加载失败</p>
-          <p className="mt-1 max-w-md text-sm text-muted-foreground">{getErrorMessage(error)}</p>
+          <p className="text-sm font-medium text-foreground">{t('traffic.loadFailed')}</p>
+          <p className="mt-1 max-w-md text-sm text-muted-foreground">{getErrorMessage(error, t('traffic.loadFailed'))}</p>
         </div>
       ) : !hasSamples ? (
         <div className="flex h-80 flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/30 text-center">
-          <p className="text-sm font-medium text-foreground">该时间范围内暂无流量数据</p>
+          <p className="text-sm font-medium text-foreground">{t('traffic.emptyRange')}</p>
         </div>
       ) : (
         <div className="h-80 min-w-0 w-full">
@@ -79,7 +81,7 @@ export function TrafficRateChart({ clientId, tunnelFilter }: TrafficRateChartPro
                 tickLine={false}
                 tickMargin={12}
                 minTickGap={28}
-                tickFormatter={(value) => formatXAxisLabel(Number(value))}
+                tickFormatter={(value) => formatXAxisLabel(Number(value), i18n.language)}
               />
               <YAxis
                 axisLine={false}
@@ -95,7 +97,7 @@ export function TrafficRateChart({ clientId, tunnelFilter }: TrafficRateChartPro
                     labelFormatter={(_, payload) => {
                       const timestamp = payload?.[0]?.payload?.timestamp;
                       return typeof timestamp === 'number'
-                        ? formatTooltipLabel(timestamp)
+                        ? formatTooltipLabel(timestamp, i18n.language)
                         : '';
                     }}
                     formatter={(value, name) => (

@@ -59,10 +59,10 @@ export function uniqueTunnelName(prefix: string) {
 
 export async function login(page: Page) {
   await gotoWhenReady(page, '/#/login');
-  await page.getByPlaceholder('请输入用户名').fill(e2eConfig.adminUser);
-  await page.getByPlaceholder('请输入密码').fill(e2eConfig.adminPass);
-  await page.getByRole('button', { name: /登\s*录/ }).click();
-  await expect(page.getByText('在线端点 (Clients)')).toBeVisible();
+  await page.getByPlaceholder('Enter username').fill(e2eConfig.adminUser);
+  await page.getByPlaceholder('Enter password').fill(e2eConfig.adminPass);
+  await page.getByRole('button', { name: 'Log in' }).click();
+  await expect(page.getByText('Online endpoints (Clients)')).toBeVisible();
 }
 
 export async function gotoWhenReady(page: Page, path: string) {
@@ -119,29 +119,29 @@ export async function waitForClientPair(page: Page): Promise<ClientPair> {
 
 export async function openCreateTunnelDialog(page: Page, clientID: string) {
   await page.goto(`/#/dashboard/clients/${clientID}`);
-  await expect(page.getByText('下属隧道')).toBeVisible();
-  await page.getByRole('button', { name: '添加隧道' }).click();
-  const dialog = page.getByRole('dialog', { name: '创建代理隧道' });
+  await expect(page.getByText('Child tunnels')).toBeVisible();
+  await page.getByRole('button', { name: 'Add tunnel' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Create proxy tunnel' });
   await expect(dialog).toBeVisible();
   return dialog;
 }
 
 export async function fillClientToClientTunnel(dialog: Locator, config: ClientToClientTunnelInput) {
-  await dialog.getByLabel('隧道名称').fill(config.name);
-  await dialog.getByRole('button', { name: '客户端互访' }).click();
-  await dialog.getByLabel('服务来源客户端').selectOption(config.sourceClientID);
-  await dialog.getByLabel('访问入口客户端').selectOption(config.ingressClientID);
+  await dialog.getByLabel('Tunnel name').fill(config.name);
+  await dialog.getByRole('button', { name: 'Client to Client' }).click();
+  await dialog.getByLabel('Service source client').selectOption(config.sourceClientID);
+  await dialog.getByLabel('Ingress client').selectOption(config.ingressClientID);
   await dialog.getByRole('button', { name: config.protocol }).click();
-  await dialog.getByLabel('目标服务地址').fill(config.targetHost);
-  await dialog.getByLabel('目标服务端口').fill(config.targetPort);
-  await dialog.getByLabel('入口监听地址').fill(config.ingressBindIP);
-  await dialog.getByLabel('入口监听端口').fill(config.ingressPort);
+  await dialog.getByLabel('Target service address').fill(config.targetHost);
+  await dialog.getByLabel('Target service port').fill(config.targetPort);
+  await dialog.getByLabel('Ingress bind address').fill(config.ingressBindIP);
+  await dialog.getByLabel('Ingress bind port').fill(config.ingressPort);
 }
 
 export async function createClientToClientTunnel(page: Page, config: ClientToClientTunnelInput) {
   const dialog = await openCreateTunnelDialog(page, config.sourceClientID);
   await fillClientToClientTunnel(dialog, config);
-  await dialog.getByRole('button', { name: '创建隧道' }).click();
+  await dialog.getByRole('button', { name: 'Create tunnel' }).click();
   await expect(dialog).toBeHidden({ timeout: 30_000 });
 }
 
@@ -166,7 +166,7 @@ export function tunnelRow(page: Page, name: string) {
   return page.getByRole('row').filter({ hasText: name }).first();
 }
 
-export async function clickTunnelAction(page: Page, name: string, action: '启动' | '停止' | '编辑' | '删除') {
+export async function clickTunnelAction(page: Page, name: string, action: 'Start' | 'Stop' | 'Edit' | 'Delete') {
   const row = tunnelRow(page, name);
   await expect(row).toBeVisible();
   await row.getByRole('button', { name: action }).click();

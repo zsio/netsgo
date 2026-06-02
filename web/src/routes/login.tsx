@@ -9,6 +9,7 @@ import type { LoginResponse } from '@/types';
 import { requireLoginPage } from '@/lib/auth';
 import { User, Lock, AlertTriangle, ArrowRight, Loader2, Github } from 'lucide-react';
 import { useParticleCanvas } from '@/hooks/use-particle-canvas';
+import { useTranslation } from 'react-i18next';
 
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -20,6 +21,7 @@ export const loginRoute = createRoute({
 /* ─── Login Page ─── */
 
 function LoginPage() {
+  const { t } = useTranslation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -40,7 +42,7 @@ function LoginPage() {
       setAuth(resp.user);
       navigate({ to: '/dashboard' });
     } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败，请检查用户名和密码');
+      setError(err instanceof Error ? err.message : t('auth.loginFailed'));
     } finally {
       setLoading(false);
     }
@@ -86,7 +88,7 @@ function LoginPage() {
             <div className="space-y-2">
               <h2 className="text-3xl font-bold tracking-tight">NetsGo</h2>
               <p className="text-muted-foreground text-sm max-w-[260px]">
-                安全、高效的网络隧道管理平台
+                {t('auth.tagline')}
               </p>
             </div>
             {/* Decorative dots */}
@@ -109,8 +111,8 @@ function LoginPage() {
             {/* Logo + Header */}
             <div className="flex flex-col items-start gap-2 mb-10 login-fade-in">
               <img src="/logo.svg" alt="NetsGo" className="w-10 h-10 mb-2 md:hidden" />
-              <h1 className="text-3xl font-bold tracking-tight">欢迎回来</h1>
-              <p className="text-sm text-muted-foreground">请输入 NetsGo 管理员账号和密码</p>
+              <h1 className="text-3xl font-bold tracking-tight">{t('auth.welcome')}</h1>
+              <p className="text-sm text-muted-foreground">{t('auth.subtitle')}</p>
             </div>
 
             {/* Form — no card at all, raw inputs on the background */}
@@ -119,13 +121,13 @@ function LoginPage() {
                 {/* Username */}
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">
-                    用户名
+                    {t('auth.username')}
                   </label>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                     <Input
                       type="text"
-                      placeholder="请输入用户名"
+                      placeholder={t('auth.usernamePlaceholder')}
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       disabled={loading}
@@ -139,13 +141,13 @@ function LoginPage() {
                 {/* Password */}
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">
-                    密码
+                    {t('auth.password')}
                   </label>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                     <Input
                       type="password"
-                      placeholder="请输入密码"
+                      placeholder={t('auth.passwordPlaceholder')}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       disabled={loading}
@@ -173,11 +175,11 @@ function LoginPage() {
                   {loading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      登录中...
+                      {t('auth.loggingIn')}
                     </>
                   ) : (
                     <>
-                      登 录
+                      {t('auth.login')}
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
@@ -197,9 +199,9 @@ function LoginPage() {
                   <Github className="w-3.5 h-3.5" />
                   <span>NetsGo</span>
                 </a>
-                <span>· 网络隧道管理平台</span>
+                <span>· {t('auth.footerProduct')}</span>
               </div>
-              <p className="text-xs text-muted-foreground/50">不收集任何数据，所以不需要隐私协议。</p>
+              <p className="text-xs text-muted-foreground/50">{t('auth.privacy')}</p>
             </div>
           </div>
         </div>
