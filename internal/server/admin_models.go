@@ -101,7 +101,9 @@ type adminConfigUpdateResponse struct {
 type tunnelMutationErrorResponse struct {
 	Success            bool     `json:"success"`
 	Error              string   `json:"error"`
+	Message            string   `json:"message,omitempty"`
 	ErrorCode          string   `json:"error_code,omitempty"`
+	Code               string   `json:"code,omitempty"`
 	Field              string   `json:"field,omitempty"`
 	ConflictingTunnels []string `json:"conflicting_tunnels,omitempty"`
 }

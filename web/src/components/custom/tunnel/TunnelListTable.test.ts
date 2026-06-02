@@ -178,7 +178,7 @@ describe('TunnelListTable', () => {
     expect(markup).not.toContain('搜索隧道...');
   });
 
-  test('合并类型与映射关系为映射列', () => {
+  test('拆分入口与目标服务，隐藏内部 endpoint 枚举', () => {
     const markup = renderTable([
       createTunnel({
         type: 'tcp',
@@ -188,14 +188,61 @@ describe('TunnelListTable', () => {
       }),
     ]);
 
-    expect(markup).toContain('映射');
+    expect(markup).toContain('入口');
+    expect(markup).toContain('目标服务');
+    expect(markup).not.toContain('链路');
+    expect(markup).not.toContain('映射');
     expect(markup).not.toContain('应用 / 类型');
     expect(markup).not.toContain('映射关系');
+    expect(markup).not.toContain('TCP_LISTEN');
     expect(markup).toContain('TCP');
+    expect(markup).not.toContain('TCP 监听');
+    expect(markup).not.toContain('TCP 服务');
     expect(markup).toContain(':10123');
     expect(markup).toContain('127.0.0.1:22');
-    expect(markup).toContain('w-11');
-    expect(markup).toContain('w-4');
+  });
+
+  test('展示统一隧道入口、目标与 wildcard bind 警告', () => {
+    const markup = renderTable([
+      createTunnel({
+        topology: 'client_to_client',
+        ingress: {
+          location: 'client',
+          client_id: 'client-a',
+          type: 'tcp_listen',
+          config: {
+            bind_ip: '0.0.0.0',
+            port: 10022,
+          },
+        },
+        target: {
+          location: 'client',
+          client_id: 'client-b',
+          type: 'tcp_service',
+          config: {
+            ip: '127.0.0.1',
+            port: 22,
+          },
+        },
+        transport_policy: 'direct_preferred',
+        actual_transport: 'server_relay',
+        p2p: {
+          state: 'fallback',
+        },
+      }),
+    ]);
+
+    expect(markup).not.toContain('入口节点');
+    expect(markup).not.toContain('目标节点');
+    expect(markup).not.toContain('链路');
+    expect(markup).not.toContain('Client ↔ Client');
+    expect(markup).toContain('client-a');
+    expect(markup).toContain('client-b');
+    expect(markup).toContain('0.0.0.0:10022');
+    expect(markup).toContain('127.0.0.1:22');
+    expect(markup).not.toContain('P2P 优先（未开放） · Server 中继');
+    expect(markup).not.toContain('已回退中继');
+    expect(markup).toContain('入口绑定到通配地址，会暴露给入口 Client 所在网络。');
   });
 
   test('归属节点可按回调渲染为可点击按钮', () => {
@@ -215,11 +262,12 @@ describe('TunnelListTable', () => {
       ),
     );
 
-    expect(markup).toContain('归属节点');
+    expect(markup).toContain('目标服务');
+    expect(markup).not.toContain('归属节点');
     expect(markup).toContain('<button');
     expect(markup).toContain('edge-node');
     expect(markup).toContain('cursor-pointer');
-    expect(markup).toContain('hover:text-foreground');
+    expect(markup).toContain('hover:text-primary');
     expect(markup).not.toContain('>操作<');
   });
 
@@ -256,4 +304,36 @@ describe('TunnelListTable', () => {
     expect(enabledMarkup).toContain('title="速率趋势"');
     expect(disabledMarkup).not.toContain('title="速率趋势"');
   });
+
+  test('显示统一隧道运行 issues 摘要与详情', () => {
+    const markup = renderTable([
+      createTunnel({
+        runtime_state: 'error',
+        issues: [
+          {
+            code: 'provision_ack_timeout',
+            scope: 'target_client',
+            severity: 'error',
+            message: '目标客户端确认超时',
+            retryable: true,
+            observed_at: '2026-05-24T01:00:00Z',
+          },
+          {
+            code: 'ingress_port_in_use',
+            scope: 'ingress_client',
+            severity: 'error',
+            message: '入口端口已被占用',
+            retryable: true,
+            observed_at: '2026-05-24T01:00:00Z',
+          },
+        ],
+      }),
+    ]);
+
+    expect(markup).toContain('入口端口已被占用 +1');
+    expect(markup).toContain('error: 入口端口已被占用');
+    expect(markup).toContain('error: 目标客户端确认超时');
+    expect(markup).toContain('lucide-circle-question-mark');
+  });
+
 });

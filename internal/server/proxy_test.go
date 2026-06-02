@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -400,14 +399,8 @@ func TestProxyAcceptLoop_And_HandleProxyConn(t *testing.T) {
 			}
 			go func(stream net.Conn) {
 				defer func() { _ = stream.Close() }()
-				// Discard the 2-byte length and Name header sent by the proxy (mock client parsing)
-				var ln [2]byte
-				if _, err := io.ReadFull(stream, ln[:]); err != nil {
-					return
-				}
-				nameLen := int(ln[0])<<8 | int(ln[1])
-				nameBuf := make([]byte, nameLen)
-				if _, err := io.ReadFull(stream, nameBuf); err != nil {
+				// Discard the versioned DataStreamHeader sent by the proxy (mock client parsing).
+				if _, err := protocol.DecodeDataStreamHeader(stream); err != nil {
 					return
 				}
 

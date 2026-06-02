@@ -72,7 +72,7 @@ describe('VersionUpdateIndicator', () => {
       update_available: true,
       recommended_action: 'run_script',
       commands: {
-        domestic: 'curl -fsSL https://cnb.cool/zsio/netsgo/-/git/raw/main/scripts/upgrade.sh | sh -s -- --source cnb --channel stable -y',
+        domestic: 'curl -fsSL https://netsgo.zs.uy/upgrade.sh | sh -s -- --source cnb --channel stable -y',
         global: 'curl -fsSL https://raw.githubusercontent.com/zsio/netsgo/main/scripts/upgrade.sh | sh -s -- --source github --channel stable -y',
       },
       }),

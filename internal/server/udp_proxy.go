@@ -63,6 +63,38 @@ func (s *UDPProxyState) removeSession(key string) bool {
 	return false
 }
 
+func (s *UDPProxyState) removeOldestSession() bool {
+	if s == nil {
+		return false
+	}
+	var oldestKey string
+	var oldestAt int64
+	s.sessions.Range(func(key, value any) bool {
+		sess, ok := value.(*UDPSession)
+		if !ok {
+			if keyString, ok := key.(string); ok {
+				s.sessions.Delete(keyString)
+			}
+			return true
+		}
+		lastActive := sess.lastActive.Load()
+		if oldestKey == "" || lastActive < oldestAt {
+			oldestKey = key.(string)
+			oldestAt = lastActive
+		}
+		return true
+	})
+	if oldestKey == "" {
+		return false
+	}
+	if value, ok := s.sessions.Load(oldestKey); ok {
+		if sess, ok := value.(*UDPSession); ok {
+			sess.Close()
+		}
+	}
+	return s.removeSession(oldestKey)
+}
+
 func (s *UDPProxyState) storeSession(key string, sess *UDPSession) (*UDPSession, bool) {
 	actual, loaded := s.sessions.LoadOrStore(key, sess)
 	if loaded {
@@ -132,10 +164,10 @@ func (s *UDPSession) IdleDuration() time.Duration {
 
 // UDP session management constants.
 const (
-	UDPSessionTimeout   = 60 * time.Second // session idle timeout
+	UDPSessionTimeout   = 2 * time.Minute  // session idle timeout
 	UDPReaperInterval   = 10 * time.Second // reaper scan interval
-	MaxUDPSessions      = 1024             // max concurrent sessions per UDP proxy
-	MaxUDPSessionsPerIP = 128              // max concurrent sessions per source IP
+	MaxUDPSessions      = 4096             // max concurrent sessions per UDP proxy
+	MaxUDPSessionsPerIP = MaxUDPSessions   // keep the explicit total cap as the effective bound
 )
 
 func udpSourceIPKey(addr net.Addr) string {
@@ -197,6 +229,7 @@ func (s *Server) publishUDPProxyRuntime(client *ClientConn, tunnel *ProxyTunnel,
 	current.Config.RemotePort = runtime.actualPort
 	current.UDPState = runtime.state
 	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+	markTunnelServerRelayActive(current, client.ID, time.Now())
 	config := current.Config
 	state := current.UDPState
 	client.proxyMu.Unlock()
@@ -224,14 +257,16 @@ func (s *Server) markUDPProxyRuntimeErrorIfCurrent(
 		return
 	}
 	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
+	markTunnelRuntimeError(current, client.ID, message, time.Now())
 	config := current.Config
 	client.proxyMu.Unlock()
 
 	if err := s.persistTunnelStates(client.ID, tunnel.Config.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message); err != nil {
 		log.Printf("⚠️ UDP proxy [%s] failed to persist error state: %v", tunnel.Config.Name, err)
 	}
+	s.recordServerExposeIngressIssue(tunnel.Config.ID, tunnel.Config.Type, message)
 	s.emitTunnelChanged(client.ID, config, "error")
-	if err := s.notifyClientProxyClose(client, tunnel.Config.Name, "runtime_error"); err != nil {
+	if err := s.notifyServerExposeTargetUnprovision(client, config, "runtime_error"); err != nil {
 		log.Printf("⚠️ UDP proxy [%s] failed to notify client of close: %v", tunnel.Config.Name, err)
 	}
 }
@@ -275,9 +310,11 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			// sessionCount.Load() and the subsequent Add(1) are not atomic;
 			// this is safe because the entire function runs in a single goroutine (non-concurrent).
 			if state.sessionCount.Load() >= int64(MaxUDPSessions) {
-				log.Printf("⚠️ UDP proxy [%s] session limit reached (%d), dropping packet from %s",
-					tunnel.Config.Name, MaxUDPSessions, key)
-				continue
+				if !state.removeOldestSession() || state.sessionCount.Load() >= int64(MaxUDPSessions) {
+					log.Printf("⚠️ UDP proxy [%s] session limit reached (%d), dropping packet from %s",
+						tunnel.Config.Name, MaxUDPSessions, key)
+					continue
+				}
 			}
 			if !state.canCreateSessionForIP(ipKey) {
 				log.Printf("⚠️ UDP proxy [%s] per-IP session limit reached (%d), dropping packet from %s",
@@ -316,7 +353,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			} else {
 				val = sess
 				// Start the reverse read loop: stream → reply to srcAddr.
-				go s.udpSessionReverse(state, sess, client.ID, tunnel.Config.Name, client.BandwidthRuntime(), tunnel.limits)
+				go s.udpSessionReverse(state, sess, client.ID, tunnel.Config, client.BandwidthRuntime(), tunnel.limits)
 			}
 		}
 
@@ -335,7 +372,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			sess.Close()
 			state.removeSession(key)
 		} else {
-			s.recordTraffic(client.ID, tunnel.Config.Name, tunnel.Config.Type, uint64(n), 0)
+			s.recordTunnelTraffic(client.ID, tunnel.Config, uint64(n), 0)
 		}
 	}
 }
@@ -344,7 +381,7 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 // external client via packetConn.
 // Exit mechanism: the goroutine blocks on ReadUDPFrame and exits when sess.Close()→stream.Close()
 // is called — this is intentional and no separate ReadDeadline is needed for ReadUDPFrame.
-func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clientID, proxyName string, clientRuntime, tunnelRuntime *directionalBandwidthRuntime) {
+func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clientID string, tunnelConfig protocol.ProxyConfig, clientRuntime, tunnelRuntime *directionalBandwidthRuntime) {
 	defer func() {
 		sess.Close()
 		state.removeSession(sess.srcAddr.String())
@@ -375,10 +412,10 @@ func (s *Server) udpSessionReverse(state *UDPProxyState, sess *UDPSession, clien
 
 		if _, err := state.packetConn.WriteTo(payload, sess.srcAddr); err != nil {
 			log.Printf("⚠️ UDP proxy [%s] WriteTo failed [%s]: %v",
-				proxyName, sess.srcAddr.String(), err)
+				tunnelConfig.Name, sess.srcAddr.String(), err)
 			return
 		}
-		s.recordTraffic(clientID, proxyName, protocol.ProxyTypeUDP, 0, uint64(len(payload)))
+		s.recordTunnelTraffic(clientID, tunnelConfig, 0, uint64(len(payload)))
 	}
 }
 

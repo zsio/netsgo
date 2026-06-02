@@ -176,6 +176,7 @@ func (s *Server) Start() error {
 	go s.trafficRollupLoop()
 	go s.trafficPersistLoop()
 	go s.trafficRealtimeLoop()
+	go s.unifiedTunnelReconcileLoop()
 
 	serving = true
 	return s.httpServer.Serve(serveLn)

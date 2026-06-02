@@ -109,14 +109,16 @@ func doAuthWithInfo(t *testing.T, conn *websocket.Conn, hostname, key string) pr
 
 func doAuthWithInstallID(t *testing.T, conn *websocket.Conn, hostname, installID, key string) protocol.AuthResponse {
 	t.Helper()
+	caps := protocol.DefaultClientCapabilities()
 	authReq := protocol.AuthRequest{
 		Key:       key,
 		InstallID: installID,
 		Client: protocol.ClientInfo{
-			Hostname: hostname,
-			OS:       "linux",
-			Arch:     "amd64",
-			Version:  "0.1.0",
+			Hostname:     hostname,
+			OS:           "linux",
+			Arch:         "amd64",
+			Version:      "0.1.0",
+			Capabilities: &caps,
 		},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
@@ -706,7 +708,7 @@ func TestAPI_DeleteClient_RejectsOnlineClient(t *testing.T) {
 	}
 }
 
-func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *testing.T) {
+func TestAPI_Clients_OfflineLegacyErrorTunnelProjectsOfflineFromLiveFacts(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
 
@@ -744,11 +746,11 @@ func TestAPI_Clients_OfflineLegacyErrorTunnelUsesDesiredAndRuntimeStates(t *test
 		if proxy["desired_state"] != "running" {
 			t.Fatalf("desired_state: want running, got %v", proxy["desired_state"])
 		}
-		if proxy["runtime_state"] != "error" {
-			t.Fatalf("runtime_state: want error, got %v", proxy["runtime_state"])
+		if proxy["runtime_state"] != "offline" {
+			t.Fatalf("runtime_state: want offline, got %v", proxy["runtime_state"])
 		}
-		if proxy["error"] != "restore failed" {
-			t.Fatalf("error: expected restore failed to be preserved, got %v", proxy["error"])
+		if proxy["error"] != nil {
+			t.Fatalf("offline projection should not preserve stale runtime error, got %v", proxy["error"])
 		}
 		return
 	}
@@ -2358,9 +2360,10 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		}
 
 		respMsg, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-			Name:     expectedName,
-			Accepted: true,
-			Message:  "ok",
+			Name:              expectedName,
+			ProvisionRevision: proxyReq.ProvisionRevision,
+			Accepted:          true,
+			Message:           "ok",
 		})
 		if err := wsConn.WriteJSON(respMsg); err != nil {
 			t.Fatalf("failed to send proxy_provision_ack: %v", err)
@@ -3020,9 +3023,10 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	s.store.mu.Unlock()
 
 	ackResume, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-		Name:     resumeProxyReq.Name,
-		Accepted: true,
-		Message:  "ok",
+		Name:              resumeProxyReq.Name,
+		ProvisionRevision: resumeProxyReq.ProvisionRevision,
+		Accepted:          true,
+		Message:           "ok",
 	})
 	if err := wsConn.WriteJSON(ackResume); err != nil {
 		t.Fatalf("failed to send resume ack: %v", err)
@@ -3094,9 +3098,10 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	var err error
 	s.store = newTestTunnelStore(t)
 
+	caps := protocol.DefaultClientCapabilities()
 	record, err := s.auth.adminStore.GetOrCreateClient(
 		"install-restore-post-ack-fail",
-		protocol.ClientInfo{Hostname: "restore-post-ack-fail"},
+		protocol.ClientInfo{Hostname: "restore-post-ack-fail", Capabilities: &caps},
 		"127.0.0.1:12345",
 	)
 	if err != nil {
@@ -3143,12 +3148,15 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	if restoreMsg.Type != protocol.MsgTypeProxyProvision {
 		t.Fatalf("restore phase: want %s, got %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
 	}
-	var restoreReq protocol.ProxyProvisionRequest
+	var restoreReq protocol.TunnelProvisionRequest
 	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
-		t.Fatalf("failed to parse restore proxy_provision: %v", err)
+		t.Fatalf("failed to parse restore tunnel_provision: %v", err)
 	}
-	if restoreReq.Name != "restore-fail-tunnel" {
-		t.Fatalf("restore tunnel name: want restore-fail-tunnel, got %s", restoreReq.Name)
+	if restoreReq.TunnelID == "" || restoreReq.Revision <= 0 || restoreReq.Role != protocol.DataStreamRoleTarget {
+		t.Fatalf("restore provision identity mismatch: %+v", restoreReq)
+	}
+	if restoreReq.Spec.Name != "restore-fail-tunnel" {
+		t.Fatalf("restore tunnel name: want restore-fail-tunnel, got %s", restoreReq.Spec.Name)
 	}
 
 	s.store.mu.Lock()
@@ -3156,8 +3164,10 @@ func TestServer_RestorePostAckStoreFailureMarksError(t *testing.T) {
 	s.store.failSaveCount = 1
 	s.store.mu.Unlock()
 
-	restoreAck, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-		Name:     restoreReq.Name,
+	restoreAck, _ := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
+		TunnelID: restoreReq.TunnelID,
+		Revision: restoreReq.Revision,
+		Role:     restoreReq.Role,
 		Accepted: true,
 		Message:  "ok",
 	})
@@ -3270,18 +3280,22 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 		t.Fatalf("HTTP restore phase: want %s, got %s", protocol.MsgTypeProxyProvision, restoreMsg.Type)
 	}
 
-	var restoreReq protocol.ProxyProvisionRequest
+	var restoreReq protocol.TunnelProvisionRequest
 	if err := restoreMsg.ParsePayload(&restoreReq); err != nil {
-		t.Fatalf("failed to parse HTTP restore proxy_provision: %v", err)
+		t.Fatalf("failed to parse HTTP restore tunnel_provision: %v", err)
 	}
-	if restoreReq.Name != "restore-http" {
-		t.Fatalf("restore tunnel name: want restore-http, got %s", restoreReq.Name)
+	if restoreReq.Spec.Name != "restore-http" {
+		t.Fatalf("restore tunnel name: want restore-http, got %s", restoreReq.Spec.Name)
 	}
-	if restoreReq.Type != protocol.ProxyTypeHTTP {
-		t.Fatalf("restore tunnel type: want http, got %s", restoreReq.Type)
+	if restoreReq.Spec.Ingress.Type != protocol.IngressTypeHTTPHost {
+		t.Fatalf("restore ingress type: want http_host, got %s", restoreReq.Spec.Ingress.Type)
 	}
-	if restoreReq.Domain != "app.example.com" {
-		t.Fatalf("restore tunnel domain: want app.example.com, got %s", restoreReq.Domain)
+	var httpCfg httpHostConfigAPI
+	if err := json.Unmarshal(restoreReq.Spec.Ingress.Config, &httpCfg); err != nil {
+		t.Fatalf("decode restore HTTP ingress config: %v", err)
+	}
+	if httpCfg.Domain != "app.example.com" {
+		t.Fatalf("restore tunnel domain: want app.example.com, got %s", httpCfg.Domain)
 	}
 
 	client, ok := s.loadLiveClient(authResp.ClientID)

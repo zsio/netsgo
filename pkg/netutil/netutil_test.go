@@ -3,6 +3,7 @@ package netutil
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -43,6 +44,27 @@ func TestFetchIPFromURLsFallsBackAndValidatesResponse(t *testing.T) {
 
 	if got := fetchIPFromURLs([]string{bad.URL, good.URL}, 4); got != "203.0.113.20" {
 		t.Fatalf("fetchIPFromURLs() = %q, want 203.0.113.20", got)
+	}
+}
+
+func TestPublicIPProbeURLsPreferNetsGoEndpoint(t *testing.T) {
+	const primary = "https://netsgo.zs.uy/ip"
+	fallbackByVersion := map[int]string{
+		4: "https://api.ipify.org",
+		6: "https://api6.ipify.org",
+	}
+
+	for _, version := range []int{4, 6} {
+		urls := publicIPProbeURLs[version]
+		if len(urls) == 0 {
+			t.Fatalf("publicIPProbeURLs[%d] is empty", version)
+		}
+		if urls[0] != primary {
+			t.Fatalf("publicIPProbeURLs[%d][0] = %q, want %q", version, urls[0], primary)
+		}
+		if fallback := fallbackByVersion[version]; !slices.Contains(urls[1:], fallback) {
+			t.Fatalf("publicIPProbeURLs[%d] should keep %q as a fallback after primary", version, fallback)
+		}
 	}
 }
 

@@ -112,7 +112,17 @@ ${colorConfig
   )
 }
 
-const ChartTooltip = RechartsPrimitive.Tooltip
+function ChartTooltip({
+  isAnimationActive = false,
+  ...props
+}: React.ComponentProps<typeof RechartsPrimitive.Tooltip>) {
+  return (
+    <RechartsPrimitive.Tooltip
+      isAnimationActive={isAnimationActive}
+      {...props}
+    />
+  )
+}
 
 function ChartTooltipContent({
   active,

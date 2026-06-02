@@ -174,6 +174,7 @@ func (s *Server) invalidateLogicalSessionIfCurrent(clientID string, generation u
 	}
 
 	s.CloseExposedProxyRuntime(client)
+	s.releaseUnifiedRuntimeForClient(clientID)
 
 	if wasLive {
 		info := client.GetInfo()

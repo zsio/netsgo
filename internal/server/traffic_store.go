@@ -28,23 +28,36 @@ const (
 )
 
 type TrafficDelta struct {
-	ClientID     string
-	TunnelName   string
-	TunnelType   string
-	SecondStart  int64
-	MinuteStart  int64
-	IngressBytes uint64
-	EgressBytes  uint64
+	TunnelID        string
+	ClientID        string
+	OwnerClientID   string
+	IngressClientID string
+	TargetClientID  string
+	Topology        string
+	Transport       string
+	TunnelName      string
+	TunnelType      string
+	SecondStart     int64
+	MinuteStart     int64
+	IngressBytes    uint64
+	EgressBytes     uint64
 }
 
 type TrafficBucket struct {
-	ClientID     string            `json:"client_id"`
-	TunnelName   string            `json:"tunnel_name"`
-	TunnelType   string            `json:"tunnel_type"`
-	Resolution   TrafficResolution `json:"resolution"`
-	BucketStart  int64             `json:"bucket_start"`
-	IngressBytes uint64            `json:"ingress_bytes"`
-	EgressBytes  uint64            `json:"egress_bytes"`
+	TunnelID        string            `json:"tunnel_id,omitempty"`
+	ClientID        string            `json:"client_id"`
+	OwnerClientID   string            `json:"owner_client_id,omitempty"`
+	IngressClientID string            `json:"ingress_client_id,omitempty"`
+	TargetClientID  string            `json:"target_client_id,omitempty"`
+	Topology        string            `json:"topology,omitempty"`
+	Transport       string            `json:"transport,omitempty"`
+	TunnelName      string            `json:"tunnel_name"`
+	TunnelType      string            `json:"tunnel_type"`
+	MetadataMissing bool              `json:"metadata_missing,omitempty"`
+	Resolution      TrafficResolution `json:"resolution"`
+	BucketStart     int64             `json:"bucket_start"`
+	IngressBytes    uint64            `json:"ingress_bytes"`
+	EgressBytes     uint64            `json:"egress_bytes"`
 }
 
 type TrafficPoint struct {
@@ -55,12 +68,15 @@ type TrafficPoint struct {
 }
 
 type TunnelTrafficSeries struct {
-	TunnelName string         `json:"tunnel_name"`
-	TunnelType string         `json:"tunnel_type"`
-	Points     []TrafficPoint `json:"points"`
+	TunnelID        string         `json:"tunnel_id,omitempty"`
+	TunnelName      string         `json:"tunnel_name,omitempty"`
+	TunnelType      string         `json:"tunnel_type,omitempty"`
+	MetadataMissing bool           `json:"metadata_missing,omitempty"`
+	Points          []TrafficPoint `json:"points"`
 }
 
 type trafficSeriesKey struct {
+	TunnelID   string
 	TunnelName string
 	TunnelType string
 }
@@ -149,14 +165,21 @@ func (s *TrafficStore) ApplyDeltas(deltas []TrafficDelta) {
 		}
 
 		minuteBucket := TrafficBucket{
-			ClientID:     delta.ClientID,
-			TunnelName:   delta.TunnelName,
-			TunnelType:   delta.TunnelType,
-			Resolution:   TrafficResolutionMinute,
-			BucketStart:  delta.MinuteStart,
-			IngressBytes: delta.IngressBytes,
-			EgressBytes:  delta.EgressBytes,
+			TunnelID:        delta.TunnelID,
+			ClientID:        delta.ClientID,
+			OwnerClientID:   delta.OwnerClientID,
+			IngressClientID: delta.IngressClientID,
+			TargetClientID:  delta.TargetClientID,
+			Topology:        delta.Topology,
+			Transport:       delta.Transport,
+			TunnelName:      delta.TunnelName,
+			TunnelType:      delta.TunnelType,
+			Resolution:      TrafficResolutionMinute,
+			BucketStart:     delta.MinuteStart,
+			IngressBytes:    delta.IngressBytes,
+			EgressBytes:     delta.EgressBytes,
 		}
+		applyTrafficBucketStorageDefaults(&minuteBucket)
 
 		key := trafficBucketKey(minuteBucket)
 		if existing, ok := s.pendingMinute[key]; ok {
@@ -174,14 +197,21 @@ func (s *TrafficStore) ApplyDeltas(deltas []TrafficDelta) {
 		}
 
 		secondBucket := TrafficBucket{
-			ClientID:     delta.ClientID,
-			TunnelName:   delta.TunnelName,
-			TunnelType:   delta.TunnelType,
-			Resolution:   TrafficResolutionSecond,
-			BucketStart:  delta.SecondStart,
-			IngressBytes: delta.IngressBytes,
-			EgressBytes:  delta.EgressBytes,
+			TunnelID:        delta.TunnelID,
+			ClientID:        delta.ClientID,
+			OwnerClientID:   delta.OwnerClientID,
+			IngressClientID: delta.IngressClientID,
+			TargetClientID:  delta.TargetClientID,
+			Topology:        delta.Topology,
+			Transport:       delta.Transport,
+			TunnelName:      delta.TunnelName,
+			TunnelType:      delta.TunnelType,
+			Resolution:      TrafficResolutionSecond,
+			BucketStart:     delta.SecondStart,
+			IngressBytes:    delta.IngressBytes,
+			EgressBytes:     delta.EgressBytes,
 		}
+		applyTrafficBucketStorageDefaults(&secondBucket)
 		if err := s.realtimeSecond.Add(secondBucket); err != nil {
 			s.pendingErr = err
 			continue
@@ -311,16 +341,15 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 
 	seriesMap := make(map[trafficSeriesKey]*TunnelTrafficSeries)
 	for _, bucket := range buckets {
-		key := trafficSeriesKey{
-			TunnelName: bucket.TunnelName,
-			TunnelType: bucket.TunnelType,
-		}
+		key := trafficSeriesKeyFromBucket(bucket)
 		series, ok := seriesMap[key]
 		if !ok {
 			series = &TunnelTrafficSeries{
-				TunnelName: bucket.TunnelName,
-				TunnelType: bucket.TunnelType,
-				Points:     []TrafficPoint{},
+				TunnelID:        bucket.TunnelID,
+				TunnelName:      bucket.TunnelName,
+				TunnelType:      bucket.TunnelType,
+				MetadataMissing: trafficBucketMetadataMissing(bucket),
+				Points:          []TrafficPoint{},
 			}
 			seriesMap[key] = series
 		}
@@ -340,12 +369,7 @@ func (s *TrafficStore) queryLocked(clientID, tunnelName string, from, to time.Ti
 	for _, series := range seriesMap {
 		items = append(items, *series)
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].TunnelName != items[j].TunnelName {
-			return items[i].TunnelName < items[j].TunnelName
-		}
-		return items[i].TunnelType < items[j].TunnelType
-	})
+	sortTrafficSeries(items)
 
 	return TrafficQueryResult{
 		Resolution: resolution,
@@ -398,21 +422,22 @@ func (s *TrafficStore) flushLocked() error {
 }
 
 func (s *TrafficStore) queryBucketsLocked(clientID, tunnelName string, resolution TrafficResolution, fromUnix, toUnix int64) ([]TrafficBucket, error) {
-	query := `SELECT client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes
-FROM traffic_buckets
-WHERE client_id = ? AND resolution = ? AND bucket_start >= ? AND bucket_start <= ?`
+	query := `SELECT b.tunnel_id, b.owner_client_id, b.ingress_client_id, b.target_client_id, b.topology, b.transport, b.client_id, b.tunnel_name, b.tunnel_type, b.resolution, b.bucket_start, b.ingress_bytes, b.egress_bytes, CASE WHEN t.id IS NULL THEN 1 ELSE 0 END
+FROM traffic_buckets b
+LEFT JOIN tunnels t ON t.id = b.tunnel_id
+WHERE b.client_id = ? AND b.resolution = ? AND b.bucket_start >= ? AND b.bucket_start <= ?`
 	args := []any{clientID, string(resolution), fromUnix, toUnix}
 	if tunnelName != "" {
-		query += ` AND tunnel_name = ?`
-		args = append(args, tunnelName)
+		query += ` AND (b.tunnel_name = ? OR b.tunnel_id = ?)`
+		args = append(args, tunnelName, tunnelName)
 	}
-	query += ` ORDER BY tunnel_name, tunnel_type, bucket_start`
+	query += ` ORDER BY b.tunnel_name, b.tunnel_type, b.bucket_start`
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
-	return scanTrafficBucketRows(rows)
+	return scanTrafficBucketRowsWithMetadata(rows)
 }
 
 func scanTrafficBucketRows(rows *sql.Rows) ([]TrafficBucket, error) {
@@ -432,10 +457,47 @@ func scanTrafficBucketRows(rows *sql.Rows) ([]TrafficBucket, error) {
 	return buckets, nil
 }
 
+func scanTrafficBucketRowsWithMetadata(rows *sql.Rows) ([]TrafficBucket, error) {
+	defer func() { _ = rows.Close() }()
+
+	buckets := []TrafficBucket{}
+	for rows.Next() {
+		bucket, err := scanTrafficBucketWithMetadata(rows)
+		if err != nil {
+			return nil, err
+		}
+		buckets = append(buckets, bucket)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return buckets, nil
+}
+
+func scanTrafficBucketWithMetadata(row dbScanner) (TrafficBucket, error) {
+	var metadataMissing int
+	bucket, err := scanTrafficBucketFields(row, &metadataMissing)
+	if err != nil {
+		return TrafficBucket{}, err
+	}
+	bucket.MetadataMissing = metadataMissing != 0
+	return bucket, nil
+}
+
 func scanTrafficBucket(row dbScanner) (TrafficBucket, error) {
+	return scanTrafficBucketFields(row)
+}
+
+func scanTrafficBucketFields(row dbScanner, extra ...any) (TrafficBucket, error) {
 	var bucket TrafficBucket
 	var ingressBytes, egressBytes int64
-	err := row.Scan(
+	dest := []any{
+		&bucket.TunnelID,
+		&bucket.OwnerClientID,
+		&bucket.IngressClientID,
+		&bucket.TargetClientID,
+		&bucket.Topology,
+		&bucket.Transport,
 		&bucket.ClientID,
 		&bucket.TunnelName,
 		&bucket.TunnelType,
@@ -443,7 +505,9 @@ func scanTrafficBucket(row dbScanner) (TrafficBucket, error) {
 		&bucket.BucketStart,
 		&ingressBytes,
 		&egressBytes,
-	)
+	}
+	dest = append(dest, extra...)
+	err := row.Scan(dest...)
 	if err != nil {
 		return TrafficBucket{}, err
 	}
@@ -460,7 +524,7 @@ func scanTrafficBucket(row dbScanner) (TrafficBucket, error) {
 
 func (s *TrafficStore) rollupCompleteHoursLocked(now time.Time) error {
 	currentHourStart := hourFloorUTC(now).Unix()
-	rows, err := s.db.Query(`SELECT client_id, tunnel_name, tunnel_type, (bucket_start / 3600) * 3600 AS hour_start, ingress_bytes, egress_bytes
+	rows, err := s.db.Query(`SELECT tunnel_id, owner_client_id, ingress_client_id, target_client_id, topology, transport, client_id, tunnel_name, tunnel_type, (bucket_start / 3600) * 3600 AS hour_start, ingress_bytes, egress_bytes
 FROM traffic_buckets
 WHERE resolution = ? AND bucket_start < ?
 ORDER BY client_id, tunnel_name, tunnel_type, hour_start`, string(TrafficResolutionMinute), currentHourStart)
@@ -472,7 +536,7 @@ ORDER BY client_id, tunnel_name, tunnel_type, hour_start`, string(TrafficResolut
 	for rows.Next() {
 		var bucket TrafficBucket
 		var ingressBytes, egressBytes int64
-		if err := rows.Scan(&bucket.ClientID, &bucket.TunnelName, &bucket.TunnelType, &bucket.BucketStart, &ingressBytes, &egressBytes); err != nil {
+		if err := rows.Scan(&bucket.TunnelID, &bucket.OwnerClientID, &bucket.IngressClientID, &bucket.TargetClientID, &bucket.Topology, &bucket.Transport, &bucket.ClientID, &bucket.TunnelName, &bucket.TunnelType, &bucket.BucketStart, &ingressBytes, &egressBytes); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -591,6 +655,9 @@ func addTrafficBucket(combined map[string]TrafficBucket, bucket TrafficBucket) e
 }
 
 func upsertTrafficBucketAdd(tx *sql.Tx, bucket TrafficBucket) error {
+	if err := hydrateTrafficBucketTx(tx, &bucket); err != nil {
+		return err
+	}
 	existing, found, err := findTrafficBucketTx(tx, bucket)
 	if err != nil {
 		return err
@@ -610,8 +677,14 @@ func upsertTrafficBucketAdd(tx *sql.Tx, bucket TrafficBucket) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.Exec(`INSERT INTO traffic_buckets (tunnel_id, owner_client_id, ingress_client_id, target_client_id, topology, transport, client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		bucket.TunnelID,
+		bucket.OwnerClientID,
+		bucket.IngressClientID,
+		bucket.TargetClientID,
+		bucket.Topology,
+		bucket.Transport,
 		bucket.ClientID,
 		bucket.TunnelName,
 		bucket.TunnelType,
@@ -624,12 +697,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`,
 }
 
 func findTrafficBucketTx(tx *sql.Tx, bucket TrafficBucket) (TrafficBucket, bool, error) {
-	row := tx.QueryRow(`SELECT client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes
+	if err := hydrateTrafficBucketTx(tx, &bucket); err != nil {
+		return TrafficBucket{}, false, err
+	}
+	row := tx.QueryRow(`SELECT tunnel_id, owner_client_id, ingress_client_id, target_client_id, topology, transport, client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes
 FROM traffic_buckets
-WHERE client_id = ? AND tunnel_name = ? AND tunnel_type = ? AND resolution = ? AND bucket_start = ?`,
-		bucket.ClientID,
-		bucket.TunnelName,
-		bucket.TunnelType,
+WHERE tunnel_id = ? AND transport = ? AND resolution = ? AND bucket_start = ?`,
+		bucket.TunnelID,
+		bucket.Transport,
 		string(bucket.Resolution),
 		bucket.BucketStart,
 	)
@@ -644,6 +719,9 @@ WHERE client_id = ? AND tunnel_name = ? AND tunnel_type = ? AND resolution = ? A
 }
 
 func upsertTrafficBucketReplace(tx *sql.Tx, bucket TrafficBucket) error {
+	if err := hydrateTrafficBucketTx(tx, &bucket); err != nil {
+		return err
+	}
 	ingressBytes, err := sqliteInt64("traffic_buckets.ingress_bytes", bucket.IngressBytes)
 	if err != nil {
 		return err
@@ -652,12 +730,25 @@ func upsertTrafficBucketReplace(tx *sql.Tx, bucket TrafficBucket) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(client_id, tunnel_name, tunnel_type, resolution, bucket_start)
+	_, err = tx.Exec(`INSERT INTO traffic_buckets (tunnel_id, owner_client_id, ingress_client_id, target_client_id, topology, transport, client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(tunnel_id, transport, resolution, bucket_start)
 DO UPDATE SET
+	owner_client_id = excluded.owner_client_id,
+	ingress_client_id = excluded.ingress_client_id,
+	target_client_id = excluded.target_client_id,
+	topology = excluded.topology,
+	client_id = excluded.client_id,
+	tunnel_name = excluded.tunnel_name,
+	tunnel_type = excluded.tunnel_type,
 	ingress_bytes = excluded.ingress_bytes,
 	egress_bytes = excluded.egress_bytes`,
+		bucket.TunnelID,
+		bucket.OwnerClientID,
+		bucket.IngressClientID,
+		bucket.TargetClientID,
+		bucket.Topology,
+		bucket.Transport,
 		bucket.ClientID,
 		bucket.TunnelName,
 		bucket.TunnelType,
@@ -670,17 +761,26 @@ DO UPDATE SET
 }
 
 func addTrafficToExistingHourBucket(tx *sql.Tx, bucket TrafficBucket, currentHourStart int64) error {
+	if err := hydrateTrafficBucketTx(tx, &bucket); err != nil {
+		return err
+	}
 	hourStart := hourFloorUTC(time.Unix(bucket.BucketStart, 0).UTC()).Unix()
 	if hourStart >= currentHourStart {
 		return nil
 	}
 
 	hourBucket := TrafficBucket{
-		ClientID:    bucket.ClientID,
-		TunnelName:  bucket.TunnelName,
-		TunnelType:  bucket.TunnelType,
-		Resolution:  TrafficResolutionHour,
-		BucketStart: hourStart,
+		TunnelID:        bucket.TunnelID,
+		ClientID:        bucket.ClientID,
+		OwnerClientID:   bucket.OwnerClientID,
+		IngressClientID: bucket.IngressClientID,
+		TargetClientID:  bucket.TargetClientID,
+		Topology:        bucket.Topology,
+		Transport:       bucket.Transport,
+		TunnelName:      bucket.TunnelName,
+		TunnelType:      bucket.TunnelType,
+		Resolution:      TrafficResolutionHour,
+		BucketStart:     hourStart,
 	}
 	existing, found, err := findTrafficBucketTx(tx, hourBucket)
 	if err != nil {
@@ -697,11 +797,17 @@ func addTrafficToExistingHourBucket(tx *sql.Tx, bucket TrafficBucket, currentHou
 
 func foldMinuteBucketIntoHour(combined map[string]TrafficBucket, bucket TrafficBucket, currentHourStart int64, skipAlreadyRolled bool) error {
 	hourBucket := TrafficBucket{
-		ClientID:    bucket.ClientID,
-		TunnelName:  bucket.TunnelName,
-		TunnelType:  bucket.TunnelType,
-		Resolution:  TrafficResolutionHour,
-		BucketStart: hourFloorUTC(time.Unix(bucket.BucketStart, 0).UTC()).Unix(),
+		TunnelID:        bucket.TunnelID,
+		ClientID:        bucket.ClientID,
+		OwnerClientID:   bucket.OwnerClientID,
+		IngressClientID: bucket.IngressClientID,
+		TargetClientID:  bucket.TargetClientID,
+		Topology:        bucket.Topology,
+		Transport:       bucket.Transport,
+		TunnelName:      bucket.TunnelName,
+		TunnelType:      bucket.TunnelType,
+		Resolution:      TrafficResolutionHour,
+		BucketStart:     hourFloorUTC(time.Unix(bucket.BucketStart, 0).UTC()).Unix(),
 	}
 	key := trafficBucketKey(hourBucket)
 	if skipAlreadyRolled && hourBucket.BucketStart < currentHourStart {
@@ -723,20 +829,48 @@ func foldMinuteBucketIntoHour(combined map[string]TrafficBucket, bucket TrafficB
 }
 
 func trafficBucketKey(bucket TrafficBucket) string {
+	seriesKey := trafficSeriesKeyFromBucket(bucket)
 	return strings.Join([]string{
 		bucket.ClientID,
-		bucket.TunnelName,
-		bucket.TunnelType,
+		seriesKey.TunnelID,
+		seriesKey.TunnelName,
+		seriesKey.TunnelType,
 		string(bucket.Resolution),
 		strconv.FormatInt(bucket.BucketStart, 10),
 	}, "\x00")
+}
+
+func trafficSeriesKeyFromBucket(bucket TrafficBucket) trafficSeriesKey {
+	return trafficSeriesKey{
+		TunnelID:   bucket.TunnelID,
+		TunnelName: bucket.TunnelName,
+		TunnelType: bucket.TunnelType,
+	}
+}
+
+func trafficBucketMetadataMissing(bucket TrafficBucket) bool {
+	return bucket.MetadataMissing || (bucket.TunnelID != "" && (bucket.TunnelName == "" || bucket.TunnelType == ""))
+}
+
+func sortTrafficSeries(items []TunnelTrafficSeries) {
+	sort.Slice(items, func(i, j int) bool {
+		leftName := items[i].TunnelName
+		rightName := items[j].TunnelName
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		if items[i].TunnelType != items[j].TunnelType {
+			return items[i].TunnelType < items[j].TunnelType
+		}
+		return items[i].TunnelID < items[j].TunnelID
+	})
 }
 
 func bucketMatches(bucket TrafficBucket, clientID, tunnelName string) bool {
 	if bucket.ClientID != clientID {
 		return false
 	}
-	if tunnelName != "" && bucket.TunnelName != tunnelName {
+	if tunnelName != "" && bucket.TunnelName != tunnelName && bucket.TunnelID != tunnelName {
 		return false
 	}
 	return true
@@ -772,8 +906,13 @@ func autoTrafficResolution(from, to time.Time) TrafficResolution {
 }
 
 func (s *TrafficStore) recordBytesAt(now time.Time, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
+	s.recordTunnelBytesAt(now, "", clientID, tunnelName, tunnelType, ingressBytes, egressBytes)
+}
+
+func (s *TrafficStore) recordTunnelBytesAt(now time.Time, tunnelID, clientID, tunnelName, tunnelType string, ingressBytes, egressBytes uint64) {
 	now = now.UTC()
 	s.ApplyDeltas([]TrafficDelta{{
+		TunnelID:     tunnelID,
 		ClientID:     clientID,
 		TunnelName:   tunnelName,
 		TunnelType:   tunnelType,
@@ -797,8 +936,10 @@ func (s *TrafficStore) EvictTunnel(clientID, tunnelName string) error {
 	if len(s.pendingMinute) == 0 {
 		s.pendingErr = nil
 	}
-	_, err := s.db.Exec(`DELETE FROM traffic_buckets WHERE client_id = ? AND tunnel_name = ?`, clientID, tunnelName)
-	return err
+	// Hard-delete tunnel semantics keep persisted history by tunnel_id. Only
+	// unflushed/realtime observations are evicted so deleted tunnels stop appearing
+	// as live series while durable traffic buckets remain queryable.
+	return nil
 }
 
 func (s *TrafficStore) RenameTunnel(clientID, oldName, newName string) error {
@@ -869,7 +1010,7 @@ func (s *TrafficStore) renamePersistedTrafficBucketsLocked(clientID, oldName, ne
 	committed := false
 	defer rollbackUnlessCommitted(tx, &committed)
 
-	rows, err := tx.Query(`SELECT client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes
+	rows, err := tx.Query(`SELECT tunnel_id, owner_client_id, ingress_client_id, target_client_id, topology, transport, client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes
 FROM traffic_buckets
 WHERE client_id = ? AND tunnel_name = ?
 ORDER BY tunnel_type, resolution, bucket_start`, clientID, oldName)
@@ -881,12 +1022,8 @@ ORDER BY tunnel_type, resolution, bucket_start`, clientID, oldName)
 		return err
 	}
 
-	if _, err := tx.Exec(`DELETE FROM traffic_buckets WHERE client_id = ? AND tunnel_name = ?`, clientID, oldName); err != nil {
-		return err
-	}
 	for _, bucket := range buckets {
-		bucket.TunnelName = newName
-		if err := upsertTrafficBucketAdd(tx, bucket); err != nil {
+		if _, err := tx.Exec(`UPDATE traffic_buckets SET tunnel_name = ? WHERE tunnel_id = ? AND transport = ? AND resolution = ? AND bucket_start = ?`, newName, bucket.TunnelID, bucket.Transport, string(bucket.Resolution), bucket.BucketStart); err != nil {
 			return err
 		}
 	}
@@ -908,4 +1045,54 @@ func (s *TrafficStore) EvictClient(clientID string) error {
 	}
 	_, err := s.db.Exec(`DELETE FROM traffic_buckets WHERE client_id = ?`, clientID)
 	return err
+}
+
+func hydrateTrafficBucketTx(tx *sql.Tx, bucket *TrafficBucket) error {
+	if bucket == nil {
+		return nil
+	}
+	if bucket.Transport == "" {
+		bucket.Transport = TunnelActualTransportServerRelay
+	}
+	if bucket.TunnelID == "" && bucket.ClientID != "" && bucket.TunnelName != "" {
+		var actualTransport string
+		err := tx.QueryRow(`SELECT id, owner_client_id, ingress_client_id, target_client_id, topology, actual_transport FROM tunnels WHERE client_id = ? AND name = ?`, bucket.ClientID, bucket.TunnelName).Scan(
+			&bucket.TunnelID,
+			&bucket.OwnerClientID,
+			&bucket.IngressClientID,
+			&bucket.TargetClientID,
+			&bucket.Topology,
+			&actualTransport,
+		)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if actualTransport != "" && actualTransport != TunnelActualTransportUnknown {
+			bucket.Transport = actualTransport
+		}
+	}
+	applyTrafficBucketStorageDefaults(bucket)
+	return nil
+}
+
+func applyTrafficBucketStorageDefaults(bucket *TrafficBucket) {
+	if bucket.OwnerClientID == "" {
+		bucket.OwnerClientID = bucket.ClientID
+	}
+	if bucket.TargetClientID == "" {
+		bucket.TargetClientID = bucket.ClientID
+	}
+	if bucket.Topology == "" {
+		bucket.Topology = TunnelTopologyServerExpose
+	}
+	if bucket.Transport == "" || bucket.Transport == TunnelActualTransportUnknown {
+		bucket.Transport = TunnelActualTransportServerRelay
+	}
+	if bucket.TunnelID == "" {
+		bucket.TunnelID = fallbackTrafficTunnelID(bucket.ClientID, bucket.TunnelName, bucket.TunnelType)
+	}
+}
+
+func fallbackTrafficTunnelID(clientID, tunnelName, tunnelType string) string {
+	return strings.Join([]string{"legacy", clientID, tunnelName, tunnelType}, "\x00")
 }

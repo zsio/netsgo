@@ -7,6 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Client } from '@/types';
 import { formatUptime } from '@/lib/format';
 import { getClientDisplayName } from '@/lib/client-utils';
+import toast from 'react-hot-toast';
 
 interface ClientHeaderProps {
   client: Client;
@@ -24,12 +25,14 @@ export function ClientHeader({ client }: ClientHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const displayName = getClientDisplayName(client);
 
   const startEdit = () => {
     setEditValue(client.display_name || '');
+    setSaveError(null);
     setIsEditing(true);
   };
 
@@ -43,6 +46,7 @@ export function ClientHeader({ client }: ClientHeaderProps) {
   const cancelEdit = () => {
     setIsEditing(false);
     setEditValue('');
+    setSaveError(null);
   };
 
   const saveDisplayName = async () => {
@@ -53,8 +57,11 @@ export function ClientHeader({ client }: ClientHeaderProps) {
       });
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       setIsEditing(false);
+      setSaveError(null);
     } catch (err) {
-      console.error('Failed to update display name:', err);
+      const message = err instanceof Error ? err.message : '保存展示名失败';
+      setSaveError(message);
+      toast.error(message);
     } finally {
       setIsSaving(false);
     }
@@ -69,24 +76,24 @@ export function ClientHeader({ client }: ClientHeaderProps) {
   };
 
   return (
-    <div className="flex items-start justify-between">
-      <div>
+    <div className="flex items-start justify-between min-w-0">
+      <div className="min-w-0">
         <div className="flex items-center gap-3 mb-2">
-          <div>
+          <div className="min-w-0">
             {/* 标题区域 — 切换 display / edit 模式 */}
             <div className="flex items-center gap-2 min-h-[36px]">
               <AnimatePresence mode="wait" initial={false}>
                 {isEditing ? (
                   <motion.div
                     key="edit"
-                    className="flex items-center gap-2"
+                    className="flex items-center gap-2 min-w-0"
                     initial={{ opacity: 0, y: -6, scale: 0.97 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 6, scale: 0.97 }}
                     transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
                   >
                     <motion.div
-                      className="relative"
+                      className="relative min-w-0"
                       initial={{ width: 120 }}
                       animate={{ width: 'auto' }}
                       transition={{ duration: 0.25 }}
@@ -98,7 +105,7 @@ export function ClientHeader({ client }: ClientHeaderProps) {
                         onChange={(e) => setEditValue(e.target.value)}
                         onKeyDown={handleKeyDown}
                         placeholder={client.info.hostname}
-                        className="text-2xl font-bold tracking-tight text-foreground bg-transparent border-b-2 border-primary/50 focus:border-primary outline-none px-0.5 py-0 min-w-[120px] max-w-[400px] transition-colors duration-200"
+                        className="text-2xl font-bold tracking-tight text-foreground bg-transparent border-b-2 border-primary/50 focus:border-primary outline-none px-0.5 py-0 w-[min(400px,70vw)] min-w-[120px] transition-colors duration-200"
                         disabled={isSaving}
                       />
                       {/* 底部高亮线动画 */}
@@ -151,13 +158,13 @@ export function ClientHeader({ client }: ClientHeaderProps) {
                 ) : (
                   <motion.div
                     key="display"
-                    className="flex items-center gap-2"
+                    className="flex items-center gap-2 min-w-0"
                     initial={{ opacity: 0, y: 6, scale: 0.97 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -6, scale: 0.97 }}
                     transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
                   >
-                    <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2 min-w-0 max-w-[min(520px,70vw)] truncate" title={displayName}>
                       {displayName}
                     </h1>
                     <motion.div whileHover={{ scale: 1.15 }} whileTap={{ scale: 0.9 }}>
@@ -175,6 +182,11 @@ export function ClientHeader({ client }: ClientHeaderProps) {
                 )}
               </AnimatePresence>
             </div>
+            {saveError && (
+              <p className="mt-1 text-xs font-medium text-destructive">
+                {saveError}
+              </p>
+            )}
 
             {/* Metadata 行 */}
             <div className="text-sm text-muted-foreground flex items-center gap-2 mt-1 flex-wrap">

@@ -7,6 +7,13 @@
  */
 
 import { useAuthStore } from '@/stores/auth-store';
+import type {
+  ProxyConfig,
+  TunnelClientRole,
+  TunnelCreateRequest,
+  TunnelMutationResponse,
+  TunnelUpdateRequest,
+} from '@/types';
 
 class ApiError extends Error {
   status: number;
@@ -96,6 +103,37 @@ export const api = {
 
   delete<T>(url: string): Promise<T> {
     return request<T>(url, { method: "DELETE" });
+  },
+};
+
+function encodePath(value: string) {
+  return encodeURIComponent(value);
+}
+
+export const tunnelApi = {
+  listByClientRole(clientId: string, role: TunnelClientRole = 'owner') {
+    const params = new URLSearchParams({ role });
+    return api.get<ProxyConfig[]>(`/api/clients/${encodePath(clientId)}/tunnels?${params.toString()}`);
+  },
+
+  create(body: TunnelCreateRequest) {
+    return api.post<TunnelMutationResponse>('/api/tunnels', body);
+  },
+
+  update(tunnelId: string, body: TunnelUpdateRequest) {
+    return api.put<TunnelMutationResponse>(`/api/tunnels/${encodePath(tunnelId)}`, body);
+  },
+
+  resume(tunnelId: string) {
+    return api.put<TunnelMutationResponse>(`/api/tunnels/${encodePath(tunnelId)}/resume`);
+  },
+
+  stop(tunnelId: string) {
+    return api.put<TunnelMutationResponse>(`/api/tunnels/${encodePath(tunnelId)}/stop`);
+  },
+
+  delete(tunnelId: string) {
+    return api.delete<TunnelMutationResponse>(`/api/tunnels/${encodePath(tunnelId)}`);
   },
 };
 

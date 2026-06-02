@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { getTrafficSeriesKey, getTunnelSeriesKey } from '@/lib/tunnel-traffic-keys';
 import type { ClientTrafficResponse, ClientTrafficRange, ProxyConfig } from '@/types';
 
 export interface RatePoint {
@@ -30,17 +31,19 @@ const RANGE_WINDOW_CONFIG: Record<ClientTrafficRange, { pointCount: number; buck
   },
 };
 
-function createAllowedSet(tunnels?: Pick<ProxyConfig, 'name' | 'type'>[]) {
+type TunnelTrafficFilter = Pick<ProxyConfig, 'name' | 'type'> & Partial<Pick<ProxyConfig, 'id'>>;
+
+function createAllowedSet(tunnels?: TunnelTrafficFilter[]) {
   if (!tunnels || tunnels.length === 0) {
     return null;
   }
 
-  return new Set(tunnels.map((tunnel) => `${tunnel.type}:${tunnel.name}`));
+  return new Set(tunnels.map(getTunnelSeriesKey));
 }
 
 export function hasTrafficSamples(
   data: ClientTrafficResponse | undefined,
-  tunnels?: Pick<ProxyConfig, 'name' | 'type'>[],
+  tunnels?: TunnelTrafficFilter[],
 ) {
   if (!data) {
     return false;
@@ -49,7 +52,7 @@ export function hasTrafficSamples(
   const allowedSet = createAllowedSet(tunnels);
 
   return data.items.some((item) => {
-    if (allowedSet && !allowedSet.has(`${item.tunnel_type}:${item.tunnel_name}`)) {
+    if (allowedSet && !allowedSet.has(getTrafficSeriesKey(item))) {
       return false;
     }
 
@@ -60,7 +63,7 @@ export function hasTrafficSamples(
 export function buildAggregatedTrafficRates(
   data: ClientTrafficResponse | undefined,
   range: ClientTrafficRange,
-  tunnels?: Pick<ProxyConfig, 'name' | 'type'>[],
+  tunnels?: TunnelTrafficFilter[],
   nowMs = Date.now(),
 ): RatePoint[] {
   if (!data) {
@@ -72,7 +75,7 @@ export function buildAggregatedTrafficRates(
   const allowedSet = createAllowedSet(tunnels);
 
   for (const item of data.items) {
-    if (allowedSet && !allowedSet.has(`${item.tunnel_type}:${item.tunnel_name}`)) {
+    if (allowedSet && !allowedSet.has(getTrafficSeriesKey(item))) {
       continue;
     }
 
@@ -103,7 +106,7 @@ export function buildAggregatedTrafficRates(
 export function useAggregatedTrafficRates(
   data: ClientTrafficResponse | undefined,
   range: ClientTrafficRange,
-  tunnels?: Pick<ProxyConfig, 'name' | 'type'>[],
+  tunnels?: TunnelTrafficFilter[],
 ): RatePoint[] {
   return useMemo(() => buildAggregatedTrafficRates(data, range, tunnels), [data, range, tunnels]);
 }

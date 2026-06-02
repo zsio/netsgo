@@ -269,7 +269,7 @@ func TestRoundTrip_ProxyConfig(t *testing.T) {
 		t.Fatalf("Unmarshal 失败: %v", err)
 	}
 
-	if restored != original {
+	if !reflect.DeepEqual(restored, original) {
 		t.Errorf("ProxyConfig 不匹配: 期望 %+v, 得到 %+v", original, restored)
 	}
 }
@@ -565,5 +565,137 @@ func TestConstants(t *testing.T) {
 	}
 	if ProxyRuntimeStateError != "error" {
 		t.Errorf("ProxyRuntimeStateError 期望 'error'，得到 %q", ProxyRuntimeStateError)
+	}
+}
+
+func TestTunnelIssueJSONRoundTrip(t *testing.T) {
+	observedAt := time.Date(2026, 5, 22, 10, 0, 0, 0, time.UTC)
+	issue := TunnelIssue{
+		Code:       TunnelMutationErrorCodeIngressPortInUse,
+		Scope:      "ingress_client",
+		ClientID:   "client-b",
+		Severity:   "error",
+		Message:    "访问入口客户端端口已被占用",
+		Retryable:  true,
+		ObservedAt: observedAt,
+		Details:    json.RawMessage(`{"bind_ip":"0.0.0.0","port":18080}`),
+	}
+
+	data, err := json.Marshal(issue)
+	if err != nil {
+		t.Fatalf("marshal TunnelIssue: %v", err)
+	}
+	var got TunnelIssue
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal TunnelIssue: %v", err)
+	}
+	if !reflect.DeepEqual(got, issue) {
+		t.Fatalf("TunnelIssue round trip mismatch:\n got: %+v\nwant: %+v", got, issue)
+	}
+}
+
+func TestTunnelSpecIssuesJSONRoundTrip(t *testing.T) {
+	spec := TunnelSpec{
+		ID:              "tun-1",
+		Name:            "demo",
+		Revision:        3,
+		Topology:        TunnelTopologyClientToClient,
+		OwnerClientID:   "target-client",
+		TransportPolicy: TransportPolicyServerRelayOnly,
+		ActualTransport: ActualTransportUnknown,
+		DesiredState:    TunnelDesiredStateRunning,
+		RuntimeState:    TunnelRuntimeStateError,
+		Issues: []TunnelIssue{{
+			Code:       "provision_ack_timeout",
+			Scope:      "target_client",
+			ClientID:   "target-client",
+			Severity:   "error",
+			Message:    "provisioning timed out",
+			Retryable:  true,
+			ObservedAt: time.Date(2026, 5, 22, 11, 0, 0, 0, time.UTC),
+		}},
+	}
+
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal TunnelSpec: %v", err)
+	}
+	if !strings.Contains(string(data), `"issues"`) {
+		t.Fatalf("TunnelSpec JSON should include issues, got %s", data)
+	}
+	var got TunnelSpec
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal TunnelSpec: %v", err)
+	}
+	if len(got.Issues) != 1 || got.Issues[0].Code != "provision_ack_timeout" || got.Issues[0].ClientID != "target-client" {
+		t.Fatalf("TunnelSpec issues mismatch: %+v", got.Issues)
+	}
+}
+
+func TestUnifiedTunnelControlMessagesJSONRoundTrip(t *testing.T) {
+	endpointConfig := json.RawMessage(`{"host":"127.0.0.1","port":8080}`)
+	spec := TunnelSpec{
+		ID:                "tun-1",
+		Name:              "demo",
+		Revision:          7,
+		Topology:          TunnelTopologyClientToClient,
+		OwnerClientID:     "target-client",
+		Ingress:           EndpointSpec{Location: EndpointLocationClient, ClientID: "ingress-client", Type: IngressTypeTCPListen, Config: json.RawMessage(`{"bind_ip":"127.0.0.1","port":18080}`)},
+		Target:            EndpointSpec{Location: EndpointLocationClient, ClientID: "target-client", Type: TargetTypeTCPService, Config: endpointConfig},
+		TransportPolicy:   TransportPolicyServerRelayOnly,
+		ActualTransport:   ActualTransportServerRelay,
+		P2P:               P2PState{State: P2PStateIdle},
+		DesiredState:      TunnelDesiredStateRunning,
+		RuntimeState:      TunnelRuntimeStateActive,
+		BandwidthSettings: BandwidthSettings{IngressBPS: 1024, EgressBPS: 2048},
+	}
+	cases := []struct {
+		name  string
+		value any
+	}{
+		{name: "create request", value: TunnelCreateRequest{
+			Name:              spec.Name,
+			Topology:          spec.Topology,
+			Ingress:           spec.Ingress,
+			Target:            spec.Target,
+			TransportPolicy:   spec.TransportPolicy,
+			BandwidthSettings: spec.BandwidthSettings,
+		}},
+		{name: "create response", value: TunnelCreateResponse{TunnelID: spec.ID, Success: true, Spec: spec}},
+		{name: "provision request", value: TunnelProvisionRequest{TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleIngress, Spec: spec}},
+		{name: "provision ack", value: TunnelProvisionAck{TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleIngress, Accepted: true, Message: "ready"}},
+		{name: "unprovision request", value: TunnelUnprovisionRequest{TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleTarget, Reason: "updated"}},
+		{name: "runtime report", value: TunnelRuntimeReport{
+			TunnelID: spec.ID,
+			Revision: spec.Revision,
+			Role:     DataStreamRoleTarget,
+			Participant: ParticipantRuntime{
+				ClientID: "target-client",
+				Role:     DataStreamRoleTarget,
+				State:    ParticipantStateReady,
+				Revision: spec.Revision,
+			},
+			Transport: TransportRuntime{Policy: TransportPolicyServerRelayOnly, Actual: ActualTransportServerRelay, P2PState: P2PStateIdle},
+			Message:   "ready",
+		}},
+		{name: "preflight request", value: TunnelPreflightRequest{RequestID: "pre-1", TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleIngress, Ingress: spec.Ingress}},
+		{name: "preflight response", value: TunnelPreflightResponse{RequestID: "pre-1", TunnelID: spec.ID, Revision: spec.Revision, Role: DataStreamRoleIngress, Accepted: true, Message: "ok"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.value)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			target := reflect.New(reflect.TypeOf(tc.value))
+			if err := json.Unmarshal(data, target.Interface()); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			got := target.Elem().Interface()
+			if !reflect.DeepEqual(got, tc.value) {
+				t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, tc.value)
+			}
+		})
 	}
 }

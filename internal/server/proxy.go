@@ -18,6 +18,7 @@ type ProxyTunnel struct {
 	Config   protocol.ProxyConfig
 	Listener net.Listener   // public listener on RemotePort (TCP tunnels only)
 	UDPState *UDPProxyState // UDP proxy runtime state (nil for TCP tunnels)
+	runtime  tunnelRuntimeSnapshot
 	limits   *directionalBandwidthRuntime
 	done     chan struct{}
 	once     sync.Once
@@ -231,6 +232,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 		Config: protocol.ProxyConfig{
 			ID:                req.ID,
 			Name:              req.Name,
+			Revision:          1,
 			Type:              req.Type,
 			LocalIP:           req.LocalIP,
 			LocalPort:         req.LocalPort,
@@ -244,6 +246,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 		done:   make(chan struct{}),
 	}
 	setProxyConfigStates(&tunnel.Config, desiredState, runtimeState, "")
+	initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
 
 	client.proxies[req.Name] = tunnel
 	client.proxyMu.Unlock()
@@ -268,6 +271,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 			return fmt.Errorf("proxy tunnel %q not found", name)
 		}
 		setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+		markTunnelServerRelayActive(current, client.ID, time.Now())
 		client.proxyMu.Unlock()
 		return nil
 	}
@@ -309,6 +313,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	tunnel.once = sync.Once{}
 	tunnel.Config.RemotePort = actualPort
 	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+	markTunnelServerRelayActive(tunnel, client.ID, time.Now())
 	listener := tunnel.Listener
 	done := tunnel.done
 	proxyName := tunnel.Config.Name
@@ -367,6 +372,7 @@ func (s *Server) stageTunnelPending(client *ClientConn, name string) (protocol.P
 		return protocol.ProxyConfig{}, fmt.Errorf("proxy tunnel %q not found", name)
 	}
 	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, "")
+	markTunnelProvisionPending(tunnel, client.ID, tunnel.runtime.Revision, time.Now())
 	return tunnel.Config, nil
 }
 
@@ -401,14 +407,16 @@ func (s *Server) markTCPProxyRuntimeErrorIfCurrent(
 	}
 	closeTunnelRuntimeResources(current)
 	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
+	markTunnelRuntimeError(current, client.ID, message, time.Now())
 	config := current.Config
 	client.proxyMu.Unlock()
 
 	if err := s.persistTunnelStates(client.ID, tunnel.Config.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message); err != nil {
 		log.Printf("⚠️ TCP proxy [%s] failed to persist error state: %v", tunnel.Config.Name, err)
 	}
+	s.recordServerExposeIngressIssue(tunnel.Config.ID, tunnel.Config.Type, message)
 	s.emitTunnelChanged(client.ID, config, "error")
-	if err := s.notifyClientProxyClose(client, tunnel.Config.Name, "runtime_error"); err != nil {
+	if err := s.notifyServerExposeTargetUnprovision(client, config, "runtime_error"); err != nil {
 		log.Printf("⚠️ TCP proxy [%s] failed to notify client of close: %v", tunnel.Config.Name, err)
 	}
 }
@@ -450,7 +458,7 @@ func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listen
 	var recordTraffic tunnelTrafficObserver
 	if s.trafficStore != nil {
 		recordTraffic = func(ingressBytes, egressBytes uint64) {
-			s.recordTraffic(client.ID, tunnel.Config.Name, tunnel.Config.Type, ingressBytes, egressBytes)
+			s.recordTunnelTraffic(client.ID, tunnel.Config, ingressBytes, egressBytes)
 		}
 	}
 	_, _ = relayTunnelPayload(stream, extConn, client.BandwidthRuntime(), tunnel.limits, recordTraffic)
@@ -549,6 +557,7 @@ func (s *Server) CloseExposedProxyRuntime(client *ClientConn) {
 		if isTunnelExposed(tunnel.Config) {
 			closeTunnelRuntimeResources(tunnel)
 			setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateOffline, "")
+			markTunnelRuntimeOffline(tunnel, client.ID, time.Now())
 		}
 	}
 }

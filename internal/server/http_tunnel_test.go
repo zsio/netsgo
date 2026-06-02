@@ -370,7 +370,7 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 			LocalIP:   "127.0.0.1",
 			LocalPort: 8080,
 		}, protocol.ProxyStatusStopped)
-		seedStoredTunnel(t, s, "client-2", protocol.ProxyNewRequest{
+		seedStoredTunnelWithoutResourceLock(t, s, "client-2", protocol.ProxyNewRequest{
 			Name:      "shared-name",
 			Type:      protocol.ProxyTypeHTTP,
 			Domain:    "dup.example.com",
@@ -389,6 +389,68 @@ func TestDomainConflictBetweenTunnels(t *testing.T) {
 			t.Fatalf("conflict name should include clientID to avoid ambiguity, got %v", conflicts)
 		}
 	})
+}
+
+func seedStoredTunnelWithoutResourceLock(t *testing.T, s *Server, clientID string, req protocol.ProxyNewRequest, status string) {
+	t.Helper()
+
+	if s.store == nil {
+		t.Fatal("test setup error: s.store must not be nil")
+	}
+	if req.LocalIP == "" {
+		req.LocalIP = "127.0.0.1"
+	}
+	if req.LocalPort == 0 {
+		req.LocalPort = 8080
+	}
+
+	desiredState := protocol.ProxyDesiredStateRunning
+	runtimeState := protocol.ProxyRuntimeStateExposed
+	switch status {
+	case protocol.ProxyStatusPending:
+		runtimeState = protocol.ProxyRuntimeStatePending
+	case protocol.ProxyStatusActive:
+		runtimeState = protocol.ProxyRuntimeStateExposed
+	case protocol.ProxyStatusStopped:
+		desiredState = protocol.ProxyDesiredStateStopped
+		runtimeState = protocol.ProxyRuntimeStateIdle
+	case protocol.ProxyStatusError:
+		runtimeState = protocol.ProxyRuntimeStateError
+	default:
+		t.Fatalf("unknown test status: %s", status)
+	}
+
+	tunnel := StoredTunnel{
+		ProxyNewRequest: req,
+		DesiredState:    desiredState,
+		RuntimeState:    runtimeState,
+		ClientID:        clientID,
+		Hostname:        clientID + ".local",
+		Binding:         TunnelBindingClientID,
+	}
+	if tunnel.ID == "" {
+		tunnel.ID = generateUUID()
+	}
+	if err := tunnel.normalize(); err != nil {
+		t.Fatalf("failed to normalize test tunnel: %v", err)
+	}
+
+	s.store.mu.Lock()
+	defer s.store.mu.Unlock()
+
+	tx, err := s.store.db.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin test tunnel insert: %v", err)
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	if err := insertTunnelTx(tx, tunnel); err != nil {
+		t.Fatalf("failed to write test tunnel without resource lock: %v", err)
+	}
+	if err := commitTx(tx, &committed); err != nil {
+		t.Fatalf("failed to commit test tunnel without resource lock: %v", err)
+	}
 }
 
 func TestIsNetsgoControlRequest(t *testing.T) {

@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"testing"
@@ -167,6 +166,61 @@ func TestCloseAndReopenProxyRuntime_UDP(t *testing.T) {
 	_ = sConn.Close()
 }
 
+func TestUDPProxySessionBoundsAndOldestEviction(t *testing.T) {
+	if MaxUDPSessions != 4096 {
+		t.Fatalf("UDP session cap: want 4096, got %d", MaxUDPSessions)
+	}
+	if UDPSessionTimeout != 2*time.Minute {
+		t.Fatalf("UDP session timeout: want 2m, got %s", UDPSessionTimeout)
+	}
+
+	state := &UDPProxyState{
+		sessionIPs: make(map[string]int),
+		done:       make(chan struct{}),
+	}
+	oldStream, oldPeer := net.Pipe()
+	newStream, newPeer := net.Pipe()
+	t.Cleanup(func() {
+		_ = oldStream.Close()
+		_ = oldPeer.Close()
+		_ = newStream.Close()
+		_ = newPeer.Close()
+	})
+
+	oldSession := &UDPSession{
+		srcAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10001},
+		ipKey:   "127.0.0.1",
+		stream:  oldStream,
+		done:    make(chan struct{}),
+	}
+	newSession := &UDPSession{
+		srcAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10002},
+		ipKey:   "127.0.0.1",
+		stream:  newStream,
+		done:    make(chan struct{}),
+	}
+	oldSession.lastActive.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+	newSession.lastActive.Store(time.Now().Add(-time.Second).UnixNano())
+	state.storeSession(oldSession.srcAddr.String(), oldSession)
+	state.storeSession(newSession.srcAddr.String(), newSession)
+
+	if !state.removeOldestSession() {
+		t.Fatal("expected oldest UDP session to be evicted")
+	}
+	if _, ok := state.sessions.Load(oldSession.srcAddr.String()); ok {
+		t.Fatal("oldest UDP session was not removed")
+	}
+	if _, ok := state.sessions.Load(newSession.srcAddr.String()); !ok {
+		t.Fatal("newer UDP session should remain")
+	}
+	if got := state.sessionCount.Load(); got != 1 {
+		t.Fatalf("session count: want 1, got %d", got)
+	}
+	if got := state.sessionCountForIP("127.0.0.1"); got != 1 {
+		t.Fatalf("per-IP session count: want 1, got %d", got)
+	}
+}
+
 func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	s := New(0)
 	clientID := "udp-e2e-client"
@@ -208,6 +262,7 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 	client.dataSession = serverSession
 	defer mustClose(t, serverSession)
 	defer mustClose(t, clientSession)
+	tunnelName := "udp-e2e-tunnel"
 
 	go func() {
 		for {
@@ -217,11 +272,10 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 			}
 			go func(s *yamux.Stream) {
 				defer func() { _ = s.Close() }()
-				var lenBuf [2]byte
-				_, _ = io.ReadFull(s, lenBuf[:])
-				nameLen := int(lenBuf[0])<<8 | int(lenBuf[1])
-				nameBuf := make([]byte, nameLen)
-				_, _ = io.ReadFull(s, nameBuf)
+				header, err := protocol.DecodeDataStreamHeader(s)
+				if err != nil || header.TunnelID != tunnelName {
+					return
+				}
 				localConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", echoPort))
 				if err != nil {
 					return
@@ -231,9 +285,7 @@ func TestUDPProxy_E2E_ForwardAndReply(t *testing.T) {
 			}(stream)
 		}
 	}()
-
-	tunnelName := "udp-e2e-tunnel"
-	req := protocol.ProxyNewRequest{Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
+	req := protocol.ProxyNewRequest{ID: tunnelName, Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
 	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("Failed to start UDP proxy: %v", err)
 	}
@@ -309,6 +361,7 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 	client.dataSession = serverSession
 	defer mustClose(t, serverSession)
 	defer mustClose(t, clientSession)
+	tunnelName := "udp-traffic-tunnel"
 
 	go func() {
 		for {
@@ -318,11 +371,10 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 			}
 			go func(s *yamux.Stream) {
 				defer func() { _ = s.Close() }()
-				var lenBuf [2]byte
-				_, _ = io.ReadFull(s, lenBuf[:])
-				nameLen := int(lenBuf[0])<<8 | int(lenBuf[1])
-				nameBuf := make([]byte, nameLen)
-				_, _ = io.ReadFull(s, nameBuf)
+				header, err := protocol.DecodeDataStreamHeader(s)
+				if err != nil || header.TunnelID != tunnelName {
+					return
+				}
 				localConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", echoPort))
 				if err != nil {
 					return
@@ -332,9 +384,7 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 			}(stream)
 		}
 	}()
-
-	tunnelName := "udp-traffic-tunnel"
-	req := protocol.ProxyNewRequest{Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
+	req := protocol.ProxyNewRequest{ID: tunnelName, Name: tunnelName, Type: protocol.ProxyTypeUDP, LocalIP: "127.0.0.1", LocalPort: echoPort, RemotePort: reserveUDPPort(t)}
 	if err := s.StartProxy(client, req); err != nil {
 		t.Fatalf("Failed to start UDP proxy: %v", err)
 	}
@@ -364,9 +414,26 @@ func TestUDPProxyTrafficAccounting_RecordsPayloadBytesOnly(t *testing.T) {
 		t.Fatalf("unexpected UDP echo reply: want %q, got %q", payload, reply[:n])
 	}
 
-	s.flushTrafficObservations()
-	result := mustQueryTraffic(t, trafficStore, clientID, tunnelName, time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
+	var result TrafficQueryResult
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.flushTrafficObservations()
+		result = mustQueryWithResolution(t, trafficStore, clientID, tunnelName, time.Now().Add(-time.Minute), time.Now().Add(time.Minute), TrafficResolutionMinute)
+		if len(result.Items) == 1 && len(result.Items[0].Points) == 1 {
+			point := result.Items[0].Points[0]
+			if point.IngressBytes == uint64(len(payload)) && point.EgressBytes == uint64(len(payload)) {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(result.Items) != 1 {
+		for i, item := range result.Items {
+			t.Logf("traffic item %d: id=%q name=%q type=%q points=%+v", i, item.TunnelID, item.TunnelName, item.TunnelType, item.Points)
+		}
 		t.Fatalf("traffic items: want 1, got %d", len(result.Items))
 	}
 	points := result.Items[0].Points

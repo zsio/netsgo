@@ -100,7 +100,7 @@ func ComputeCheckResult(idx *ReleaseIndex, currentVersion, installMethod, cacheS
 
 func BuildUpgradeCommands(channel string) *Commands {
 	return &Commands{
-		Domestic: fmt.Sprintf("curl -fsSL https://cnb.cool/zsio/netsgo/-/git/raw/main/scripts/upgrade.sh | sh -s -- --source cnb --channel %s -y", channel),
+		Domestic: fmt.Sprintf("curl -fsSL https://netsgo.zs.uy/upgrade.sh | sh -s -- --source cnb --channel %s -y", channel),
 		Global:   fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/zsio/netsgo/main/scripts/upgrade.sh | sh -s -- --source github --channel %s -y", channel),
 	}
 }

@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +13,30 @@ import (
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
+
+func encodeDataStreamHeader(t *testing.T, header protocol.DataStreamHeader) []byte {
+	t.Helper()
+	payload, err := protocol.WriteDataStreamHeaderToBytes(header)
+	if err != nil {
+		t.Fatalf("failed to encode data stream header: %v", err)
+	}
+	return payload
+}
+
+func testDataStreamHeader(tunnelID string) protocol.DataStreamHeader {
+	return protocol.DataStreamHeader{
+		Kind:             protocol.DataStreamHeaderKindTunnelStream,
+		TunnelID:         tunnelID,
+		Revision:         1,
+		StreamID:         "stream-" + tunnelID,
+		OpenClientID:     "server",
+		SourceRole:       protocol.DataStreamRoleServer,
+		TargetRole:       protocol.DataStreamRoleTarget,
+		Direction:        protocol.DataStreamDirectionIngressToTarget,
+		Transport:        protocol.ActualTransportServerRelay,
+		ServerAuthorized: true,
+	}
+}
 
 func TestClient_HandleStream_Success(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,6 +53,7 @@ func TestClient_HandleStream_Success(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	proxyName := "test-backend"
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:        proxyName,
 		Name:      proxyName,
 		LocalIP:   "127.0.0.1",
 		LocalPort: localPort,
@@ -57,11 +81,7 @@ func TestClient_HandleStream_Success(t *testing.T) {
 			return
 		}
 
-		nameBytes := []byte(proxyName)
-		var lenBuf [2]byte
-		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
-		mustWriteAll(t, serverStream, lenBuf[:])
-		mustWriteAll(t, serverStream, nameBytes)
+		mustWriteAll(t, serverStream, encodeDataStreamHeader(t, testDataStreamHeader(proxyName)))
 		mustWriteAll(t, serverStream, []byte("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
 	}()
 
@@ -116,6 +136,7 @@ func TestClient_HandleStream_HTTPProxy_ReusesTCPPath(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	proxyName := "http-backend"
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:        proxyName,
 		Name:      proxyName,
 		Type:      protocol.ProxyTypeHTTP,
 		LocalIP:   "127.0.0.1",
@@ -145,11 +166,7 @@ func TestClient_HandleStream_HTTPProxy_ReusesTCPPath(t *testing.T) {
 			return
 		}
 
-		nameBytes := []byte(proxyName)
-		var lenBuf [2]byte
-		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
-		mustWriteAll(t, serverStream, lenBuf[:])
-		mustWriteAll(t, serverStream, nameBytes)
+		mustWriteAll(t, serverStream, encodeDataStreamHeader(t, testDataStreamHeader(proxyName)))
 		mustWriteAll(t, serverStream, []byte("GET / HTTP/1.1\r\nHost: app.example.com\r\n\r\n"))
 	}()
 
@@ -210,7 +227,7 @@ func TestClient_HandleStream_InvalidHeader(t *testing.T) {
 			errCh <- err
 			return
 		}
-		if _, err := stream.Write([]byte{0x00, 0x00}); err != nil {
+		if _, err := stream.Write([]byte("BAD!")); err != nil {
 			_ = stream.Close()
 			errCh <- err
 			return
@@ -233,6 +250,7 @@ func TestClient_HandleStream_DialFail(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	proxyName := "fail-proxy"
 	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:        proxyName,
 		Name:      proxyName,
 		LocalIP:   "127.0.0.1",
 		LocalPort: 99999,
@@ -254,11 +272,7 @@ func TestClient_HandleStream_DialFail(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		stream, _ := serverSession.Open()
-		nameBytes := []byte(proxyName)
-		var lenBuf [2]byte
-		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
-		mustWriteAll(t, stream, lenBuf[:])
-		mustWriteAll(t, stream, nameBytes)
+		mustWriteAll(t, stream, encodeDataStreamHeader(t, testDataStreamHeader(proxyName)))
 
 		buf := make([]byte, 10)
 		_, err := stream.Read(buf)
@@ -272,4 +286,124 @@ func TestClient_HandleStream_DialFail(t *testing.T) {
 	c.handleStream(stream)
 
 	wg.Wait()
+}
+
+func TestClient_HandleStream_RejectsStaleRevisionAndWrongRoles(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	proxyName := "guarded-proxy"
+	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:                proxyName,
+		Name:              proxyName,
+		LocalIP:           "127.0.0.1",
+		LocalPort:         1,
+		TransportPolicy:   protocol.TransportPolicyServerRelayOnly,
+		ActualTransport:   protocol.ActualTransportServerRelay,
+		ProvisionRevision: 3,
+	})
+
+	valid := testDataStreamHeader(proxyName)
+	valid.Revision = 3
+	for name, mutate := range map[string]func(*protocol.DataStreamHeader){
+		"stale revision": func(header *protocol.DataStreamHeader) { header.Revision = 2 },
+		"wrong transport": func(header *protocol.DataStreamHeader) {
+			header.Transport = protocol.ActualTransportPeerDirect
+			header.ServerAuthorized = true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clientConn, serverConn := net.Pipe()
+			defer mustClose(t, clientConn)
+			defer mustClose(t, serverConn)
+
+			clientSession, err := mux.NewClientSession(clientConn, mux.DefaultConfig())
+			if err != nil {
+				t.Fatalf("client session: %v", err)
+			}
+			defer mustClose(t, clientSession)
+			serverSession, err := mux.NewServerSession(serverConn, mux.DefaultConfig())
+			if err != nil {
+				t.Fatalf("server session: %v", err)
+			}
+			defer mustClose(t, serverSession)
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				stream, err := serverSession.Open()
+				if err != nil {
+					return
+				}
+				defer func() { _ = stream.Close() }()
+				header := valid
+				mutate(&header)
+				mustWriteAll(t, stream, encodeDataStreamHeader(t, header))
+			}()
+
+			stream, err := clientSession.AcceptStream()
+			if err != nil {
+				t.Fatalf("accept stream: %v", err)
+			}
+			c.handleStream(stream)
+
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("server stream did not close after rejected header")
+			}
+		})
+	}
+}
+
+func TestClient_HandleStream_RejectsDirectOnlyRelayStream(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	proxyName := "direct-only-proxy"
+	c.proxies.Store(proxyName, protocol.ProxyNewRequest{
+		ID:                proxyName,
+		Name:              proxyName,
+		LocalIP:           "127.0.0.1",
+		LocalPort:         1,
+		TransportPolicy:   protocol.TransportPolicyDirectOnly,
+		ActualTransport:   protocol.ActualTransportServerRelay,
+		ProvisionRevision: 3,
+	})
+
+	clientConn, serverConn := net.Pipe()
+	defer mustClose(t, clientConn)
+	defer mustClose(t, serverConn)
+
+	clientSession, err := mux.NewClientSession(clientConn, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("client session: %v", err)
+	}
+	defer mustClose(t, clientSession)
+	serverSession, err := mux.NewServerSession(serverConn, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("server session: %v", err)
+	}
+	defer mustClose(t, serverSession)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		stream, err := serverSession.Open()
+		if err != nil {
+			return
+		}
+		defer func() { _ = stream.Close() }()
+		header := testDataStreamHeader(proxyName)
+		header.Revision = 3
+		mustWriteAll(t, stream, encodeDataStreamHeader(t, header))
+	}()
+
+	stream, err := clientSession.AcceptStream()
+	if err != nil {
+		t.Fatalf("accept stream: %v", err)
+	}
+	c.handleStream(stream)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server stream did not close after direct_only relay rejection")
+	}
 }

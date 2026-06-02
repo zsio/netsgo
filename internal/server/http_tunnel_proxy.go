@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -73,6 +72,7 @@ type httpTunnelRoute struct {
 func (r httpTunnelRoute) serviceable() bool {
 	return r.client != nil &&
 		r.client.isLive() &&
+		clientHasDataSession(r.client) &&
 		isTunnelExposed(r.config)
 }
 
@@ -204,25 +204,6 @@ func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool, error)
 	if ok {
 		return serverRoute, true, nil
 	}
-	if s.store == nil {
-		return httpTunnelRoute{}, false, nil
-	}
-
-	allTunnels, err := s.store.GetAllTunnels()
-	if err != nil {
-		return httpTunnelRoute{}, false, fmt.Errorf("load persisted tunnels for HTTP route matching: %w", err)
-	}
-	for _, stored := range allTunnels {
-		if stored.Type != protocol.ProxyTypeHTTP {
-			continue
-		}
-		if canonicalHost(stored.Domain) != canonical {
-			continue
-		}
-		return httpTunnelRoute{
-			config: storedTunnelToProxyConfig(stored),
-		}, true, nil
-	}
 
 	return httpTunnelRoute{}, false, nil
 }
@@ -239,10 +220,14 @@ func (s *Server) findRuntimeHTTPRoute(host string) (httpTunnelRoute, bool) {
 			if canonicalHost(tunnel.Config.Domain) != host {
 				return true
 			}
-			route = httpTunnelRoute{
+			candidate := httpTunnelRoute{
 				config: tunnel.Config,
 				client: client,
 			}
+			if !candidate.serviceable() {
+				return true
+			}
+			route = candidate
 			found = true
 			return false
 		})
@@ -300,11 +285,7 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 			pr.Out.Header = headers
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			status := http.StatusBadGateway
-			if isHTTPRouteUnavailable(err) {
-				status = http.StatusServiceUnavailable
-			}
-			http.Error(w, http.StatusText(status), status)
+			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		},
 	}
 
@@ -312,16 +293,6 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 
 	if cc != nil {
 		ingressBytes, egressBytes := cc.ingressEgressBytes()
-		s.recordTraffic(route.client.ID, route.config.Name, route.config.Type, ingressBytes, egressBytes)
+		s.recordTunnelTraffic(route.client.ID, route.config, ingressBytes, egressBytes)
 	}
-}
-
-func isHTTPRouteUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return errors.Is(err, context.Canceled) ||
-		strings.Contains(msg, "is not online") ||
-		strings.Contains(msg, "data channel not established")
 }

@@ -1,6 +1,213 @@
 package protocol
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
+
+// Unified tunnel enum values. The tunnel architecture is modeled as
+// TunnelSpec = Ingress + Target + Transport. Future endpoint examples such as
+// unix_socket/static_file/serial_device are intentionally not enum values here.
+const (
+	TunnelSpecVersion = 1
+
+	TunnelTopologyServerExpose   = "server_expose"
+	TunnelTopologyClientToClient = "client_to_client"
+
+	EndpointLocationServer = "server"
+	EndpointLocationClient = "client"
+
+	IngressTypeTCPListen = "tcp_listen"
+	IngressTypeUDPListen = "udp_listen"
+	IngressTypeHTTPHost  = "http_host"
+
+	TargetTypeTCPService = "tcp_service"
+	TargetTypeUDPService = "udp_service"
+
+	TransportPolicyServerRelayOnly = "server_relay_only"
+	TransportPolicyDirectPreferred = "direct_preferred"
+	TransportPolicyDirectOnly      = "direct_only"
+
+	ActualTransportUnknown     = "unknown"
+	ActualTransportServerRelay = "server_relay"
+	ActualTransportPeerDirect  = "peer_direct"
+	ActualTransportTURNRelay   = "turn_relay"
+
+	TunnelDesiredStateRunning = "running"
+	TunnelDesiredStateStopped = "stopped"
+
+	TunnelRuntimeStatePending = "pending"
+	TunnelRuntimeStateActive  = "active"
+	TunnelRuntimeStateOffline = "offline"
+	TunnelRuntimeStateIdle    = "idle"
+	TunnelRuntimeStateError   = "error"
+
+	ParticipantStateUnknown           = "unknown"
+	ParticipantStateOffline           = "offline"
+	ParticipantStateProvisionPending  = "provision_pending"
+	ParticipantStateProvisionRejected = "provision_rejected"
+	ParticipantStateReady             = "ready"
+	ParticipantStateIdle              = "idle"
+	ParticipantStateError             = "error"
+	ParticipantStateListening         = "listening"
+	ParticipantStateListenFailed      = "listen_failed"
+	ParticipantStateTargetReady       = "target_ready"
+	ParticipantStateTargetFailed      = "target_failed"
+
+	P2PStateIdle      = "idle"
+	P2PStateGathering = "gathering"
+	P2PStateChecking  = "checking"
+	P2PStateConnected = "connected"
+	P2PStateFailed    = "failed"
+	P2PStateFallback  = "fallback"
+	P2PStateClosed    = "closed"
+
+	P2PImplWebRTCICE = "webrtc_ice"
+)
+
+// EndpointSpec describes where traffic enters or exits a tunnel.
+type EndpointSpec struct {
+	Location string          `json:"location"`
+	ClientID string          `json:"client_id,omitempty"`
+	Type     string          `json:"type"`
+	Config   json.RawMessage `json:"config"`
+}
+
+// P2PState describes the currently selected peer-direct session state.
+type P2PState struct {
+	State     string `json:"state"`
+	Error     string `json:"error,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// ParticipantRuntime records the runtime state for one tunnel participant.
+type ParticipantRuntime struct {
+	ClientID string `json:"client_id"`
+	Role     string `json:"role"`
+	State    string `json:"state"`
+	Revision int64  `json:"revision"`
+	Error    string `json:"error,omitempty"`
+}
+
+// TunnelParticipants groups ingress and target participant runtime state.
+type TunnelParticipants struct {
+	Ingress ParticipantRuntime `json:"ingress"`
+	Target  ParticipantRuntime `json:"target"`
+}
+
+// TransportRuntime describes the effective transport path for a tunnel.
+type TransportRuntime struct {
+	Policy          string    `json:"policy"`
+	Actual          string    `json:"actual"`
+	P2PState        string    `json:"p2p_state,omitempty"`
+	P2PError        string    `json:"p2p_error,omitempty"`
+	FallbackSince   time.Time `json:"fallback_since,omitempty"`
+	LastDirectOK    time.Time `json:"last_direct_ok,omitempty"`
+	LastDirectError string    `json:"last_direct_error,omitempty"`
+}
+
+// TunnelIssue records a current NetsGo-owned runtime/provisioning/resource
+// problem for a tunnel. Issues are projected from live facts and in-memory
+// runtime state; they are not persisted as authoritative storage state.
+type TunnelIssue struct {
+	Code       string          `json:"code"`
+	Scope      string          `json:"scope"`
+	ClientID   string          `json:"client_id,omitempty"`
+	Severity   string          `json:"severity"`
+	Message    string          `json:"message"`
+	Retryable  bool            `json:"retryable"`
+	ObservedAt time.Time       `json:"observed_at"`
+	Details    json.RawMessage `json:"details,omitempty"`
+}
+
+// Stable tunnel issue codes emitted by server/client runtime paths.
+const (
+	TunnelIssueCodeRuntimeReport          = "runtime_report"
+	TunnelIssueCodeCapabilityNotSupported = "capability_not_supported"
+	TunnelIssueCodeIngressPortInUse       = "ingress_port_in_use"
+	TunnelIssueCodeIngressListenFailed    = "ingress_listen_failed"
+	TunnelIssueCodeIngressRouteFailed     = "ingress_route_failed"
+	TunnelIssueCodeProvisionAckTimeout    = "provision_ack_timeout"
+	TunnelIssueCodeProvisionAckRejected   = "provision_ack_rejected"
+	TunnelIssueCodeProvisionAckCancelled  = "provision_ack_cancelled"
+	TunnelIssueCodeTargetStreamOpenFailed = "target_stream_open_failed"
+)
+
+// TunnelSpec is the canonical tunnel payload used by API, protocol, storage,
+// runtime and events.
+type TunnelSpec struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Revision int64  `json:"revision"`
+
+	Topology      string `json:"topology"`
+	OwnerClientID string `json:"owner_client_id"`
+
+	Ingress EndpointSpec `json:"ingress"`
+	Target  EndpointSpec `json:"target"`
+
+	TransportPolicy string `json:"transport_policy"`
+	ActualTransport string `json:"actual_transport"`
+
+	P2P P2PState `json:"p2p"`
+
+	DesiredState string        `json:"desired_state"`
+	RuntimeState string        `json:"runtime_state"`
+	Error        string        `json:"error,omitempty"`
+	Issues       []TunnelIssue `json:"issues,omitempty"`
+
+	Participants TunnelParticipants `json:"participants,omitempty"`
+	Transport    TransportRuntime   `json:"transport,omitempty"`
+
+	BandwidthSettings BandwidthSettings `json:"bandwidth_settings"`
+
+	CreatedByUserID string              `json:"created_by_user_id,omitempty"`
+	CreatedAt       time.Time           `json:"created_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
+	Capabilities    *TunnelCapabilities `json:"capabilities,omitempty"`
+}
+
+// ClientTunnelRole selects the relationship used for client-scoped tunnel lists.
+const (
+	ClientTunnelRoleOwner   = "owner"
+	ClientTunnelRoleIngress = "ingress"
+	ClientTunnelRoleTarget  = "target"
+	ClientTunnelRoleRelated = "related"
+)
+
+// P2PCapabilities describes a client's peer-direct implementation.
+type P2PCapabilities struct {
+	Supported    bool   `json:"supported"`
+	Impl         string `json:"impl,omitempty"`
+	SupportsIPv6 bool   `json:"supports_ipv6,omitempty"`
+	SupportsTURN bool   `json:"supports_turn,omitempty"`
+}
+
+// ClientCapabilities is reported during auth and persisted as the latest known
+// tunnel capability set for offline validation.
+type ClientCapabilities struct {
+	ProtocolVersion     int             `json:"protocol_version"`
+	StreamHeaderVersion int             `json:"stream_header_version"`
+	TunnelSpecVersion   int             `json:"tunnel_spec_version"`
+	IngressTypes        []string        `json:"ingress_types"`
+	TargetTypes         []string        `json:"target_types"`
+	TransportPolicies   []string        `json:"transport_policies"`
+	P2P                 P2PCapabilities `json:"p2p"`
+}
+
+// DefaultClientCapabilities returns the capabilities implemented by this client
+// binary without advertising future-only endpoint types.
+func DefaultClientCapabilities() ClientCapabilities {
+	return ClientCapabilities{
+		ProtocolVersion:     1,
+		StreamHeaderVersion: 1,
+		TunnelSpecVersion:   TunnelSpecVersion,
+		IngressTypes:        []string{IngressTypeTCPListen, IngressTypeUDPListen},
+		TargetTypes:         []string{TargetTypeTCPService, TargetTypeUDPService},
+		TransportPolicies:   []string{TransportPolicyServerRelayOnly},
+		P2P:                 P2PCapabilities{Supported: false},
+	}
+}
 
 // BandwidthSettings carries directional payload-byte-per-second limits.
 // A zero value means unlimited.
@@ -16,14 +223,15 @@ type UpdateCapability struct {
 
 // ClientInfo 描述一个 Client 的基本信息，在认证时发送给 Server
 type ClientInfo struct {
-	Hostname         string            `json:"hostname"`                    // 主机名
-	OS               string            `json:"os"`                          // 操作系统 (windows/linux/darwin)
-	Arch             string            `json:"arch"`                        // CPU 架构 (amd64/arm64)
-	IP               string            `json:"ip"`                          // Client 本地 IP 地址
-	Version          string            `json:"version"`                     // Client 版本号
-	UpdateCapability *UpdateCapability `json:"update_capability,omitempty"` // 更新能力
-	PublicIPv4       string            `json:"public_ipv4,omitempty"`       // 公网 IPv4
-	PublicIPv6       string            `json:"public_ipv6,omitempty"`       // 公网 IPv6
+	Hostname         string              `json:"hostname"`                    // 主机名
+	OS               string              `json:"os"`                          // 操作系统 (windows/linux/darwin)
+	Arch             string              `json:"arch"`                        // CPU 架构 (amd64/arm64)
+	IP               string              `json:"ip"`                          // Client 本地 IP 地址
+	Version          string              `json:"version"`                     // Client 版本号
+	UpdateCapability *UpdateCapability   `json:"update_capability,omitempty"` // 更新能力
+	Capabilities     *ClientCapabilities `json:"capabilities,omitempty"`      // TunnelSpec 能力
+	PublicIPv4       string              `json:"public_ipv4,omitempty"`       // 公网 IPv4
+	PublicIPv6       string              `json:"public_ipv6,omitempty"`       // 公网 IPv6
 }
 
 // DiskPartition 描述单个磁盘分区的使用情况
@@ -71,12 +279,23 @@ type TunnelCapabilities struct {
 type ProxyConfig struct {
 	ID                string              `json:"id"`          // 隧道稳定 ID（管理面唯一标识）
 	Name              string              `json:"name"`        // 隧道名称（唯一标识）
+	Revision          int64               `json:"revision"`    // 管理面规格修订号
 	Type              string              `json:"type"`        // 隧道类型: tcp, udp, http
 	LocalIP           string              `json:"local_ip"`    // 内网目标服务 IP
 	LocalPort         int                 `json:"local_port"`  // 内网目标服务端口
 	RemotePort        int                 `json:"remote_port"` // 公网暴露端口
 	Domain            string              `json:"domain"`      // HTTP 类型时的域名
 	ClientID          string              `json:"client_id"`   // 所属 Client ID
+	Topology          string              `json:"topology,omitempty"`
+	OwnerClientID     string              `json:"owner_client_id,omitempty"`
+	Ingress           *EndpointSpec       `json:"ingress,omitempty"`
+	Target            *EndpointSpec       `json:"target,omitempty"`
+	TransportPolicy   string              `json:"transport_policy,omitempty"`
+	ActualTransport   string              `json:"actual_transport,omitempty"`
+	P2P               *P2PState           `json:"p2p,omitempty"`
+	Issues            []TunnelIssue       `json:"issues,omitempty"`
+	Participants      *TunnelParticipants `json:"participants,omitempty"`
+	Transport         *TransportRuntime   `json:"transport,omitempty"`
 	BandwidthSettings                     // 聚合带宽限制（payload bytes/sec，0 = unlimited）
 	CreatedAt         time.Time           `json:"created_at"`             // 创建时间
 	DesiredState      string              `json:"desired_state"`          // 用户目标状态: running, stopped
@@ -95,6 +314,8 @@ func (c ProxyConfig) ToProxyNewRequest() ProxyNewRequest {
 		LocalPort:         c.LocalPort,
 		RemotePort:        c.RemotePort,
 		Domain:            c.Domain,
+		TransportPolicy:   c.TransportPolicy,
+		ActualTransport:   c.ActualTransport,
 		BandwidthSettings: c.BandwidthSettings,
 	}
 }
@@ -117,10 +338,22 @@ const (
 
 // Tunnel mutation error code constants used by the admin HTTP API.
 const (
-	TunnelMutationErrorCodeDomainInvalid      = "domain_invalid"
-	TunnelMutationErrorCodeServerAddrConflict = "server_addr_conflict"
-	TunnelMutationErrorCodeHTTPTunnelConflict = "http_tunnel_conflict"
-	TunnelMutationErrorCodeTunnelBusy         = "tunnel_busy"
+	TunnelMutationErrorCodeDomainInvalid              = "domain_invalid"
+	TunnelMutationErrorCodeServerAddrConflict         = "server_addr_conflict"
+	TunnelMutationErrorCodeHTTPTunnelConflict         = "http_tunnel_conflict"
+	TunnelMutationErrorCodeTunnelBusy                 = "tunnel_busy"
+	TunnelMutationErrorCodeUnknownClient              = "unknown_client"
+	TunnelMutationErrorCodeCapabilityNotSupported     = "capability_not_supported"
+	TunnelMutationErrorCodeSameIngressAndTargetClient = "same_ingress_and_target_client"
+	TunnelMutationErrorCodeInvalidBindIP              = "invalid_bind_ip"
+	TunnelMutationErrorCodeIngressResourceConflict    = "ingress_resource_conflict"
+	TunnelMutationErrorCodeIngressPreflightTimeout    = "ingress_preflight_timeout"
+	TunnelMutationErrorCodeIngressPreflightRejected   = "ingress_preflight_rejected"
+	TunnelMutationErrorCodeIngressPortInUse           = "ingress_port_in_use"
+	TunnelMutationErrorCodeDirectTransportUnavailable = "direct_transport_unavailable"
+	TunnelMutationErrorCodeUnsupportedTopology        = "unsupported_topology"
+	TunnelMutationErrorCodeUnsupportedEndpointType    = "unsupported_endpoint_type"
+	TunnelMutationErrorCodeRevisionConflict           = "revision_conflict"
 )
 
 // WebSocket 子协议常量
@@ -155,5 +388,7 @@ const (
 // StreamHeader 每个 yamux stream 开头发送的头部
 // Server 打开 stream 后写入此头部，告诉 Client 这个 stream 属于哪条代理隧道
 type StreamHeader struct {
-	ProxyName string `json:"proxy_name"`
+	ProxyName       string `json:"proxy_name"`
+	TransportPolicy string `json:"transport_policy,omitempty"`
+	ActualTransport string `json:"actual_transport,omitempty"`
 }

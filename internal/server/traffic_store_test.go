@@ -74,20 +74,32 @@ func findSeriesWithType(t *testing.T, result TrafficQueryResult, tunnelName, tun
 	return TunnelTrafficSeries{}
 }
 
+func findSeriesWithID(t *testing.T, result TrafficQueryResult, tunnelID string) TunnelTrafficSeries {
+	t.Helper()
+	for _, item := range result.Items {
+		if item.TunnelID == tunnelID {
+			return item
+		}
+	}
+	t.Fatalf("Tunnel id=%s not found in %+v", tunnelID, result.Items)
+	return TunnelTrafficSeries{}
+}
+
 func mustInsertTrafficBucket(t *testing.T, store *TrafficStore, bucket TrafficBucket) {
 	t.Helper()
 
-	if _, err := store.db.Exec(`INSERT INTO traffic_buckets (client_id, tunnel_name, tunnel_type, resolution, bucket_start, ingress_bytes, egress_bytes)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		bucket.ClientID,
-		bucket.TunnelName,
-		bucket.TunnelType,
-		string(bucket.Resolution),
-		bucket.BucketStart,
-		int64(bucket.IngressBytes),
-		int64(bucket.EgressBytes),
-	); err != nil {
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin traffic insert transaction: %v", err)
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	if err := upsertTrafficBucketReplace(tx, bucket); err != nil {
 		t.Fatalf("failed to insert traffic bucket: %v", err)
+	}
+	if err := commitTx(tx, &committed); err != nil {
+		t.Fatalf("failed to commit traffic bucket: %v", err)
 	}
 }
 
@@ -813,16 +825,19 @@ func TestTrafficStore_RenameTunnelMergesPendingAndRealtimeBuckets(t *testing.T) 
 
 	from := time.Unix(secondStart, 0).Add(-time.Second)
 	to := time.Unix(secondStart, 0).Add(time.Second)
-	secondResult := mustQueryWithResolution(t, ts, "c1", "new", from, to, TrafficResolutionSecond)
-	secondSeries := mustSingleSeries(t, secondResult, "new")
-	if len(secondSeries.Points) != 1 || secondSeries.Points[0].IngressBytes != 17 || secondSeries.Points[0].EgressBytes != 7 {
-		t.Fatalf("realtime buckets should be merged under new name, got %+v", secondSeries.Points)
-	}
-
-	minuteResult := mustQueryWithResolution(t, ts, "c1", "new", from, to, TrafficResolutionMinute)
-	minuteSeries := mustSingleSeries(t, minuteResult, "new")
-	if len(minuteSeries.Points) != 1 || minuteSeries.Points[0].IngressBytes != 17 || minuteSeries.Points[0].EgressBytes != 7 {
-		t.Fatalf("pending minute buckets should be merged under new name, got %+v", minuteSeries.Points)
+	for _, resolution := range []TrafficResolution{TrafficResolutionSecond, TrafficResolutionMinute} {
+		result := mustQueryWithResolution(t, ts, "c1", "new", from, to, resolution)
+		if len(result.Items) != 2 {
+			t.Fatalf("%s stable tunnel-id histories should remain separate after display-name convergence, got %+v", resolution, result.Items)
+		}
+		renamedOld := findSeriesWithID(t, result, fallbackTrafficTunnelID("c1", "old", "tcp"))
+		if renamedOld.TunnelName != "new" || len(renamedOld.Points) != 1 || renamedOld.Points[0].IngressBytes != 10 || renamedOld.Points[0].EgressBytes != 4 {
+			t.Fatalf("renamed old %s history mismatch: %+v", resolution, renamedOld)
+		}
+		existingNew := findSeriesWithID(t, result, fallbackTrafficTunnelID("c1", "new", "tcp"))
+		if existingNew.TunnelName != "new" || len(existingNew.Points) != 1 || existingNew.Points[0].IngressBytes != 7 || existingNew.Points[0].EgressBytes != 3 {
+			t.Fatalf("existing new %s history mismatch: %+v", resolution, existingNew)
+		}
 	}
 	oldResult := mustQueryWithResolution(t, ts, "c1", "old", from, to, TrafficResolutionMinute)
 	if len(oldResult.Items) != 0 {
@@ -843,13 +858,20 @@ func TestTrafficStore_RenameTunnelMergesPersistedBuckets(t *testing.T) {
 	}
 
 	result := mustQueryWithResolution(t, ts, "c1", "new", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
-	series := mustSingleSeries(t, result, "new")
-	if len(series.Points) != 1 || series.Points[0].IngressBytes != 17 || series.Points[0].EgressBytes != 7 {
-		t.Fatalf("persisted buckets should be merged under new name, got %+v", series.Points)
+	if len(result.Items) != 2 {
+		t.Fatalf("stable tunnel-id histories should remain separate after display-name convergence, got %+v", result.Items)
+	}
+	renamedOld := findSeriesWithID(t, result, fallbackTrafficTunnelID("c1", "old", "tcp"))
+	if renamedOld.TunnelName != "new" || len(renamedOld.Points) != 1 || renamedOld.Points[0].IngressBytes != 10 || renamedOld.Points[0].EgressBytes != 4 {
+		t.Fatalf("renamed old tunnel history mismatch: %+v", renamedOld)
+	}
+	existingNew := findSeriesWithID(t, result, fallbackTrafficTunnelID("c1", "new", "tcp"))
+	if existingNew.TunnelName != "new" || len(existingNew.Points) != 1 || existingNew.Points[0].IngressBytes != 7 || existingNew.Points[0].EgressBytes != 3 {
+		t.Fatalf("existing new tunnel history mismatch: %+v", existingNew)
 	}
 	oldResult := mustQueryWithResolution(t, ts, "c1", "old", now.Add(-time.Minute), now.Add(time.Minute), TrafficResolutionMinute)
 	if len(oldResult.Items) != 0 {
-		t.Fatalf("old persisted buckets should be gone after rename, got %+v", oldResult.Items)
+		t.Fatalf("old display-name buckets should be gone after rename, got %+v", oldResult.Items)
 	}
 }
 
@@ -861,8 +883,8 @@ func TestTrafficStore_RenameTunnelOverflowDoesNotMutatePendingOrRealtimeBuckets(
 	secondStart := secondFloorUTC(now).Unix()
 	minuteStart := minuteFloorUTC(now).Unix()
 	ts.ApplyDeltas([]TrafficDelta{
-		{ClientID: "c1", TunnelName: "old", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: ^uint64(0)},
-		{ClientID: "c1", TunnelName: "new", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: 1},
+		{TunnelID: "stable-tunnel", ClientID: "c1", TunnelName: "old", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: ^uint64(0)},
+		{TunnelID: "stable-tunnel", ClientID: "c1", TunnelName: "new", TunnelType: "tcp", SecondStart: secondStart, MinuteStart: minuteStart, IngressBytes: 1},
 	})
 
 	err := ts.RenameTunnel("c1", "old", "new")

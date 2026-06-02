@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"netsgo/pkg/protocol"
 )
@@ -21,6 +22,7 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 		return
 	}
 	if len(tunnels) == 0 {
+		s.reconcileNonOwnerTunnelsForClient(client.ID, "restore_related")
 		return
 	}
 
@@ -37,11 +39,13 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 				client.proxyMu.Lock()
 				config := storedTunnelToProxyConfig(st)
 				setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
-				client.proxies[st.Name] = &ProxyTunnel{
+				tunnel := &ProxyTunnel{
 					Config: config,
 					limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
 					done:   make(chan struct{}),
 				}
+				initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
+				client.proxies[st.Name] = tunnel
 				client.proxyMu.Unlock()
 				_ = s.persistTunnelStates(client.ID, st.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 				eventConfig := storedTunnelToProxyConfig(st)
@@ -58,11 +62,13 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 				client.proxyMu.Lock()
 				config := storedTunnelToProxyConfig(st)
 				setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
-				client.proxies[st.Name] = &ProxyTunnel{
+				tunnel := &ProxyTunnel{
 					Config: config,
 					limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
 					done:   make(chan struct{}),
 				}
+				initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
+				client.proxies[st.Name] = tunnel
 				client.proxyMu.Unlock()
 				_ = s.persistTunnelStates(client.ID, st.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, errMsg)
 				eventConfig := storedTunnelToProxyConfig(st)
@@ -75,11 +81,10 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			}
 		}
 
-		switch {
-		case st.DesiredState == protocol.ProxyDesiredStateRunning &&
-			(st.RuntimeState == protocol.ProxyRuntimeStateExposed || st.RuntimeState == protocol.ProxyRuntimeStatePending || st.RuntimeState == protocol.ProxyRuntimeStateOffline):
+		switch st.DesiredState {
+		case protocol.ProxyDesiredStateRunning:
 			log.Printf("🔄 restoring tunnel: %s (:%d → %s:%d)", st.Name, st.RemotePort, st.LocalIP, st.LocalPort)
-			if err := s.restoreManagedTunnel(client, st); err != nil {
+			if err := s.reconcileUnifiedTunnel(st.ID, "restore"); err != nil {
 				log.Printf("⚠️ failed to restore tunnel [%s]: %v", st.Name, err)
 				continue
 			}
@@ -89,11 +94,13 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			config := storedTunnelToProxyConfig(st)
 			setProxyConfigStates(&config, st.DesiredState, st.RuntimeState, st.Error)
 			client.proxyMu.Lock()
-			client.proxies[st.Name] = &ProxyTunnel{
+			tunnel := &ProxyTunnel{
 				Config: config,
 				limits: newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{}),
 				done:   make(chan struct{}),
 			}
+			initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
+			client.proxies[st.Name] = tunnel
 			client.proxyMu.Unlock()
 			restoredCount++
 		}
@@ -106,4 +113,5 @@ func (s *Server) restoreTunnels(client *ClientConn) {
 			"count":     restoredCount,
 		})
 	}
+	s.reconcileNonOwnerTunnelsForClient(client.ID, "restore_related")
 }

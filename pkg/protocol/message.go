@@ -9,15 +9,36 @@ const (
 	MsgTypePing        = "ping"         // Client → Server: 心跳
 	MsgTypePong        = "pong"         // Server → Client: 心跳回复
 	MsgTypeProbeReport = "probe_report" // Client → Server: 探针数据上报
-	MsgTypeProxyClose  = "proxy_close"  // 双向: 关闭某条代理隧道
 )
 
-// Tunnel 控制消息类型。create / provision / ack / close 统一以共享协议层为唯一真相。
+// Tunnel control messages. The wire protocol uses the unified tunnel_*
+// names; the MsgTypeProxy* identifiers remain source-compatible aliases while
+// the codebase is being cut over.
 const (
-	MsgTypeProxyCreate       = "proxy_create"
-	MsgTypeProxyCreateResp   = "proxy_create_resp"
-	MsgTypeProxyProvision    = "proxy_provision"
-	MsgTypeProxyProvisionAck = "proxy_provision_ack"
+	MsgTypeTunnelCreate         = "tunnel_create"
+	MsgTypeTunnelCreateResp     = "tunnel_create_resp"
+	MsgTypeTunnelProvision      = "tunnel_provision"
+	MsgTypeTunnelProvisionAck   = "tunnel_provision_ack"
+	MsgTypeTunnelUnprovision    = "tunnel_unprovision"
+	MsgTypeTunnelRuntimeReport  = "tunnel_runtime_report"
+	MsgTypeTunnelPreflight      = "tunnel_preflight"
+	MsgTypeTunnelPreflightResp  = "tunnel_preflight_resp"
+	MsgTypeTunnelStreamClose    = "tunnel_stream_close"
+	MsgTypeP2PSessionPrepare    = "p2p_session_prepare"
+	MsgTypeP2PSessionReady      = "p2p_session_ready"
+	MsgTypeP2PCandidate         = "p2p_candidate"
+	MsgTypeP2PConnectivityCheck = "p2p_connectivity_check"
+	MsgTypeP2PSelected          = "p2p_selected"
+	MsgTypeP2PFailed            = "p2p_failed"
+	MsgTypeP2PClosed            = "p2p_closed"
+	MsgTypeP2PStatsReport       = "p2p_stats_report"
+	MsgTypeTrafficReport        = "traffic_report"
+
+	MsgTypeProxyCreate       = MsgTypeTunnelCreate
+	MsgTypeProxyCreateResp   = MsgTypeTunnelCreateResp
+	MsgTypeProxyProvision    = MsgTypeTunnelProvision
+	MsgTypeProxyProvisionAck = MsgTypeTunnelProvisionAck
+	MsgTypeProxyClose        = MsgTypeTunnelUnprovision
 )
 
 const (
@@ -77,6 +98,79 @@ type AuthResponse struct {
 	ClearToken bool   `json:"clear_token,omitempty"`
 }
 
+// TunnelCreateRequest requests creation of a unified tunnel.
+type TunnelCreateRequest struct {
+	Name              string            `json:"name"`
+	Topology          string            `json:"topology"`
+	Ingress           EndpointSpec      `json:"ingress"`
+	Target            EndpointSpec      `json:"target"`
+	TransportPolicy   string            `json:"transport_policy"`
+	BandwidthSettings BandwidthSettings `json:"bandwidth_settings"`
+}
+
+// TunnelProvisionRequest is sent by the server to an ingress or target client.
+type TunnelProvisionRequest struct {
+	TunnelID string     `json:"tunnel_id"`
+	Revision int64      `json:"revision"`
+	Role     string     `json:"role"`
+	Spec     TunnelSpec `json:"spec"`
+}
+
+// TunnelCreateResponse is returned for unified tunnel creation.
+type TunnelCreateResponse struct {
+	TunnelID string     `json:"tunnel_id,omitempty"`
+	Success  bool       `json:"success"`
+	Message  string     `json:"message,omitempty"`
+	Spec     TunnelSpec `json:"spec,omitempty"`
+}
+
+// TunnelProvisionAck acknowledges a tunnel provisioning request.
+type TunnelProvisionAck struct {
+	TunnelID string `json:"tunnel_id"`
+	Revision int64  `json:"revision"`
+	Role     string `json:"role"`
+	Accepted bool   `json:"accepted"`
+	Message  string `json:"message,omitempty"`
+}
+
+// TunnelUnprovisionRequest asks a participant to stop a tunnel revision.
+type TunnelUnprovisionRequest struct {
+	TunnelID string `json:"tunnel_id"`
+	Revision int64  `json:"revision"`
+	Role     string `json:"role,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// TunnelRuntimeReport reports participant/runtime state changes.
+type TunnelRuntimeReport struct {
+	TunnelID    string             `json:"tunnel_id"`
+	Revision    int64              `json:"revision"`
+	Role        string             `json:"role,omitempty"`
+	Participant ParticipantRuntime `json:"participant,omitempty"`
+	Transport   TransportRuntime   `json:"transport,omitempty"`
+	Message     string             `json:"message,omitempty"`
+}
+
+// TunnelPreflightRequest asks a client to check a local ingress resource.
+type TunnelPreflightRequest struct {
+	RequestID string       `json:"request_id"`
+	TunnelID  string       `json:"tunnel_id,omitempty"`
+	Revision  int64        `json:"revision,omitempty"`
+	Role      string       `json:"role"`
+	Ingress   EndpointSpec `json:"ingress"`
+}
+
+// TunnelPreflightResponse reports the result of a preflight resource check.
+type TunnelPreflightResponse struct {
+	RequestID string `json:"request_id"`
+	TunnelID  string `json:"tunnel_id,omitempty"`
+	Revision  int64  `json:"revision,omitempty"`
+	Role      string `json:"role"`
+	Accepted  bool   `json:"accepted"`
+	Code      string `json:"code,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
 // ProxyNewRequest 请求创建一条新的代理隧道
 type ProxyNewRequest struct {
 	ID                string `json:"id,omitempty"` // 隧道稳定 ID（管理面唯一标识）
@@ -86,6 +180,9 @@ type ProxyNewRequest struct {
 	LocalPort         int    `json:"local_port"`   // 内网目标端口
 	RemotePort        int    `json:"remote_port"`  // 公网暴露端口（TCP/UDP 类型时使用）
 	Domain            string `json:"domain"`       // 域名（HTTP 类型时使用）
+	TransportPolicy   string `json:"transport_policy,omitempty"`
+	ActualTransport   string `json:"actual_transport,omitempty"`
+	ProvisionRevision uint64 `json:"provision_revision,omitempty"` // Server 生成的 provisioning 修订号；ACK 必须原样返回
 	BandwidthSettings        // payload bytes/sec; 0 = unlimited
 }
 
@@ -97,17 +194,22 @@ type ProxyProvisionRequest = ProxyNewRequest
 
 // ProxyCreateResponse 表示 client 主动创建 tunnel 时 server 返回的结果。
 type ProxyCreateResponse struct {
-	Name       string `json:"name,omitempty"`
-	Success    bool   `json:"success"`
-	Message    string `json:"message,omitempty"`
-	RemotePort int    `json:"remote_port,omitempty"` // 实际分配的公网端口
+	ID                string `json:"id,omitempty"`
+	Name              string `json:"name,omitempty"`
+	Success           bool   `json:"success"`
+	Message           string `json:"message,omitempty"`
+	RemotePort        int    `json:"remote_port,omitempty"` // 实际分配的公网端口
+	TransportPolicy   string `json:"transport_policy,omitempty"`
+	ActualTransport   string `json:"actual_transport,omitempty"`
+	ProvisionRevision uint64 `json:"provision_revision,omitempty"`
 }
 
 // ProxyProvisionAck 表示 client 接收 provisioning 配置后的 ACK。
 type ProxyProvisionAck struct {
-	Name     string `json:"name,omitempty"`
-	Accepted bool   `json:"accepted"`
-	Message  string `json:"message,omitempty"`
+	Name              string `json:"name,omitempty"`
+	ProvisionRevision uint64 `json:"provision_revision,omitempty"`
+	Accepted          bool   `json:"accepted"`
+	Message           string `json:"message,omitempty"`
 }
 
 // ProxyCloseRequest 关闭某条代理隧道

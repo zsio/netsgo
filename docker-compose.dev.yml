@@ -1,0 +1,169 @@
+# Local source-mode stack for inspecting NetsGo with one server, two clients,
+# and the Vite dev server proxy. Open http://localhost:5173.
+
+x-go-dev: &go-dev
+  image: golang:1.25.10-bookworm
+  working_dir: /workspace
+  init: true
+  environment:
+    GOCACHE: /root/.cache/go-build
+    GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+  volumes:
+    - .:/workspace
+    - netsgo-src-dev-go-build:/root/.cache/go-build
+    - netsgo-src-dev-go-mod:/go/pkg/mod
+
+services:
+  server:
+    <<: *go-dev
+    hostname: netsgo-dev-server
+    command:
+      - /bin/sh
+      - -c
+      - |
+        exec go run -tags dev ./cmd/netsgo server \
+          --port 9527 \
+          --data-dir /data \
+          --allow-loopback-management-host \
+          --init-admin-username "$${NETSGO_DEV_ADMIN_USER}" \
+          --init-admin-password "$${NETSGO_DEV_ADMIN_PASS}" \
+          --init-server-addr "$${NETSGO_DEV_SERVER_ADDR}" \
+          --tls-mode off
+    environment:
+      GOCACHE: /root/.cache/go-build
+      GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+      NETSGO_DEV_ADMIN_USER: ${NETSGO_DEV_ADMIN_USER:-admin}
+      NETSGO_DEV_ADMIN_PASS: ${NETSGO_DEV_ADMIN_PASS:?NETSGO_DEV_ADMIN_PASS is required}
+      NETSGO_DEV_SERVER_ADDR: ${NETSGO_DEV_SERVER_ADDR:-http://localhost:5173}
+    ports:
+      - "${NETSGO_DEV_SERVER_PORT:-9527}:9527"
+    volumes:
+      - .:/workspace
+      - netsgo-src-dev-go-build:/root/.cache/go-build
+      - netsgo-src-dev-go-mod:/go/pkg/mod
+      - netsgo-src-dev-server-data:/data
+
+  web:
+    image: oven/bun:1.3.10
+    working_dir: /workspace/web
+    init: true
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        bun install --frozen-lockfile
+        exec bun run dev -- --host 0.0.0.0
+    environment:
+      VITE_DEV_PROXY_TARGET: http://server:9527
+      VITE_DEV_PROXY_CHANGE_ORIGIN: "false"
+    ports:
+      - "${NETSGO_DEV_WEB_PORT:-5173}:5173"
+    volumes:
+      - ./web:/workspace/web
+      - netsgo-src-dev-web-node-modules:/workspace/web/node_modules
+      - netsgo-src-dev-bun-cache:/root/.bun/install/cache
+    depends_on:
+      - server
+
+  client-key:
+    image: netsgo-dev-tools:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev-tools
+    hostname: netsgo-dev-client-key
+    entrypoint:
+      - /bin/sh
+      - /opt/netsgo-e2e/create-client-key.sh
+    environment:
+      NETSGO_BOOTSTRAP_BASE_URL: http://server:9527
+      NETSGO_ADMIN_USER: ${NETSGO_DEV_ADMIN_USER:-admin}
+      NETSGO_ADMIN_PASS: ${NETSGO_DEV_ADMIN_PASS:?NETSGO_DEV_ADMIN_PASS is required}
+      NETSGO_CLIENT_KEY_FILE: /shared/client.key
+      NETSGO_ADMIN_TOKEN_FILE: /shared/admin.token
+      NETSGO_READY_FILE: /shared/client-key.ready
+      NETSGO_BOOTSTRAP_WAIT_TIMEOUT: ${NETSGO_DEV_BOOTSTRAP_WAIT_TIMEOUT:-180}
+      NETSGO_MANAGEMENT_HOST: ${NETSGO_DEV_MANAGEMENT_HOST:-localhost:5173}
+    volumes:
+      - netsgo-src-dev-shared:/shared
+    depends_on:
+      - server
+
+  client-a:
+    <<: *go-dev
+    hostname: ${NETSGO_DEV_CLIENT_A_HOSTNAME:-netsgo-dev-client-a}
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - |
+        deadline=$$(($$(date +%s) + $${NETSGO_DEV_CLIENT_KEY_WAIT_TIMEOUT:-180}))
+        while [ ! -s /shared/client.key ]; do
+          if [ $$(date +%s) -ge $$deadline ]; then
+            echo "client key not ready" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        api_key="$$(tr -d '\r\n' < /shared/client.key)"
+        exec go run -tags dev ./cmd/netsgo client \
+          --server http://server:9527 \
+          --key "$$api_key" \
+          --data-dir /data
+    environment:
+      GOCACHE: /root/.cache/go-build
+      GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+      NETSGO_DEV_CLIENT_KEY_WAIT_TIMEOUT: ${NETSGO_DEV_CLIENT_KEY_WAIT_TIMEOUT:-180}
+    volumes:
+      - .:/workspace
+      - netsgo-src-dev-go-build:/root/.cache/go-build
+      - netsgo-src-dev-go-mod:/go/pkg/mod
+      - netsgo-src-dev-client-a-data:/data
+      - netsgo-src-dev-shared:/shared
+    depends_on:
+      - client-key
+
+  client-b:
+    <<: *go-dev
+    hostname: ${NETSGO_DEV_CLIENT_B_HOSTNAME:-netsgo-dev-client-b}
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - |
+        deadline=$$(($$(date +%s) + $${NETSGO_DEV_CLIENT_KEY_WAIT_TIMEOUT:-180}))
+        while [ ! -s /shared/client.key ]; do
+          if [ $$(date +%s) -ge $$deadline ]; then
+            echo "client key not ready" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        api_key="$$(tr -d '\r\n' < /shared/client.key)"
+        exec go run -tags dev ./cmd/netsgo client \
+          --server http://server:9527 \
+          --key "$$api_key" \
+          --data-dir /data
+    environment:
+      GOCACHE: /root/.cache/go-build
+      GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+      NETSGO_DEV_CLIENT_KEY_WAIT_TIMEOUT: ${NETSGO_DEV_CLIENT_KEY_WAIT_TIMEOUT:-180}
+    volumes:
+      - .:/workspace
+      - netsgo-src-dev-go-build:/root/.cache/go-build
+      - netsgo-src-dev-go-mod:/go/pkg/mod
+      - netsgo-src-dev-client-b-data:/data
+      - netsgo-src-dev-shared:/shared
+    depends_on:
+      - client-key
+
+volumes:
+  netsgo-src-dev-bun-cache:
+  netsgo-src-dev-client-a-data:
+  netsgo-src-dev-client-b-data:
+  netsgo-src-dev-go-build:
+  netsgo-src-dev-go-mod:
+  netsgo-src-dev-server-data:
+  netsgo-src-dev-shared:
+  netsgo-src-dev-web-node-modules:

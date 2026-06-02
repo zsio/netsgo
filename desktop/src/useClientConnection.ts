@@ -7,7 +7,6 @@ import { LAST_SERVER_KEY, SERVER_RELEASE_DELAY_MS, SIDECAR_EVENT_NAME, TOKEN_REC
 import { formatClientEventError } from "./clientErrors";
 import type { ClientEvent, ClientSidecarEvent, ClientSidecarStatus, ConnectionState } from "./clientTypes";
 import { logDesktop } from "./desktopLog";
-import { sanitizeSidecarArgs } from "./sidecarArgs";
 
 export function useClientConnection() {
   const [server, setServer] = useState("");
@@ -201,13 +200,15 @@ export function useClientConnection() {
         "client",
         "--server",
         trimmedServer,
+        "--data-dir",
+        dataDir,
+        "--log-format",
+        "json",
       ];
-      if (sidecarKey) {
-        loggedArgs.push("--key", sidecarKey);
-      }
-      loggedArgs.push("--data-dir", dataDir, "--log-format", "json");
       logDesktop("debug", "desktop.sidecar_args_ready", "Sidecar args ready", {
-        args: sanitizeSidecarArgs(loggedArgs),
+        args: loggedArgs,
+        hasKey: Boolean(sidecarKey),
+        tokenReconnect: options.mode === "token",
         startSeq,
       });
 

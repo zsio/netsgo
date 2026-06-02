@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/chart';
 import { useClientTraffic } from '@/hooks/use-client-traffic';
 import { formatBytes } from '@/lib/format';
+import { getTrafficSeriesKey, getTunnelSeriesKey } from '@/lib/tunnel-traffic-keys';
 import type { ClientTrafficRange, ClientTrafficResponse, ProxyConfig, ProxyType } from '@/types';
 
 interface TrafficChartProps {
@@ -53,8 +54,8 @@ function getTunnelColor(index: number) {
   return CHART_COLORS[index] ?? `hsl(${(index * 67) % 360} 72% 58%)`;
 }
 
-function getTunnelSeriesKey(name: string, type: ProxyType) {
-  return `${type}:${name}`;
+function getTrafficSeriesName(item: ClientTrafficResponse['items'][number]) {
+  return item.tunnel_name ?? `已删除隧道 ${item.tunnel_id ?? 'unknown'}`;
 }
 
 function formatTrafficValue(value: number, range?: ClientTrafficRange) {
@@ -116,24 +117,27 @@ function buildZeroFilledTimestamps(range: ClientTrafficRange, nowMs = Date.now()
 
 function buildTrafficTrendChartState(
   data: ClientTrafficResponse | undefined,
-  tunnels: Pick<ProxyConfig, 'name' | 'type'>[],
+  tunnels: (Pick<ProxyConfig, 'name' | 'type'> & Partial<Pick<ProxyConfig, 'id'>>)[],
   range: ClientTrafficRange,
 ) {
-  const knownTunnels = new Map<string, Pick<TunnelMeta, 'name' | 'type'>>();
+  const knownTunnels = new Map<string, Pick<TunnelMeta, 'key' | 'name' | 'type'>>();
 
   for (const tunnel of tunnels) {
-    knownTunnels.set(getTunnelSeriesKey(tunnel.name, tunnel.type), {
+    const seriesKey = getTunnelSeriesKey(tunnel);
+    knownTunnels.set(seriesKey, {
+      key: seriesKey,
       name: tunnel.name,
       type: tunnel.type,
     });
   }
 
   for (const item of data?.items ?? []) {
-    const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
+    const seriesKey = getTrafficSeriesKey(item);
     if (!knownTunnels.has(seriesKey)) {
       knownTunnels.set(seriesKey, {
-        name: item.tunnel_name,
-        type: item.tunnel_type,
+        key: seriesKey,
+        name: getTrafficSeriesName(item),
+        type: item.tunnel_type ?? 'tcp',
       });
     }
   }
@@ -146,7 +150,7 @@ function buildTrafficTrendChartState(
       return left.type.localeCompare(right.type);
     })
     .map((tunnel, index) => ({
-      key: getTunnelSeriesKey(tunnel.name, tunnel.type),
+      key: tunnel.key,
       name: tunnel.name,
       type: tunnel.type,
       color: getTunnelColor(index),
@@ -172,7 +176,7 @@ function buildTrafficTrendChartState(
       timestamps.add(timestamp);
     }
 
-    const seriesKey = getTunnelSeriesKey(item.tunnel_name, item.tunnel_type);
+    const seriesKey = getTrafficSeriesKey(item);
     pointsByTunnel.set(seriesKey, pointMap);
   }
 

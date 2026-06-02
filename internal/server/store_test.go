@@ -417,6 +417,27 @@ func TestTunnelStore_AddTunnel_DiffClientSameNameAllowed(t *testing.T) {
 	}
 }
 
+func TestTunnelStore_GetTunnelByID(t *testing.T) {
+	store := newTestTunnelStore(t)
+	tunnel := StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{ID: "stable-id-1", Name: "web"},
+		ClientID:        "client-A",
+		Hostname:        "host-A",
+	}
+	mustAddStableTunnel(t, store, tunnel)
+
+	got, err := store.GetTunnelByID("stable-id-1")
+	if err != nil {
+		t.Fatalf("GetTunnelByID failed: %v", err)
+	}
+	if got.ID != tunnel.ID || got.ClientID != tunnel.ClientID || got.Name != tunnel.Name {
+		t.Fatalf("GetTunnelByID mismatch: %+v", got)
+	}
+	if _, err := store.GetTunnelByID("missing-id"); !errors.Is(err, ErrTunnelNotFound) {
+		t.Fatalf("missing tunnel should return ErrTunnelNotFound, got %v", err)
+	}
+}
+
 func TestTunnelStore_RemoveTunnel_Success(t *testing.T) {
 	store := newTestTunnelStore(t)
 

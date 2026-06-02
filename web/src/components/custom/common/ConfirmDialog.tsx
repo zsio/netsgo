@@ -28,7 +28,12 @@ export function ConfirmDialog({
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onCancel} />
 
       {/* Dialog */}
-      <div className="relative bg-card border border-border rounded-xl p-6 shadow-lg max-w-sm w-full mx-4">
+      <div
+        className="relative bg-card border border-border rounded-xl p-6 shadow-lg max-w-sm w-full mx-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
         <h3 className="text-lg font-semibold mb-2">{title}</h3>
         <p className="text-sm text-muted-foreground mb-6">{description}</p>
         <div className="flex justify-end gap-3">

@@ -41,6 +41,10 @@ func (s *Server) handleControlMessage(client *ClientConn, msg protocol.Message) 
 		s.handleProxyCreateMessage(client, msg)
 	case protocol.MsgTypeProxyProvisionAck:
 		s.handleProxyProvisionAckMessage(client, msg)
+	case protocol.MsgTypeTunnelRuntimeReport:
+		s.handleTunnelRuntimeReportMessage(client, msg)
+	case protocol.MsgTypeTunnelPreflightResp:
+		s.handleTunnelPreflightResponseMessage(client, msg)
 	case protocol.MsgTypeProxyClose:
 		s.handleProxyCloseMessage(client, msg)
 	default:
@@ -168,10 +172,13 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 		client.proxyMu.RUnlock()
 
 		resp, _ = protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
-			Name:       req.Name,
-			Success:    true,
-			Message:    "proxy tunnel created successfully",
-			RemotePort: actualPort,
+			ID:              config.ID,
+			Name:            config.Name,
+			Success:         true,
+			Message:         "proxy tunnel created successfully",
+			RemotePort:      actualPort,
+			TransportPolicy: config.TransportPolicy,
+			ActualTransport: config.ActualTransport,
 		})
 
 		s.emitTunnelChanged(client.ID, config, "created_by_client")
@@ -183,6 +190,22 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 }
 
 func (s *Server) handleProxyProvisionAckMessage(client *ClientConn, msg protocol.Message) {
+	var unifiedAck protocol.TunnelProvisionAck
+	if err := msg.ParsePayload(&unifiedAck); err == nil && unifiedAck.TunnelID != "" {
+		resp := provisionAckResult{
+			name:     unifiedAck.TunnelID,
+			accepted: unifiedAck.Accepted,
+			message:  unifiedAck.Message,
+			revision: uint64(unifiedAck.Revision),
+			role:     unifiedAck.Role,
+		}
+		if s.resolveTunnelProvisionAckWaiter(client.ID, client.generation, resp) {
+			return
+		}
+		log.Printf("📩 Received unmatched tunnel provisioning ack [%s]: tunnel_id=%s role=%s accepted=%v", client.ID, unifiedAck.TunnelID, unifiedAck.Role, unifiedAck.Accepted)
+		return
+	}
+
 	var ack protocol.ProxyProvisionAck
 	if err := msg.ParsePayload(&ack); err != nil {
 		log.Printf("⚠️ Failed to parse provisioning ack [%s]: %v", client.ID, err)
@@ -193,11 +216,85 @@ func (s *Server) handleProxyProvisionAckMessage(client *ClientConn, msg protocol
 		name:     ack.Name,
 		accepted: ack.Accepted,
 		message:  ack.Message,
+		revision: ack.ProvisionRevision,
 	}
 	if s.resolveTunnelProvisionAckWaiter(client.ID, client.generation, resp) {
 		return
 	}
 	log.Printf("📩 Received unmatched provisioning ack [%s]: name=%s accepted=%v", client.ID, resp.name, resp.accepted)
+}
+
+func (s *Server) handleTunnelRuntimeReportMessage(client *ClientConn, msg protocol.Message) {
+	if !s.isCurrentLive(client.ID, client.generation) {
+		return
+	}
+
+	var report protocol.TunnelRuntimeReport
+	if err := msg.ParsePayload(&report); err != nil {
+		log.Printf("⚠️ Failed to parse tunnel runtime report [%s]: %v", client.ID, err)
+		return
+	}
+	if report.TunnelID == "" || report.Revision <= 0 || report.Role == "" {
+		log.Printf("⚠️ Ignoring incomplete tunnel runtime report [%s]: tunnel_id=%q role=%q revision=%d", client.ID, report.TunnelID, report.Role, report.Revision)
+		return
+	}
+
+	stored, ok, err := s.findStoredTunnelByID(report.TunnelID)
+	if err != nil {
+		log.Printf("⚠️ Ignoring tunnel runtime report [%s]: failed to load tunnel %q: %v", client.ID, report.TunnelID, err)
+		return
+	}
+	if !ok {
+		log.Printf("⚠️ Ignoring tunnel runtime report [%s]: unknown tunnel_id=%s role=%s revision=%d", client.ID, report.TunnelID, report.Role, report.Revision)
+		return
+	}
+	if stored.Revision != report.Revision {
+		log.Printf("⚠️ Ignoring stale tunnel runtime report [%s]: tunnel_id=%s role=%s report_revision=%d current_revision=%d", client.ID, report.TunnelID, report.Role, report.Revision, stored.Revision)
+		return
+	}
+	if !runtimeReportMatchesStoredTunnel(client.ID, stored, report) {
+		log.Printf("⚠️ Ignoring tunnel runtime report with unexpected role/client [%s]: tunnel_id=%s role=%s revision=%d", client.ID, report.TunnelID, report.Role, report.Revision)
+		return
+	}
+
+	s.unifiedRuntime.recordReport(client.ID, report, time.Now())
+	s.emitTunnelChanged(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "runtime_report")
+	s.scheduleUnifiedTunnelReconcile(stored, "runtime_report")
+	log.Printf("📩 Received tunnel runtime report [%s]: tunnel_id=%s role=%s revision=%d message=%q", client.ID, report.TunnelID, report.Role, report.Revision, report.Message)
+}
+
+func runtimeReportMatchesStoredTunnel(clientID string, stored StoredTunnel, report protocol.TunnelRuntimeReport) bool {
+	switch report.Role {
+	case protocol.DataStreamRoleTarget:
+		return clientID != "" && clientID == stored.Target.ClientID
+	case protocol.DataStreamRoleIngress:
+		return stored.Ingress.Location == tunnelEndpointLocationClient &&
+			clientID != "" &&
+			clientID == stored.Ingress.ClientID
+	default:
+		return false
+	}
+}
+
+func (s *Server) handleTunnelPreflightResponseMessage(client *ClientConn, msg protocol.Message) {
+	if !s.isCurrentLive(client.ID, client.generation) {
+		return
+	}
+
+	var resp protocol.TunnelPreflightResponse
+	if err := msg.ParsePayload(&resp); err != nil {
+		log.Printf("⚠️ Failed to parse tunnel preflight response [%s]: %v", client.ID, err)
+		return
+	}
+	if resp.RequestID == "" {
+		log.Printf("⚠️ Ignoring tunnel preflight response without request_id [%s]: tunnel_id=%s role=%s", client.ID, resp.TunnelID, resp.Role)
+		return
+	}
+	if s.tunnels.resolvePreflightWaiter(client.ID, client.generation, resp) {
+		return
+	}
+
+	log.Printf("📩 Received unmatched tunnel preflight response [%s]: request_id=%s tunnel_id=%s role=%s accepted=%v code=%s", client.ID, resp.RequestID, resp.TunnelID, resp.Role, resp.Accepted, resp.Code)
 }
 
 func (s *Server) handleProxyCloseMessage(client *ClientConn, msg protocol.Message) {

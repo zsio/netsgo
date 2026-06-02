@@ -3,11 +3,9 @@ package client
 import (
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -38,9 +36,13 @@ const (
 	retryLongInterval      = 10 * time.Second
 	retryLongIntervalAfter = 5 * time.Minute
 	retryJitterMultiplier  = 0.5
+	publicIPRefreshAfter   = 2 * time.Hour
 )
 
-var retryJitterFloat64 = rand.Float64
+var (
+	retryJitterFloat64 = rand.Float64
+	fetchPublicIPs     = netutil.FetchPublicIPs
+)
 
 // Client is the core client structure.
 type Client struct {
@@ -59,6 +61,7 @@ type Client struct {
 	dataSession      *yamux.Session // yamux session for the data channel
 	dataMu           sync.RWMutex
 	proxies          sync.Map // proxy_name -> ProxyNewRequest
+	tunnels          sync.Map // tunnel_id:role -> *clientTunnelRuntime
 	useTLS           bool
 	startTime        time.Time // Program start time, used to calculate process uptime
 	publicIPv4       string    // Cached public IPv4 address
@@ -105,13 +108,13 @@ func (rt *sessionRuntime) writeJSON(v any) error {
 	return rt.conn.WriteJSON(v)
 }
 
-func (rt *sessionRuntime) writeMessage(messageType int, data []byte) error {
+func (rt *sessionRuntime) writeControl(messageType int, data []byte, deadline time.Time) error {
 	rt.connMu.Lock()
 	defer rt.connMu.Unlock()
 	if rt.conn == nil {
 		return fmt.Errorf("control channel unavailable")
 	}
-	return rt.conn.WriteMessage(messageType, data)
+	return rt.conn.WriteControl(messageType, data, deadline)
 }
 
 func (rt *sessionRuntime) detachConn() *websocket.Conn {
@@ -202,18 +205,23 @@ func (c *Client) setRuntimeConn(rt *sessionRuntime, conn *websocket.Conn) {
 }
 
 func (c *Client) setRuntimeDataSession(rt *sessionRuntime, session *yamux.Session) {
+	c.mu.Lock()
+	shouldMirror := c.currentRuntime == rt || c.currentRuntime == nil
+	if shouldMirror {
+		c.dataMu.Lock()
+		rt.dataMu.Lock()
+		rt.dataSession = session
+		rt.dataMu.Unlock()
+		c.dataSession = session
+		c.dataMu.Unlock()
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+
 	rt.dataMu.Lock()
 	rt.dataSession = session
 	rt.dataMu.Unlock()
-
-	c.mu.Lock()
-	shouldMirror := c.currentRuntime == rt || c.currentRuntime == nil
-	c.mu.Unlock()
-	if shouldMirror {
-		c.dataMu.Lock()
-		c.dataSession = session
-		c.dataMu.Unlock()
-	}
 }
 
 func (c *Client) runtimeForStandaloneUse() *sessionRuntime {
@@ -434,13 +442,12 @@ func (c *Client) Shutdown() {
 	c.logger().Info("client.shutdown_started", "Starting graceful client shutdown", nil)
 
 	if rt := c.getCurrentRuntime(); rt != nil {
-		_ = rt.writeMessage(
+		_ = rt.writeControl(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "client shutting down"),
+			time.Now().Add(time.Second),
 		)
 	}
-
-	time.Sleep(100 * time.Millisecond)
 
 	c.cleanup()
 
@@ -486,6 +493,13 @@ func (c *Client) cleanup() {
 
 	c.proxies.Range(func(key, _ any) bool {
 		c.proxies.Delete(key)
+		return true
+	})
+	c.tunnels.Range(func(key, value any) bool {
+		if rt, ok := value.(*clientTunnelRuntime); ok {
+			rt.close()
+		}
+		c.tunnels.Delete(key)
 		return true
 	})
 
@@ -556,6 +570,7 @@ func (c *Client) connectAndRun() error {
 		return fmt.Errorf("failed to establish data channel: %w", err)
 	}
 	c.logger().Info("client.data_channel_established", "Data channel established", nil)
+	c.refreshPublicIPsAsync(true)
 
 	rt.wg.Add(1)
 	go func() {
@@ -592,6 +607,7 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 	hostname, _ := os.Hostname()
 	localIP := netutil.GetOutboundIP()
 	_, _, token := c.currentAuthState()
+	capabilities := protocol.DefaultClientCapabilities()
 
 	authReq := protocol.AuthRequest{
 		Key:       c.Key,
@@ -606,6 +622,7 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 			UpdateCapability: &protocol.UpdateCapability{
 				InstallMethod: installmethod.Detect(svcmgr.RoleClient),
 			},
+			Capabilities: &capabilities,
 		},
 	}
 
@@ -718,7 +735,7 @@ func (c *Client) handleAuthFailure(authResp protocol.AuthResponse, attemptedWith
 		c.logger().Warn("client.auth_failed", "Authentication failed", map[string]any{"code": authResp.Code, "message": message, "retryable": true})
 		return &clientRunError{
 			message: fmt.Sprintf("authentication failed (%s): %s", authResp.Code, message),
-			fatal:   true,
+			fatal:   false,
 		}
 	}
 
@@ -905,39 +922,27 @@ func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
 }
 
 // handleStream handles a single yamux stream:
-// 1. Read the StreamHeader to get proxy_name
-// 2. Look up the local proxy configuration by proxy_name
+// 1. Read the DataStreamHeader to get the stable tunnel identity
+// 2. Look up the local proxy configuration by tunnel id or legacy name
 // 3. Dial the local service
 // 4. Relay(stream, localConn)
 func (c *Client) handleStream(stream *yamux.Stream) {
 	defer func() { _ = stream.Close() }()
 
-	// Read StreamHeader: [2B name length] [NB proxy_name]
-	var lenBuf [2]byte
-	if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
-		log.Printf("⚠️ Failed to read StreamHeader: %v", err)
+	header, err := protocol.DecodeDataStreamHeader(stream)
+	if err != nil {
+		log.Printf("⚠️ Failed to read DataStreamHeader: %v", err)
 		return
 	}
-	nameLen := binary.BigEndian.Uint16(lenBuf[:])
-	if nameLen == 0 || nameLen > 1024 {
-		log.Printf("⚠️ Invalid StreamHeader name length: %d", nameLen)
-		return
-	}
-
-	nameBuf := make([]byte, nameLen)
-	if _, err := io.ReadFull(stream, nameBuf); err != nil {
-		log.Printf("⚠️ Failed to read StreamHeader name: %v", err)
-		return
-	}
-	proxyName := string(nameBuf)
-
-	// Look up the proxy configuration.
-	val, ok := c.proxies.Load(proxyName)
+	proxyName, cfg, ok := c.proxyForDataStreamHeader(header)
 	if !ok {
-		log.Printf("⚠️ Unknown proxy name: %s", proxyName)
+		log.Printf("⚠️ Unknown tunnel id: %s", header.TunnelID)
 		return
 	}
-	cfg := val.(protocol.ProxyNewRequest)
+	if !dataStreamHeaderMatchesProxyConfig(header, cfg) {
+		log.Printf("⚠️ DataStreamHeader rejected for %s: tunnel=%s revision=%d source=%s target=%s direction=%s transport=%s", proxyName, header.TunnelID, header.Revision, header.SourceRole, header.TargetRole, header.Direction, header.Transport)
+		return
+	}
 
 	// Dispatch by proxy type.
 	if cfg.Type == protocol.ProxyTypeUDP {
@@ -955,6 +960,64 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 
 	// Relay traffic in both directions.
 	mux.Relay(stream, localConn)
+}
+
+func dataStreamHeaderMatchesProxyConfig(header protocol.DataStreamHeader, cfg protocol.ProxyNewRequest) bool {
+	if cfg.ProvisionRevision != 0 && header.Revision != int64(cfg.ProvisionRevision) {
+		return false
+	}
+	if header.TargetRole != protocol.DataStreamRoleTarget {
+		return false
+	}
+	if header.SourceRole != protocol.DataStreamRoleServer && header.SourceRole != protocol.DataStreamRoleIngress {
+		return false
+	}
+	if header.Direction != protocol.DataStreamDirectionIngressToTarget {
+		return false
+	}
+	if header.Transport != protocol.ActualTransportServerRelay {
+		return false
+	}
+	if cfg.TransportPolicy == protocol.TransportPolicyDirectOnly {
+		return false
+	}
+	if cfg.ActualTransport != "" && cfg.ActualTransport != protocol.ActualTransportUnknown && header.Transport != cfg.ActualTransport {
+		return false
+	}
+	return true
+}
+
+func (c *Client) proxyForDataStreamHeader(header protocol.DataStreamHeader) (string, protocol.ProxyNewRequest, bool) {
+	if val, ok := c.proxies.Load(header.TunnelID); ok {
+		cfg, ok := val.(protocol.ProxyNewRequest)
+		if !ok {
+			log.Printf("⚠️ invalid proxy cache entry for tunnel %s: %T", header.TunnelID, val)
+			return "", protocol.ProxyNewRequest{}, false
+		}
+		return cfg.Name, cfg, true
+	}
+
+	var proxyName string
+	var cfg protocol.ProxyNewRequest
+	found := false
+	c.proxies.Range(func(key, value any) bool {
+		candidate, ok := value.(protocol.ProxyNewRequest)
+		if !ok {
+			return true
+		}
+		if candidate.ID != "" && candidate.ID == header.TunnelID {
+			if name, ok := key.(string); ok && name != "" {
+				proxyName = name
+			} else {
+				proxyName = candidate.Name
+			}
+			cfg = candidate
+			found = true
+			return false
+		}
+		return true
+	})
+	return proxyName, cfg, found
 }
 
 // requestProxy requests creation of a proxy tunnel over the control channel.
@@ -1023,7 +1086,7 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 	// Public IP probing can be slow or unavailable on some networks. Do it in
 	// the background so routine health probes are never blocked by third-party
 	// probe services.
-	c.refreshPublicIPsAsync()
+	c.refreshPublicIPsAsync(false)
 	c.mu.Lock()
 	stats.PublicIPv4 = c.publicIPv4
 	stats.PublicIPv6 = c.publicIPv6
@@ -1038,10 +1101,10 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 }
 
 // refreshPublicIPsAsync fetches and caches public IPs in the background.
-// It only performs a real request if more than 5 minutes have passed since the last fetch.
-func (c *Client) refreshPublicIPsAsync() {
+// It only performs a real request if forced or if the cached result is stale.
+func (c *Client) refreshPublicIPsAsync(force bool) {
 	c.mu.Lock()
-	if c.publicIPFetching || (!c.publicIPFetched.IsZero() && time.Since(c.publicIPFetched) < 5*time.Minute) {
+	if c.publicIPFetching || (!force && !c.publicIPFetched.IsZero() && time.Since(c.publicIPFetched) < publicIPRefreshAfter) {
 		c.mu.Unlock()
 		return // Cache is still fresh.
 	}
@@ -1049,10 +1112,18 @@ func (c *Client) refreshPublicIPsAsync() {
 	c.mu.Unlock()
 
 	go func() {
-		ipv4, ipv6 := netutil.FetchPublicIPs()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("⚠️ Public IP refresh panicked: %v", r)
+			}
+			c.mu.Lock()
+			c.publicIPFetching = false
+			c.mu.Unlock()
+		}()
+
+		ipv4, ipv6 := fetchPublicIPs()
 
 		c.mu.Lock()
-		defer c.mu.Unlock()
 		if ipv4 != "" {
 			c.publicIPv4 = ipv4
 		}
@@ -1060,7 +1131,7 @@ func (c *Client) refreshPublicIPsAsync() {
 			c.publicIPv6 = ipv6
 		}
 		c.publicIPFetched = time.Now()
-		c.publicIPFetching = false
+		c.mu.Unlock()
 	}()
 }
 
@@ -1087,6 +1158,30 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			// Heartbeat reply, ignore.
 
 		case protocol.MsgTypeProxyProvision:
+			var meta struct {
+				TunnelID string `json:"tunnel_id"`
+			}
+			if err := msg.ParsePayload(&meta); err == nil && meta.TunnelID != "" {
+				var req protocol.TunnelProvisionRequest
+				if err := msg.ParsePayload(&req); err != nil {
+					log.Printf("⚠️ Failed to parse tunnel provision instruction: %v", err)
+					continue
+				}
+				ack := c.handleTunnelProvision(rt, req)
+				resp, _ := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, ack)
+				if err := rt.writeJSON(resp); err != nil {
+					log.Printf("⚠️ Failed to send tunnel provisioning ACK [%s]: %v", req.TunnelID, err)
+					c.failRuntime(rt, "tunnel_provision_ack_write_failed")
+					return
+				}
+				if ack.Accepted {
+					log.Printf("✅ Accepted tunnel provisioning config from server [%s] role=%s", req.TunnelID, req.Role)
+				} else {
+					log.Printf("⚠️ Rejected tunnel provisioning config from server [%s] role=%s: %s", req.TunnelID, req.Role, ack.Message)
+				}
+				continue
+			}
+
 			// Sent by the server: asks the client to accept/provision a proxy tunnel configuration.
 			var req protocol.ProxyProvisionRequest
 			if err := msg.ParsePayload(&req); err != nil {
@@ -1098,15 +1193,29 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 
 			c.proxies.Store(req.Name, protocol.ProxyNewRequest(req))
 			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyProvisionAck, protocol.ProxyProvisionAck{
-				Name:     req.Name,
-				Accepted: true,
-				Message:  "provision accepted",
+				Name:              req.Name,
+				ProvisionRevision: req.ProvisionRevision,
+				Accepted:          true,
+				Message:           "provision accepted",
 			})
 			log.Printf("✅ Accepted tunnel provisioning config from server [%s]", req.Name)
 
 			if err := rt.writeJSON(resp); err != nil {
 				log.Printf("⚠️ Failed to send provisioning ACK [%s]: %v", req.Name, err)
 				c.failRuntime(rt, "proxy_provision_ack_write_failed")
+				return
+			}
+
+		case protocol.MsgTypeTunnelPreflight:
+			var req protocol.TunnelPreflightRequest
+			if err := msg.ParsePayload(&req); err != nil {
+				log.Printf("⚠️ Failed to parse tunnel preflight request: %v", err)
+				continue
+			}
+			resp, _ := protocol.NewMessage(protocol.MsgTypeTunnelPreflightResp, c.handleTunnelPreflight(req))
+			if err := rt.writeJSON(resp); err != nil {
+				log.Printf("⚠️ Failed to send tunnel preflight response [%s]: %v", req.RequestID, err)
+				c.failRuntime(rt, "tunnel_preflight_resp_write_failed")
 				return
 			}
 
@@ -1118,12 +1227,27 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				continue
 			}
 			if resp.Success {
+				c.applyProxyCreateResponse(resp)
 				log.Printf("✅ Proxy tunnel created successfully [%s], public port: %d", resp.Name, resp.RemotePort)
 			} else {
 				log.Printf("❌ Failed to create proxy tunnel [%s]: %s", resp.Name, resp.Message)
 			}
 
 		case protocol.MsgTypeProxyClose:
+			var meta struct {
+				TunnelID string `json:"tunnel_id"`
+			}
+			if err := msg.ParsePayload(&meta); err == nil && meta.TunnelID != "" {
+				var req protocol.TunnelUnprovisionRequest
+				if err := msg.ParsePayload(&req); err != nil {
+					log.Printf("⚠️ Failed to parse tunnel unprovision instruction: %v", err)
+					continue
+				}
+				c.handleTunnelUnprovision(req)
+				log.Printf("🔌 Tunnel unprovisioned: %s role=%s (reason: %s)", req.TunnelID, req.Role, req.Reason)
+				continue
+			}
+
 			// Sent by the server: close the proxy tunnel.
 			var req protocol.ProxyCloseRequest
 			if err := msg.ParsePayload(&req); err != nil {
@@ -1137,4 +1261,34 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			log.Printf("📩 Received control message: %s", msg.Type)
 		}
 	}
+}
+
+func (c *Client) applyProxyCreateResponse(resp protocol.ProxyCreateResponse) {
+	if resp.Name == "" {
+		return
+	}
+	val, ok := c.proxies.Load(resp.Name)
+	if !ok {
+		return
+	}
+	cfg, ok := val.(protocol.ProxyNewRequest)
+	if !ok {
+		return
+	}
+	if resp.ID != "" {
+		cfg.ID = resp.ID
+	}
+	if resp.RemotePort != 0 {
+		cfg.RemotePort = resp.RemotePort
+	}
+	if resp.TransportPolicy != "" {
+		cfg.TransportPolicy = resp.TransportPolicy
+	}
+	if resp.ActualTransport != "" {
+		cfg.ActualTransport = resp.ActualTransport
+	}
+	if resp.ProvisionRevision != 0 {
+		cfg.ProvisionRevision = resp.ProvisionRevision
+	}
+	c.proxies.Store(resp.Name, cfg)
 }

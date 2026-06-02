@@ -12,6 +12,8 @@ import (
 var (
 	errTunnelProvisionAckTimeout   = errors.New("tunnel provision ack timeout")
 	errTunnelProvisionAckCancelled = errors.New("tunnel provision ack cancelled")
+	errTunnelPreflightTimeout      = errors.New("tunnel preflight timeout")
+	errTunnelPreflightCancelled    = errors.New("tunnel preflight cancelled")
 )
 
 type tunnelProvisionRejectedError struct {
@@ -30,12 +32,22 @@ type pendingTunnelProvisionAckKey struct {
 	clientID   string
 	generation uint64
 	name       string
+	revision   uint64
+	role       string
 }
 
 type provisionAckResult struct {
 	name     string
 	accepted bool
 	message  string
+	revision uint64
+	role     string
+}
+
+type pendingTunnelPreflightKey struct {
+	clientID   string
+	generation uint64
+	requestID  string
 }
 
 // TunnelRegistry holds tunnel provisioning wait state and timeout configuration:
@@ -47,6 +59,9 @@ type TunnelRegistry struct {
 	pendingProvisionAckMu sync.Mutex
 	pendingProvisionAcks  map[pendingTunnelProvisionAckKey]chan provisionAckResult
 	tunnelReadyTimeout    time.Duration
+	pendingPreflightMu    sync.Mutex
+	pendingPreflights     map[pendingTunnelPreflightKey]chan protocol.TunnelPreflightResponse
+	preflightTimeout      time.Duration
 }
 
 // newTunnelRegistry creates a TunnelRegistry with default timeout.
@@ -54,14 +69,18 @@ func newTunnelRegistry() *TunnelRegistry {
 	return &TunnelRegistry{
 		pendingProvisionAcks: make(map[pendingTunnelProvisionAckKey]chan provisionAckResult),
 		tunnelReadyTimeout:   5 * time.Second,
+		pendingPreflights:    make(map[pendingTunnelPreflightKey]chan protocol.TunnelPreflightResponse),
+		preflightTimeout:     3 * time.Second,
 	}
 }
 
-func (tr *TunnelRegistry) registerProvisionAckWaiter(client *ClientConn, name string) (<-chan provisionAckResult, error) {
+func (tr *TunnelRegistry) registerProvisionAckWaiter(client *ClientConn, name string, revision uint64, role string) (<-chan provisionAckResult, error) {
 	key := pendingTunnelProvisionAckKey{
 		clientID:   client.ID,
 		generation: client.generation,
 		name:       name,
+		revision:   revision,
+		role:       role,
 	}
 
 	tr.pendingProvisionAckMu.Lock()
@@ -76,11 +95,13 @@ func (tr *TunnelRegistry) registerProvisionAckWaiter(client *ClientConn, name st
 	return ch, nil
 }
 
-func (tr *TunnelRegistry) unregisterProvisionAckWaiter(client *ClientConn, name string) {
+func (tr *TunnelRegistry) unregisterProvisionAckWaiter(client *ClientConn, name string, revision uint64, role string) {
 	key := pendingTunnelProvisionAckKey{
 		clientID:   client.ID,
 		generation: client.generation,
 		name:       name,
+		revision:   revision,
+		role:       role,
 	}
 
 	tr.pendingProvisionAckMu.Lock()
@@ -97,6 +118,8 @@ func (tr *TunnelRegistry) resolveProvisionAckWaiter(clientID string, generation 
 		clientID:   clientID,
 		generation: generation,
 		name:       resp.name,
+		revision:   resp.revision,
+		role:       resp.role,
 	}
 
 	tr.pendingProvisionAckMu.Lock()
@@ -127,13 +150,16 @@ func (tr *TunnelRegistry) cancelProvisionAckWaiters(clientID string, generation 
 }
 
 func (tr *TunnelRegistry) waitForProvisionAck(s *Server, client *ClientConn, req protocol.ProxyNewRequest) (provisionAckResult, error) {
-	ch, err := tr.registerProvisionAckWaiter(client, req.Name)
+	if req.ProvisionRevision == 0 {
+		return provisionAckResult{}, fmt.Errorf("tunnel %q missing provisioning revision", req.Name)
+	}
+	ch, err := tr.registerProvisionAckWaiter(client, req.Name, req.ProvisionRevision, "")
 	if err != nil {
 		return provisionAckResult{}, err
 	}
 
 	if err := s.notifyClientProxyProvision(client, req); err != nil {
-		tr.unregisterProvisionAckWaiter(client, req.Name)
+		tr.unregisterProvisionAckWaiter(client, req.Name, req.ProvisionRevision, "")
 		return provisionAckResult{}, err
 	}
 
@@ -154,7 +180,60 @@ func (tr *TunnelRegistry) waitForProvisionAck(s *Server, client *ClientConn, req
 		}
 		return resp, nil
 	case <-timer.C:
-		tr.unregisterProvisionAckWaiter(client, req.Name)
+		tr.unregisterProvisionAckWaiter(client, req.Name, req.ProvisionRevision, "")
 		return provisionAckResult{}, errTunnelProvisionAckTimeout
 	}
+}
+
+func (tr *TunnelRegistry) registerPreflightWaiter(client *ClientConn, requestID string) (<-chan protocol.TunnelPreflightResponse, error) {
+	if requestID == "" {
+		return nil, fmt.Errorf("preflight request missing request_id")
+	}
+	key := pendingTunnelPreflightKey{clientID: client.ID, generation: client.generation, requestID: requestID}
+	tr.pendingPreflightMu.Lock()
+	defer tr.pendingPreflightMu.Unlock()
+	if _, exists := tr.pendingPreflights[key]; exists {
+		return nil, fmt.Errorf("preflight request %q already has a pending waiter", requestID)
+	}
+	ch := make(chan protocol.TunnelPreflightResponse, 1)
+	tr.pendingPreflights[key] = ch
+	return ch, nil
+}
+
+func (tr *TunnelRegistry) unregisterPreflightWaiter(client *ClientConn, requestID string) {
+	key := pendingTunnelPreflightKey{clientID: client.ID, generation: client.generation, requestID: requestID}
+	tr.pendingPreflightMu.Lock()
+	delete(tr.pendingPreflights, key)
+	tr.pendingPreflightMu.Unlock()
+}
+
+func (tr *TunnelRegistry) cancelPreflightWaiters(clientID string, generation uint64) {
+	tr.pendingPreflightMu.Lock()
+	defer tr.pendingPreflightMu.Unlock()
+
+	for key, ch := range tr.pendingPreflights {
+		if key.clientID == clientID && key.generation == generation {
+			delete(tr.pendingPreflights, key)
+			close(ch)
+		}
+	}
+}
+
+func (tr *TunnelRegistry) resolvePreflightWaiter(clientID string, generation uint64, resp protocol.TunnelPreflightResponse) bool {
+	if resp.RequestID == "" {
+		return false
+	}
+	key := pendingTunnelPreflightKey{clientID: clientID, generation: generation, requestID: resp.RequestID}
+	tr.pendingPreflightMu.Lock()
+	ch, ok := tr.pendingPreflights[key]
+	if ok {
+		delete(tr.pendingPreflights, key)
+	}
+	tr.pendingPreflightMu.Unlock()
+	if !ok {
+		return false
+	}
+	ch <- resp
+	close(ch)
+	return true
 }

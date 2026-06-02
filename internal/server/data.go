@@ -2,18 +2,21 @@ package server
 
 import (
 	"crypto/subtle"
-	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/hashicorp/yamux"
 
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
+
+const dataStreamDrainTimeout = 2 * time.Second
 
 func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 	if !websocket.IsWebSocketUpgrade(r) {
@@ -139,9 +142,19 @@ func (s *Server) handleDataWS(w http.ResponseWriter, r *http.Request) {
 			"info":      info,
 		})
 		go s.restoreTunnels(client)
+	} else {
+		go s.reconcileTunnelsForClient(client.ID, "data_channel_ready")
 	}
 
+	var streamWG sync.WaitGroup
+	streamWG.Add(1)
+	go s.acceptClientOpenedDataStreams(client, session, &streamWG)
+
 	<-session.CloseChan()
+	_ = session.Close()
+	if !waitForDataStreamHandlers(&streamWG, dataStreamDrainTimeout) {
+		log.Printf("⚠️ data channel: timed out waiting for client-opened streams to close [%s] generation=%d", clientID, generation)
+	}
 
 	client.dataMu.Lock()
 	isCurrentSession := client.dataSession == session
@@ -168,8 +181,43 @@ func (s *Server) writeDataHandshakeResult(conn *websocket.Conn, status byte) err
 	return conn.WriteMessage(websocket.BinaryMessage, []byte{status})
 }
 
-// openStreamToClient opens a new stream on the client's yamux session and
-// writes a StreamHeader to tell the client which proxy this stream belongs to.
+func (s *Server) acceptClientOpenedDataStreams(client *ClientConn, session *yamux.Session, streamWG *sync.WaitGroup) {
+	defer streamWG.Done()
+	for {
+		stream, err := session.AcceptStream()
+		if err != nil {
+			return
+		}
+		streamWG.Add(1)
+		go func() {
+			defer streamWG.Done()
+			header, err := protocol.DecodeDataStreamHeader(stream)
+			if err != nil {
+				log.Printf("⚠️ data channel: decode client-opened stream header failed [%s]: %v", client.ID, err)
+				_ = stream.Close()
+				return
+			}
+			s.handleClientOpenedDataStream(client, stream, header)
+		}()
+	}
+}
+
+func waitForDataStreamHandlers(streamWG *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		streamWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// openStreamToClient opens a new server-relay stream on the client's yamux session and
+// writes a DataStreamHeader that identifies the tunnel/revision before payload bytes.
 func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.Conn, error) {
 	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
 		return nil, fmt.Errorf("client [%s] is not online", client.ID)
@@ -188,18 +236,56 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 		return nil, fmt.Errorf("OpenStream failed: %w", err)
 	}
 
-	// Write StreamHeader: [2B name length] [NB proxy_name]
-	nameBytes := []byte(proxyName)
-	var lenBuf [2]byte
-	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(nameBytes)))
-	if _, err := stream.Write(lenBuf[:]); err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("write StreamHeader length failed: %w", err)
+	client.proxyMu.Lock()
+	tunnel, ok := client.proxies[proxyName]
+	if ok {
+		ensureTunnelRuntimeRevision(tunnel)
 	}
-	if _, err := stream.Write(nameBytes); err != nil {
+	var header protocol.DataStreamHeader
+	if ok {
+		header, err = dataStreamHeaderForServerRelay(client, tunnel, proxyName)
+	}
+	client.proxyMu.Unlock()
+	if err != nil {
 		_ = stream.Close()
-		return nil, fmt.Errorf("write StreamHeader name failed: %w", err)
+		return nil, err
+	}
+	if !ok {
+		_ = stream.Close()
+		return nil, fmt.Errorf("proxy tunnel %q not found", proxyName)
+	}
+	if tunnel.Config.TransportPolicy == protocol.TransportPolicyDirectOnly {
+		_ = stream.Close()
+		return nil, fmt.Errorf("direct_only tunnels must not use server relay")
+	}
+
+	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
+		_ = stream.Close()
+		return nil, fmt.Errorf("write DataStreamHeader failed: %w", err)
 	}
 
 	return stream, nil
+}
+
+func dataStreamHeaderForServerRelay(client *ClientConn, tunnel *ProxyTunnel, fallbackName string) (protocol.DataStreamHeader, error) {
+	tunnelID := tunnel.Config.ID
+	if tunnelID == "" {
+		tunnelID = fallbackName
+	}
+	streamID, err := protocol.NewDataStreamID()
+	if err != nil {
+		return protocol.DataStreamHeader{}, err
+	}
+	return protocol.DataStreamHeader{
+		Kind:             protocol.DataStreamHeaderKindTunnelStream,
+		TunnelID:         tunnelID,
+		Revision:         int64(ensureTunnelRuntimeRevision(tunnel)),
+		StreamID:         streamID,
+		OpenClientID:     client.ID,
+		SourceRole:       protocol.DataStreamRoleServer,
+		TargetRole:       protocol.DataStreamRoleTarget,
+		Direction:        protocol.DataStreamDirectionIngressToTarget,
+		Transport:        protocol.ActualTransportServerRelay,
+		ServerAuthorized: true,
+	}, nil
 }

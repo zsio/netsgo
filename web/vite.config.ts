@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '')
   const backendTarget = (env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:9527').replace(/\/$/, '')
   const wsTarget = backendTarget.replace(/^http/, 'ws')
+  const proxyChangeOrigin = env.VITE_DEV_PROXY_CHANGE_ORIGIN !== 'false'
 
   return {
     plugins: [
@@ -33,12 +34,12 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': {
           target: backendTarget,
-          changeOrigin: true,
+          changeOrigin: proxyChangeOrigin,
         },
         '/ws': {
           target: wsTarget,
           ws: true,
-          changeOrigin: true,
+          changeOrigin: proxyChangeOrigin,
         },
       },
     },
