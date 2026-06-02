@@ -4,10 +4,42 @@ export const SERVER_ADDR_PLACEHOLDER = 'e.g. https://tunnel.example.com';
 export const SERVER_ADDR_HELP_TEXT = 'Only http:// and https:// are supported. Enter a base connection address without path, query, fragment, or user info. HTTPS through nginx/caddy or another reverse proxy is recommended.';
 
 type ServerAddrHostKind = 'domain' | 'ip' | 'localhost' | 'local';
+export type ServerAddrValidationCode =
+  | 'required'
+  | 'invalid_url'
+  | 'unsupported_protocol'
+  | 'not_base_url'
+  | 'contains_user_info'
+  | 'invalid_hostname';
+
+export interface ServerAddrValidationIssue {
+  code: ServerAddrValidationCode;
+  message: string;
+}
 
 interface ServerAddrInfo {
   isSecure: boolean;
   hostKind: ServerAddrHostKind;
+}
+
+type ParsedServerAddrResult =
+  | { error: ServerAddrValidationIssue; url?: never; normalized?: never }
+  | { error?: never; url: URL; normalized: string };
+
+const serverAddrValidationMessages = {
+  required: 'Enter a valid Client connection address.',
+  invalid_url: 'Enter a valid full URL that includes http:// or https://.',
+  unsupported_protocol: 'Only http:// and https:// are supported.',
+  not_base_url: 'Enter a base connection address without path, query, or fragment.',
+  contains_user_info: 'Enter a base connection address without user info.',
+  invalid_hostname: 'Hostname must be an FQDN, localhost, IPv4, or IPv6 literal.',
+} as const satisfies Record<ServerAddrValidationCode, string>;
+
+function serverAddrValidationIssue(code: ServerAddrValidationCode): ServerAddrValidationIssue {
+  return {
+    code,
+    message: serverAddrValidationMessages[code],
+  };
 }
 
 function parseServerAddr(value: string): URL | null {
@@ -37,15 +69,15 @@ function hasUserInfo(raw: string) {
 
 function validateParsedServerAddr(raw: string, url: URL) {
   if (!isSupportedServerAddrProtocol(url.protocol)) {
-    return 'Only http:// and https:// are supported.';
+    return serverAddrValidationIssue('unsupported_protocol');
   }
 
   if ((url.pathname && url.pathname !== '/') || url.search || url.hash) {
-    return 'Enter a base connection address without path, query, or fragment.';
+    return serverAddrValidationIssue('not_base_url');
   }
 
   if (hasUserInfo(raw) || url.username || url.password) {
-    return 'Enter a base connection address without user info.';
+    return serverAddrValidationIssue('contains_user_info');
   }
 
   const hostname = url.hostname.toLowerCase();
@@ -63,22 +95,22 @@ function validateParsedServerAddr(raw: string, url: URL) {
     ));
 
     if (!isFQDN) {
-      return 'Hostname must be an FQDN, localhost, IPv4, or IPv6 literal.';
+      return serverAddrValidationIssue('invalid_hostname');
     }
   }
 
   return null;
 }
 
-function parseValidatedServerAddr(value: string) {
+function parseValidatedServerAddr(value: string): ParsedServerAddrResult {
   const trimmed = value.trim();
   if (!trimmed) {
-    return { error: 'Enter a valid Client connection address.' as const };
+    return { error: serverAddrValidationIssue('required') };
   }
 
   const url = parseServerAddr(trimmed);
   if (!url) {
-    return { error: 'Enter a valid full URL that includes http:// or https://.' as const };
+    return { error: serverAddrValidationIssue('invalid_url') };
   }
 
   const error = validateParsedServerAddr(trimmed, url);
@@ -94,7 +126,12 @@ function parseValidatedServerAddr(value: string) {
 
 export function getServerAddrValidationError(value: string) {
   const result = parseValidatedServerAddr(value);
-  return 'error' in result ? result.error : null;
+  return result.error?.message ?? null;
+}
+
+export function getServerAddrValidationIssue(value: string): ServerAddrValidationIssue | null {
+  const result = parseValidatedServerAddr(value);
+  return result.error ?? null;
 }
 
 export function normalizeServerAddr(value: string) {

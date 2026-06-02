@@ -330,9 +330,9 @@ describe('TunnelListTable', () => {
       }),
     ]);
 
-    expect(markup).toContain('ingress port is already in use +1');
-    expect(markup).toContain('error: ingress port is already in use');
-    expect(markup).toContain('error: target client acknowledgement timed out');
+    expect(markup).toContain('Ingress port is already in use. +1');
+    expect(markup).toContain('error: Ingress port is already in use.');
+    expect(markup).toContain('error: Client did not confirm tunnel provisioning in time.');
     expect(markup).toContain('lucide-circle-question-mark');
   });
 

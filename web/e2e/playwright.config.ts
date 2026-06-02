@@ -13,6 +13,7 @@ export default defineConfig({
   outputDir: '../../test-results/playwright',
   use: {
     baseURL: process.env.NETSGO_E2E_BASE_URL ?? 'http://127.0.0.1:19180',
+    locale: 'en-US',
     trace: 'retain-on-failure',
   },
   projects: [

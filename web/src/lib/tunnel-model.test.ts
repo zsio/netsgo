@@ -385,7 +385,7 @@ describe('tunnel-model', () => {
     })).toThrow('TCP/UDP tunnels require an explicit public port.');
   });
 
-  test('API 字段错误保留字段、文案和错误码', () => {
+  test('API 字段错误保留字段和错误码，文案按错误码本地化', () => {
     const error = new ApiError(400, 'Bad Request', 'bind_ip must be a valid IPv4 address', {
       field: 'ingress.config.bind_ip',
       code: 'invalid_bind_ip',
@@ -393,7 +393,7 @@ describe('tunnel-model', () => {
 
     expect(getTunnelMutationFieldError(error)).toEqual({
       field: 'ingress.config.bind_ip',
-      message: 'bind_ip must be a valid IPv4 address',
+      message: 'Ingress bind address must be a valid IP address.',
       code: 'invalid_bind_ip',
     });
   });

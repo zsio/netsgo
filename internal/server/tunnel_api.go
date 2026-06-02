@@ -363,11 +363,11 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 }
 
 func tunnelDeleteBlockedErrorBody(config protocol.ProxyConfig) map[string]any {
-	message := "当前隧道暂时不能删除"
+	message := "This tunnel cannot be deleted right now"
 	if config.DesiredState == protocol.ProxyDesiredStateRunning && config.RuntimeState == protocol.ProxyRuntimeStateExposed {
-		message = "请先停止隧道后再删除"
+		message = "Stop the tunnel before deleting it"
 	} else if config.RuntimeState == protocol.ProxyRuntimeStatePending {
-		message = "隧道正在处理中，请稍后再删除"
+		message = "Tunnel is still processing. Try deleting it later"
 	}
 	return map[string]any{
 		"error":      message,

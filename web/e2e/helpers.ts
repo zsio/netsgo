@@ -34,6 +34,9 @@ export type ClientToClientTunnelInput = {
   ingressPort: string;
 };
 
+const e2eLocaleStorageKey = 'netsgo.locale';
+const pagesWithLocaleInit = new WeakSet<Page>();
+
 function requiredEnv(name: string) {
   const value = process.env[name];
   if (!value) {
@@ -66,6 +69,7 @@ export async function login(page: Page) {
 }
 
 export async function gotoWhenReady(page: Page, path: string) {
+  await ensureEnglishLocale(page);
   const deadline = Date.now() + 90_000;
   let lastError: unknown;
   while (Date.now() < deadline) {
@@ -78,6 +82,16 @@ export async function gotoWhenReady(page: Page, path: string) {
     }
   }
   throw lastError instanceof Error ? lastError : new Error(`timed out waiting for ${path}`);
+}
+
+async function ensureEnglishLocale(page: Page) {
+  if (pagesWithLocaleInit.has(page)) {
+    return;
+  }
+  await page.addInitScript(({ key, value }) => {
+    window.localStorage.setItem(key, value);
+  }, { key: e2eLocaleStorageKey, value: 'en-US' });
+  pagesWithLocaleInit.add(page);
 }
 
 export async function fetchClients(page: Page): Promise<ClientSummary[]> {

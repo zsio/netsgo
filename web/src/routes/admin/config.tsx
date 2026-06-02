@@ -21,7 +21,7 @@ import {
   AlertDialogMedia, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { api } from '@/lib/api';
-import { getServerAddrValidationError, normalizeServerAddr, SERVER_ADDR_HELP_TEXT, SERVER_ADDR_PLACEHOLDER } from '@/lib/server-address';
+import { getServerAddrValidationIssue, normalizeServerAddr, SERVER_ADDR_HELP_TEXT, SERVER_ADDR_PLACEHOLDER } from '@/lib/server-address';
 import { createLocalId } from '@/lib/utils';
 import { resolveTunnelStatus } from '@/lib/tunnel-model';
 import toast from 'react-hot-toast';
@@ -73,7 +73,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
   const updateConfig = useUpdateAdminConfig();
   const [serverAddr, setServerAddr] = useState(initialConfig.server_addr || '');
   const initialServerAddr = (initialConfig.server_addr || '').trim();
-  const initialServerAddrIsLegacy = initialServerAddr !== '' && getServerAddrValidationError(initialServerAddr) !== null;
+  const initialServerAddrIsLegacy = initialServerAddr !== '' && getServerAddrValidationIssue(initialServerAddr) !== null;
   const serverAddrLocked = initialConfig.server_addr_locked;
   // 为每行分配一个绝对稳定的本地 id 以保证增删、编辑改值时 React 动画不会重组闪烁
   const [portRanges, setPortRanges] = useState<LocalPortRange[]>(() => {
@@ -106,9 +106,9 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
       };
     }
 
-    const addrError = getServerAddrValidationError(serverAddr);
-    if (addrError) {
-      toast.error(addrError);
+    const addrIssue = getServerAddrValidationIssue(serverAddr);
+    if (addrIssue) {
+      toast.error(t(`serverAddress.${addrIssue.code}`, { defaultValue: addrIssue.message }));
       return null;
     }
     const normalizedServerAddr = normalizeServerAddr(serverAddr);

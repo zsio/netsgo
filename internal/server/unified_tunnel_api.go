@@ -1221,13 +1221,13 @@ func (s *Server) capabilityIssuesForStoredTunnel(stored StoredTunnel) []protocol
 	if stored.Target.ClientID != "" {
 		target, ok := s.registeredClientInfo(stored.Target.ClientID)
 		if !ok || !clientSupportsTargetType(target.Info.Capabilities, stored.Target.Type) {
-			issues = append(issues, capabilityIssue("target_client", stored.Target.ClientID, stored.Target.Type, "服务来源客户端不支持当前目标服务类型"))
+			issues = append(issues, capabilityIssue("target_client", stored.Target.ClientID, stored.Target.Type, "Service source client does not support this target service type"))
 		}
 	}
 	if stored.Ingress.Location == tunnelEndpointLocationClient && stored.Ingress.ClientID != "" {
 		ingress, ok := s.registeredClientInfo(stored.Ingress.ClientID)
 		if !ok || !clientSupportsIngressType(ingress.Info.Capabilities, stored.Ingress.Type) {
-			issues = append(issues, capabilityIssue("ingress_client", stored.Ingress.ClientID, stored.Ingress.Type, "访问入口客户端不支持当前入口类型"))
+			issues = append(issues, capabilityIssue("ingress_client", stored.Ingress.ClientID, stored.Ingress.Type, "Ingress client does not support this ingress type"))
 		}
 	}
 	return issues

@@ -22,6 +22,7 @@ import {
 } from '@/lib/tunnel-model';
 import { cn } from '@/lib/utils';
 import { getClientDisplayName } from '@/lib/client-utils';
+import { formatTunnelIssueMessage, formatTunnelIssueTooltipLine } from '@/lib/tunnel-issues';
 import {
   useResumeTunnel, useStopTunnel, useDeleteTunnel,
 } from '@/hooks/use-tunnel-mutations';
@@ -564,10 +565,10 @@ function TunnelStatusBadge({
   const primaryIssue = issueItems[0];
   const additionalIssueCount = Math.max(0, issueItems.length - 1);
   const issueSummary = primaryIssue
-    ? `${primaryIssue.message}${additionalIssueCount > 0 ? ` +${additionalIssueCount}` : ''}`
+    ? `${formatTunnelIssueMessage(primaryIssue)}${additionalIssueCount > 0 ? ` +${additionalIssueCount}` : ''}`
     : '';
   const tooltipLines = issueItems.length > 0
-    ? issueItems.map((issue) => `${issue.severity}: ${issue.message}`)
+    ? issueItems.map(formatTunnelIssueTooltipLine)
     : error
       ? [error]
       : [];

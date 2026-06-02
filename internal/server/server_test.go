@@ -3818,7 +3818,7 @@ func TestDeleteRunningTunnelReturnsLocalizedError(t *testing.T) {
 	if errorMessage == "" {
 		t.Fatalf("error should be non-empty, got %v", body["error"])
 	}
-	if errorMessage != "请先停止隧道后再删除" {
+	if errorMessage != "Stop the tunnel before deleting it" {
 		t.Fatalf("error: want running delete hint, got %q", errorMessage)
 	}
 	if strings.Contains(errorMessage, "running/exposed") {

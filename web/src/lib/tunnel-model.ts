@@ -249,22 +249,17 @@ export function buildTunnelViewModel(
 export function getTunnelMutationErrorMessage(error: unknown) {
   if (error instanceof ApiError) {
     const body = error.body as TunnelMutationErrorResponse | undefined;
-    switch (body?.code ?? body?.error_code) {
-      case 'server_addr_conflict':
-        return i18n.t('errors.server_addr_conflict');
-      case 'http_tunnel_conflict':
-        return i18n.t('errors.http_tunnel_conflict');
-      case 'metadata_missing':
-        return i18n.t('errors.metadata_missing');
-      case 'unknown_target_type':
-      case 'unsupported_target_type':
-      case 'unsupported_endpoint_type':
-        return i18n.t('errors.unsupported_endpoint_type');
-      case 'direct_transport_unavailable':
-        return i18n.t('errors.direct_transport_unavailable');
-      default:
-        return error.message;
+    const code = body?.code ?? body?.error_code;
+    if (code === 'unknown_target_type' || code === 'unsupported_target_type') {
+      return i18n.t('errors.unsupported_endpoint_type');
     }
+    if (code) {
+      const localizedMessage = i18n.t(`errors.${code}`, { defaultValue: '' });
+      if (localizedMessage) {
+        return localizedMessage;
+      }
+    }
+    return error.message;
   }
 
   if (error instanceof Error) {
