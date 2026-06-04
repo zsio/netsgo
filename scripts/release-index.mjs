@@ -48,6 +48,9 @@ function parseAssetName(name, version) {
 
   const desktopAssetPatterns = [
     { re: /^macos_x64\.app\.tar\.gz$/, os: 'macos', arch: 'x64', kind: 'desktop-app' },
+    { re: /^macos_x64\.app\.zip$/, os: 'macos', arch: 'x64', kind: 'desktop-app' },
+    { re: /^macos_arm64\.app\.zip$/, os: 'macos', arch: 'arm64', kind: 'desktop-app' },
+    { re: /^macos_x64\.dmg$/, os: 'macos', arch: 'x64', kind: 'desktop-dmg' },
     { re: /^macos_arm64\.dmg$/, os: 'macos', arch: 'arm64', kind: 'desktop-dmg' },
     { re: /^windows_x64-setup\.exe$/, os: 'windows', arch: 'x64', kind: 'desktop-nsis' },
     { re: /^windows_x64_en-US\.msi$/, os: 'windows', arch: 'x64', kind: 'desktop-msi' },

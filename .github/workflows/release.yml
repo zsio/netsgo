@@ -71,11 +71,11 @@ jobs:
             bundles: app
             desktop_os: macos
             desktop_arch: x64
-            asset_ext: .app.tar.gz
+            asset_ext: .dmg
           - os: macos-15
             target: aarch64-apple-darwin
             artifact: desktop-macos-arm64
-            bundles: dmg
+            bundles: app
             desktop_os: macos
             desktop_arch: arm64
             asset_ext: .dmg
@@ -118,6 +118,22 @@ jobs:
             --target "${{ matrix.target }}" \
             --bundles "${{ matrix.bundles }}" \
             --config "{\"version\":\"${cargo_version}\"}"
+      - name: Sign macOS app bundle
+        if: ${{ matrix.desktop_os == 'macos' }}
+        shell: bash
+        env:
+          CODESIGN_IDENTITY: "-"
+          CLEAR_QUARANTINE: "0"
+        run: |
+          set -euo pipefail
+          bundle_dir="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          app_dir="$(find "$bundle_dir" -type d -name '*.app' -print -quit)"
+          if [ -z "$app_dir" ]; then
+            echo "No macOS .app bundle found under $bundle_dir" >&2
+            find "$bundle_dir" -print >&2
+            exit 1
+          fi
+          scripts/sign-macos-app.sh "$app_dir"
       - name: Normalize desktop artifacts
         shell: bash
         run: |
@@ -134,28 +150,22 @@ jobs:
 
           case "${{ matrix.desktop_os }}/${{ matrix.desktop_arch }}" in
             macos/x64)
-              asset="$out_dir/NetsGo_${version}_macos_x64.app.tar.gz"
-              app_archive="$(find "$bundle_dir" -type f -name '*.app.tar.gz' -print -quit)"
-              if [ -n "$app_archive" ]; then
-                cp "$app_archive" "$asset"
-              else
-                app_dir="$(find "$bundle_dir" -type d -name '*.app' -print -quit)"
-                if [ -z "$app_dir" ]; then
-                  echo "No macOS .app bundle found under $bundle_dir" >&2
-                  find "$bundle_dir" -print >&2
-                  exit 1
-                fi
-                tar -czf "$asset" -C "$(dirname "$app_dir")" "$(basename "$app_dir")"
-              fi
-              ;;
-            macos/arm64)
-              dmg="$(find "$bundle_dir" -type f -name '*.dmg' -print -quit)"
-              if [ -z "$dmg" ]; then
-                echo "No macOS DMG found under $bundle_dir" >&2
+              app_dir="$(find "$bundle_dir" -type d -name '*.app' -print -quit)"
+              if [ -z "$app_dir" ]; then
+                echo "No macOS .app bundle found under $bundle_dir" >&2
                 find "$bundle_dir" -print >&2
                 exit 1
               fi
-              cp "$dmg" "$out_dir/NetsGo_${version}_macos_arm64.dmg"
+              scripts/package-macos-dmg.sh "$app_dir" "$out_dir/NetsGo_${version}_macos_x64.dmg"
+              ;;
+            macos/arm64)
+              app_dir="$(find "$bundle_dir" -type d -name '*.app' -print -quit)"
+              if [ -z "$app_dir" ]; then
+                echo "No macOS .app bundle found under $bundle_dir" >&2
+                find "$bundle_dir" -print >&2
+                exit 1
+              fi
+              scripts/package-macos-dmg.sh "$app_dir" "$out_dir/NetsGo_${version}_macos_arm64.dmg"
               ;;
             windows/x64)
               exe="$(find "$bundle_dir" -type f -name '*.exe' -print -quit)"
@@ -350,7 +360,7 @@ jobs:
           assets=()
           while IFS= read -r asset; do
             assets+=("$asset")
-          done < <(find dist -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.msi' -o -name '*.exe' \) -exec basename {} \; | LC_ALL=C sort)
+          done < <(find dist -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.app.zip' -o -name '*.msi' -o -name '*.exe' \) -exec basename {} \; | LC_ALL=C sort)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "No release assets found for checksum manifest" >&2
             exit 1
@@ -481,7 +491,7 @@ jobs:
           }
 
           shopt -s nullglob
-          for file in dist/netsgo_*.tar.gz dist/*.dmg dist/*.app.tar.gz dist/*.msi dist/*.exe dist/checksums.txt dist/checksums.txt.sig dist/checksums.txt.sshsig; do
+          for file in dist/netsgo_*.tar.gz dist/*.dmg dist/*.app.tar.gz dist/*.app.zip dist/*.msi dist/*.exe dist/checksums.txt dist/checksums.txt.sig dist/checksums.txt.sshsig; do
             name="$(basename "$file")"
             size="$(stat -c%s "$file")"
             if ! upload_cnb_asset "$file" "$name" "$size"; then

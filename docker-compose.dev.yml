@@ -2,7 +2,7 @@
 # and the Vite dev server proxy. Open http://localhost:5173.
 
 x-go-dev: &go-dev
-  image: golang:1.25.10-bookworm
+  image: golang:1.25.11-bookworm
   working_dir: /workspace
   init: true
   environment:

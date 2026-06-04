@@ -1,4 +1,4 @@
-.PHONY: build build-web build-go build-desktop-sidecar build-desktop clean docs dev-server dev-client dev-bench dev-web test test-race lint test-e2e-nginx test-e2e-caddy test-playwright-e2e test-playwright-e2e-smoke test-playwright-e2e-full test-playwright-e2e-run bench-data soak-data compose-stack-up compose-stack-logs compose-stack-down compose-stack-clean test-compose-stack test-compose-stack-nginx test-compose-stack-caddy
+.PHONY: build build-web build-go build-desktop-sidecar build-desktop build-desktop-macos-local sign-desktop-macos-app package-desktop-macos-local clean docs dev-server dev-client dev-bench dev-web test test-race lint test-e2e-nginx test-e2e-caddy test-playwright-e2e test-playwright-e2e-smoke test-playwright-e2e-full test-playwright-e2e-run bench-data soak-data compose-stack-up compose-stack-logs compose-stack-down compose-stack-clean test-compose-stack test-compose-stack-nginx test-compose-stack-caddy
 
 # 编译输出目录
 BIN_DIR=bin
@@ -37,6 +37,10 @@ build-go:
 
 DESKTOP_TARGET_TRIPLE ?= $(shell rustc --print host-tuple 2>/dev/null || rustc -vV 2>/dev/null | sed -n 's/^host: //p')
 DESKTOP_BUNDLE_ARGS ?= --no-bundle
+DESKTOP_MACOS_APP ?= desktop/src-tauri/target/$(DESKTOP_TARGET_TRIPLE)/release/bundle/macos/NetsGo.app
+DESKTOP_MACOS_DMG ?= desktop/src-tauri/target/$(DESKTOP_TARGET_TRIPLE)/release/bundle/macos/NetsGo-macOS-$(DESKTOP_TARGET_TRIPLE).dmg
+DESKTOP_CODESIGN_IDENTITY ?= -
+DESKTOP_CLEAR_QUARANTINE ?= 1
 
 # 构建当前 Rust target 对应的 desktop client sidecar。使用 dev tag 跳过 server Web 面板嵌入。
 build-desktop-sidecar:
@@ -47,6 +51,18 @@ build-desktop: build-desktop-sidecar
 	@echo "🖥️  构建 desktop..."
 	cd desktop && bun install --frozen-lockfile && bun run tauri build --target "$(DESKTOP_TARGET_TRIPLE)" $(DESKTOP_BUNDLE_ARGS)
 	@echo "✅ desktop 构建完成"
+
+# 构建 macOS .app 并做本地可用的签名。没有 Apple Developer 账号时默认使用 ad-hoc identity "-".
+build-desktop-macos-local: DESKTOP_BUNDLE_ARGS=--bundles app
+build-desktop-macos-local: build-desktop sign-desktop-macos-app
+	@echo "✅ macOS desktop 本地构建完成: $(DESKTOP_MACOS_APP)"
+
+sign-desktop-macos-app:
+	@CODESIGN_IDENTITY="$(DESKTOP_CODESIGN_IDENTITY)" CLEAR_QUARANTINE="$(DESKTOP_CLEAR_QUARANTINE)" scripts/sign-macos-app.sh "$(DESKTOP_MACOS_APP)"
+
+package-desktop-macos-local: build-desktop-macos-local
+	@echo "📦 打包 macOS desktop dmg..."
+	@scripts/package-macos-dmg.sh "$(DESKTOP_MACOS_APP)" "$(DESKTOP_MACOS_DMG)"
 
 # 清理
 clean:
