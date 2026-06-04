@@ -1,17 +1,26 @@
 use std::env;
 use std::fs::{create_dir_all, metadata, remove_dir_all, remove_file, rename, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{Emitter, Manager, RunEvent};
+use tauri::{
+    image::Image,
+    menu::{Menu, MenuBuilder, MenuItem},
+    tray::TrayIconBuilder,
+    Emitter, Manager, RunEvent, WindowEvent,
+};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 const SIDECAR_EVENT_NAME: &str = "netsgo://client-sidecar-event";
 const SIDECAR_BASE_PATH: &str = "binaries/netsgo";
+const TRAY_ACTION_ID: &str = "connection-action";
+const TRAY_SHOW_ID: &str = "show-window";
+const TRAY_QUIT_ID: &str = "quit-app";
+const TRAY_ID: &str = "main";
 const DESKTOP_LOG_MAX_ENTRY_BYTES: usize = 16 * 1024;
 const DESKTOP_LOG_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const DESKTOP_LOG_ROTATED_FILE_NAME: &str = "desktop.1.jsonl";
@@ -22,12 +31,66 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .manage(ClientSidecarManager::default())
+        .manage(TrayConnectionState::default())
+        .setup(|app| {
+            let menu = build_tray_menu(app.handle(), TrayConnectionAction::Hidden)?;
+
+            let mut tray = TrayIconBuilder::with_id(TRAY_ID)
+                .tooltip("NetsGo")
+                .menu(&menu)
+                .show_menu_on_left_click(true)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    TRAY_ACTION_ID => {
+                        let manager = app.state::<ClientSidecarManager>();
+                        let tray_state = app.state::<TrayConnectionState>();
+                        let action = tray_state.action();
+                        if action == TrayConnectionAction::Disconnect {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.emit("netsgo://tray-disconnect-request", ());
+                            } else {
+                                let _ = manager.kill_running_child();
+                            }
+                        } else if action == TrayConnectionAction::Connect {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                                let _ = window.emit("netsgo://tray-start-request", ());
+                            }
+                        }
+                    }
+                    TRAY_SHOW_ID => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    TRAY_QUIT_ID => {
+                        let manager = app.state::<ClientSidecarManager>();
+                        let _ = manager.kill_running_child();
+                        app.exit(0);
+                    }
+                    _ => {}
+                });
+
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(disconnected_tray_icon(icon));
+            }
+            tray.build(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             append_desktop_log,
             clear_client_state_dir,
             start_client_sidecar,
             stop_client_sidecar,
-            client_sidecar_status
+            client_sidecar_status,
+            update_tray_connection_menu
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -55,6 +118,29 @@ struct ClientSidecarState {
     start_seq: u64,
 }
 
+#[derive(Default)]
+struct TrayConnectionState {
+    inner: Mutex<TrayConnectionAction>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum TrayConnectionAction {
+    #[default]
+    Hidden,
+    Connect,
+    Disconnect,
+}
+
+impl TrayConnectionState {
+    fn action(&self) -> TrayConnectionAction {
+        *self.inner.lock().unwrap()
+    }
+
+    fn set_action(&self, action: TrayConnectionAction) {
+        *self.inner.lock().unwrap() = action;
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StartClientSidecarRequest {
@@ -62,6 +148,13 @@ struct StartClientSidecarRequest {
     key: Option<String>,
     mode: String,
     data_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrayConnectionMenuRequest {
+    state: String,
+    has_saved_connection: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -131,8 +224,8 @@ fn append_desktop_log(app: tauri::AppHandle, entry: Value) -> Result<(), String>
     rotate_desktop_log_if_needed(&path, &rotated_path)?;
 
     let sanitized = sanitize_log_value(entry);
-    let line = serde_json::to_string(&sanitized)
-        .map_err(|err| format!("encode app log entry: {err}"))?;
+    let line =
+        serde_json::to_string(&sanitized).map_err(|err| format!("encode app log entry: {err}"))?;
     if line.len() > DESKTOP_LOG_MAX_ENTRY_BYTES {
         return Err(format!(
             "desktop log entry exceeds {} bytes",
@@ -232,6 +325,97 @@ fn client_sidecar_status(manager: tauri::State<ClientSidecarManager>) -> ClientS
 }
 
 #[tauri::command]
+fn update_tray_connection_menu(
+    app: tauri::AppHandle,
+    tray_state: tauri::State<TrayConnectionState>,
+    request: TrayConnectionMenuRequest,
+) -> Result<(), String> {
+    let action = tray_action_for_state(&request.state, request.has_saved_connection);
+    tray_state.set_action(action);
+
+    let menu = build_tray_menu(&app, action).map_err(|err| format!("build tray menu: {err}"))?;
+    let tray = app
+        .tray_by_id(TRAY_ID)
+        .ok_or_else(|| format!("tray icon not found: {TRAY_ID}"))?;
+    tray.set_menu(Some(menu))
+        .map_err(|err| format!("update tray menu: {err}"))?;
+    if let Some(icon) = app.default_window_icon() {
+        let icon = if action == TrayConnectionAction::Disconnect {
+            icon.clone()
+        } else {
+            disconnected_tray_icon(icon)
+        };
+        tray.set_icon(Some(icon))
+            .map_err(|err| format!("update tray icon: {err}"))?;
+    }
+    Ok(())
+}
+
+fn tray_action_for_state(state: &str, has_saved_connection: bool) -> TrayConnectionAction {
+    match state {
+        "connected" | "connecting" | "disconnecting" => TrayConnectionAction::Disconnect,
+        "saved" if has_saved_connection => TrayConnectionAction::Connect,
+        _ => TrayConnectionAction::Hidden,
+    }
+}
+
+fn build_tray_menu<R: tauri::Runtime>(
+    manager: &impl Manager<R>,
+    action: TrayConnectionAction,
+) -> tauri::Result<Menu<R>> {
+    let show = MenuItem::with_id(manager, TRAY_SHOW_ID, "显示", true, None::<&str>)?;
+    let quit = MenuItem::with_id(manager, TRAY_QUIT_ID, "退出程序", true, None::<&str>)?;
+    let builder = MenuBuilder::new(manager);
+
+    match action {
+        TrayConnectionAction::Connect => builder
+            .item(&MenuItem::with_id(
+                manager,
+                TRAY_ACTION_ID,
+                "连接",
+                true,
+                None::<&str>,
+            )?)
+            .item(&show)
+            .separator()
+            .item(&quit)
+            .build(),
+        TrayConnectionAction::Disconnect => builder
+            .item(&MenuItem::with_id(
+                manager,
+                TRAY_ACTION_ID,
+                "断开",
+                true,
+                None::<&str>,
+            )?)
+            .item(&show)
+            .separator()
+            .item(&quit)
+            .build(),
+        TrayConnectionAction::Hidden => builder.item(&show).separator().item(&quit).build(),
+    }
+}
+
+fn disconnected_tray_icon(icon: &Image<'_>) -> Image<'static> {
+    let mut rgba = icon.rgba().to_vec();
+    for pixel in rgba.chunks_exact_mut(4) {
+        let [r, g, b, a] = pixel else {
+            continue;
+        };
+        if *a > 0 && is_netsgo_orange(*r, *g, *b) {
+            *r = 41;
+            *g = 58;
+            *b = 71;
+        }
+    }
+    Image::new_owned(rgba, icon.width(), icon.height())
+}
+
+fn is_netsgo_orange(r: u8, g: u8, b: u8) -> bool {
+    r > 180 && (80..=180).contains(&g) && b < 60
+}
+
+#[tauri::command]
 fn start_client_sidecar(
     app: tauri::AppHandle,
     manager: tauri::State<ClientSidecarManager>,
@@ -270,7 +454,7 @@ fn start_client_sidecar(
         "json".to_string(),
     ]);
 
-    let sidecar_path = resolve_sidecar_path(&app)?;
+    let sidecar_path = resolve_sidecar_path()?;
     let mut command = app.shell().command(sidecar_path).args(args);
     if let Some(key) = sidecar_key {
         command = command.env("NETSGO_KEY", key);
@@ -305,27 +489,17 @@ fn start_client_sidecar(
     Ok(manager.status())
 }
 
-fn resolve_sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+fn resolve_sidecar_path() -> Result<PathBuf, String> {
     let target_triple = option_env!("TAURI_ENV_TARGET_TRIPLE")
         .map(str::to_string)
         .or_else(|| env::var("TARGET").ok())
         .unwrap_or_else(current_target_triple);
 
     let mut tried = Vec::new();
-    for relative in sidecar_relative_candidates(&target_triple) {
-        let resource_path = app
-            .path()
-            .resolve(&relative, tauri::path::BaseDirectory::Resource)
-            .map_err(|err| format!("resolve sidecar resource path: {err}"))?;
-        tried.push(resource_path.display().to_string());
-        if resource_path.exists() {
-            return Ok(resource_path);
-        }
-
-        let dev_path = std::path::PathBuf::from(&relative);
-        tried.push(dev_path.display().to_string());
-        if dev_path.exists() {
-            return Ok(dev_path);
+    for candidate in sidecar_path_candidates(&target_triple) {
+        tried.push(candidate.display().to_string());
+        if candidate.exists() {
+            return Ok(candidate);
         }
     }
 
@@ -335,13 +509,41 @@ fn resolve_sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, St
     ))
 }
 
-fn sidecar_relative_candidates(target_triple: &str) -> Vec<String> {
-    let base = format!("{SIDECAR_BASE_PATH}-{target_triple}");
-    if is_windows_target(target_triple) {
-        vec![format!("{base}.exe"), base]
-    } else {
-        vec![base]
+fn sidecar_path_candidates(target_triple: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(exe) = env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            for name in packaged_sidecar_names(target_triple) {
+                candidates.push(exe_dir.join(name));
+                candidates.push(exe_dir.join("binaries").join(name));
+            }
+        }
     }
+
+    let relative = sidecar_relative_path(target_triple);
+    if let Ok(cwd) = env::current_dir() {
+        candidates.push(cwd.join(&relative));
+        candidates.push(cwd.join("src-tauri").join(&relative));
+    }
+    candidates.push(PathBuf::from(relative));
+    candidates
+}
+
+fn packaged_sidecar_names(target_triple: &str) -> &'static [&'static str] {
+    if is_windows_target(target_triple) {
+        &["netsgo.exe", "netsgo"]
+    } else {
+        &["netsgo", "netsgo.exe"]
+    }
+}
+
+fn sidecar_relative_path(target_triple: &str) -> PathBuf {
+    let filename = if is_windows_target(target_triple) {
+        format!("{SIDECAR_BASE_PATH}-{target_triple}.exe")
+    } else {
+        format!("{SIDECAR_BASE_PATH}-{target_triple}")
+    };
+    PathBuf::from(filename)
 }
 
 fn is_windows_target(target_triple: &str) -> bool {
@@ -511,23 +713,86 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn windows_sidecar_candidates_try_exe_first() {
-        let candidates = sidecar_relative_candidates("x86_64-pc-windows-msvc");
+    fn macos_packaged_sidecar_candidate_uses_flat_binary_name() {
+        let candidates = sidecar_path_candidates("aarch64-apple-darwin");
+
+        assert!(candidates.iter().any(|path| {
+            path.file_name().and_then(|name| name.to_str()) == Some("netsgo")
+                && path.parent().is_some_and(|parent| {
+                    parent.file_name().and_then(|name| name.to_str()) == Some("MacOS")
+                        || !parent.ends_with("binaries")
+                })
+        }));
+    }
+
+    #[test]
+    fn dev_sidecar_candidate_keeps_target_triple_suffix() {
+        let relative = sidecar_relative_path("x86_64-pc-windows-msvc");
 
         assert_eq!(
-            candidates,
-            vec![
-                "binaries/netsgo-x86_64-pc-windows-msvc.exe",
-                "binaries/netsgo-x86_64-pc-windows-msvc",
-            ]
+            relative,
+            PathBuf::from("binaries/netsgo-x86_64-pc-windows-msvc.exe")
         );
     }
 
     #[test]
-    fn unix_sidecar_candidates_do_not_add_exe() {
-        let candidates = sidecar_relative_candidates("aarch64-apple-darwin");
+    fn windows_packaged_sidecar_candidate_includes_exe_extension() {
+        let candidates = sidecar_path_candidates("x86_64-pc-windows-msvc");
 
-        assert_eq!(candidates, vec!["binaries/netsgo-aarch64-apple-darwin"]);
+        assert!(candidates
+            .iter()
+            .any(|path| { path.file_name().and_then(|name| name.to_str()) == Some("netsgo.exe") }));
+    }
+
+    #[test]
+    fn packaged_sidecar_name_order_matches_target_platform() {
+        assert_eq!(
+            packaged_sidecar_names("x86_64-pc-windows-msvc"),
+            &["netsgo.exe", "netsgo"]
+        );
+        assert_eq!(
+            packaged_sidecar_names("aarch64-apple-darwin"),
+            &["netsgo", "netsgo.exe"]
+        );
+    }
+
+    #[test]
+    fn tray_action_matches_connection_state() {
+        assert_eq!(
+            tray_action_for_state("idle", false),
+            TrayConnectionAction::Hidden
+        );
+        assert_eq!(
+            tray_action_for_state("saved", false),
+            TrayConnectionAction::Hidden
+        );
+        assert_eq!(
+            tray_action_for_state("saved", true),
+            TrayConnectionAction::Connect
+        );
+        assert_eq!(
+            tray_action_for_state("connected", true),
+            TrayConnectionAction::Disconnect
+        );
+        assert_eq!(
+            tray_action_for_state("connecting", true),
+            TrayConnectionAction::Disconnect
+        );
+        assert_eq!(
+            tray_action_for_state("disconnecting", true),
+            TrayConnectionAction::Disconnect
+        );
+    }
+
+    #[test]
+    fn disconnected_tray_icon_recolors_orange_pixels() {
+        let rgba = vec![251, 133, 4, 255, 41, 58, 71, 255, 251, 133, 4, 0];
+        let icon = Image::new(&rgba, 3, 1);
+        let disconnected = disconnected_tray_icon(&icon);
+
+        assert_eq!(&disconnected.rgba()[0..4], &[41, 58, 71, 255]);
+        assert_eq!(&disconnected.rgba()[4..8], &[41, 58, 71, 255]);
+        assert_eq!(&disconnected.rgba()[8..12], &[251, 133, 4, 0]);
     }
 
     #[test]
@@ -552,10 +817,8 @@ mod tests {
 
     #[test]
     fn rotate_desktop_log_moves_oversized_current_log() {
-        let dir = std::env::temp_dir().join(format!(
-            "netsgo-desktop-log-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("netsgo-desktop-log-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp log dir");
         let path = dir.join("desktop.jsonl");

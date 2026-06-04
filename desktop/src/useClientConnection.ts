@@ -31,11 +31,23 @@ export function useClientConnection() {
     logDesktop("info", "desktop.app_started", "Desktop app started");
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    let unlistenTrayStart: (() => void) | null = null;
+    let unlistenTrayDisconnect: (() => void) | null = null;
 
     void (async () => {
       unlisten = await listen<ClientSidecarEvent>(SIDECAR_EVENT_NAME, (event) => {
         if (!disposed) {
           handleSidecarEvent(event.payload);
+        }
+      });
+      unlistenTrayStart = await listen("netsgo://tray-start-request", () => {
+        if (!disposed && lastServerRef.current) {
+          void startClient({ server: lastServerRef.current, mode: "token" });
+        }
+      });
+      unlistenTrayDisconnect = await listen("netsgo://tray-disconnect-request", () => {
+        if (!disposed) {
+          void disconnect();
         }
       });
 
@@ -48,8 +60,25 @@ export function useClientConnection() {
       disposed = true;
       logDesktop("info", "desktop.app_unmount", "Desktop app unmounting");
       unlisten?.();
+      unlistenTrayStart?.();
+      unlistenTrayDisconnect?.();
     };
   }, []);
+
+  useEffect(() => {
+    invoke("update_tray_connection_menu", {
+      request: {
+        state,
+        hasSavedConnection: Boolean(lastServer),
+      },
+    }).catch((error) => {
+      logDesktop("warn", "desktop.tray_menu_update_failed", "Tray menu update failed", {
+        state,
+        hasSavedConnection: Boolean(lastServer),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [state, lastServer]);
 
   const canConnect = useMemo(
     () =>
@@ -426,7 +455,7 @@ export function useClientConnection() {
     if (!sidecarRunningRef.current) {
       resolveCloseWaiters();
       disconnectTargetRef.current = null;
-      setState(targetState ?? (lastServer ? "saved" : "idle"));
+      setState(targetState ?? (lastServerRef.current ? "saved" : "idle"));
       setStatusText("");
       return;
     }

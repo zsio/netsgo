@@ -12,7 +12,7 @@ RUN chmod +x /opt/netsgo-e2e/*.sh
 
 ENTRYPOINT ["/bin/sh"]
 
-FROM --platform=$BUILDPLATFORM golang:1.25.10-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25.11-bookworm AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
