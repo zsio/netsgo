@@ -19,6 +19,7 @@ export const enUS = {
     english: 'English',
     chinese: 'Chinese',
     retry: 'Retry',
+    docs: 'Docs',
     githubStar: 'Star NetsGo on GitHub',
   },
   auth: {

@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import {
   Server as ServerIcon, LayoutDashboard,
   Settings,
-  LayersPlus, Languages, LogOut
+  BookOpen, LayersPlus, Languages, LogOut
 } from 'lucide-react';
 import { Link, useMatch, useRouterState, useNavigate } from '@tanstack/react-router';
 import type { Client } from '@/types';
@@ -48,6 +48,8 @@ const LANGUAGE_LABEL_KEYS: Record<SupportedLocale, string> = {
   'en-US': 'common.english',
   'zh-CN': 'common.chinese',
 };
+
+const DOCS_URL = 'https://netsgo.zs.uy';
 
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const { t, i18n } = useTranslation();
@@ -110,8 +112,8 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
         <SidebarGroup>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton 
-                asChild 
+              <SidebarMenuButton
+                asChild
                 isActive={isOverview} 
                 tooltip="Dashboard"
                 className="data-[active=true]:bg-background data-[active=true]:shadow-sm data-[active=true]:border-l-2 data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium"
@@ -222,6 +224,18 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                   <Settings className="h-4 w-4" />
                   <span>{t('dashboard.serverConfig')}</span>
                 </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                tooltip={t('common.docs')}
+                className="relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
+              >
+                <a href={DOCS_URL} target="_blank" rel="noreferrer">
+                  <BookOpen className="h-4 w-4" />
+                  <span>{t('common.docs')}</span>
+                </a>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>

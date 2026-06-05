@@ -21,6 +21,7 @@ export const zhCN = {
     english: '英文',
     chinese: '中文',
     retry: '重试',
+    docs: '文档',
     githubStar: '去 GitHub 给 NetsGo 点 Star',
   },
   auth: {
