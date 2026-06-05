@@ -33,6 +33,7 @@ const EXPIRY_OPTIONS = [
 ] as const;
 
 const INSTALL_SCRIPT_URL = 'https://netsgo.zs.uy/install.sh';
+const CLIENT_DOCKER_IMAGE = 'zsio/netsgo:latest';
 
 type CommandTab = 'install' | 'docker' | 'compose' | 'run';
 type CopyTarget = 'key' | 'url' | CommandTab;
@@ -167,7 +168,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       `  -e NETSGO_SERVER=${shellQuote(serverAddr)} \\`,
       `  -e NETSGO_KEY=${shellQuote(generatedKey)} \\`,
       '  -v netsgo-client-data:/var/lib/netsgo \\',
-      '  ghcr.io/zsio/netsgo:latest \\',
+      `  ${CLIENT_DOCKER_IMAGE} \\`,
       '  client --data-dir /var/lib/netsgo',
     ].join('\n')
     : '';
@@ -175,7 +176,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     ? [
       'services:',
       '  netsgo-client:',
-      '    image: ghcr.io/zsio/netsgo:latest',
+      `    # ${t('clients.dockerComposeChinaImageComment')}`,
+      `    image: ${CLIENT_DOCKER_IMAGE}`,
       '    restart: unless-stopped',
       '    user: "0:0"',
       '    network_mode: host',

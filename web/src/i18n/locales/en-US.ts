@@ -121,6 +121,7 @@ export const enUS = {
     installAndRun: 'Quick start',
     dockerRun: 'Docker',
     dockerCompose: 'Docker Compose',
+    dockerComposeChinaImageComment: 'Users in China can use docker.cnb.cool/zsio/netsgo:latest',
     runInstalled: 'Manual start',
     regenerate: 'Generate another',
     done: 'Done',
