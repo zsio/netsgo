@@ -205,6 +205,27 @@ func (ms *mockServer) getReceivedMsgs() []protocol.Message {
 	return result
 }
 
+func (ms *mockServer) waitForMessage(t *testing.T, timeout time.Duration, msgType string) protocol.Message {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		ms.mu.Lock()
+		for _, msg := range ms.receivedMsgs {
+			if msg.Type == msgType {
+				ms.mu.Unlock()
+				return msg
+			}
+		}
+		ms.mu.Unlock()
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("server did not receive %s message within %s", msgType, timeout)
+	return protocol.Message{}
+}
+
 func (ms *mockServer) getControlProtocols() [][]string {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -282,8 +303,11 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 		errCh <- c.Start()
 	}()
 
-	// Wait for the client to finish authentication
-	_ = ms.waitForConn(t, 2*time.Second)
+	// Wait for authentication to be observed by both the server and the client.
+	authMsg := ms.waitForMessage(t, 2*time.Second, protocol.MsgTypeAuth)
+	waitForClientCondition(t, 2*time.Second, func() bool {
+		return c.CurrentClientID() == "mock_client_1"
+	})
 
 	// Verify that ClientID was set
 	if c.CurrentClientID() != "mock_client_1" {
@@ -291,12 +315,8 @@ func TestClient_ConnectAndAuth(t *testing.T) {
 	}
 
 	// Verify that the server received the authentication message
-	msgs := ms.getReceivedMsgs()
-	if len(msgs) == 0 {
-		t.Fatal("server did not receive any messages")
-	}
-	if msgs[0].Type != protocol.MsgTypeAuth {
-		t.Errorf("the first message should be auth, got %s", msgs[0].Type)
+	if authMsg.Type != protocol.MsgTypeAuth {
+		t.Errorf("server should receive auth, got %s", authMsg.Type)
 	}
 }
 

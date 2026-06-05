@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,15 @@ import (
 
 	"netsgo/pkg/protocol"
 )
+
+func responseHasTunnelErrorCode(t testing.TB, resp *httptest.ResponseRecorder, code string) bool {
+	t.Helper()
+	var body tunnelMutationErrorResponse
+	if err := mustDecodeJSON(t, bytes.NewReader(resp.Body.Bytes()), &body); err != nil {
+		return false
+	}
+	return body.ErrorCode == code || body.Code == code
+}
 
 func TestDecodeStrictEndpointConfigRejectsComplexConfig(t *testing.T) {
 	var serviceCfg serviceConfigAPI
@@ -1936,71 +1946,87 @@ func TestAPI_UnifiedTunnelAcceptsAllServerRelayCloseoutShapes(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		body       []byte
+		body       func() []byte
 		topology   string
 		ingress    string
 		targetType string
 	}{
 		{
 			name: "server tcp",
-			body: []byte(`{
+			body: func() []byte {
+				return []byte(`{
 				"name":"shape-server-tcp",
 				"topology":"server_expose",
 				"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":` + strconv.Itoa(reserveTCPPort(t)) + `}},
 				"target":{"location":"client","client_id":"` + target.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
 				"transport_policy":"server_relay_only"
-			}`),
+			}`)
+			},
 			topology: tunnelTopologyServerExpose, ingress: tunnelIngressTypeTCPListen, targetType: tunnelTargetTypeTCPService,
 		},
 		{
 			name: "server udp",
-			body: []byte(`{
+			body: func() []byte {
+				return []byte(`{
 				"name":"shape-server-udp",
 				"topology":"server_expose",
 				"ingress":{"location":"server","type":"udp_listen","config":{"bind_ip":"0.0.0.0","port":` + strconv.Itoa(reserveUDPPort(t)) + `}},
 				"target":{"location":"client","client_id":"` + target.ID + `","type":"udp_service","config":{"ip":"127.0.0.1","port":5353}},
 				"transport_policy":"server_relay_only"
-			}`),
+			}`)
+			},
 			topology: tunnelTopologyServerExpose, ingress: tunnelIngressTypeUDPListen, targetType: tunnelTargetTypeUDPService,
 		},
 		{
 			name: "server http",
-			body: []byte(`{
+			body: func() []byte {
+				return []byte(`{
 				"name":"shape-server-http",
 				"topology":"server_expose",
 				"ingress":{"location":"server","type":"http_host","config":{"domain":"shape-http.example.com"}},
 				"target":{"location":"client","client_id":"` + target.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":8080}},
 				"transport_policy":"server_relay_only"
-			}`),
+			}`)
+			},
 			topology: tunnelTopologyServerExpose, ingress: tunnelIngressTypeHTTPHost, targetType: tunnelTargetTypeTCPService,
 		},
 		{
 			name: "c2c tcp",
-			body: []byte(`{
+			body: func() []byte {
+				return []byte(`{
 				"name":"shape-c2c-tcp",
 				"topology":"client_to_client",
 				"ingress":{"location":"client","client_id":"` + ingress.ID + `","type":"tcp_listen","config":{"bind_ip":"127.0.0.1","port":` + strconv.Itoa(reserveTCPPort(t)) + `}},
 				"target":{"location":"client","client_id":"` + target.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
 				"transport_policy":"server_relay_only"
-			}`),
+			}`)
+			},
 			topology: tunnelTopologyClientToClient, ingress: tunnelIngressTypeTCPListen, targetType: tunnelTargetTypeTCPService,
 		},
 		{
 			name: "c2c udp",
-			body: []byte(`{
+			body: func() []byte {
+				return []byte(`{
 				"name":"shape-c2c-udp",
 				"topology":"client_to_client",
 				"ingress":{"location":"client","client_id":"` + ingress.ID + `","type":"udp_listen","config":{"bind_ip":"127.0.0.1","port":` + strconv.Itoa(reserveUDPPort(t)) + `}},
 				"target":{"location":"client","client_id":"` + target.ID + `","type":"udp_service","config":{"ip":"127.0.0.1","port":5353}},
 				"transport_policy":"server_relay_only"
-			}`),
+			}`)
+			},
 			topology: tunnelTopologyClientToClient, ingress: tunnelIngressTypeUDPListen, targetType: tunnelTargetTypeUDPService,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, tc.body)
+			var resp *httptest.ResponseRecorder
+			for attempt := 0; attempt < 3; attempt++ {
+				resp = doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, tc.body())
+				if resp.Code != http.StatusConflict || !responseHasTunnelErrorCode(t, resp, protocol.TunnelMutationErrorCodeIngressPortInUse) {
+					break
+				}
+			}
 			if resp.Code != http.StatusCreated {
 				t.Fatalf("POST /api/tunnels: want 201, got %d body=%s", resp.Code, resp.Body.String())
 			}
