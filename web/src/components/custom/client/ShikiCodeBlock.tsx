@@ -1,5 +1,4 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import type { HighlighterCore } from 'shiki/core';
 
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 
@@ -14,21 +13,18 @@ interface ShikiCodeBlockProps {
 const LIGHT_THEME = 'github-light';
 const DARK_THEME = 'github-dark';
 
-let highlighterPromise: Promise<HighlighterCore> | null = null;
+type ShikiHighlighter = {
+  codeToHtml: (code: string, options: { lang: CodeLanguage; theme: string }) => string;
+};
+
+let highlighterPromise: Promise<ShikiHighlighter> | null = null;
 
 function getHighlighter() {
-  highlighterPromise ??= Promise.all([
-    import('shiki/core'),
-    import('shiki/engine/javascript'),
-    import('shiki/langs/bash.mjs'),
-    import('shiki/langs/yaml.mjs'),
-    import('shiki/themes/github-light.mjs'),
-    import('shiki/themes/github-dark.mjs'),
-  ]).then(([core, engine, bash, yaml, githubLight, githubDark]) => core.createHighlighterCore({
-    langs: [bash.default, yaml.default],
-    themes: [githubLight.default, githubDark.default],
-    engine: engine.createJavaScriptRegexEngine(),
-  }));
+  highlighterPromise ??= import('shiki')
+    .then(({ createHighlighter }) => createHighlighter({
+      langs: ['bash', 'yaml'],
+      themes: [LIGHT_THEME, DARK_THEME],
+    }));
 
   return highlighterPromise;
 }
