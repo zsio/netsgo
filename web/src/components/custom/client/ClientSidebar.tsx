@@ -1,13 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   Server as ServerIcon, LayoutDashboard,
   Settings,
-  LayersPlus, Languages, LogOut
+  BookOpen, LayersPlus, Languages, LogOut
 } from 'lucide-react';
 import { Link, useMatch, useRouterState, useNavigate } from '@tanstack/react-router';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
-import { AddClientDialog } from './AddClientDialog';
+import { useAddClientDialog } from './add-client-dialog-context';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { useTranslation } from 'react-i18next';
@@ -49,9 +49,11 @@ const LANGUAGE_LABEL_KEYS: Record<SupportedLocale, string> = {
   'zh-CN': 'common.chinese',
 };
 
+const DOCS_URL = 'https://netsgo.zs.uy';
+
 export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const { t, i18n } = useTranslation();
-  const [showAddClient, setShowAddClient] = useState(false);
+  const { openAddClientDialog } = useAddClientDialog();
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
 
@@ -110,8 +112,8 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
         <SidebarGroup>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton 
-                asChild 
+              <SidebarMenuButton
+                asChild
                 isActive={isOverview} 
                 tooltip="Dashboard"
                 className="data-[active=true]:bg-background data-[active=true]:shadow-sm data-[active=true]:border-l-2 data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium"
@@ -130,8 +132,8 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
           <SidebarGroupLabel className="text-[11px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em] px-2 mb-1 transition-colors group-hover/clients:text-muted-foreground/70">
             {t('dashboard.clients')}
           </SidebarGroupLabel>
-          <SidebarGroupAction 
-            onClick={() => setShowAddClient(true)} 
+          <SidebarGroupAction
+            onClick={openAddClientDialog}
             title={t('dashboard.addClient')}
             className="top-4 cursor-pointer text-muted-foreground hover:text-foreground"
           >
@@ -149,7 +151,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
               <div className="px-3 py-6 w-full flex justify-center">
                 <button
                   type="button"
-                  onClick={() => setShowAddClient(true)}
+                  onClick={openAddClientDialog}
                   className="group flex flex-col items-center w-full rounded-xl border border-dashed border-border/80 bg-muted/10 transition-colors hover:border-primary/50 hover:bg-muted/40 p-5 focus:outline-none"
                 >
                   <div className="h-10 w-10 rounded-full bg-muted/50 flex items-center justify-center mb-3 group-hover:bg-background border border-transparent group-hover:border-border/50 transition-colors">
@@ -226,6 +228,18 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton
+                asChild
+                tooltip={t('common.docs')}
+                className="relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
+              >
+                <a href={DOCS_URL} target="_blank" rel="noreferrer">
+                  <BookOpen className="h-4 w-4" />
+                  <span>{t('common.docs')}</span>
+                </a>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
                 tooltip={t('common.language')}
                 className="relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
                 onClick={() => void i18n.changeLanguage(nextLanguage)}
@@ -265,7 +279,6 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
       </SidebarFooter>
 
       <SidebarRail />
-      <AddClientDialog open={showAddClient} onOpenChange={setShowAddClient} />
     </Sidebar>
   );
 }

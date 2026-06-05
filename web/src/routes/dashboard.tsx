@@ -6,6 +6,7 @@ import { ErrorFallback } from '@/components/custom/layout/ErrorFallback';
 import { useClients } from '@/hooks/use-clients';
 import { requireConsoleAuth } from '@/lib/auth';
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
+import { AddClientDialogProvider } from '@/components/custom/client/AddClientDialogProvider';
 
 function DashboardLayout() {
   const { data: clients, isLoading, isError, error, refetch } = useClients();
@@ -19,15 +20,17 @@ function DashboardLayout() {
   }
 
   return (
-    <SidebarProvider className="flex-1 overflow-hidden !min-h-0 min-w-0 bg-transparent">
-      <ClientSidebar clients={clients ?? []} isLoading={isLoading} />
-      <SidebarInset className="flex min-w-0 flex-col overflow-hidden bg-transparent">
-        <TopBar />
-        <div className="relative min-w-0 flex-1 overflow-y-auto overflow-x-hidden pb-safe-bottom">
-          <Outlet />
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+    <AddClientDialogProvider>
+      <SidebarProvider className="flex-1 overflow-hidden !min-h-0 min-w-0 bg-transparent">
+        <ClientSidebar clients={clients ?? []} isLoading={isLoading} />
+        <SidebarInset className="flex min-w-0 flex-col overflow-hidden bg-transparent">
+          <TopBar />
+          <div className="relative min-w-0 flex-1 overflow-y-auto overflow-x-hidden pb-safe-bottom">
+            <Outlet />
+          </div>
+        </SidebarInset>
+      </SidebarProvider>
+    </AddClientDialogProvider>
   );
 }
 

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { formatPercent } from '@/lib/format';
 import { TableActionIconButton } from '@/components/custom/common/TableActionIconButton';
 import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
-import { AddClientDialog } from '@/components/custom/client/AddClientDialog';
+import { useAddClientDialog } from '@/components/custom/client/add-client-dialog-context';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 import type { ReactNode } from 'react';
@@ -297,8 +297,8 @@ export function DashboardClientTable() {
   const { data: clients, isLoading } = useClients();
   const deleteClient = useDeleteClient();
   const navigate = useNavigate();
+  const { openAddClientDialog } = useAddClientDialog();
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null);
-  const [showAddClient, setShowAddClient] = useState(false);
 
   if (isLoading) {
     return <Skeleton className="h-64 rounded-xl" />;
@@ -312,9 +312,8 @@ export function DashboardClientTable() {
           navigate({ to: '/dashboard/clients/$clientId', params: { clientId } });
         }}
         onDelete={setDeleteTarget}
-        onAddClient={() => setShowAddClient(true)}
+        onAddClient={openAddClientDialog}
       />
-      <AddClientDialog open={showAddClient} onOpenChange={setShowAddClient} />
       <ConfirmDialog
         open={deleteTarget !== null}
         title={t('dashboard.deleteOfflineNode')}

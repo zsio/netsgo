@@ -13,6 +13,10 @@
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@shikijs/core": "4.2.0",
+    "@shikijs/engine-javascript": "4.2.0",
+    "@shikijs/langs": "4.2.0",
+    "@shikijs/themes": "4.2.0",
     "@tailwindcss/vite": "^4.2.1",
     "@tanstack/query-sync-storage-persister": "^5.90.24",
     "@tanstack/react-query": "^5.90.21",

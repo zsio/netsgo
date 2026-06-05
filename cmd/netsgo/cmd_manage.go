@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"netsgo/internal/manage"
@@ -57,6 +60,9 @@ func runResetAdminUserCommand(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := rerunManageResetAdminUserWithSudoIfNeeded(dataDir, os.Getuid(), exec.LookPath, execAsRoot); err != nil {
+		return err
+	}
 	username, err := cmd.Flags().GetString("username")
 	if err != nil {
 		return err
@@ -71,6 +77,13 @@ func runResetAdminUserCommand(cmd *cobra.Command, args []string) error {
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "admin user reset to %q\n", username)
 	return err
+}
+
+func rerunManageResetAdminUserWithSudoIfNeeded(dataDir string, uid int, lookPath func(file string) (string, error), execFn func(argv0 string, argv []string, envv []string) error) error {
+	if filepath.Clean(dataDir) != filepath.Clean(svcmgr.ManagedDataDir) {
+		return nil
+	}
+	return rerunInstallWithSudoIfNeeded(uid, lookPath, execFn)
 }
 
 func init() {

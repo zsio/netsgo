@@ -47,6 +47,10 @@ func readControlMessageOfType(t *testing.T, conn interface {
 		}
 		var msg protocol.Message
 		if err := conn.ReadJSON(&msg); err != nil {
+			var netErr net.Error
+			if !errors.As(err, &netErr) || !netErr.Timeout() {
+				t.Fatalf("read control message %s: %v", wantType, err)
+			}
 			continue
 		}
 		if msg.Type == wantType {

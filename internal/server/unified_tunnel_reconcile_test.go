@@ -179,7 +179,17 @@ func TestUnifiedServerExposeProvisionAndDataHeaderUseStoredRevision(t *testing.T
 	s := New(0)
 	s.store = newTestTunnelStore(t)
 
-	remotePort := reserveTCPPort(t)
+	reservedListener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("reserve remote port: %v", err)
+	}
+	remotePort := reservedListener.Addr().(*net.TCPAddr).Port
+	t.Cleanup(func() {
+		if reservedListener != nil {
+			_ = reservedListener.Close()
+		}
+	})
+
 	stored := StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{
 			ID:         "server-expose-unified-id",
@@ -237,12 +247,36 @@ func TestUnifiedServerExposeProvisionAndDataHeaderUseStoredRevision(t *testing.T
 	go func() {
 		restoreDone <- s.restoreUnifiedServerExposeTunnel(target, stored)
 	}()
-	provision := ackTunnelProvision(t, targetWS)
+	msg := readControlMessageOfType(t, targetWS, protocol.MsgTypeTunnelProvision)
+	var provision protocol.TunnelProvisionRequest
+	if err := msg.ParsePayload(&provision); err != nil {
+		t.Fatalf("parse provision payload: %v", err)
+	}
+	if provision.TunnelID == "" {
+		t.Fatalf("expected unified tunnel provision payload, got empty tunnel_id: %+v", provision)
+	}
 	if provision.TunnelID != stored.ID || provision.Revision != stored.Revision || provision.Role != protocol.DataStreamRoleTarget {
 		t.Fatalf("provision identity mismatch: %+v", provision)
 	}
 	if provision.Spec.Topology != TunnelTopologyServerExpose || provision.Spec.Target.ClientID != stored.Target.ClientID {
 		t.Fatalf("provision spec mismatch: %+v", provision.Spec)
+	}
+	if err := reservedListener.Close(); err != nil {
+		t.Fatalf("release remote port: %v", err)
+	}
+	reservedListener = nil
+	ack, err := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
+		TunnelID: provision.TunnelID,
+		Revision: provision.Revision,
+		Role:     provision.Role,
+		Accepted: true,
+		Message:  "ok",
+	})
+	if err != nil {
+		t.Fatalf("build provision ack: %v", err)
+	}
+	if err := targetWS.WriteJSON(ack); err != nil {
+		t.Fatalf("write provision ack: %v", err)
 	}
 	select {
 	case err := <-restoreDone:

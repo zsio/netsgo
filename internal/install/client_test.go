@@ -142,6 +142,77 @@ func TestInstallClientWithFreshInstall(t *testing.T) {
 	assertNoSummaryRow(t, ui.summaries[1], "Data endpoint")
 }
 
+func TestInstallClientNonInteractiveWithFreshInstall(t *testing.T) {
+	var writtenEnv svcmgr.ClientEnv
+	err := InstallClientNonInteractiveWith(clientDeps{
+		Detect:            func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateNotInstalled },
+		EnsureUser:        func(name string) error { return nil },
+		EnsureDirs:        func() error { return nil },
+		CurrentBinaryPath: func() (string, error) { return "/tmp/netsgo", nil },
+		InstallBinary:     func(src string) error { return nil },
+		WriteClientEnv: func(layout svcmgr.ServiceLayout, env svcmgr.ClientEnv) error {
+			writtenEnv = env
+			return nil
+		},
+		WriteClientUnit:  func(layout svcmgr.ServiceLayout) error { return nil },
+		DaemonReload:     func() error { return nil },
+		EnableAndStart:   func(unit string) error { return nil },
+		VerifyClientLink: fakeClientLink(ClientLinkEstablished),
+		CheckServerTLS: func(addr clientaddr.Address, skipVerify bool) error {
+			if skipVerify {
+				t.Fatal("non-interactive install should not skip TLS verification by default")
+			}
+			return nil
+		},
+	}, "https://panel.example.com", "sk-test-key")
+	if err != nil {
+		t.Fatalf("non-interactive client install should not error: %v", err)
+	}
+	if writtenEnv.Server != "https://panel.example.com" || writtenEnv.Key != "sk-test-key" {
+		t.Fatalf("non-interactive install wrote env %#v", writtenEnv)
+	}
+	if writtenEnv.TLSSkipVerify || writtenEnv.TLSFingerprint != "" {
+		t.Fatalf("non-interactive install should not write TLS bypass settings, got %#v", writtenEnv)
+	}
+}
+
+func TestInstallClientNonInteractiveWithBrokenStateFails(t *testing.T) {
+	err := InstallClientNonInteractiveWith(clientDeps{
+		Inspect: func(role svcmgr.Role) svcmgr.InstallInspection {
+			return svcmgr.InstallInspection{Role: role, State: svcmgr.StateBroken, Problems: []string{"missing env file"}}
+		},
+	}, "https://panel.example.com", "sk-test-key")
+	if !errors.Is(err, errInstallBrokenState) {
+		t.Fatalf("non-interactive install should preserve broken state guard, got %v", err)
+	}
+}
+
+func TestInstallClientNonInteractiveRejectsCertificateFailure(t *testing.T) {
+	var askedForKey bool
+	err := InstallClientNonInteractiveWith(clientDeps{
+		Detect: func(role svcmgr.Role) svcmgr.InstallState { return svcmgr.StateNotInstalled },
+		CheckServerTLS: func(addr clientaddr.Address, skipVerify bool) error {
+			if askedForKey {
+				t.Fatal("TLS probe should happen before using the client key")
+			}
+			if skipVerify {
+				t.Fatal("non-interactive install must not silently skip TLS verification")
+			}
+			return x509.UnknownAuthorityError{}
+		},
+		WriteClientEnv: func(layout svcmgr.ServiceLayout, env svcmgr.ClientEnv) error {
+			askedForKey = true
+			return nil
+		},
+	}, "https://panel.example.com", "sk-test-key")
+	if err == nil || !strings.Contains(err.Error(), "非交互安装不能确认 TLS 指纹") {
+		t.Fatalf("non-interactive certificate failure should return actionable error, got %v", err)
+	}
+	if askedForKey {
+		t.Fatal("non-interactive install should fail before writing env when TLS probe fails")
+	}
+}
+
 func TestInstallClientWithEnsureDirs(t *testing.T) {
 	ui := &fakeUI{
 		inputs:    []string{"https://panel.example.com"},
