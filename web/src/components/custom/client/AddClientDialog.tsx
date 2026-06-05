@@ -8,7 +8,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  Key, Copy, Check, RefreshCcw, Terminal, Loader2, LayersPlus, Link,
+  Key, Copy, Check, RefreshCcw, Terminal, Loader2, LayersPlus, Link, Box, FileText,
 } from 'lucide-react';
 import {
   Tabs,
@@ -16,6 +16,7 @@ import {
   TabsList,
   TabsTrigger,
 } from '@/components/ui/tabs';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { useAdminConfig } from '@/hooks/use-admin-config';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
 import { useServerStatus } from '@/hooks/use-server-status';
@@ -33,6 +34,9 @@ const EXPIRY_OPTIONS = [
 
 const INSTALL_SCRIPT_URL = 'https://netsgo.zs.uy/install.sh';
 
+type CommandTab = 'install' | 'docker' | 'compose' | 'run';
+type CopyTarget = 'key' | 'url' | CommandTab;
+
 interface AddClientDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -42,6 +46,30 @@ function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
+function yamlDoubleQuote(value: string) {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+async function writeClipboardText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Try the textarea fallback for HTTP or permission-restricted contexts.
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+}
+
 export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   const { t } = useTranslation();
   const [step, setStep] = useState<'config' | 'result'>('config');
@@ -49,8 +77,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   const [expiresIn, setExpiresIn] = useState('0');
   const [generatedKey, setGeneratedKey] = useState('');
   const [serverAddr, setServerAddr] = useState('');
-  const [activeCommandTab, setActiveCommandTab] = useState<'install' | 'run'>('install');
-  const [copied, setCopied] = useState<'key' | 'url' | 'cmd' | null>(null);
+  const [activeCommandTab, setActiveCommandTab] = useState<CommandTab>('install');
+  const [copied, setCopied] = useState<CopyTarget | null>(null);
 
   const createKey = useCreateAPIKey();
   const { data: adminConfig } = useAdminConfig({
@@ -104,9 +132,9 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     );
   }, [adminConfig, createKey, expiresIn, maxUses, status]);
 
-  const copyToClipboard = useCallback(async (text: string, tag: 'key' | 'url' | 'cmd') => {
+  const copyToClipboard = useCallback(async (text: string, tag: CopyTarget) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
       setCopied(tag);
       setTimeout(() => setCopied(null), 2000);
     } catch {
@@ -115,15 +143,72 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   }, []);
 
   const connectCmd = generatedKey
-    ? `netsgo client --server ${shellQuote(serverAddr)} --key ${shellQuote(generatedKey)}`
+    ? [
+      'netsgo client \\',
+      `  --server ${shellQuote(serverAddr)} \\`,
+      `  --key ${shellQuote(generatedKey)}`,
+    ].join('\n')
     : '';
-  const installAndRunCmd = connectCmd
-    ? `curl -fsSL ${INSTALL_SCRIPT_URL} | sh -s -- --client --server ${shellQuote(serverAddr)} --key ${shellQuote(generatedKey)}`
+  const installAndRunCmd = generatedKey
+    ? [
+      `curl -fsSL ${INSTALL_SCRIPT_URL} | sh -s -- \\`,
+      '  --client \\',
+      `  --server ${shellQuote(serverAddr)} \\`,
+      `  --key ${shellQuote(generatedKey)}`,
+    ].join('\n')
     : '';
+  const dockerRunCmd = generatedKey
+    ? [
+      'docker run -d \\',
+      '  --name netsgo-client \\',
+      '  --restart unless-stopped \\',
+      '  --user 0:0 \\',
+      '  --network host \\',
+      `  -e NETSGO_SERVER=${shellQuote(serverAddr)} \\`,
+      `  -e NETSGO_KEY=${shellQuote(generatedKey)} \\`,
+      '  -v netsgo-client-data:/var/lib/netsgo \\',
+      '  ghcr.io/zsio/netsgo:latest \\',
+      '  client --data-dir /var/lib/netsgo',
+    ].join('\n')
+    : '';
+  const dockerComposeConfig = generatedKey
+    ? [
+      'services:',
+      '  netsgo-client:',
+      '    image: ghcr.io/zsio/netsgo:latest',
+      '    restart: unless-stopped',
+      '    user: "0:0"',
+      '    network_mode: host',
+      '    environment:',
+      `      NETSGO_SERVER: ${yamlDoubleQuote(serverAddr)}`,
+      `      NETSGO_KEY: ${yamlDoubleQuote(generatedKey)}`,
+      '    command:',
+      '      - client',
+      '      - --data-dir',
+      '      - /var/lib/netsgo',
+      '    volumes:',
+      '      - netsgo-client-data:/var/lib/netsgo',
+      '',
+      'volumes:',
+      '  netsgo-client-data:',
+    ].join('\n')
+    : '';
+  const commandTabs = [
+    { value: 'install' as const, icon: Link, label: t('clients.installAndRun') },
+    { value: 'docker' as const, icon: Box, label: t('clients.dockerRun') },
+    { value: 'compose' as const, icon: FileText, label: t('clients.dockerCompose') },
+    { value: 'run' as const, icon: Terminal, label: t('clients.runInstalled') },
+  ];
+  const commandByTab: Record<CommandTab, string> = {
+    install: installAndRunCmd,
+    docker: dockerRunCmd,
+    compose: dockerComposeConfig,
+    run: connectCmd,
+  };
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <LayersPlus className="h-5 w-5 text-primary" />
@@ -202,7 +287,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
         )}
 
         {step === 'result' && (
-          <div className="flex flex-col gap-4 pt-1">
+          <div className="flex min-w-0 flex-col gap-4 pt-1">
             <div className="overflow-hidden rounded-lg border border-border bg-card">
               <div className="grid divide-y divide-border">
                 <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5">
@@ -216,6 +301,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                     variant="ghost"
                     size="icon-sm"
                     className="shrink-0 text-muted-foreground"
+                    title={t('clients.copyLabel', { label: t('clients.connectionURL') })}
+                    aria-label={t('clients.copyLabel', { label: t('clients.connectionURL') })}
                     onClick={() => copyToClipboard(serverAddr, 'url')}
                   >
                     {copied === 'url' ? (
@@ -237,6 +324,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                     variant="ghost"
                     size="icon-sm"
                     className="shrink-0 text-muted-foreground"
+                    title={t('clients.copyLabel', { label: t('clients.connectionKey') })}
+                    aria-label={t('clients.copyLabel', { label: t('clients.connectionKey') })}
                     onClick={() => copyToClipboard(generatedKey, 'key')}
                   >
                     {copied === 'key' ? (
@@ -251,57 +340,49 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
 
             <Tabs
               value={activeCommandTab}
-              onValueChange={value => setActiveCommandTab(value as 'install' | 'run')}
+              onValueChange={value => setActiveCommandTab(value as CommandTab)}
               className="gap-2"
             >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="install">
-                  <Link data-icon="inline-start" />
-                  {t('clients.installAndRun')}
-                </TabsTrigger>
-                <TabsTrigger value="run">
-                  <Terminal data-icon="inline-start" />
-                  {t('clients.runInstalled')}
-                </TabsTrigger>
+              <TabsList>
+                {commandTabs.map((tab) => {
+                  const Icon = tab.icon;
+                  return (
+                    <TabsTrigger
+                      key={tab.value}
+                      value={tab.value}
+                    >
+                      <Icon data-icon="inline-start" className="hidden sm:block" />
+                      {tab.label}
+                    </TabsTrigger>
+                  );
+                })}
               </TabsList>
-              <TabsContent value="install" className="mt-0">
-                <div className="relative rounded-lg border border-border bg-muted/40 p-3">
-                  <code className="block max-h-32 min-h-16 overflow-auto whitespace-pre-wrap pr-10 text-xs leading-5 font-mono break-all text-foreground select-all">
-                    {installAndRunCmd}
-                  </code>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="absolute right-2 top-2 text-muted-foreground"
-                    onClick={() => copyToClipboard(installAndRunCmd, 'cmd')}
-                  >
-                    {copied === 'cmd' ? (
-                      <Check className="text-primary" />
-                    ) : (
-                      <Copy />
-                    )}
-                  </Button>
-                </div>
-              </TabsContent>
-              <TabsContent value="run" className="mt-0">
-                <div className="relative rounded-lg border border-border bg-muted/40 p-3">
-                  <code className="block max-h-32 min-h-16 overflow-auto whitespace-pre-wrap pr-10 text-xs leading-5 font-mono break-all text-foreground select-all">
-                    {connectCmd}
-                  </code>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="absolute right-2 top-2 text-muted-foreground"
-                    onClick={() => copyToClipboard(connectCmd, 'cmd')}
-                  >
-                    {copied === 'cmd' ? (
-                      <Check className="text-primary" />
-                    ) : (
-                      <Copy />
-                    )}
-                  </Button>
-                </div>
-              </TabsContent>
+              {commandTabs.map(tab => (
+                <TabsContent key={tab.value} value={tab.value} className="mt-0 min-w-0">
+                  <div className="relative min-w-0 overflow-hidden rounded-lg border border-border bg-muted/30">
+                    <ScrollArea className="h-[clamp(8rem,calc(100vh-28rem),14rem)]">
+                      <pre className="w-max min-w-full p-3 pr-12 text-xs leading-5 font-mono text-foreground select-all">
+                        <code>{commandByTab[tab.value]}</code>
+                      </pre>
+                      <ScrollBar orientation="horizontal" />
+                    </ScrollArea>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="absolute right-2 top-2 text-muted-foreground"
+                      title={t('clients.copyLabel', { label: tab.label })}
+                      aria-label={t('clients.copyLabel', { label: tab.label })}
+                      onClick={() => copyToClipboard(commandByTab[tab.value], tab.value)}
+                    >
+                      {copied === tab.value ? (
+                        <Check className="text-primary" />
+                      ) : (
+                        <Copy />
+                      )}
+                    </Button>
+                  </div>
+                </TabsContent>
+              ))}
             </Tabs>
 
             <div className="flex gap-2 pt-1">
