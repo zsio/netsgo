@@ -119,7 +119,7 @@ export const enUS = {
     connectionKey: 'Connection key',
     connectionCommand: 'Connection command',
     installAndRun: 'Download and run',
-    runInstalled: 'Already installed',
+    runInstalled: 'Manual run',
     regenerate: 'Generate another',
     done: 'Done',
   },

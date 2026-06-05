@@ -121,7 +121,7 @@ export const zhCN = {
     connectionKey: '连接密钥',
     connectionCommand: '连接命令',
     installAndRun: '一键下载启动',
-    runInstalled: '已安装启动',
+    runInstalled: '手动运行',
     regenerate: '再生成一个',
     done: '完成',
   },
