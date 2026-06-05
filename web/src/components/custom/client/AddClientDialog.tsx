@@ -16,13 +16,13 @@ import {
   TabsList,
   TabsTrigger,
 } from '@/components/ui/tabs';
-import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { useAdminConfig } from '@/hooks/use-admin-config';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { useTranslation } from 'react-i18next';
 
 import { resolveAddClientServiceAddress } from './client-service-address';
+import { ShikiCodeBlock } from './ShikiCodeBlock';
 
 const EXPIRY_OPTIONS = [
   { labelKey: 'clients.expiry1h', value: '1h' },
@@ -194,10 +194,10 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     ].join('\n')
     : '';
   const commandTabs = [
-    { value: 'install' as const, icon: Link, label: t('clients.installAndRun') },
-    { value: 'docker' as const, icon: Box, label: t('clients.dockerRun') },
-    { value: 'compose' as const, icon: FileText, label: t('clients.dockerCompose') },
-    { value: 'run' as const, icon: Terminal, label: t('clients.runInstalled') },
+    { value: 'install' as const, icon: Link, label: t('clients.installAndRun'), language: 'bash' as const },
+    { value: 'docker' as const, icon: Box, label: t('clients.dockerRun'), language: 'bash' as const },
+    { value: 'compose' as const, icon: FileText, label: t('clients.dockerCompose'), language: 'yaml' as const },
+    { value: 'run' as const, icon: Terminal, label: t('clients.runInstalled'), language: 'bash' as const },
   ];
   const commandByTab: Record<CommandTab, string> = {
     install: installAndRunCmd,
@@ -360,12 +360,10 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
               {commandTabs.map(tab => (
                 <TabsContent key={tab.value} value={tab.value} className="mt-0 min-w-0">
                   <div className="relative min-w-0 overflow-hidden rounded-lg border border-border bg-muted/30">
-                    <ScrollArea className="h-[clamp(8rem,calc(100vh-28rem),14rem)]">
-                      <pre className="w-max min-w-full p-3 pr-12 text-xs leading-5 font-mono text-foreground select-all">
-                        <code>{commandByTab[tab.value]}</code>
-                      </pre>
-                      <ScrollBar orientation="horizontal" />
-                    </ScrollArea>
+                    <ShikiCodeBlock
+                      code={commandByTab[tab.value]}
+                      language={tab.language}
+                    />
                     <Button
                       variant="ghost"
                       size="icon-sm"
