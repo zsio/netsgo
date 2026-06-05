@@ -506,8 +506,18 @@ run_interactive_install() {
   "$1" install <"$tty_path" >"$tty_path" 2>&1
 }
 
+run_noninteractive_client_install() {
+  binary="$1"
+  [ -n "$client_server" ] || die "--client requires --server"
+  [ -n "$client_key" ] || die "--client requires --key"
+  "$binary" install --client --server "$client_server" --key "$client_key"
+}
+
 source="auto"
 channel="stable"
+install_mode="interactive"
+client_server=""
+client_key=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -521,6 +531,20 @@ while [ "$#" -gt 0 ]; do
       channel="$2"
       shift 2
       ;;
+    --client)
+      install_mode="client"
+      shift
+      ;;
+    --server)
+      [ "$#" -ge 2 ] || die "--server requires a value"
+      client_server="$2"
+      shift 2
+      ;;
+    --key)
+      [ "$#" -ge 2 ] || die "--key requires a value"
+      client_key="$2"
+      shift 2
+      ;;
     -y|--yes)
       die "install.sh 不支持 -y/--yes；首次安装需要交互配置。"
       ;;
@@ -531,12 +555,17 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$channel" in stable|beta) ;; *) die "--channel 仅支持 stable|beta" ;; esac
+case "$install_mode" in
+  interactive) [ -z "$client_server" ] && [ -z "$client_key" ] || die "--server/--key must be used with --client" ;;
+  client) ;;
+  *) die "unknown install mode: $install_mode" ;;
+esac
 
 require_linux_systemd
 require_tools
 
 log "检查是否已有 NetsGo 托管服务"
-if systemctl list-unit-files 'netsgo-*.service' 2>/dev/null | grep -q '^netsgo-'; then
+if [ "$install_mode" = "interactive" ] && systemctl list-unit-files 'netsgo-*.service' 2>/dev/null | grep -q '^netsgo-'; then
   die "检测到已有 NetsGo 托管服务。请使用 scripts/upgrade.sh 或 netsgo manage。"
 fi
 
@@ -565,6 +594,10 @@ version_output="$("$tmp/netsgo" --version)"
 version="$(extract_exact_release_version "$version_output" || true)"
 [ "$version" = "$target" ] || die "临时 netsgo 版本不匹配: want $target, got $version_output"
 
-log "进入交互安装"
-run_interactive_install "$tmp/netsgo"
+if [ "$install_mode" = "client" ]; then
+  run_noninteractive_client_install "$tmp/netsgo"
+else
+  log "进入交互安装"
+  run_interactive_install "$tmp/netsgo"
+fi
 completed=1

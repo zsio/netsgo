@@ -4,13 +4,13 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  Key, Copy, Check, RefreshCcw, Terminal, Loader2, LayersPlus,
+  Key, Copy, Check, RefreshCcw, Terminal, Loader2, LayersPlus, Link,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useAdminConfig } from '@/hooks/use-admin-config';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
 import { useServerStatus } from '@/hooks/use-server-status';
@@ -26,9 +26,15 @@ const EXPIRY_OPTIONS = [
   { labelKey: 'common.unlimited', value: '0' },
 ] as const;
 
+const INSTALL_SCRIPT_URL = 'https://netsgo.zs.uy/install.sh';
+
 interface AddClientDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
@@ -38,7 +44,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   const [expiresIn, setExpiresIn] = useState('0');
   const [generatedKey, setGeneratedKey] = useState('');
   const [serverAddr, setServerAddr] = useState('');
-  const [copied, setCopied] = useState<'key' | 'cmd' | null>(null);
+  const [activeCommandTab, setActiveCommandTab] = useState<'install' | 'run'>('install');
+  const [copied, setCopied] = useState<'key' | 'url' | 'cmd' | null>(null);
 
   const createKey = useCreateAPIKey();
   const { data: adminConfig } = useAdminConfig({
@@ -58,6 +65,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     setExpiresIn('0');
     setGeneratedKey('');
     setServerAddr('');
+    setActiveCommandTab('install');
     setCopied(null);
   }, []);
 
@@ -91,7 +99,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     );
   }, [adminConfig, createKey, expiresIn, maxUses, status]);
 
-  const copyToClipboard = useCallback(async (text: string, tag: 'key' | 'cmd') => {
+  const copyToClipboard = useCallback(async (text: string, tag: 'key' | 'url' | 'cmd') => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(tag);
@@ -102,20 +110,21 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   }, []);
 
   const connectCmd = generatedKey
-    ? `netsgo client --server ${serverAddr} --key ${generatedKey}`
+    ? `netsgo client --server ${shellQuote(serverAddr)} --key ${shellQuote(generatedKey)}`
     : '';
+  const installAndRunCmd = connectCmd
+    ? `curl -fsSL ${INSTALL_SCRIPT_URL} | sh -s -- --client --server ${shellQuote(serverAddr)} --key ${shellQuote(generatedKey)}`
+    : '';
+  const activeCommand = activeCommandTab === 'install' ? installAndRunCmd : connectCmd;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <LayersPlus className="h-5 w-5 text-primary" />
             {t('clients.addTitle')}
           </DialogTitle>
-          <DialogDescription>
-            {t('clients.addDescription')}
-          </DialogDescription>
         </DialogHeader>
 
         {step === 'config' && (
@@ -190,83 +199,94 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
 
         {step === 'result' && (
           <div className="space-y-4 pt-1">
-            {/* 生成的 Key */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                {t('clients.connectionKey')}
-              </label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 px-3 py-2 text-xs font-mono bg-muted rounded-lg border border-border break-all select-all">
-                  {generatedKey}
-                </code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="shrink-0"
-                  onClick={() => copyToClipboard(generatedKey, 'key')}
-                >
-                  {copied === 'key' ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                {t('clients.keyOneTime')}
-              </p>
-            </div>
+            <div className="overflow-hidden rounded-xl border border-border/70 bg-muted/25">
+              <div className="grid divide-y divide-border/70">
+                <div className="grid grid-cols-[4.5rem_1fr_auto] items-center gap-3 px-3 py-2.5">
+                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    {t('clients.connectionURL')}
+                  </span>
+                  <code className="min-w-0 truncate text-xs font-mono text-foreground" title={serverAddr}>
+                    {serverAddr}
+                  </code>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => copyToClipboard(serverAddr, 'url')}
+                  >
+                    {copied === 'url' ? (
+                      <Check className="h-3.5 w-3.5 text-green-500" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                {t('clients.recommendedServiceAddress')}
-              </label>
-              <code className="block px-3 py-2 text-xs font-mono bg-muted rounded-lg border border-border break-all select-all">
-                {serverAddr}
-              </code>
-              <p className="text-[11px] text-muted-foreground">
-                {t('clients.serviceAddressHelp')}
-              </p>
-            </div>
-
-            {adminConfig?.server_addr_locked && (
-              <div className="rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-[11px] text-muted-foreground">
-                {t('clients.serverAddrLocked')}
-                <div className="mt-1 font-mono text-foreground break-all">
-                  {t('clients.effectiveServiceAddress', { address: adminConfig.effective_server_addr })}
+                <div className="grid grid-cols-[4.5rem_1fr_auto] items-center gap-3 px-3 py-2.5">
+                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    {t('clients.connectionKey')}
+                  </span>
+                  <code className="min-w-0 truncate text-xs font-mono text-foreground" title={generatedKey}>
+                    {generatedKey}
+                  </code>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => copyToClipboard(generatedKey, 'key')}
+                  >
+                    {copied === 'key' ? (
+                      <Check className="h-3.5 w-3.5 text-green-500" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
                 </div>
               </div>
-            )}
+            </div>
 
-            {/* 连接命令 */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                <Terminal className="h-3.5 w-3.5" />
-                {t('clients.connectionCommand')}
-              </label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 px-3 py-2 text-xs font-mono bg-muted rounded-lg border border-border break-all select-all">
-                  {connectCmd}
+            <div className="overflow-hidden rounded-xl border border-border bg-background shadow-sm">
+              <div
+                role="tablist"
+                aria-label={t('clients.connectionCommand')}
+                className="grid grid-cols-2 bg-muted/45 p-1"
+              >
+                {(['install', 'run'] as const).map(tab => (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeCommandTab === tab}
+                    className={cn(
+                      'inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground transition-colors',
+                      activeCommandTab === tab && 'bg-background text-foreground shadow-sm ring-1 ring-border/60',
+                    )}
+                    onClick={() => setActiveCommandTab(tab)}
+                  >
+                    {tab === 'install' ? <Link className="h-3.5 w-3.5" /> : <Terminal className="h-3.5 w-3.5" />}
+                    {tab === 'install' ? t('clients.installAndRun') : t('clients.runInstalled')}
+                  </button>
+                ))}
+              </div>
+              <div className="relative bg-zinc-950 px-4 py-3 text-zinc-50">
+                <code className="block max-h-32 min-h-16 overflow-auto whitespace-pre-wrap pr-10 text-[12px] leading-5 font-mono break-all select-all">
+                  {activeCommand}
                 </code>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="shrink-0"
-                  onClick={() => copyToClipboard(connectCmd, 'cmd')}
+                  className="absolute right-2 top-2 h-7 w-7 text-zinc-400 hover:bg-white/10 hover:text-white"
+                  onClick={() => copyToClipboard(activeCommand, 'cmd')}
                 >
                   {copied === 'cmd' ? (
-                    <Check className="h-4 w-4 text-green-500" />
+                    <Check className="h-3.5 w-3.5 text-green-400" />
                   ) : (
-                    <Copy className="h-4 w-4" />
+                    <Copy className="h-3.5 w-3.5" />
                   )}
                 </Button>
               </div>
-              <p className="text-[11px] text-muted-foreground">
-                {t('clients.commandHelp')}
-              </p>
             </div>
 
-            {/* 操作按钮 */}
             <div className="flex gap-2 pt-1">
               <Button
                 variant="outline"
@@ -286,17 +306,6 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
             </div>
           </div>
         )}
-
-        {/* 使用说明 */}
-        <div className="mt-2 rounded-lg bg-muted/50 border border-border/50 p-3 space-y-2">
-          <p className="text-xs font-medium text-foreground">{t('clients.instructions')}</p>
-          <ol className="text-[11px] text-muted-foreground space-y-1.5 list-decimal list-inside">
-            <li>{t('clients.instructionInstall')}</li>
-            <li>{t('clients.instructionRun')}</li>
-            <li>{t('clients.instructionReplaceServer')}</li>
-            <li>{t('clients.instructionVisible')}</li>
-          </ol>
-        </div>
       </DialogContent>
     </Dialog>
   );

@@ -59,6 +59,82 @@ func InstallClient() error {
 	return InstallClientWith(defaultClientDeps())
 }
 
+func InstallClientNonInteractive(serverInput, clientKey string) error {
+	return InstallClientNonInteractiveWith(defaultClientDeps(), serverInput, clientKey)
+}
+
+func InstallClientNonInteractiveWith(deps clientDeps, serverInput, clientKey string) error {
+	ui := &nonInteractiveClientUI{
+		serverInput: serverInput,
+		clientKey:   clientKey,
+	}
+	deps.UI = ui
+	return InstallClientWith(deps)
+}
+
+type nonInteractiveClientUI struct {
+	serverInput string
+	clientKey   string
+	confirmed   bool
+}
+
+func (ui *nonInteractiveClientUI) Select(prompt string, options []string) (int, error) {
+	return -1, fmt.Errorf("non-interactive client install cannot select %q", prompt)
+}
+
+func (ui *nonInteractiveClientUI) Input(prompt string, opts ...tui.InputOptions) (string, error) {
+	switch prompt {
+	case "服务地址":
+		value := strings.TrimSpace(ui.serverInput)
+		if len(opts) > 0 && opts[0].Validate != nil {
+			if err := opts[0].Validate(value); err != nil {
+				return "", err
+			}
+		}
+		return value, nil
+	case "TLS 证书指纹":
+		return "", fmt.Errorf("HTTPS 证书校验失败；非交互安装不能确认 TLS 指纹，请先修复证书或运行 netsgo install 交互安装")
+	default:
+		return "", fmt.Errorf("non-interactive client install cannot prompt for %q", prompt)
+	}
+}
+
+func (ui *nonInteractiveClientUI) Password(prompt string, opts ...tui.InputOptions) (string, error) {
+	if prompt != "客户端接入密钥" {
+		return "", fmt.Errorf("non-interactive client install cannot prompt for %q", prompt)
+	}
+	value := strings.TrimSpace(ui.clientKey)
+	if len(opts) > 0 && opts[0].Validate != nil {
+		if err := opts[0].Validate(value); err != nil {
+			return "", err
+		}
+	}
+	return value, nil
+}
+
+func (ui *nonInteractiveClientUI) Confirm(prompt string) (bool, error) {
+	return ui.ConfirmWithOptions(prompt, tui.ConfirmOptions{})
+}
+
+func (ui *nonInteractiveClientUI) ConfirmWithOptions(prompt string, opts tui.ConfirmOptions) (bool, error) {
+	switch prompt {
+	case "继续安装？":
+		if ui.confirmed {
+			return false, fmt.Errorf("non-interactive client install received duplicate confirmation prompt")
+		}
+		ui.confirmed = true
+		return true, nil
+	case "HTTPS 证书校验失败，是否跳过 TLS 证书校验？":
+		return false, fmt.Errorf("HTTPS 证书校验失败；非交互安装不能确认跳过 TLS 校验，请先修复证书或运行 netsgo install 交互安装")
+	default:
+		return false, fmt.Errorf("non-interactive client install cannot confirm %q", prompt)
+	}
+}
+
+func (ui *nonInteractiveClientUI) PrintSummary(title string, rows [][2]string) {
+	tui.PrintSummary(title, rows)
+}
+
 func InstallClientWith(deps clientDeps) error {
 	inspection := resolveInspection(deps.Inspect, deps.Detect, svcmgr.RoleClient)
 	state := inspection.State
