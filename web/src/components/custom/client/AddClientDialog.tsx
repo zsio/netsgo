@@ -22,6 +22,12 @@ import { useServerStatus } from '@/hooks/use-server-status';
 import { useTranslation } from 'react-i18next';
 
 import { resolveAddClientServiceAddress } from './client-service-address';
+import {
+  clientCNBDockerImageForVersion,
+  clientDockerImageForVersion,
+  clientInstallChannelArgForVersion,
+  INSTALL_SCRIPT_URL,
+} from './client-install-commands';
 import { ShikiCodeBlock } from './ShikiCodeBlock';
 
 const EXPIRY_OPTIONS = [
@@ -31,9 +37,6 @@ const EXPIRY_OPTIONS = [
   { labelKey: 'clients.expiry7d', value: '168h' },
   { labelKey: 'common.unlimited', value: '0' },
 ] as const;
-
-const INSTALL_SCRIPT_URL = 'https://netsgo.zs.uy/install.sh';
-const CLIENT_DOCKER_IMAGE = 'zsio/netsgo:latest';
 
 type CommandTab = 'install' | 'docker' | 'compose' | 'run';
 type CopyTarget = 'key' | 'url' | CommandTab;
@@ -150,9 +153,14 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       `  --key ${shellQuote(generatedKey)}`,
     ].join('\n')
     : '';
+  const installChannelArg = clientInstallChannelArgForVersion(status?.version);
+  const installChannelLines = installChannelArg ? [`  ${installChannelArg} \\`] : [];
+  const clientDockerImage = clientDockerImageForVersion(status?.version);
+  const clientCNBDockerImage = clientCNBDockerImageForVersion(status?.version);
   const installAndRunCmd = generatedKey
     ? [
       `curl -fsSL ${INSTALL_SCRIPT_URL} | sh -s -- \\`,
+      ...installChannelLines,
       '  --client \\',
       `  --server ${shellQuote(serverAddr)} \\`,
       `  --key ${shellQuote(generatedKey)}`,
@@ -168,7 +176,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       `  -e NETSGO_SERVER=${shellQuote(serverAddr)} \\`,
       `  -e NETSGO_KEY=${shellQuote(generatedKey)} \\`,
       '  -v netsgo-client-data:/var/lib/netsgo \\',
-      `  ${CLIENT_DOCKER_IMAGE} \\`,
+      `  ${clientDockerImage} \\`,
       '  client --data-dir /var/lib/netsgo',
     ].join('\n')
     : '';
@@ -176,8 +184,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     ? [
       'services:',
       '  netsgo-client:',
-      `    # ${t('clients.dockerComposeChinaImageComment')}`,
-      `    image: ${CLIENT_DOCKER_IMAGE}`,
+      `    # ${t('clients.dockerComposeChinaImageComment', { image: clientCNBDockerImage })}`,
+      `    image: ${clientDockerImage}`,
       '    restart: unless-stopped',
       '    user: "0:0"',
       '    network_mode: host',
@@ -292,11 +300,11 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
           <div className="flex min-w-0 flex-col gap-4 pt-1">
             <div className="overflow-hidden rounded-lg border border-border bg-card">
               <div className="grid divide-y divide-border">
-                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5">
-                  <span className="text-xs font-medium text-muted-foreground">
+                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2.5">
+                  <span className="pt-0.5 text-xs font-medium text-muted-foreground">
                     {t('clients.connectionURL')}
                   </span>
-                  <code className="min-w-0 truncate text-xs font-mono text-foreground" title={serverAddr}>
+                  <code className="min-w-0 select-all break-all font-mono text-xs leading-5 text-foreground" title={serverAddr}>
                     {serverAddr}
                   </code>
                   <Button
@@ -315,11 +323,11 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                   </Button>
                 </div>
 
-                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5">
-                  <span className="text-xs font-medium text-muted-foreground">
+                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2.5">
+                  <span className="pt-0.5 text-xs font-medium text-muted-foreground">
                     {t('clients.connectionKey')}
                   </span>
-                  <code className="min-w-0 truncate text-xs font-mono text-foreground" title={generatedKey}>
+                  <code className="min-w-0 select-all break-all font-mono text-xs leading-5 text-foreground" title={generatedKey}>
                     {generatedKey}
                   </code>
                   <Button

@@ -123,7 +123,7 @@ export const zhCN = {
     installAndRun: '一键启动',
     dockerRun: 'Docker',
     dockerCompose: 'Docker Compose',
-    dockerComposeChinaImageComment: '中国用户可以使用 docker.cnb.cool/zsio/netsgo:latest',
+    dockerComposeChinaImageComment: '中国用户可以使用 {{image}}',
     runInstalled: '手动',
     regenerate: '再生成一个',
     done: '完成',

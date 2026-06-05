@@ -20,10 +20,25 @@ type ShikiHighlighter = {
 let highlighterPromise: Promise<ShikiHighlighter> | null = null;
 
 function getHighlighter() {
-  highlighterPromise ??= import('shiki')
-    .then(({ createHighlighter }) => createHighlighter({
-      langs: ['bash', 'yaml'],
-      themes: [LIGHT_THEME, DARK_THEME],
+  highlighterPromise ??= Promise.all([
+    import('@shikijs/core'),
+    import('@shikijs/engine-javascript'),
+    import('@shikijs/langs/bash'),
+    import('@shikijs/langs/yaml'),
+    import('@shikijs/themes/github-light'),
+    import('@shikijs/themes/github-dark'),
+  ])
+    .then(([
+      { createHighlighterCore },
+      { createJavaScriptRegexEngine },
+      bash,
+      yaml,
+      githubLight,
+      githubDark,
+    ]) => createHighlighterCore({
+      engine: createJavaScriptRegexEngine(),
+      langs: [bash.default, yaml.default],
+      themes: [githubLight.default, githubDark.default],
     }));
 
   return highlighterPromise;
@@ -31,10 +46,6 @@ function getHighlighter() {
 
 function getColorMode(): ColorMode {
   if (typeof document !== 'undefined' && document.documentElement.classList.contains('dark')) {
-    return 'dark';
-  }
-
-  if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches) {
     return 'dark';
   }
 
@@ -46,10 +57,8 @@ function useColorMode() {
 
   useEffect(() => {
     const syncMode = () => setMode(getColorMode());
-    const colorScheme = window.matchMedia('(prefers-color-scheme: dark)');
     const observer = new MutationObserver(syncMode);
 
-    colorScheme.addEventListener('change', syncMode);
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class'],
@@ -58,7 +67,6 @@ function useColorMode() {
     syncMode();
 
     return () => {
-      colorScheme.removeEventListener('change', syncMode);
       observer.disconnect();
     };
   }, []);
@@ -148,7 +156,7 @@ export function ShikiCodeBlock({ code, language }: ShikiCodeBlockProps) {
         {html ? (
           <div dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
-          <pre className="m-0 min-w-max p-3 pr-12 pl-12 font-mono text-xs leading-6 text-foreground">
+          <pre className="m-0 min-w-max p-3 pr-12 pl-12 font-mono text-xs leading-5 text-foreground">
             <code>{code}</code>
           </pre>
         )}

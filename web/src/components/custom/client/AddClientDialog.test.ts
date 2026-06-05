@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 
 import { resolveAddClientServiceAddress } from './client-service-address';
+import {
+  clientCNBDockerImageForVersion,
+  clientDockerImageForVersion,
+  clientInstallChannelArgForVersion,
+  clientReleaseChannelForVersion,
+} from './client-install-commands';
 
 describe('resolveAddClientServiceAddress', () => {
   test('prefers the effective service address for env-locked configs', () => {
@@ -21,5 +27,22 @@ describe('resolveAddClientServiceAddress', () => {
       statusServerAddr: 'https://status.example.com',
       browserOrigin: 'https://browser.example.com',
     })).toBe('https://key.example.com');
+  });
+});
+
+describe('client install command release helpers', () => {
+  test('defaults to stable without adding an install channel argument', () => {
+    expect(clientReleaseChannelForVersion('v0.2.0')).toBe('stable');
+    expect(clientReleaseChannelForVersion('dev-snapshot')).toBe('stable');
+    expect(clientInstallChannelArgForVersion('v0.2.0')).toBe('');
+    expect(clientDockerImageForVersion('v0.2.0')).toBe('zsio/netsgo:latest');
+    expect(clientCNBDockerImageForVersion('v0.2.0')).toBe('docker.cnb.cool/zsio/netsgo:latest');
+  });
+
+  test('uses beta channel and a matching Docker image tag for beta server versions', () => {
+    expect(clientReleaseChannelForVersion('v0.2.0-beta.3')).toBe('beta');
+    expect(clientInstallChannelArgForVersion('v0.2.0-beta.3')).toBe('--channel beta');
+    expect(clientDockerImageForVersion('v0.2.0-beta.3')).toBe('zsio/netsgo:0.2.0-beta.3');
+    expect(clientCNBDockerImageForVersion('v0.2.0-beta.3')).toBe('docker.cnb.cool/zsio/netsgo:0.2.0-beta.3');
   });
 });
