@@ -12,19 +12,21 @@ import (
 )
 
 type serverDeps struct {
-	UI             uiProvider
-	Inspect        func() svcmgr.InstallInspection
-	IsActive       func() (bool, error)
-	IsEnabled      func() (bool, error)
-	Logs           func() error
-	RunInstall     func() error
-	ReadServerEnv  func() (svcmgr.ServerEnv, error)
-	DisableAndStop func() error
-	EnableAndStart func() error
-	DaemonReload   func() error
-	RemovePaths    func(paths ...string) error
-	RemoveBinary   func() error
-	DetectClient   func() svcmgr.InstallState
+	UI                        uiProvider
+	Inspect                   func() svcmgr.InstallInspection
+	IsActive                  func() (bool, error)
+	IsEnabled                 func() (bool, error)
+	Logs                      func() error
+	RunInstall                func() error
+	ReadServerEnv             func() (svcmgr.ServerEnv, error)
+	DisableAndStop            func() error
+	EnableAndStart            func() error
+	DaemonReload              func() error
+	RemovePaths               func(paths ...string) error
+	RemoveBinary              func() error
+	DetectClient              func() svcmgr.InstallState
+	ResetAdminPassword        func(username, password string) error
+	ResetAdminPasswordDataDir string
 }
 
 func ManageServer() error {
@@ -49,6 +51,17 @@ func ManageServerWith(deps serverDeps) error {
 			Stop:  deps.DisableAndStop,
 			Uninstall: func() (bool, error) {
 				return uninstallServer(deps)
+			},
+			Extra: []serviceMenuAction{
+				{
+					Option: tui.SelectOption{
+						Label:       "重置管理员密码",
+						Description: "离线更新指定管理员用户的登录密码，并清除该用户现有 Web 会话。",
+					},
+					Run: func() error {
+						return resetAdminPasswordInteractive(deps)
+					},
+				},
 			},
 		})
 	case svcmgr.StateHistoricalDataOnly:
@@ -91,6 +104,10 @@ func defaultServerDeps() serverDeps {
 		DetectClient: func() svcmgr.InstallState {
 			return svcmgr.Detect(svcmgr.RoleClient)
 		},
+		ResetAdminPassword: func(username, password string) error {
+			return ResetAdminPassword(svcmgr.ManagedDataDir, username, password)
+		},
+		ResetAdminPasswordDataDir: svcmgr.ManagedDataDir,
 	}
 }
 

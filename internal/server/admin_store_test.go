@@ -277,6 +277,42 @@ func TestAdminStore_ValidateAdminPassword_NoUser(t *testing.T) {
 	}
 }
 
+func TestAdminStore_ResetAdminPassword(t *testing.T) {
+	store := newInitializedAdminStore(t)
+	user, err := store.ValidateAdminPassword("admin", "Admin1234")
+	if err != nil {
+		t.Fatalf("ValidateAdminPassword before reset failed: %v", err)
+	}
+	session := mustCreateSession(t, store, user.ID, user.Username, user.Role, "127.0.0.1", "ua")
+	if store.GetSession(session.ID) == nil {
+		t.Fatal("expected session before password reset")
+	}
+
+	if err := store.ResetAdminPassword("admin", "NewPass123"); err != nil {
+		t.Fatalf("ResetAdminPassword failed: %v", err)
+	}
+	if _, err := store.ValidateAdminPassword("admin", "Admin1234"); err == nil {
+		t.Fatal("old password should no longer work")
+	}
+	if _, err := store.ValidateAdminPassword("admin", "NewPass123"); err != nil {
+		t.Fatalf("new password should work: %v", err)
+	}
+	if store.GetSession(session.ID) != nil {
+		t.Fatal("existing admin session should be removed after password reset")
+	}
+}
+
+func TestAdminStore_ResetAdminPasswordRequiresExistingUser(t *testing.T) {
+	store := newInitializedAdminStore(t)
+	err := store.ResetAdminPassword("missing", "NewPass123")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected missing user error, got %v", err)
+	}
+	if _, validateErr := store.ValidateAdminPassword("admin", "Admin1234"); validateErr != nil {
+		t.Fatalf("existing admin password should be unchanged: %v", validateErr)
+	}
+}
+
 // --- JWT Secret ---
 
 func TestAdminStore_GetJWTSecret_BeforeInit(t *testing.T) {

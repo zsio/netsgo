@@ -578,6 +578,54 @@ func (s *AdminStore) ValidateAdminPassword(username, password string) (*AdminUse
 	return &user, nil
 }
 
+func (s *AdminStore) ResetAdminPassword(username, password string) error {
+	if err := validatePassword(password); err != nil {
+		return fmt.Errorf("password does not meet requirements: %w", err)
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.bcryptCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	var userID string
+	if err := tx.QueryRow(`SELECT id FROM admin_users WHERE username = ?`, username).Scan(&userID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("admin user %q not found", username)
+		}
+		return err
+	}
+
+	result, err := tx.Exec(`UPDATE admin_users SET password_hash = ? WHERE id = ?`, string(hash), userID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("admin user %q not found", username)
+	}
+	if _, err := tx.Exec(`DELETE FROM admin_sessions WHERE user_id = ?`, userID); err != nil {
+		return err
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
+}
+
 func (s *AdminStore) UpdateAdminLoginTime(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

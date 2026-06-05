@@ -25,11 +25,18 @@ type serviceMenuDeps struct {
 	Start     func() error
 	Stop      func() error
 	Uninstall func() (bool, error)
+	Extra     []serviceMenuAction
+}
+
+type serviceMenuAction struct {
+	Option tui.SelectOption
+	Run    func() error
 }
 
 func runServiceMenu(deps serviceMenuDeps) error {
 	for {
-		action, err := selectWithOptions(deps.UI, serviceActionPrompt(deps.Role), manageActionOptions())
+		options := serviceActionOptions(deps.Extra)
+		action, err := selectWithOptions(deps.UI, serviceActionPrompt(deps.Role), options)
 		if err != nil {
 			return err
 		}
@@ -65,12 +72,38 @@ func runServiceMenu(deps serviceMenuDeps) error {
 			if exitMenu {
 				return errReturnToSelection
 			}
-		case 7:
+		case len(manageActionOptions()) - 1 + len(deps.Extra):
 			return errReturnToSelection
 		default:
-			return errReturnToSelection
+			extraIndex := action - (len(manageActionOptions()) - 1)
+			if extraIndex < 0 || extraIndex >= len(deps.Extra) {
+				return errReturnToSelection
+			}
+			if err := deps.Extra[extraIndex].Run(); err != nil {
+				return err
+			}
 		}
 	}
+}
+
+func serviceActionOptions(extra []serviceMenuAction) []tui.SelectOption {
+	base := manageActionOptions()
+	if len(extra) == 0 {
+		return base
+	}
+	options := make([]tui.SelectOption, 0, len(base)+len(extra))
+	options = append(options, base[:len(base)-1]...)
+	options = append(options, extraActionOptions(extra)...)
+	options = append(options, base[len(base)-1])
+	return options
+}
+
+func extraActionOptions(actions []serviceMenuAction) []tui.SelectOption {
+	options := make([]tui.SelectOption, len(actions))
+	for i, action := range actions {
+		options[i] = action.Option
+	}
+	return options
 }
 
 func serviceActionPrompt(role svcmgr.Role) string {

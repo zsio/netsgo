@@ -16,6 +16,8 @@ import (
 
 type uiProvider interface {
 	Select(prompt string, options []string) (int, error)
+	Input(prompt string, opts ...tui.InputOptions) (string, error)
+	Password(prompt string, opts ...tui.InputOptions) (string, error)
 	Confirm(prompt string) (bool, error)
 	ConfirmWithOptions(prompt string, opts tui.ConfirmOptions) (bool, error)
 	PrintSummary(title string, rows [][2]string)
@@ -28,6 +30,12 @@ func (defaultUI) Select(prompt string, options []string) (int, error) {
 }
 func (defaultUI) SelectWithOptions(prompt string, options []tui.SelectOption) (int, error) {
 	return tui.SelectWithOptions(prompt, options)
+}
+func (defaultUI) Input(prompt string, opts ...tui.InputOptions) (string, error) {
+	return tui.Input(prompt, opts...)
+}
+func (defaultUI) Password(prompt string, opts ...tui.InputOptions) (string, error) {
+	return tui.Password(prompt, opts...)
 }
 func (defaultUI) Confirm(prompt string) (bool, error) { return tui.Confirm(prompt) }
 func (defaultUI) ConfirmWithOptions(prompt string, opts tui.ConfirmOptions) (bool, error) {
