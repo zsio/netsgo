@@ -108,12 +108,12 @@ export function ShikiCodeBlock({ code, language }: ShikiCodeBlockProps) {
             .${blockClassName} .shiki {
               min-width: max-content;
               margin: 0;
-              padding: 0.75rem 3rem 0.75rem 0;
+              padding: 0.625rem 3rem 0.625rem 0;
               overflow: visible;
               background-color: transparent !important;
               font-family: var(--font-mono);
               font-size: 0.75rem;
-              line-height: 1.5rem;
+              line-height: 1.25rem;
             }
 
             .${blockClassName} .shiki code {
@@ -123,10 +123,12 @@ export function ShikiCodeBlock({ code, language }: ShikiCodeBlockProps) {
 
             .${blockClassName} .shiki .line {
               position: relative;
-              display: block;
-              min-height: 1.5rem;
+              display: inline-block;
+              min-width: 100%;
+              min-height: 1.25rem;
               padding-left: 3rem;
               padding-right: 0.75rem;
+              box-sizing: border-box;
             }
 
             .${blockClassName} .shiki .line::before {
