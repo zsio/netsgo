@@ -6,6 +6,7 @@ import {
   clientDockerImageForVersion,
   clientInstallChannelArgForVersion,
   clientReleaseChannelForVersion,
+  hasKnownClientInstallVersion,
 } from './client-install-commands';
 
 describe('resolveAddClientServiceAddress', () => {
@@ -31,6 +32,13 @@ describe('resolveAddClientServiceAddress', () => {
 });
 
 describe('client install command release helpers', () => {
+  test('requires a known server version before generating install output', () => {
+    expect(hasKnownClientInstallVersion(undefined)).toBe(false);
+    expect(hasKnownClientInstallVersion('')).toBe(false);
+    expect(hasKnownClientInstallVersion('  ')).toBe(false);
+    expect(hasKnownClientInstallVersion('v0.2.0-beta.3')).toBe(true);
+  });
+
   test('defaults to stable without adding an install channel argument', () => {
     expect(clientReleaseChannelForVersion('v0.2.0')).toBe('stable');
     expect(clientReleaseChannelForVersion('dev-snapshot')).toBe('stable');

@@ -26,6 +26,7 @@ import {
   clientCNBDockerImageForVersion,
   clientDockerImageForVersion,
   clientInstallChannelArgForVersion,
+  hasKnownClientInstallVersion,
   INSTALL_SCRIPT_URL,
 } from './client-install-commands';
 import { ShikiCodeBlock } from './ShikiCodeBlock';
@@ -80,9 +81,12 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   const [maxUses, setMaxUses] = useState(0);
   const [expiresIn, setExpiresIn] = useState('0');
   const [generatedKey, setGeneratedKey] = useState('');
+  const [generatedServerVersion, setGeneratedServerVersion] = useState('');
   const [serverAddr, setServerAddr] = useState('');
   const [activeCommandTab, setActiveCommandTab] = useState<CommandTab>('install');
   const [copied, setCopied] = useState<CopyTarget | null>(null);
+  const [isWaitingForStatus, setIsWaitingForStatus] = useState(false);
+  const [statusLoadFailed, setStatusLoadFailed] = useState(false);
 
   const createKey = useCreateAPIKey();
   const { data: adminConfig } = useAdminConfig({
@@ -90,7 +94,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     refetchOnMount: 'always',
     staleTime: 0,
   });
-  const { data: status } = useServerStatus({
+  const { data: status, refetch: refetchStatus } = useServerStatus({
     enabled: open,
     refetchOnMount: 'always',
     staleTime: 0,
@@ -101,9 +105,12 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     setMaxUses(0);
     setExpiresIn('0');
     setGeneratedKey('');
+    setGeneratedServerVersion('');
     setServerAddr('');
     setActiveCommandTab('install');
     setCopied(null);
+    setIsWaitingForStatus(false);
+    setStatusLoadFailed(false);
   }, []);
 
   const handleOpenChange = useCallback((v: boolean) => {
@@ -111,7 +118,31 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
     onOpenChange(v);
   }, [onOpenChange, handleReset]);
 
-  const handleGenerate = useCallback(() => {
+  const handleGenerate = useCallback(async () => {
+    if (createKey.isPending || isWaitingForStatus) return;
+
+    setStatusLoadFailed(false);
+    let statusForCommand = status;
+    if (!hasKnownClientInstallVersion(statusForCommand?.version)) {
+      setIsWaitingForStatus(true);
+      try {
+        const result = await refetchStatus({ cancelRefetch: false });
+        statusForCommand = result.data;
+      } catch {
+        setStatusLoadFailed(true);
+        return;
+      } finally {
+        setIsWaitingForStatus(false);
+      }
+    }
+
+    const commandVersion = statusForCommand?.version.trim() ?? '';
+    if (!hasKnownClientInstallVersion(commandVersion)) {
+      setStatusLoadFailed(true);
+      return;
+    }
+
+    const statusServerAddr = statusForCommand?.server_addr;
     const name = `quick-${Date.now().toString(36)}`;
     createKey.mutate(
       {
@@ -123,18 +154,19 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       {
         onSuccess: (data) => {
           setGeneratedKey(data.raw_key);
+          setGeneratedServerVersion(commandVersion);
           setServerAddr(resolveAddClientServiceAddress({
             effectiveServerAddr: adminConfig?.effective_server_addr,
             adminServerAddr: adminConfig?.server_addr,
             keyServerAddr: data.server_addr,
-            statusServerAddr: status?.server_addr,
+            statusServerAddr,
             browserOrigin: window.location.origin,
           }));
           setStep('result');
         },
       },
     );
-  }, [adminConfig, createKey, expiresIn, maxUses, status]);
+  }, [adminConfig, createKey, expiresIn, isWaitingForStatus, maxUses, refetchStatus, status]);
 
   const copyToClipboard = useCallback(async (text: string, tag: CopyTarget) => {
     try {
@@ -153,10 +185,10 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       `  --key ${shellQuote(generatedKey)}`,
     ].join('\n')
     : '';
-  const installChannelArg = clientInstallChannelArgForVersion(status?.version);
+  const installChannelArg = clientInstallChannelArgForVersion(generatedServerVersion);
   const installChannelLines = installChannelArg ? [`  ${installChannelArg} \\`] : [];
-  const clientDockerImage = clientDockerImageForVersion(status?.version);
-  const clientCNBDockerImage = clientCNBDockerImageForVersion(status?.version);
+  const clientDockerImage = clientDockerImageForVersion(generatedServerVersion);
+  const clientCNBDockerImage = clientCNBDockerImageForVersion(generatedServerVersion);
   const installAndRunCmd = generatedKey
     ? [
       `curl -fsSL ${INSTALL_SCRIPT_URL} | sh -s -- \\`,
@@ -203,6 +235,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
       '  netsgo-client-data:',
     ].join('\n')
     : '';
+  const isGeneratePending = createKey.isPending || isWaitingForStatus;
   const commandTabs = [
     { value: 'install' as const, icon: Link, label: t('clients.installAndRun'), language: 'bash' as const },
     { value: 'docker' as const, icon: Box, label: t('clients.dockerRun'), language: 'bash' as const },
@@ -273,9 +306,9 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
             <Button
               className="w-full"
               onClick={handleGenerate}
-              disabled={createKey.isPending}
+              disabled={isGeneratePending}
             >
-              {createKey.isPending ? (
+              {isGeneratePending ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   {t('clients.generating')}
@@ -288,7 +321,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
               )}
             </Button>
 
-            {createKey.isError && (
+            {(createKey.isError || statusLoadFailed) && (
               <p className="text-xs text-destructive text-center">
                 {t('clients.generateFailed')}
               </p>

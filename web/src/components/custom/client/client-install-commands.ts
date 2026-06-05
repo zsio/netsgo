@@ -4,6 +4,10 @@ export const CLIENT_CNB_DOCKER_REPOSITORY = 'docker.cnb.cool/zsio/netsgo';
 
 export type ClientReleaseChannel = 'stable' | 'beta';
 
+export function hasKnownClientInstallVersion(version?: string) {
+  return (version?.trim() ?? '') !== '';
+}
+
 export function clientReleaseChannelForVersion(version?: string): ClientReleaseChannel {
   const normalized = version?.trim() ?? '';
   return /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.[1-9]\d*$/.test(normalized)
