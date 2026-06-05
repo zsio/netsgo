@@ -210,7 +210,7 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto sm:max-w-[500px]">
+      <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto sm:max-w-[640px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <LayersPlus className="h-5 w-5 text-primary" />
