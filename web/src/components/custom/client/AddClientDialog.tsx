@@ -10,7 +10,12 @@ import { Input } from '@/components/ui/input';
 import {
   Key, Copy, Check, RefreshCcw, Terminal, Loader2, LayersPlus, Link,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
 import { useAdminConfig } from '@/hooks/use-admin-config';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
 import { useServerStatus } from '@/hooks/use-server-status';
@@ -115,7 +120,6 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
   const installAndRunCmd = connectCmd
     ? `curl -fsSL ${INSTALL_SCRIPT_URL} | sh -s -- --client --server ${shellQuote(serverAddr)} --key ${shellQuote(generatedKey)}`
     : '';
-  const activeCommand = activeCommandTab === 'install' ? installAndRunCmd : connectCmd;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -198,11 +202,11 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
         )}
 
         {step === 'result' && (
-          <div className="space-y-4 pt-1">
-            <div className="overflow-hidden rounded-xl border border-border/70 bg-muted/25">
-              <div className="grid divide-y divide-border/70">
-                <div className="grid grid-cols-[4.5rem_1fr_auto] items-center gap-3 px-3 py-2.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <div className="flex flex-col gap-4 pt-1">
+            <div className="overflow-hidden rounded-lg border border-border bg-card">
+              <div className="grid divide-y divide-border">
+                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5">
+                  <span className="text-xs font-medium text-muted-foreground">
                     {t('clients.connectionURL')}
                   </span>
                   <code className="min-w-0 truncate text-xs font-mono text-foreground" title={serverAddr}>
@@ -210,20 +214,20 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                   </code>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                    size="icon-sm"
+                    className="shrink-0 text-muted-foreground"
                     onClick={() => copyToClipboard(serverAddr, 'url')}
                   >
                     {copied === 'url' ? (
-                      <Check className="h-3.5 w-3.5 text-green-500" />
+                      <Check className="text-primary" />
                     ) : (
-                      <Copy className="h-3.5 w-3.5" />
+                      <Copy />
                     )}
                   </Button>
                 </div>
 
-                <div className="grid grid-cols-[4.5rem_1fr_auto] items-center gap-3 px-3 py-2.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5">
+                  <span className="text-xs font-medium text-muted-foreground">
                     {t('clients.connectionKey')}
                   </span>
                   <code className="min-w-0 truncate text-xs font-mono text-foreground" title={generatedKey}>
@@ -231,61 +235,74 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                   </code>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                    size="icon-sm"
+                    className="shrink-0 text-muted-foreground"
                     onClick={() => copyToClipboard(generatedKey, 'key')}
                   >
                     {copied === 'key' ? (
-                      <Check className="h-3.5 w-3.5 text-green-500" />
+                      <Check className="text-primary" />
                     ) : (
-                      <Copy className="h-3.5 w-3.5" />
+                      <Copy />
                     )}
                   </Button>
                 </div>
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-xl border border-border bg-background shadow-sm">
-              <div
-                role="tablist"
-                aria-label={t('clients.connectionCommand')}
-                className="grid grid-cols-2 bg-muted/45 p-1"
-              >
-                {(['install', 'run'] as const).map(tab => (
-                  <button
-                    key={tab}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeCommandTab === tab}
-                    className={cn(
-                      'inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground transition-colors',
-                      activeCommandTab === tab && 'bg-background text-foreground shadow-sm ring-1 ring-border/60',
-                    )}
-                    onClick={() => setActiveCommandTab(tab)}
+            <Tabs
+              value={activeCommandTab}
+              onValueChange={value => setActiveCommandTab(value as 'install' | 'run')}
+              className="gap-2"
+            >
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="install">
+                  <Link data-icon="inline-start" />
+                  {t('clients.installAndRun')}
+                </TabsTrigger>
+                <TabsTrigger value="run">
+                  <Terminal data-icon="inline-start" />
+                  {t('clients.runInstalled')}
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="install" className="mt-0">
+                <div className="relative rounded-lg border border-border bg-muted/40 p-3">
+                  <code className="block max-h-32 min-h-16 overflow-auto whitespace-pre-wrap pr-10 text-xs leading-5 font-mono break-all text-foreground select-all">
+                    {installAndRunCmd}
+                  </code>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="absolute right-2 top-2 text-muted-foreground"
+                    onClick={() => copyToClipboard(installAndRunCmd, 'cmd')}
                   >
-                    {tab === 'install' ? <Link className="h-3.5 w-3.5" /> : <Terminal className="h-3.5 w-3.5" />}
-                    {tab === 'install' ? t('clients.installAndRun') : t('clients.runInstalled')}
-                  </button>
-                ))}
-              </div>
-              <div className="relative bg-zinc-950 px-4 py-3 text-zinc-50">
-                <code className="block max-h-32 min-h-16 overflow-auto whitespace-pre-wrap pr-10 text-[12px] leading-5 font-mono break-all select-all">
-                  {activeCommand}
-                </code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-2 top-2 h-7 w-7 text-zinc-400 hover:bg-white/10 hover:text-white"
-                  onClick={() => copyToClipboard(activeCommand, 'cmd')}
-                >
-                  {copied === 'cmd' ? (
-                    <Check className="h-3.5 w-3.5 text-green-400" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-              </div>
-            </div>
+                    {copied === 'cmd' ? (
+                      <Check className="text-primary" />
+                    ) : (
+                      <Copy />
+                    )}
+                  </Button>
+                </div>
+              </TabsContent>
+              <TabsContent value="run" className="mt-0">
+                <div className="relative rounded-lg border border-border bg-muted/40 p-3">
+                  <code className="block max-h-32 min-h-16 overflow-auto whitespace-pre-wrap pr-10 text-xs leading-5 font-mono break-all text-foreground select-all">
+                    {connectCmd}
+                  </code>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="absolute right-2 top-2 text-muted-foreground"
+                    onClick={() => copyToClipboard(connectCmd, 'cmd')}
+                  >
+                    {copied === 'cmd' ? (
+                      <Check className="text-primary" />
+                    ) : (
+                      <Copy />
+                    )}
+                  </Button>
+                </div>
+              </TabsContent>
+            </Tabs>
 
             <div className="flex gap-2 pt-1">
               <Button
