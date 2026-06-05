@@ -16,9 +16,18 @@ type fakeUI struct {
 	selects           []int
 	selectCalls       []selectCall
 	selectOptionCalls []selectOptionCall
+	inputs            []string
+	passwords         []string
+	inputCalls        []inputCall
+	passwordCalls     []inputCall
 	confirms          []bool
 	confirmCalls      []confirmCall
 	summaries         []summaryCall
+}
+
+type inputCall struct {
+	prompt string
+	opts   tui.InputOptions
 }
 
 type selectCall struct {
@@ -66,6 +75,34 @@ func (f *fakeUI) SelectWithOptions(prompt string, options []tui.SelectOption) (i
 		labels[i] = option.Label
 	}
 	return f.Select(prompt, labels)
+}
+
+func (f *fakeUI) Input(prompt string, opts ...tui.InputOptions) (string, error) {
+	call := inputCall{prompt: prompt}
+	if len(opts) > 0 {
+		call.opts = opts[0]
+	}
+	f.inputCalls = append(f.inputCalls, call)
+	if len(f.inputs) == 0 {
+		return "", errors.New("no input value")
+	}
+	v := f.inputs[0]
+	f.inputs = f.inputs[1:]
+	return v, nil
+}
+
+func (f *fakeUI) Password(prompt string, opts ...tui.InputOptions) (string, error) {
+	call := inputCall{prompt: prompt}
+	if len(opts) > 0 {
+		call.opts = opts[0]
+	}
+	f.passwordCalls = append(f.passwordCalls, call)
+	if len(f.passwords) == 0 {
+		return "", errors.New("no password value")
+	}
+	v := f.passwords[0]
+	f.passwords = f.passwords[1:]
+	return v, nil
 }
 
 func (f *fakeUI) Confirm(prompt string) (bool, error) {

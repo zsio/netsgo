@@ -277,6 +277,61 @@ func TestAdminStore_ValidateAdminPassword_NoUser(t *testing.T) {
 	}
 }
 
+func TestAdminStore_ResetAdminUser(t *testing.T) {
+	store := newInitializedAdminStore(t)
+	user, err := store.ValidateAdminPassword("admin", "Admin1234")
+	if err != nil {
+		t.Fatalf("ValidateAdminPassword before reset failed: %v", err)
+	}
+	session := mustCreateSession(t, store, user.ID, user.Username, user.Role, "127.0.0.1", "ua")
+	if store.GetSession(session.ID) == nil {
+		t.Fatal("expected session before admin user reset")
+	}
+
+	if err := store.ResetAdminUser("root", "NewPass123"); err != nil {
+		t.Fatalf("ResetAdminUser failed: %v", err)
+	}
+	if _, err := store.ValidateAdminPassword("admin", "Admin1234"); err == nil {
+		t.Fatal("old admin user should no longer work")
+	}
+	if _, err := store.ValidateAdminPassword("root", "NewPass123"); err != nil {
+		t.Fatalf("new admin user should work: %v", err)
+	}
+	if store.GetSession(session.ID) != nil {
+		t.Fatal("existing admin session should be removed after admin user reset")
+	}
+
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM admin_users`).Scan(&count); err != nil {
+		t.Fatalf("count admin users: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one admin user after reset, got %d", count)
+	}
+}
+
+func TestAdminStore_ResetAdminUserRequiresUsername(t *testing.T) {
+	store := newInitializedAdminStore(t)
+	err := store.ResetAdminUser("  ", "NewPass123")
+	if err == nil || !strings.Contains(err.Error(), "username") {
+		t.Fatalf("expected username error, got %v", err)
+	}
+	if _, validateErr := store.ValidateAdminPassword("admin", "Admin1234"); validateErr != nil {
+		t.Fatalf("existing admin should be unchanged: %v", validateErr)
+	}
+}
+
+func TestAdminStore_ResetAdminUserRequiresInitializedStore(t *testing.T) {
+	store := newTestAdminStore(t)
+	err := store.ResetAdminUser("admin", "NewPass123")
+	if err == nil || !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("expected uninitialized error, got %v", err)
+	}
+	if store.IsInitialized() {
+		t.Fatal("reset should not initialize the store")
+	}
+}
+
 // --- JWT Secret ---
 
 func TestAdminStore_GetJWTSecret_BeforeInit(t *testing.T) {

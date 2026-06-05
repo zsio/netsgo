@@ -12,19 +12,21 @@ import (
 )
 
 type serverDeps struct {
-	UI             uiProvider
-	Inspect        func() svcmgr.InstallInspection
-	IsActive       func() (bool, error)
-	IsEnabled      func() (bool, error)
-	Logs           func() error
-	RunInstall     func() error
-	ReadServerEnv  func() (svcmgr.ServerEnv, error)
-	DisableAndStop func() error
-	EnableAndStart func() error
-	DaemonReload   func() error
-	RemovePaths    func(paths ...string) error
-	RemoveBinary   func() error
-	DetectClient   func() svcmgr.InstallState
+	UI                    uiProvider
+	Inspect               func() svcmgr.InstallInspection
+	IsActive              func() (bool, error)
+	IsEnabled             func() (bool, error)
+	Logs                  func() error
+	RunInstall            func() error
+	ReadServerEnv         func() (svcmgr.ServerEnv, error)
+	DisableAndStop        func() error
+	EnableAndStart        func() error
+	DaemonReload          func() error
+	RemovePaths           func(paths ...string) error
+	RemoveBinary          func() error
+	DetectClient          func() svcmgr.InstallState
+	ResetAdminUser        func(username, password string) error
+	ResetAdminUserDataDir string
 }
 
 func ManageServer() error {
@@ -49,6 +51,17 @@ func ManageServerWith(deps serverDeps) error {
 			Stop:  deps.DisableAndStop,
 			Uninstall: func() (bool, error) {
 				return uninstallServer(deps)
+			},
+			Extra: []serviceMenuAction{
+				{
+					Option: tui.SelectOption{
+						Label:       "重置管理员用户",
+						Description: "离线替换管理员登录用户和密码，并清除现有 Web 会话。",
+					},
+					Run: func() error {
+						return resetAdminUserInteractive(deps)
+					},
+				},
 			},
 		})
 	case svcmgr.StateHistoricalDataOnly:
@@ -91,6 +104,10 @@ func defaultServerDeps() serverDeps {
 		DetectClient: func() svcmgr.InstallState {
 			return svcmgr.Detect(svcmgr.RoleClient)
 		},
+		ResetAdminUser: func(username, password string) error {
+			return ResetAdminUser(svcmgr.ManagedDataDir, username, password)
+		},
+		ResetAdminUserDataDir: svcmgr.ManagedDataDir,
 	}
 }
 

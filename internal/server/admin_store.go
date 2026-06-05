@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 	"unicode"
@@ -576,6 +577,63 @@ func (s *AdminStore) ValidateAdminPassword(username, password string) (*AdminUse
 		return nil, fmt.Errorf("incorrect username or password")
 	}
 	return &user, nil
+}
+
+func (s *AdminStore) ResetAdminUser(username, password string) error {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return fmt.Errorf("admin username is required")
+	}
+	if err := validatePassword(password); err != nil {
+		return fmt.Errorf("password does not meet requirements: %w", err)
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.bcryptCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	initialized, _, err := s.loadConfigLifecycle(tx)
+	if err != nil {
+		return err
+	}
+	if !initialized {
+		return fmt.Errorf("service is not initialized; cannot reset admin user")
+	}
+
+	now := time.Now()
+	user := AdminUser{
+		ID:           generateUUID(),
+		Username:     username,
+		PasswordHash: string(hash),
+		Role:         "admin",
+		CreatedAt:    now,
+	}
+
+	if _, err := tx.Exec(`DELETE FROM admin_sessions`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM admin_users`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO admin_users (id, username, password_hash, role, created_at, last_login) VALUES (?, ?, ?, ?, ?, NULL)`,
+		user.ID, user.Username, user.PasswordHash, user.Role, formatTime(user.CreatedAt)); err != nil {
+		return err
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
 }
 
 func (s *AdminStore) UpdateAdminLoginTime(id string) error {

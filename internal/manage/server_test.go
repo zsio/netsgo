@@ -38,7 +38,7 @@ func newInstalledServerDeps(t *testing.T, ui *fakeUI) (serverDeps, svcmgr.Servic
 }
 
 func TestManageServerInspectRedactsSensitiveData(t *testing.T) {
-	ui := &fakeUI{selects: []int{1, 7}}
+	ui := &fakeUI{selects: []int{1, 8}}
 	deps, _ := newInstalledServerDeps(t, ui)
 
 	err := ManageServerWith(deps)
@@ -87,8 +87,65 @@ func TestManageServerUninstallKeepData(t *testing.T) {
 	assertConfirmPhrase(t, ui.confirmCalls, "继续卸载 server？", "uninstall server")
 }
 
+func TestManageServerResetAdminUser(t *testing.T) {
+	ui := &fakeUI{
+		selects:   []int{7, 8},
+		inputs:    []string{" admin "},
+		passwords: []string{"NewPass123", "NewPass123"},
+	}
+	var gotUsername, gotPassword string
+	deps, _ := newInstalledServerDeps(t, ui)
+	deps.ResetAdminUserDataDir = "/tmp/netsgo-data"
+	deps.ResetAdminUser = func(username, password string) error {
+		gotUsername = username
+		gotPassword = password
+		return nil
+	}
+
+	err := ManageServerWith(deps)
+	assertSelectionExit(t, err)
+
+	if gotUsername != "admin" || gotPassword != "NewPass123" {
+		t.Fatalf("reset admin user input = username %q password %q", gotUsername, gotPassword)
+	}
+	if len(ui.inputCalls) != 1 || ui.inputCalls[0].prompt != "新的管理员用户名" {
+		t.Fatalf("should ask for new admin username, got %#v", ui.inputCalls)
+	}
+	if len(ui.passwordCalls) != 2 {
+		t.Fatalf("should ask for password and confirmation, got %#v", ui.passwordCalls)
+	}
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "管理员用户已重置" {
+		t.Fatalf("should show reset success summary, got %#v", ui.summaries)
+	}
+	assertSummaryCallRow(t, ui.summaries[0], "新管理员", "admin")
+	assertSummaryCallRow(t, ui.summaries[0], "数据目录", "/tmp/netsgo-data")
+	assertSelectOptionsDescribed(t, ui.selectOptionCalls, "选择 server 操作")
+}
+
+func TestManageServerResetAdminUserRequiresMatchingConfirmation(t *testing.T) {
+	ui := &fakeUI{
+		selects:   []int{7},
+		inputs:    []string{"admin"},
+		passwords: []string{"NewPass123", "OtherPass123"},
+	}
+	called := false
+	deps, _ := newInstalledServerDeps(t, ui)
+	deps.ResetAdminUser = func(username, password string) error {
+		called = true
+		return nil
+	}
+
+	err := ManageServerWith(deps)
+	if err == nil || !strings.Contains(err.Error(), "不一致") {
+		t.Fatalf("expected mismatch error, got %v", err)
+	}
+	if called {
+		t.Fatal("reset should not run when confirmation mismatches")
+	}
+}
+
 func TestManageServerRestart(t *testing.T) {
-	ui := &fakeUI{selects: []int{5, 7}}
+	ui := &fakeUI{selects: []int{5, 8}}
 	stopped := false
 	started := false
 	deps, _ := newInstalledServerDeps(t, ui)
@@ -125,7 +182,7 @@ func TestManageServerLogs(t *testing.T) {
 }
 
 func TestManageServerStartPrintsSuccess(t *testing.T) {
-	ui := &fakeUI{selects: []int{3, 7}}
+	ui := &fakeUI{selects: []int{3, 8}}
 	deps, _ := newInstalledServerDeps(t, ui)
 
 	err := ManageServerWith(deps)
@@ -137,7 +194,7 @@ func TestManageServerStartPrintsSuccess(t *testing.T) {
 }
 
 func TestManageServerUninstallCancelPrintsCancelled(t *testing.T) {
-	ui := &fakeUI{selects: []int{6, 0, 7}, confirms: []bool{false}}
+	ui := &fakeUI{selects: []int{6, 0, 8}, confirms: []bool{false}}
 	deps, _ := newInstalledServerDeps(t, ui)
 
 	err := ManageServerWith(deps)
