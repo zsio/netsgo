@@ -116,7 +116,7 @@ export const enUS = {
     generating: 'Generating...',
     generateFailed: 'Generation failed. Try again.',
     connectionURL: 'URL',
-    connectionKey: 'Connection key',
+    connectionKey: 'Key',
     connectionCommand: 'Connection command',
     installAndRun: 'Quick start',
     dockerRun: 'Docker',

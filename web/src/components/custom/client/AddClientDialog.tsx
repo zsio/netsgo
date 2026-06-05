@@ -333,8 +333,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
           <div className="flex min-w-0 flex-col gap-4 pt-1">
             <div className="overflow-hidden rounded-lg border border-border bg-card">
               <div className="grid divide-y divide-border">
-                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2.5">
-                  <span className="pt-0.5 text-xs font-medium text-muted-foreground">
+                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5">
+                  <span className="text-xs font-medium text-muted-foreground">
                     {t('clients.connectionURL')}
                   </span>
                   <code className="min-w-0 select-all break-all font-mono text-xs leading-5 text-foreground" title={serverAddr}>
@@ -356,8 +356,8 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                   </Button>
                 </div>
 
-                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2.5">
-                  <span className="pt-0.5 text-xs font-medium text-muted-foreground">
+                <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5">
+                  <span className="text-xs font-medium text-muted-foreground">
                     {t('clients.connectionKey')}
                   </span>
                   <code className="min-w-0 select-all break-all font-mono text-xs leading-5 text-foreground" title={generatedKey}>
