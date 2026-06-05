@@ -1,5 +1,5 @@
 export const INSTALL_SCRIPT_URL = 'https://netsgo.zs.uy/install.sh';
-export const CLIENT_DOCKER_REPOSITORY = 'zsio/netsgo';
+export const CLIENT_DOCKER_REPOSITORY = 'ghcr.io/zsio/netsgo';
 export const CLIENT_CNB_DOCKER_REPOSITORY = 'docker.cnb.cool/zsio/netsgo';
 
 export type ClientReleaseChannel = 'stable' | 'beta';

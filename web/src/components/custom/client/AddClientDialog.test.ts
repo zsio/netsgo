@@ -43,14 +43,14 @@ describe('client install command release helpers', () => {
     expect(clientReleaseChannelForVersion('v0.2.0')).toBe('stable');
     expect(clientReleaseChannelForVersion('dev-snapshot')).toBe('stable');
     expect(clientInstallChannelArgForVersion('v0.2.0')).toBe('');
-    expect(clientDockerImageForVersion('v0.2.0')).toBe('zsio/netsgo:latest');
+    expect(clientDockerImageForVersion('v0.2.0')).toBe('ghcr.io/zsio/netsgo:latest');
     expect(clientCNBDockerImageForVersion('v0.2.0')).toBe('docker.cnb.cool/zsio/netsgo:latest');
   });
 
   test('uses beta channel and a matching Docker image tag for beta server versions', () => {
     expect(clientReleaseChannelForVersion('v0.2.0-beta.3')).toBe('beta');
     expect(clientInstallChannelArgForVersion('v0.2.0-beta.3')).toBe('--channel beta');
-    expect(clientDockerImageForVersion('v0.2.0-beta.3')).toBe('zsio/netsgo:0.2.0-beta.3');
+    expect(clientDockerImageForVersion('v0.2.0-beta.3')).toBe('ghcr.io/zsio/netsgo:0.2.0-beta.3');
     expect(clientCNBDockerImageForVersion('v0.2.0-beta.3')).toBe('docker.cnb.cool/zsio/netsgo:0.2.0-beta.3');
   });
 });
