@@ -565,7 +565,11 @@ require_linux_systemd
 require_tools
 
 log "检查是否已有 NetsGo 托管服务"
-if [ "$install_mode" = "interactive" ] && systemctl list-unit-files 'netsgo-*.service' 2>/dev/null | grep -q '^netsgo-'; then
+if [ "$install_mode" = "client" ]; then
+  if systemctl list-unit-files 'netsgo-client.service' 2>/dev/null | grep -q '^netsgo-client\.service'; then
+    die "检测到已有 netsgo-client.service。此一键安装命令只用于首次安装，不会覆盖现有 client 配置。请使用 netsgo manage 管理或重新安装 client。"
+  fi
+elif systemctl list-unit-files 'netsgo-*.service' 2>/dev/null | grep -q '^netsgo-'; then
   die "检测到已有 NetsGo 托管服务。请使用 scripts/upgrade.sh 或 netsgo manage。"
 fi
 
