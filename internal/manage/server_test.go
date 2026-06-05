@@ -87,7 +87,7 @@ func TestManageServerUninstallKeepData(t *testing.T) {
 	assertConfirmPhrase(t, ui.confirmCalls, "继续卸载 server？", "uninstall server")
 }
 
-func TestManageServerResetAdminPassword(t *testing.T) {
+func TestManageServerResetAdminUser(t *testing.T) {
 	ui := &fakeUI{
 		selects:   []int{7, 8},
 		inputs:    []string{" admin "},
@@ -95,8 +95,8 @@ func TestManageServerResetAdminPassword(t *testing.T) {
 	}
 	var gotUsername, gotPassword string
 	deps, _ := newInstalledServerDeps(t, ui)
-	deps.ResetAdminPasswordDataDir = "/tmp/netsgo-data"
-	deps.ResetAdminPassword = func(username, password string) error {
+	deps.ResetAdminUserDataDir = "/tmp/netsgo-data"
+	deps.ResetAdminUser = func(username, password string) error {
 		gotUsername = username
 		gotPassword = password
 		return nil
@@ -106,23 +106,23 @@ func TestManageServerResetAdminPassword(t *testing.T) {
 	assertSelectionExit(t, err)
 
 	if gotUsername != "admin" || gotPassword != "NewPass123" {
-		t.Fatalf("reset password input = username %q password %q", gotUsername, gotPassword)
+		t.Fatalf("reset admin user input = username %q password %q", gotUsername, gotPassword)
 	}
-	if len(ui.inputCalls) != 1 || ui.inputCalls[0].prompt != "管理员用户名" {
-		t.Fatalf("should ask for admin username, got %#v", ui.inputCalls)
+	if len(ui.inputCalls) != 1 || ui.inputCalls[0].prompt != "新的管理员用户名" {
+		t.Fatalf("should ask for new admin username, got %#v", ui.inputCalls)
 	}
 	if len(ui.passwordCalls) != 2 {
 		t.Fatalf("should ask for password and confirmation, got %#v", ui.passwordCalls)
 	}
-	if len(ui.summaries) != 1 || ui.summaries[0].title != "管理员密码已重置" {
+	if len(ui.summaries) != 1 || ui.summaries[0].title != "管理员用户已重置" {
 		t.Fatalf("should show reset success summary, got %#v", ui.summaries)
 	}
-	assertSummaryCallRow(t, ui.summaries[0], "用户", "admin")
+	assertSummaryCallRow(t, ui.summaries[0], "新管理员", "admin")
 	assertSummaryCallRow(t, ui.summaries[0], "数据目录", "/tmp/netsgo-data")
 	assertSelectOptionsDescribed(t, ui.selectOptionCalls, "选择 server 操作")
 }
 
-func TestManageServerResetAdminPasswordRequiresMatchingConfirmation(t *testing.T) {
+func TestManageServerResetAdminUserRequiresMatchingConfirmation(t *testing.T) {
 	ui := &fakeUI{
 		selects:   []int{7},
 		inputs:    []string{"admin"},
@@ -130,7 +130,7 @@ func TestManageServerResetAdminPasswordRequiresMatchingConfirmation(t *testing.T
 	}
 	called := false
 	deps, _ := newInstalledServerDeps(t, ui)
-	deps.ResetAdminPassword = func(username, password string) error {
+	deps.ResetAdminUser = func(username, password string) error {
 		called = true
 		return nil
 	}

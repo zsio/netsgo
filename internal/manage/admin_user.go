@@ -8,9 +8,10 @@ import (
 	"netsgo/internal/server"
 	"netsgo/internal/svcmgr"
 	"netsgo/internal/tui"
+	"netsgo/pkg/flock"
 )
 
-func ResetAdminPassword(dataDir, username, password string) error {
+func ResetAdminUser(dataDir, username, password string) error {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return fmt.Errorf("admin username is required")
@@ -18,6 +19,13 @@ func ResetAdminPassword(dataDir, username, password string) error {
 	if password == "" {
 		return fmt.Errorf("admin password is required")
 	}
+
+	lockPath := filepath.Join(dataDir, "locks", "server.lock")
+	unlock, err := flock.TryLock(lockPath)
+	if err != nil {
+		return fmt.Errorf("server appears to be running or another server operation holds %s; stop the server before resetting the admin user: %w", lockPath, err)
+	}
+	defer unlock()
 
 	initialized, err := server.IsInitialized(dataDir)
 	if err != nil {
@@ -36,15 +44,15 @@ func ResetAdminPassword(dataDir, username, password string) error {
 	}
 	defer func() { _ = store.Close() }()
 
-	return store.ResetAdminPassword(username, password)
+	return store.ResetAdminUser(username, password)
 }
 
-func resetAdminPasswordInteractive(deps serverDeps) error {
-	if deps.ResetAdminPassword == nil {
+func resetAdminUserInteractive(deps serverDeps) error {
+	if deps.ResetAdminUser == nil {
 		return fmt.Errorf("manage dependencies are incomplete")
 	}
 
-	username, err := deps.UI.Input("管理员用户名", tui.InputOptions{
+	username, err := deps.UI.Input("新的管理员用户名", tui.InputOptions{
 		Placeholder: "e.g. admin",
 		Validate: func(value string) error {
 			if strings.TrimSpace(value) == "" {
@@ -84,20 +92,20 @@ func resetAdminPasswordInteractive(deps serverDeps) error {
 	}
 
 	username = strings.TrimSpace(username)
-	if err := deps.ResetAdminPassword(username, password); err != nil {
+	if err := deps.ResetAdminUser(username, password); err != nil {
 		return err
 	}
-	deps.UI.PrintSummary("管理员密码已重置", [][2]string{
-		{"用户", username},
-		{"会话", "该管理员的现有 Web 登录会话已失效"},
-		{"数据目录", resetAdminPasswordDataDir(deps)},
+	deps.UI.PrintSummary("管理员用户已重置", [][2]string{
+		{"新管理员", username},
+		{"会话", "现有 Web 登录会话已全部失效"},
+		{"数据目录", resetAdminUserDataDir(deps)},
 	})
 	return nil
 }
 
-func resetAdminPasswordDataDir(deps serverDeps) string {
-	if deps.ResetAdminPasswordDataDir != "" {
-		return deps.ResetAdminPasswordDataDir
+func resetAdminUserDataDir(deps serverDeps) string {
+	if deps.ResetAdminUserDataDir != "" {
+		return deps.ResetAdminUserDataDir
 	}
 	return svcmgr.ManagedDataDir
 }

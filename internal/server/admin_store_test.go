@@ -277,7 +277,7 @@ func TestAdminStore_ValidateAdminPassword_NoUser(t *testing.T) {
 	}
 }
 
-func TestAdminStore_ResetAdminPassword(t *testing.T) {
+func TestAdminStore_ResetAdminUser(t *testing.T) {
 	store := newInitializedAdminStore(t)
 	user, err := store.ValidateAdminPassword("admin", "Admin1234")
 	if err != nil {
@@ -285,31 +285,50 @@ func TestAdminStore_ResetAdminPassword(t *testing.T) {
 	}
 	session := mustCreateSession(t, store, user.ID, user.Username, user.Role, "127.0.0.1", "ua")
 	if store.GetSession(session.ID) == nil {
-		t.Fatal("expected session before password reset")
+		t.Fatal("expected session before admin user reset")
 	}
 
-	if err := store.ResetAdminPassword("admin", "NewPass123"); err != nil {
-		t.Fatalf("ResetAdminPassword failed: %v", err)
+	if err := store.ResetAdminUser("root", "NewPass123"); err != nil {
+		t.Fatalf("ResetAdminUser failed: %v", err)
 	}
 	if _, err := store.ValidateAdminPassword("admin", "Admin1234"); err == nil {
-		t.Fatal("old password should no longer work")
+		t.Fatal("old admin user should no longer work")
 	}
-	if _, err := store.ValidateAdminPassword("admin", "NewPass123"); err != nil {
-		t.Fatalf("new password should work: %v", err)
+	if _, err := store.ValidateAdminPassword("root", "NewPass123"); err != nil {
+		t.Fatalf("new admin user should work: %v", err)
 	}
 	if store.GetSession(session.ID) != nil {
-		t.Fatal("existing admin session should be removed after password reset")
+		t.Fatal("existing admin session should be removed after admin user reset")
+	}
+
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM admin_users`).Scan(&count); err != nil {
+		t.Fatalf("count admin users: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one admin user after reset, got %d", count)
 	}
 }
 
-func TestAdminStore_ResetAdminPasswordRequiresExistingUser(t *testing.T) {
+func TestAdminStore_ResetAdminUserRequiresUsername(t *testing.T) {
 	store := newInitializedAdminStore(t)
-	err := store.ResetAdminPassword("missing", "NewPass123")
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("expected missing user error, got %v", err)
+	err := store.ResetAdminUser("  ", "NewPass123")
+	if err == nil || !strings.Contains(err.Error(), "username") {
+		t.Fatalf("expected username error, got %v", err)
 	}
 	if _, validateErr := store.ValidateAdminPassword("admin", "Admin1234"); validateErr != nil {
-		t.Fatalf("existing admin password should be unchanged: %v", validateErr)
+		t.Fatalf("existing admin should be unchanged: %v", validateErr)
+	}
+}
+
+func TestAdminStore_ResetAdminUserRequiresInitializedStore(t *testing.T) {
+	store := newTestAdminStore(t)
+	err := store.ResetAdminUser("admin", "NewPass123")
+	if err == nil || !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("expected uninitialized error, got %v", err)
+	}
+	if store.IsInitialized() {
+		t.Fatal("reset should not initialize the store")
 	}
 }
 

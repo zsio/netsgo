@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"netsgo/internal/manage"
@@ -26,22 +29,23 @@ var manageCmd = &cobra.Command{
 	},
 }
 
-var resetAdminPasswordCmd = &cobra.Command{
-	Use:          "reset-admin-password",
-	Short:        "Reset a NetsGo server admin password offline",
+var resetAdminUserCmd = &cobra.Command{
+	Use:          "reset-admin-user",
+	Short:        "Reset a NetsGo server admin user offline",
 	SilenceUsage: true,
-	Long: `Reset a NetsGo server admin password directly in the server SQLite data.
+	Long: `Reset the NetsGo server admin login user directly in the server SQLite data.
 
 This command is intended for recovery and container/script usage. It requires an
-existing initialized server data directory and an existing admin username.`,
-	Example: `  netsgo manage reset-admin-password --username admin --password NewPass123
-  netsgo manage reset-admin-password --data-dir /var/lib/netsgo --username admin --password NewPass123`,
-	RunE: runResetAdminPasswordCommand,
+existing initialized server data directory. The provided username and password
+replace the current admin login user.`,
+	Example: `  netsgo manage reset-admin-user --username admin --password NewPass123
+  netsgo manage reset-admin-user --data-dir /var/lib/netsgo --username admin --password NewPass123`,
+	RunE: runResetAdminUserCommand,
 }
 
-func addResetAdminPasswordFlags(cmd *cobra.Command) {
+func addResetAdminUserFlags(cmd *cobra.Command) {
 	cmd.Flags().String("data-dir", svcmgr.ManagedDataDir, "Data root directory containing server/netsgo.db")
-	cmd.Flags().String("username", "", "Existing admin username to reset")
+	cmd.Flags().String("username", "", "New admin username")
 	cmd.Flags().String("password", "", "New admin password")
 	if err := cmd.MarkFlagRequired("username"); err != nil {
 		panic(err)
@@ -51,9 +55,12 @@ func addResetAdminPasswordFlags(cmd *cobra.Command) {
 	}
 }
 
-func runResetAdminPasswordCommand(cmd *cobra.Command, args []string) error {
+func runResetAdminUserCommand(cmd *cobra.Command, args []string) error {
 	dataDir, err := cmd.Flags().GetString("data-dir")
 	if err != nil {
+		return err
+	}
+	if err := rerunManageResetAdminUserWithSudoIfNeeded(dataDir, os.Getuid(), exec.LookPath, execAsRoot); err != nil {
 		return err
 	}
 	username, err := cmd.Flags().GetString("username")
@@ -65,15 +72,22 @@ func runResetAdminPasswordCommand(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	username = strings.TrimSpace(username)
-	if err := manage.ResetAdminPassword(dataDir, username, password); err != nil {
+	if err := manage.ResetAdminUser(dataDir, username, password); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "admin password reset for %q\n", username)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "admin user reset to %q\n", username)
 	return err
 }
 
+func rerunManageResetAdminUserWithSudoIfNeeded(dataDir string, uid int, lookPath func(file string) (string, error), execFn func(argv0 string, argv []string, envv []string) error) error {
+	if filepath.Clean(dataDir) != filepath.Clean(svcmgr.ManagedDataDir) {
+		return nil
+	}
+	return rerunInstallWithSudoIfNeeded(uid, lookPath, execFn)
+}
+
 func init() {
-	addResetAdminPasswordFlags(resetAdminPasswordCmd)
-	manageCmd.AddCommand(resetAdminPasswordCmd)
+	addResetAdminUserFlags(resetAdminUserCmd)
+	manageCmd.AddCommand(resetAdminUserCmd)
 	rootCmd.AddCommand(manageCmd)
 }
