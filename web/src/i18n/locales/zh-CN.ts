@@ -174,7 +174,7 @@ export const zhCN = {
     name: '隧道名称',
     namePlaceholder: '例如 ssh-dev',
     topology: '隧道拓扑',
-    c2cRequiresTwoClients: '客户端互访需要至少两个客户端',
+    c2cRequiresTwoClients: '添加第二个客户端后可创建客户端互访隧道',
     sourceClient: '服务来源客户端',
     ingressClient: '访问入口客户端',
     protocolType: '协议类型',

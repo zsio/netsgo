@@ -172,7 +172,7 @@ export const enUS = {
     name: 'Tunnel name',
     namePlaceholder: 'e.g. ssh-dev',
     topology: 'Tunnel topology',
-    c2cRequiresTwoClients: 'Client-to-Client requires at least two clients',
+    c2cRequiresTwoClients: 'Add a second client to create a Client-to-Client tunnel.',
     sourceClient: 'Service source client',
     ingressClient: 'Ingress client',
     protocolType: 'Protocol type',

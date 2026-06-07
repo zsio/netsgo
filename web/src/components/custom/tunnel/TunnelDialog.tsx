@@ -12,6 +12,11 @@ import {
   InputGroupInput,
   InputGroupText,
 } from '@/components/ui/input-group';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import toast from 'react-hot-toast';
 import { useCreateTunnel, useUpdateTunnel } from '@/hooks/use-tunnel-mutations';
 import {
@@ -197,6 +202,49 @@ function formatPortRanges(ranges: PortRange[] | undefined) {
     return i18n.t('tunnels.unrestricted');
   }
   return ranges.map((range) => range.start === range.end ? range.start : `${range.start}-${range.end}`).join(', ');
+}
+
+export function ClientToClientTopologyButton({
+  selected,
+  disabled,
+  label,
+  tooltip,
+  onSelect,
+}: {
+  selected: boolean;
+  disabled: boolean;
+  label: string;
+  tooltip: string;
+  onSelect: () => void;
+}) {
+  const button = (
+    <Button
+      type="button"
+      variant={selected ? 'default' : 'outline'}
+      disabled={disabled}
+      onClick={onSelect}
+      className="w-full"
+    >
+      {label}
+    </Button>
+  );
+
+  if (!disabled) {
+    return button;
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="block cursor-not-allowed" tabIndex={0}>
+          {button}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 export function TunnelDialog(props: TunnelDialogProps) {
@@ -456,11 +504,12 @@ function TunnelDialogForm({
             >
               {t('tunnels.serverExpose')}
             </Button>
-            <Button
-              type="button"
-              variant={topology === 'client_to_client' ? 'default' : 'outline'}
+            <ClientToClientTopologyButton
+              selected={topology === 'client_to_client'}
               disabled={!canUseClientToClient}
-              onClick={() => {
+              label={t('tunnels.clientToClient')}
+              tooltip={t('tunnels.c2cRequiresTwoClients')}
+              onSelect={() => {
                 if (!canUseClientToClient) {
                   return;
                 }
@@ -468,15 +517,8 @@ function TunnelDialogForm({
                 setTopology('client_to_client');
                 if (type === 'http') setType('tcp');
               }}
-            >
-              {t('tunnels.clientToClient')}
-            </Button>
+            />
           </div>
-          {!canUseClientToClient && (
-            <p className="text-[11px] font-medium text-destructive">
-              {t('tunnels.c2cRequiresTwoClients')}
-            </p>
-          )}
           <FieldErrorText error={fieldError} fields={['topology', 'transport_policy']} />
         </div>
 
