@@ -88,34 +88,15 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// create session (automatically invalidates old sessions → single active session per user)
-	session, err := s.auth.adminStore.CreateSession(user.ID, user.Username, user.Role, r.RemoteAddr, r.UserAgent())
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "session_persist_failed", "failed to persist session")
-		return
-	}
-
-	token, err := s.GenerateAdminToken(session)
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "token_generate_failed", "failed to generate token")
-		return
-	}
-
 	slog.Info("Admin user logged in", "user", user.Username, "module", "auth")
 	if s.auth.loginLimiter != nil {
 		s.auth.loginLimiter.ResetFailures(ip)
 	}
 
-	s.setSessionCookie(w, r, token, int(sessionDefaultTTL.Seconds()))
-
-	encodeJSON(w, http.StatusOK, map[string]any{
-		"token": token,
-		"user": map[string]any{
-			"id":       user.ID,
-			"username": user.Username,
-			"role":     user.Role,
-		},
-	})
+	if s.maybeBeginMFALogin(w, r, user) {
+		return
+	}
+	s.createAdminLoginSession(w, r, *user)
 }
 
 func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
