@@ -1492,6 +1492,7 @@ func TestProbe_SingleReport(t *testing.T) {
 	client := val.(*ClientConn)
 	if client.GetStats() == nil {
 		t.Fatal("Stats should not be nil")
+		return
 	}
 	if client.GetStats().CPUUsage != 42.5 {
 		t.Errorf("CPUUsage: want 42.5, got %f", client.GetStats().CPUUsage)
@@ -1733,6 +1734,7 @@ func TestAuth_RehydratesPersistedClientBandwidthSettings(t *testing.T) {
 	}
 	if client.BandwidthRuntime() == nil {
 		t.Fatal("client bandwidth runtime should be initialized during auth")
+		return
 	}
 	if got := client.BandwidthRuntime().Budget(payloadDirectionIngress).Preview(4096); got != 777 {
 		t.Fatalf("ingress preview mismatch after auth rehydrate: want 777, got %d", got)
@@ -2239,6 +2241,7 @@ func TestServer_StartHTTPOnly(t *testing.T) {
 	mux := s.StartHTTPOnly()
 	if mux == nil {
 		t.Fatal("StartHTTPOnly should return a non-nil ServeMux")
+		return
 	}
 }
 
@@ -2342,6 +2345,7 @@ func TestServer_TunnelLifecycleAPI(t *testing.T) {
 		liveClient.proxyMu.RUnlock()
 		if pendingTunnel == nil {
 			t.Fatalf("pending tunnel should already exist when proxy_provision is received: %s", expectedName)
+			return apiResult{}
 		}
 		if pendingTunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || pendingTunnel.Config.RuntimeState != protocol.ProxyRuntimeStatePending {
 			t.Fatalf("tunnel state when proxy_provision is sent should be running/pending, got %s/%s", pendingTunnel.Config.DesiredState, pendingTunnel.Config.RuntimeState)
@@ -3071,6 +3075,7 @@ func TestServer_ResumePostAckStoreFailureRollsBackAndClosesClientProxy(t *testin
 	client.proxyMu.RUnlock()
 	if runtimeTunnel == nil {
 		t.Fatal("runtime tunnel should not be lost after resume rollback")
+		return
 	}
 	if runtimeTunnel.Config.DesiredState != protocol.ProxyDesiredStateStopped || runtimeTunnel.Config.RuntimeState != protocol.ProxyRuntimeStateIdle {
 		t.Fatalf("runtime state after resume rollback: want stopped/idle, got %s/%s", runtimeTunnel.Config.DesiredState, runtimeTunnel.Config.RuntimeState)
@@ -3307,6 +3312,7 @@ func TestServer_RestoreActiveHTTPTunnel_DoesNotConflictWithSelf(t *testing.T) {
 	client.proxyMu.RUnlock()
 	if tunnel == nil {
 		t.Fatal("restore should create an in-memory tunnel before waiting for ack")
+		return
 	}
 	if !tunnel.Config.CreatedAt.Equal(createdAt) {
 		t.Fatalf("restored active tunnel should preserve CreatedAt: want %s, got %s", createdAt, tunnel.Config.CreatedAt)
@@ -3498,6 +3504,7 @@ func TestRestoreTunnels_StoppedHTTPPlaceholderPreservesDomain(t *testing.T) {
 	client.proxyMu.RUnlock()
 	if tunnel == nil {
 		t.Fatal("stopped HTTP tunnel should be restored to in-memory state")
+		return
 	}
 	if tunnel.Config.Domain != domain {
 		t.Fatalf("restored stopped HTTP tunnel should retain domain=%q, got %q", domain, tunnel.Config.Domain)
@@ -3560,6 +3567,7 @@ func TestRestoreTunnels_PortNotAllowedEventPreservesDomain(t *testing.T) {
 	client.proxyMu.RUnlock()
 	if runtimeTunnel == nil {
 		t.Fatal("tunnel with a port outside the allowlist should create an error placeholder")
+		return
 	}
 	if runtimeTunnel.Config.Domain != domain {
 		t.Fatalf("error placeholder should retain domain=%q, got %q", domain, runtimeTunnel.Config.Domain)
@@ -3693,6 +3701,7 @@ func TestRestoreTunnels_PortNotAllowedPreservesBandwidthFields(t *testing.T) {
 	client.proxyMu.RUnlock()
 	if runtimeTunnel == nil {
 		t.Fatal("restore should create an in-memory error placeholder")
+		return
 	}
 
 	runtimeBytes, err := json.Marshal(runtimeTunnel.Config)
@@ -3857,6 +3866,7 @@ func TestFailRestoredTunnelAfterReadyPreservesCreatedAt(t *testing.T) {
 	client.proxyMu.RUnlock()
 	if placeholder == nil {
 		t.Fatal("expected restored tunnel placeholder")
+		return
 	}
 	if !placeholder.Config.CreatedAt.Equal(createdAt) {
 		t.Fatalf("CreatedAt should be preserved: want %s, got %s", createdAt, placeholder.Config.CreatedAt)
@@ -3935,12 +3945,14 @@ func TestRestoreTunnels_StoppedTunnelPreservesBandwidthRuntime(t *testing.T) {
 	client.proxyMu.RUnlock()
 	if tunnel == nil {
 		t.Fatal("restore should create an in-memory stopped tunnel")
+		return
 	}
 	if tunnel.Config.IngressBPS != 321 || tunnel.Config.EgressBPS != 654 {
 		t.Fatalf("restored tunnel config lost bandwidth fields: %+v", tunnel.Config.BandwidthSettings)
 	}
 	if tunnel.limits == nil {
 		t.Fatal("restored tunnel runtime limiter should not be nil")
+		return
 	}
 	if got := tunnel.limits.Budget(payloadDirectionIngress).Preview(4096); got != 321 {
 		t.Fatalf("restored tunnel ingress runtime mismatch: want 321, got %d", got)
@@ -3961,6 +3973,7 @@ func TestAuth_TokenReconnect(t *testing.T) {
 	clientToken := s.auth.adminStore.GetClientTokenByInstallID("install-token-reconnect-host")
 	if clientToken == nil {
 		t.Fatal("there should be a token record after the first key authentication")
+		return
 	}
 
 	// get the current key use_count
