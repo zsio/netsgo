@@ -1075,6 +1075,7 @@ func TestAPI_UnifiedTunnelServerExposeProvisionTimeoutProjectsIssue(t *testing.T
 			}
 			if projected == nil {
 				t.Fatalf("unified tunnel should appear in /api/clients projection")
+				return
 			}
 			if projected.Topology != tunnelTopologyServerExpose || projected.Ingress == nil || projected.Target == nil {
 				t.Fatalf("/api/clients tunnel should keep unified metadata: %+v", projected)
