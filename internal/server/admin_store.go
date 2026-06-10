@@ -339,7 +339,16 @@ func (s *AdminStore) Initialize(username, password, serverAddr string, allowedPo
 	if _, err := tx.Exec(`DELETE FROM admin_users`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO admin_users (id, username, password_hash, role, created_at, last_login) VALUES (?, ?, ?, ?, ?, NULL)`,
+	if _, err := tx.Exec(`DELETE FROM admin_auth_challenges`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM admin_passkeys`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM admin_totp_recovery_codes`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO admin_users (id, username, password_hash, role, created_at, last_login, totp_enabled, totp_secret) VALUES (?, ?, ?, ?, ?, NULL, 0, '')`,
 		user.ID, user.Username, user.PasswordHash, user.Role, formatTime(user.CreatedAt)); err != nil {
 		return err
 	}
@@ -541,11 +550,16 @@ func (s *AdminStore) getDummyHash() []byte {
 	return s.dummyHash
 }
 
+func adminUserSelectColumns() string {
+	return `id, username, password_hash, role, created_at, last_login, totp_enabled, totp_secret`
+}
+
 func scanAdminUser(row dbScanner) (AdminUser, error) {
 	var user AdminUser
 	var createdAt string
 	var lastLogin sql.NullString
-	if err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &createdAt, &lastLogin); err != nil {
+	var totpEnabled int
+	if err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &createdAt, &lastLogin, &totpEnabled, &user.TOTPSecret); err != nil {
 		return AdminUser{}, err
 	}
 	parsedCreatedAt, err := parseTime(createdAt)
@@ -558,6 +572,7 @@ func scanAdminUser(row dbScanner) (AdminUser, error) {
 	}
 	user.CreatedAt = parsedCreatedAt
 	user.LastLogin = parsedLastLogin
+	user.TOTPEnabled = intToBool(totpEnabled)
 	return user, nil
 }
 
@@ -565,7 +580,7 @@ func (s *AdminStore) ValidateAdminPassword(username, password string) (*AdminUse
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, err := scanAdminUser(s.db.QueryRow(`SELECT id, username, password_hash, role, created_at, last_login FROM admin_users WHERE username = ?`, username))
+	user, err := scanAdminUser(s.db.QueryRow(`SELECT `+adminUserSelectColumns()+` FROM admin_users WHERE username = ?`, username))
 	if err == sql.ErrNoRows {
 		_ = bcrypt.CompareHashAndPassword(s.getDummyHash(), []byte(password))
 		return nil, fmt.Errorf("incorrect username or password")
@@ -623,10 +638,19 @@ func (s *AdminStore) ResetAdminUser(username, password string) error {
 	if _, err := tx.Exec(`DELETE FROM admin_sessions`); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`DELETE FROM admin_auth_challenges`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM admin_passkeys`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM admin_totp_recovery_codes`); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM admin_users`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO admin_users (id, username, password_hash, role, created_at, last_login) VALUES (?, ?, ?, ?, ?, NULL)`,
+	if _, err := tx.Exec(`INSERT INTO admin_users (id, username, password_hash, role, created_at, last_login, totp_enabled, totp_secret) VALUES (?, ?, ?, ?, ?, NULL, 0, '')`,
 		user.ID, user.Username, user.PasswordHash, user.Role, formatTime(user.CreatedAt)); err != nil {
 		return err
 	}

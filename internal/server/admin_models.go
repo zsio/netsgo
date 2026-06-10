@@ -27,6 +27,63 @@ type AdminUser struct {
 	Role         string     `json:"role"`          // admin, viewer
 	CreatedAt    time.Time  `json:"created_at"`
 	LastLogin    *time.Time `json:"last_login,omitempty"`
+	TOTPEnabled  bool       `json:"totp_enabled"`
+	TOTPSecret   string     `json:"totp_secret,omitempty"` // for persistence only; must not be returned to the frontend
+}
+
+// AdminPasskey is a stored WebAuthn/passkey credential for the admin user.
+type AdminPasskey struct {
+	ID             string     `json:"id"`
+	UserID         string     `json:"user_id"`
+	Name           string     `json:"name"`
+	CredentialID   string     `json:"credential_id"`
+	CredentialJSON string     `json:"credential_json"` // for persistence only; must not be returned to the frontend
+	RPID           string     `json:"rp_id"`
+	Origin         string     `json:"origin"`
+	CreatedAt      time.Time  `json:"created_at"`
+	LastUsedAt     *time.Time `json:"last_used_at,omitempty"`
+}
+
+// AdminAuthChallenge stores short-lived MFA and WebAuthn ceremony data.
+type AdminAuthChallenge struct {
+	ID           string
+	UserID       string
+	Kind         string
+	SessionJSON  string
+	MetadataJSON string
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
+}
+
+// adminSecurityResponse is returned by `/api/admin/security`.
+type adminSecurityResponse struct {
+	User                   adminSecurityUserResponse     `json:"user"`
+	TOTPEnabled            bool                          `json:"totp_enabled"`
+	RecoveryCodesRemaining int                           `json:"recovery_codes_remaining"`
+	Passkeys               []adminPasskeyResponse        `json:"passkeys"`
+	WebAuthn               adminSecurityWebAuthnResponse `json:"webauthn"`
+}
+
+type adminSecurityUserResponse struct {
+	ID        string     `json:"id"`
+	Username  string     `json:"username"`
+	Role      string     `json:"role"`
+	CreatedAt time.Time  `json:"created_at"`
+	LastLogin *time.Time `json:"last_login,omitempty"`
+}
+
+type adminSecurityWebAuthnResponse struct {
+	RPID   string `json:"rp_id"`
+	Origin string `json:"origin"`
+}
+
+type adminPasskeyResponse struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	RPID       string     `json:"rp_id"`
+	Origin     string     `json:"origin"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
 // RegisteredClient represents a Client record with a stable identity

@@ -250,6 +250,7 @@ func TestAdminStore_ValidateAdminPassword_Success(t *testing.T) {
 	}
 	if user == nil {
 		t.Fatal("user should not be nil")
+		return
 	}
 	if user.Username != "admin" {
 		t.Errorf("expected username admin, got %s", user.Username)
@@ -471,6 +472,7 @@ func TestAdminStore_UpdateClientStatsPreservesZeroUpdatedAt(t *testing.T) {
 	}
 	if record.Stats == nil {
 		t.Fatal("client stats should be persisted")
+		return
 	}
 	if !record.Stats.UpdatedAt.IsZero() {
 		t.Fatalf("zero UpdatedAt should be preserved, got %s", record.Stats.UpdatedAt.Format(time.RFC3339Nano))
@@ -745,6 +747,7 @@ func TestAdminStore_Session_CreateAndGet(t *testing.T) {
 	session := mustCreateSession(t, store, "user-1", "admin", "admin", "127.0.0.1", "test-client")
 	if session == nil {
 		t.Fatal("CreateSession should not return nil")
+		return
 	}
 	if session.ID == "" {
 		t.Error("session ID should not be empty")
@@ -753,6 +756,7 @@ func TestAdminStore_Session_CreateAndGet(t *testing.T) {
 	got := store.GetSession(session.ID)
 	if got == nil {
 		t.Fatal("GetSession should return the created session")
+		return
 	}
 	if got.Username != "admin" {
 		t.Errorf("expected username admin, got %s", got.Username)
@@ -961,6 +965,7 @@ func TestAdminStore_Token_ExchangeAndValidate(t *testing.T) {
 	}
 	if clientToken == nil {
 		t.Fatal("ClientToken should not be nil")
+		return
 	}
 	if clientToken.InstallID != "install-1" {
 		t.Errorf("expected InstallID install-1, got %s", clientToken.InstallID)

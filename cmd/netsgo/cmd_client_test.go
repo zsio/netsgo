@@ -28,6 +28,7 @@ func TestClientCommandLogFormatFlag(t *testing.T) {
 	flag := clientCmd.Flags().Lookup("log-format")
 	if flag == nil {
 		t.Fatal("client command should define --log-format")
+		return
 	}
 	if flag.DefValue != "text" {
 		t.Fatalf("default log format = %q, want text", flag.DefValue)

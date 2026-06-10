@@ -177,6 +177,7 @@ func TestClientRelayRegistryStoresTunnelBandwidthRuntime(t *testing.T) {
 	limits := registry.limits(stored.ID)
 	if limits == nil {
 		t.Fatal("expected client relay registry to create tunnel bandwidth runtime")
+		return
 	}
 	if got := limits.Budget(payloadDirectionIngress).Preview(4096); got != 123 {
 		t.Fatalf("ingress tunnel budget: want 123, got %d", got)
@@ -260,6 +261,7 @@ func TestClientRelayTCPTransfersBytes(t *testing.T) {
 	}
 	if targetStream == nil {
 		t.Fatal("target stream failed to open")
+		return
 	}
 	defer mustClose(t, targetStream)
 
@@ -416,6 +418,7 @@ func TestClientRelayUDPTransfersFrames(t *testing.T) {
 	}
 	if targetStream == nil {
 		t.Fatal("target stream failed to open")
+		return
 	}
 	defer mustClose(t, targetStream)
 

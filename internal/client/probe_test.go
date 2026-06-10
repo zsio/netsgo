@@ -112,6 +112,7 @@ func TestProbe_MultipleCollections(t *testing.T) {
 		}
 		if stats == nil {
 			t.Fatalf("collection #%d returned nil", i)
+			continue
 		}
 		if stats.NumCPU <= 0 {
 			t.Errorf("collection #%d: NumCPU should be positive, got %d", i, stats.NumCPU)

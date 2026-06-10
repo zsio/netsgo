@@ -98,6 +98,7 @@ func seedStoredTunnel(t *testing.T, s *Server, clientID string, req protocol.Pro
 
 	if s.store == nil {
 		t.Fatal("test setup error: s.store must not be nil")
+		return
 	}
 	if req.LocalIP == "" {
 		req.LocalIP = "127.0.0.1"
@@ -885,6 +886,7 @@ func TestAPI_UpdateClientBandwidthSettingsMutatesLiveRuntimeInPlace(t *testing.T
 	liveClient.proxyMu.RUnlock()
 	if tunnel == nil {
 		t.Fatal("live tunnel disappeared after client bandwidth update")
+		return
 	}
 	if tunnel.Config.DesiredState != protocol.ProxyDesiredStateRunning || tunnel.Config.RuntimeState != protocol.ProxyRuntimeStateExposed {
 		t.Fatalf("client bandwidth update should not alter tunnel state, got %s/%s", tunnel.Config.DesiredState, tunnel.Config.RuntimeState)
@@ -919,6 +921,7 @@ func TestAPI_Login_SetsCookie(t *testing.T) {
 	}
 	if sessionCookie == nil {
 		t.Fatal("login response is missing the netsgo_session cookie")
+		return
 	}
 	if !sessionCookie.HttpOnly {
 		t.Error("session cookie should set HttpOnly")
@@ -969,6 +972,7 @@ func TestAPI_Logout_ClearsCookie(t *testing.T) {
 	}
 	if sessionCookie == nil {
 		t.Fatal("logout response is missing the Set-Cookie header that clears the netsgo_session cookie")
+		return
 	}
 	if sessionCookie.MaxAge != -1 {
 		t.Errorf("clearing cookie MaxAge should be -1, got %d", sessionCookie.MaxAge)
@@ -1000,6 +1004,7 @@ func TestAPI_Login_SetsSecureCookie_WhenRequestIsTLS(t *testing.T) {
 	}
 	if sessionCookie == nil {
 		t.Fatal("login response is missing the netsgo_session cookie")
+		return
 	}
 	if !sessionCookie.Secure {
 		t.Error("TLS requests should set a Secure cookie")
@@ -1036,6 +1041,7 @@ func TestAPI_Login_SetsSecureCookie_WhenTrustedProxyReportsHTTPS(t *testing.T) {
 	}
 	if sessionCookie == nil {
 		t.Fatal("login response is missing the netsgo_session cookie")
+		return
 	}
 	if !sessionCookie.Secure {
 		t.Error("should set a Secure cookie when a trusted reverse proxy declares HTTPS")
@@ -1072,6 +1078,7 @@ func TestAPI_Login_IgnoresUntrustedProxyHTTPSForSecureCookie(t *testing.T) {
 	}
 	if sessionCookie == nil {
 		t.Fatal("login response is missing the netsgo_session cookie")
+		return
 	}
 	if sessionCookie.Secure {
 		t.Error("should not trust forged HTTPS headers from an untrusted proxy")

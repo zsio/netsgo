@@ -479,6 +479,62 @@ export interface LoginResponse {
     username: string;
     role: string;
   };
+  mfa_required?: false;
+}
+
+export interface MFALoginResponse {
+  mfa_required: true;
+  mfa_token: string;
+  user: {
+    id: string;
+    username: string;
+    role: string;
+  };
+}
+
+export type AuthLoginResponse = LoginResponse | MFALoginResponse;
+
+export interface PasskeySummary {
+  id: string;
+  name: string;
+  rp_id: string;
+  origin: string;
+  created_at: string;
+  last_used_at?: string;
+}
+
+export interface AdminSecurity {
+  user: AdminUser;
+  totp_enabled: boolean;
+  recovery_codes_remaining: number;
+  passkeys: PasskeySummary[];
+  webauthn: {
+    rp_id: string;
+    origin: string;
+  };
+}
+
+export interface TOTPBeginResponse {
+  setup_token: string;
+  secret: string;
+  otpauth_url: string;
+  qr_data_url: string;
+}
+
+export interface RecoveryCodesResponse {
+  success: boolean;
+  requires_relogin: boolean;
+  recovery_codes: string[];
+}
+
+export interface PasskeyChallengeResponse {
+  challenge_id: string;
+  public_key: unknown;
+}
+
+export interface ReloginResponse {
+  success: boolean;
+  requires_relogin: boolean;
 }
 
 // --- Setup (初始化) ---

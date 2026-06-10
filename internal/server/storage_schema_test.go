@@ -83,6 +83,35 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "role", typ: "TEXT", notNull: true},
 			{name: "created_at", typ: "TEXT", notNull: true},
 			{name: "last_login", typ: "TEXT"},
+			{name: "totp_enabled", typ: "INTEGER", notNull: true, defaultValue: "0"},
+			{name: "totp_secret", typ: "TEXT", notNull: true, defaultValue: "''"},
+		},
+		"admin_totp_recovery_codes": {
+			{name: "id", typ: "TEXT", primaryKey: true},
+			{name: "user_id", typ: "TEXT", notNull: true},
+			{name: "code_hash", typ: "TEXT", notNull: true},
+			{name: "created_at", typ: "TEXT", notNull: true},
+			{name: "used_at", typ: "TEXT"},
+		},
+		"admin_passkeys": {
+			{name: "id", typ: "TEXT", primaryKey: true},
+			{name: "user_id", typ: "TEXT", notNull: true},
+			{name: "name", typ: "TEXT", notNull: true},
+			{name: "credential_id", typ: "TEXT", notNull: true},
+			{name: "credential_json", typ: "TEXT", notNull: true},
+			{name: "rp_id", typ: "TEXT", notNull: true},
+			{name: "origin", typ: "TEXT", notNull: true},
+			{name: "created_at", typ: "TEXT", notNull: true},
+			{name: "last_used_at", typ: "TEXT"},
+		},
+		"admin_auth_challenges": {
+			{name: "id", typ: "TEXT", primaryKey: true},
+			{name: "user_id", typ: "TEXT", notNull: true},
+			{name: "kind", typ: "TEXT", notNull: true},
+			{name: "session_json", typ: "TEXT", notNull: true},
+			{name: "metadata_json", typ: "TEXT", notNull: true, defaultValue: "'{}'"},
+			{name: "created_at", typ: "TEXT", notNull: true},
+			{name: "expires_at", typ: "TEXT", notNull: true},
 		},
 		"api_keys": {
 			{name: "id", typ: "TEXT", primaryKey: true},
@@ -239,7 +268,23 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 	wantIndexes := map[string][]sqliteIndex{
 		"schema_migrations": {{name: "sqlite_autoindex_schema_migrations_1", unique: true, columns: []string{"name"}}},
 		"admin_users":       {{name: "sqlite_autoindex_admin_users_1", unique: true, columns: []string{"id"}}, {name: "sqlite_autoindex_admin_users_2", unique: true, columns: []string{"username"}}},
-		"api_keys":          {{name: "sqlite_autoindex_api_keys_1", unique: true, columns: []string{"id"}}},
+		"admin_totp_recovery_codes": {
+			{name: "idx_admin_totp_recovery_codes_user_unused", unique: false, columns: []string{"user_id", "used_at"}},
+			{name: "sqlite_autoindex_admin_totp_recovery_codes_1", unique: true, columns: []string{"id"}},
+			{name: "sqlite_autoindex_admin_totp_recovery_codes_2", unique: true, columns: []string{"code_hash"}},
+		},
+		"admin_passkeys": {
+			{name: "idx_admin_passkeys_rp", unique: false, columns: []string{"rp_id", "origin"}},
+			{name: "idx_admin_passkeys_user", unique: false, columns: []string{"user_id"}},
+			{name: "sqlite_autoindex_admin_passkeys_1", unique: true, columns: []string{"id"}},
+			{name: "sqlite_autoindex_admin_passkeys_2", unique: true, columns: []string{"credential_id"}},
+		},
+		"admin_auth_challenges": {
+			{name: "idx_admin_auth_challenges_expires", unique: false, columns: []string{"expires_at"}},
+			{name: "idx_admin_auth_challenges_user_kind", unique: false, columns: []string{"user_id", "kind"}},
+			{name: "sqlite_autoindex_admin_auth_challenges_1", unique: true, columns: []string{"id"}},
+		},
+		"api_keys": {{name: "sqlite_autoindex_api_keys_1", unique: true, columns: []string{"id"}}},
 		"api_key_permissions": {
 			{name: "sqlite_autoindex_api_key_permissions_1", unique: true, columns: []string{"api_key_id", "permission"}},
 		},
@@ -294,6 +339,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"003_tunnel_stable_id",
 		"004_tunnel_created_at",
 		"005_unified_tunnel_storage",
+		"006_admin_security",
 	}
 	if got := appliedMigrationNames(t, db); !reflect.DeepEqual(got, wantMigrationNames) {
 		t.Fatalf("applied migrations = %#v, want %#v", got, wantMigrationNames)
@@ -328,6 +374,7 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"003_tunnel_stable_id",
 		"004_tunnel_created_at",
 		"005_unified_tunnel_storage",
+		"006_admin_security",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -484,8 +531,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations failed: %v", err)
 	}
-	if count != 5 {
-		t.Fatalf("schema_migrations count = %d, want 5", count)
+	if count != 6 {
+		t.Fatalf("schema_migrations count = %d, want 6", count)
 	}
 }
 

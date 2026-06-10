@@ -49,6 +49,15 @@ interface ApiErrorBody {
   field?: string;
 }
 
+const AUTH_SESSION_ERROR_CODES = new Set([
+  'missing_credentials',
+  'invalid_or_expired_token',
+  'session_expired_or_revoked',
+  'session_environment_mismatch',
+  'session_not_found',
+  'admin_user_not_found',
+]);
+
 function localizeApiErrorMessage(code?: string, fallback?: string) {
   if (!code) return fallback;
   const translated = i18n.t(`errors.${code}`, { defaultValue: '' });
@@ -58,6 +67,11 @@ function localizeApiErrorMessage(code?: string, fallback?: string) {
 function normalizeErrorBody(value: unknown): ApiErrorBody | undefined {
   if (!value || typeof value !== 'object') return undefined;
   return value as ApiErrorBody;
+}
+
+export function shouldLogoutOnAPIError(status: number, code?: string) {
+  if (status !== 401) return false;
+  return !code || AUTH_SESSION_ERROR_CODES.has(code);
 }
 
 async function request<T>(
@@ -76,12 +90,6 @@ async function request<T>(
   });
 
   if (!res.ok) {
-    if (res.status === 401) {
-      useAuthStore.getState().logout();
-      if (typeof window !== 'undefined' && !window.location.hash.startsWith('#/login')) {
-        window.location.hash = '#/login';
-      }
-    }
     const bodyText = await res.text().catch(() => "");
     let errorBody: unknown;
     let errorMessage = bodyText || undefined;
@@ -104,6 +112,13 @@ async function request<T>(
       }
     } catch {
       // not JSON, fallback to raw string
+    }
+
+    if (shouldLogoutOnAPIError(res.status, errorCode)) {
+      useAuthStore.getState().logout();
+      if (typeof window !== 'undefined' && !window.location.hash.startsWith('#/login')) {
+        window.location.hash = '#/login';
+      }
     }
 
     throw new ApiError(res.status, res.statusText, errorMessage, errorBody, errorCode, errorField);
@@ -134,8 +149,11 @@ export const api = {
     });
   },
 
-  delete<T>(url: string): Promise<T> {
-    return request<T>(url, { method: "DELETE" });
+  delete<T>(url: string, body?: unknown): Promise<T> {
+    return request<T>(url, {
+      method: "DELETE",
+      body: body ? JSON.stringify(body) : undefined,
+    });
   },
 };
 

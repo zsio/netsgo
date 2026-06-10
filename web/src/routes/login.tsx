@@ -5,9 +5,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
-import type { LoginResponse } from '@/types';
+import {
+  isPasskeySupported,
+  normalizeRequestOptions,
+  publicKeyCredentialToJSON,
+} from '@/lib/webauthn';
+import type { AuthLoginResponse, LoginResponse, PasskeyChallengeResponse } from '@/types';
 import { requireLoginPage } from '@/lib/auth';
-import { User, Lock, AlertTriangle, ArrowRight, Loader2, Github } from 'lucide-react';
+import { User, Lock, AlertTriangle, ArrowRight, Loader2, Github, KeyRound } from 'lucide-react';
 import { useParticleCanvas } from '@/hooks/use-particle-canvas';
 import { useTranslation } from 'react-i18next';
 
@@ -26,6 +31,10 @@ function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
+  const [mfaToken, setMfaToken] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
+  const [pendingUser, setPendingUser] = useState<LoginResponse['user'] | null>(null);
   const setAuth = useAuthStore((s) => s.setAuth);
   const navigate = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -38,13 +47,66 @@ function LoginPage() {
     setLoading(true);
 
     try {
-      const resp = await api.post<LoginResponse>('/api/auth/login', { username, password });
+      const resp = await api.post<AuthLoginResponse>('/api/auth/login', { username, password });
+      if ('mfa_required' in resp && resp.mfa_required) {
+        setMfaToken(resp.mfa_token);
+        setPendingUser(resp.user);
+        return;
+      }
       setAuth(resp.user);
       navigate({ to: '/dashboard' });
     } catch (err) {
       setError(err instanceof Error ? err.message : t('auth.loginFailed'));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleMFAVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      const resp = await api.post<LoginResponse>('/api/auth/mfa/verify', {
+        mfa_token: mfaToken,
+        code: mfaCode,
+      });
+      setAuth(resp.user);
+      navigate({ to: '/dashboard' });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('auth.loginFailed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasskeyLogin = async () => {
+    if (!isPasskeySupported()) {
+      setError(t('auth.passkeyUnsupported'));
+      return;
+    }
+    setError('');
+    setPasskeyLoading(true);
+
+    try {
+      const begin = await api.post<PasskeyChallengeResponse>('/api/auth/passkey/begin');
+      const credential = await navigator.credentials.get({
+        publicKey: normalizeRequestOptions(begin.public_key),
+      });
+      if (!(credential instanceof PublicKeyCredential)) {
+        throw new Error(t('auth.passkeyFailed'));
+      }
+      const resp = await api.post<LoginResponse>('/api/auth/passkey/finish', {
+        challenge_id: begin.challenge_id,
+        credential: publicKeyCredentialToJSON(credential),
+      });
+      setAuth(resp.user);
+      navigate({ to: '/dashboard' });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('auth.passkeyFailed'));
+    } finally {
+      setPasskeyLoading(false);
     }
   };
 
@@ -117,9 +179,14 @@ function LoginPage() {
 
             {/* Form — no card at all, raw inputs on the background */}
             <div className="login-fade-in-delay">
-              <form onSubmit={handleLogin} className="flex flex-col gap-5">
+              <form onSubmit={mfaToken ? handleMFAVerify : handleLogin} className="flex flex-col gap-5">
+                {mfaToken ? (
+                  <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+                    {t('auth.mfaPrompt', { username: pendingUser?.username || username })}
+                  </div>
+                ) : null}
                 {/* Username */}
-                <div className="space-y-2">
+                <div className={mfaToken ? 'hidden' : 'space-y-2'}>
                   <label className="text-sm font-medium text-foreground">
                     {t('auth.username')}
                   </label>
@@ -139,7 +206,7 @@ function LoginPage() {
                 </div>
 
                 {/* Password */}
-                <div className="space-y-2">
+                <div className={mfaToken ? 'hidden' : 'space-y-2'}>
                   <label className="text-sm font-medium text-foreground">
                     {t('auth.password')}
                   </label>
@@ -157,6 +224,28 @@ function LoginPage() {
                     />
                   </div>
                 </div>
+
+                {mfaToken ? (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-foreground">
+                      {t('auth.mfaCode')}
+                    </label>
+                    <div className="relative">
+                      <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                      <Input
+                        type="text"
+                        placeholder={t('auth.mfaCodePlaceholder')}
+                        value={mfaCode}
+                        onChange={(e) => setMfaCode(e.target.value)}
+                        disabled={loading}
+                        autoComplete="one-time-code"
+                        inputMode="numeric"
+                        required
+                        className="pl-9"
+                      />
+                    </div>
+                  </div>
+                ) : null}
 
                 {/* Error message */}
                 {error && (
@@ -179,11 +268,37 @@ function LoginPage() {
                     </>
                   ) : (
                     <>
-                      {t('auth.login')}
+                      {mfaToken ? t('auth.verifyMFA') : t('auth.login')}
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
                 </Button>
+                {!mfaToken ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full gap-2"
+                    disabled={loading || passkeyLoading}
+                    onClick={handlePasskeyLogin}
+                  >
+                    {passkeyLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
+                    {t('auth.loginWithPasskey')}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="w-full"
+                    disabled={loading}
+                    onClick={() => {
+                      setMfaToken('');
+                      setMfaCode('');
+                      setPendingUser(null);
+                    }}
+                  >
+                    {t('common.cancel')}
+                  </Button>
+                )}
               </form>
             </div>
 

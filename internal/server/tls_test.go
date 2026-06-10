@@ -219,6 +219,7 @@ func TestAutoTLS_PersistAndReload(t *testing.T) {
 	}
 	if tlsCfg1 == nil {
 		t.Fatal("tlsConfig should not be nil")
+		return
 	}
 	if fp1 == "" {
 		t.Fatal("Fingerprint should not be empty")
@@ -366,6 +367,7 @@ func TestCustomTLS_Load(t *testing.T) {
 	}
 	if tlsCfg == nil {
 		t.Fatal("tlsConfig should not be nil")
+		return
 	}
 	if fp == "" {
 		t.Fatal("Fingerprint should not be empty")

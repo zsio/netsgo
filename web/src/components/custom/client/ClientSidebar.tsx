@@ -216,13 +216,13 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild
-                isActive={pathname === '/dashboard/admin/config'}
-                tooltip={t('dashboard.serverConfig')}
+                isActive={pathname.startsWith('/dashboard/admin')}
+                tooltip={t('dashboard.systemSettings')}
                 className="data-[active=true]:bg-background data-[active=true]:shadow-[0_1px_2px_rgba(0,0,0,0.05)] data-[active=true]:border-l-[3px] data-[active=true]:border-primary data-[active=true]:text-foreground relative -ml-2 pl-4 rounded-none rounded-r-md font-medium text-muted-foreground hover:text-foreground"
               >
                 <Link to="/dashboard/admin/config">
                   <Settings className="h-4 w-4" />
-                  <span>{t('dashboard.serverConfig')}</span>
+                  <span>{t('dashboard.systemSettings')}</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

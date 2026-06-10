@@ -271,6 +271,7 @@ func TestLifecycle_ClientDisconnect_DoesNotRewriteStoreState(t *testing.T) {
 	}
 	if liveClient == nil {
 		t.Fatal("timed out waiting for live client")
+		return
 	}
 
 	liveClient.proxyMu.Lock()

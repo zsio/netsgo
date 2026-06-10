@@ -64,7 +64,7 @@ export async function login(page: Page) {
   await gotoWhenReady(page, '/#/login');
   await page.getByPlaceholder('Enter username').fill(e2eConfig.adminUser);
   await page.getByPlaceholder('Enter password').fill(e2eConfig.adminPass);
-  await page.getByRole('button', { name: 'Log in' }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page.getByText('Online endpoints (Clients)')).toBeVisible();
 }
 

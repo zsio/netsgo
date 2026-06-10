@@ -47,6 +47,9 @@ func (s *Server) registerManagementRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clients/{id}/traffic", s.RequireAuth(s.handleGetClientTraffic))
 
 	mux.HandleFunc("POST /api/auth/login", s.handleAPILogin)
+	mux.HandleFunc("POST /api/auth/mfa/verify", s.handleAPIMFAVerify)
+	mux.HandleFunc("POST /api/auth/passkey/begin", s.handleAPIPasskeyLoginBegin)
+	mux.HandleFunc("POST /api/auth/passkey/finish", s.handleAPIPasskeyLoginFinish)
 	mux.HandleFunc("POST /api/auth/logout", s.RequireAuth(s.handleAPILogout))
 	mux.HandleFunc("GET /api/admin/keys", s.RequireAuth(s.handleAPIAdminKeys))
 	mux.HandleFunc("POST /api/admin/keys", s.RequireAuth(s.handleAPIAdminKeys))
@@ -54,6 +57,18 @@ func (s *Server) registerManagementRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/admin/keys/{id}", s.RequireAuth(s.handleAPIAdminKeyItem))
 	mux.HandleFunc("GET /api/admin/config", s.RequireAuth(s.handleAPIAdminConfig))
 	mux.HandleFunc("PUT /api/admin/config", s.RequireAuth(s.handleAPIAdminConfig))
+	mux.HandleFunc("GET /api/admin/security", s.RequireAuth(s.handleAPIAdminSecurity))
+	mux.HandleFunc("PUT /api/admin/security/username", s.RequireAuth(s.handleAPIAdminSecurityUsername))
+	mux.HandleFunc("PUT /api/admin/security/password", s.RequireAuth(s.handleAPIAdminSecurityPassword))
+	mux.HandleFunc("POST /api/admin/security/totp/begin", s.RequireAuth(s.handleAPIAdminSecurityTOTPBegin))
+	mux.HandleFunc("POST /api/admin/security/totp/confirm", s.RequireAuth(s.handleAPIAdminSecurityTOTPConfirm))
+	mux.HandleFunc("DELETE /api/admin/security/totp", s.RequireAuth(s.handleAPIAdminSecurityTOTPDisable))
+	mux.HandleFunc("POST /api/admin/security/recovery-codes/regenerate", s.RequireAuth(s.handleAPIAdminSecurityRecoveryRegenerate))
+	mux.HandleFunc("GET /api/admin/security/passkeys", s.RequireAuth(s.handleAPIAdminSecurityPasskeys))
+	mux.HandleFunc("POST /api/admin/security/passkeys/begin", s.RequireAuth(s.handleAPIAdminSecurityPasskeyBegin))
+	mux.HandleFunc("POST /api/admin/security/passkeys/finish", s.RequireAuth(s.handleAPIAdminSecurityPasskeyFinish))
+	mux.HandleFunc("PUT /api/admin/security/passkeys/{id}", s.RequireAuth(s.handleAPIAdminSecurityPasskeyItem))
+	mux.HandleFunc("DELETE /api/admin/security/passkeys/{id}", s.RequireAuth(s.handleAPIAdminSecurityPasskeyItem))
 
 	mux.HandleFunc("GET /api/events", s.RequireAuth(s.handleSSE))
 }
