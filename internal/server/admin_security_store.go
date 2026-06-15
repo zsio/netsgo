@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
