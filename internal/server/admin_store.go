@@ -69,12 +69,22 @@ type dbExecer interface {
 }
 
 func generateUUID() string {
+	id, err := generateUUIDE()
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func generateUUIDE() (string, error) {
 	var buf [16]byte
-	_, _ = rand.Read(buf[:])
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", fmt.Errorf("failed to generate uuid: %w", err)
+	}
 	buf[6] = (buf[6] & 0x0f) | 0x40
 	buf[8] = (buf[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
+		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16]), nil
 }
 
 // AdminStoreOptions configures admin store startup behavior.
@@ -310,8 +320,12 @@ func (s *AdminStore) Initialize(username, password, serverAddr string, allowedPo
 	jwtSecret := hex.EncodeToString(secretBytes)
 
 	now := time.Now()
+	userID, err := generateUUIDE()
+	if err != nil {
+		return err
+	}
 	user := AdminUser{
-		ID:           generateUUID(),
+		ID:           userID,
 		Username:     username,
 		PasswordHash: string(hash),
 		Role:         "admin",
@@ -627,8 +641,12 @@ func (s *AdminStore) ResetAdminUser(username, password string) error {
 	}
 
 	now := time.Now()
+	userID, err := generateUUIDE()
+	if err != nil {
+		return err
+	}
 	user := AdminUser{
-		ID:           generateUUID(),
+		ID:           userID,
 		Username:     username,
 		PasswordHash: string(hash),
 		Role:         "admin",
