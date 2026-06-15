@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -159,8 +160,11 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 			expiresAt = &t
 		}
 
-		// generate a random string as the raw key on the server side
-		rawKey := "sk-" + generateUUID()
+		rawKey, err := generateAPIKeySecret()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "api_key_generate_failed", "failed to generate api key")
+			return
+		}
 		key, err := s.auth.adminStore.AddAPIKey(req.Name, rawKey, req.Permissions, expiresAt)
 		if err != nil {
 			encodeJSON(w, http.StatusBadRequest, map[string]any{
@@ -199,6 +203,14 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "not allowed")
 	}
+}
+
+func generateAPIKeySecret() (string, error) {
+	raw, err := randomBytes(32)
+	if err != nil {
+		return "", err
+	}
+	return "sk-" + hex.EncodeToString(raw), nil
 }
 
 func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
