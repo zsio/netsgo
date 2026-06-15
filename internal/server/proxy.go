@@ -237,6 +237,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 			LocalIP:           req.LocalIP,
 			LocalPort:         req.LocalPort,
 			RemotePort:        req.RemotePort,
+			BindIP:            normalizeServerBindIP(req.BindIP),
 			Domain:            req.Domain,
 			ClientID:          client.ID,
 			BandwidthSettings: req.BandwidthSettings,
@@ -293,10 +294,10 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 		return nil
 	}
 
-	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
+	addr := net.JoinHostPort(normalizeServerBindIP(tunnel.Config.BindIP), fmt.Sprintf("%d", tunnel.Config.RemotePort))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to listen on port %d: %w", tunnel.Config.RemotePort, err)
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
 	actualPort := ln.Addr().(*net.TCPAddr).Port
@@ -321,8 +322,8 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	localPort := tunnel.Config.LocalPort
 	client.proxyMu.Unlock()
 
-	log.Printf("🚇 proxy tunnel created: %s [:%d → %s:%d] Client [%s]",
-		proxyName, actualPort, localIP, localPort, client.ID)
+	log.Printf("🚇 proxy tunnel created: %s [%s:%d → %s:%d] Client [%s]",
+		proxyName, normalizeServerBindIP(tunnel.Config.BindIP), actualPort, localIP, localPort, client.ID)
 
 	go s.proxyAcceptLoop(client, tunnel, listener, done)
 	return nil

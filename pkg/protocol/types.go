@@ -284,6 +284,7 @@ type ProxyConfig struct {
 	LocalIP           string              `json:"local_ip"`    // 内网目标服务 IP
 	LocalPort         int                 `json:"local_port"`  // 内网目标服务端口
 	RemotePort        int                 `json:"remote_port"` // 公网暴露端口
+	BindIP            string              `json:"bind_ip,omitempty"`
 	Domain            string              `json:"domain"`      // HTTP 类型时的域名
 	ClientID          string              `json:"client_id"`   // 所属 Client ID
 	Topology          string              `json:"topology,omitempty"`
@@ -313,6 +314,7 @@ func (c ProxyConfig) ToProxyNewRequest() ProxyNewRequest {
 		LocalIP:           c.LocalIP,
 		LocalPort:         c.LocalPort,
 		RemotePort:        c.RemotePort,
+		BindIP:            c.BindIP,
 		Domain:            c.Domain,
 		TransportPolicy:   c.TransportPolicy,
 		ActualTransport:   c.ActualTransport,
