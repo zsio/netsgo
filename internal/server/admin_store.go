@@ -810,8 +810,12 @@ func getOrCreateClientInTx(tx *sql.Tx, installID string, info protocol.ClientInf
 		return RegisteredClient{}, err
 	}
 
+	clientID, err := generateUUIDE()
+	if err != nil {
+		return RegisteredClient{}, err
+	}
 	client = RegisteredClient{
-		ID:        generateUUID(),
+		ID:        clientID,
 		InstallID: installID,
 		Info:      info,
 		CreatedAt: now,
@@ -1380,8 +1384,12 @@ func (s *AdminStore) CreateSession(userID, username, role, ip, ua string) (*Admi
 	defer s.mu.Unlock()
 
 	now := time.Now()
+	sessionID, err := generateUUIDE()
+	if err != nil {
+		return nil, err
+	}
 	session := AdminSession{
-		ID:        generateUUID(),
+		ID:        sessionID,
 		UserID:    userID,
 		Username:  username,
 		Role:      role,
@@ -1917,8 +1925,12 @@ func exchangeTokenInTx(tx *sql.Tx, key, installID, clientID, ip string, now time
 		}
 	}
 
+	tokenID, err := generateUUIDE()
+	if err != nil {
+		return "", nil, err
+	}
 	clientToken := ClientToken{
-		ID:           generateUUID(),
+		ID:           tokenID,
 		TokenHash:    hashToken(newToken),
 		InstallID:    installID,
 		KeyID:        keyID,
@@ -2177,14 +2189,19 @@ func (s *AdminStore) AddAPIKey(name, keyString string, permissions []string, exp
 		return nil, err
 	}
 
+	keyID, err := generateUUIDE()
+	if err != nil {
+		return nil, err
+	}
 	k := APIKey{
-		ID:          generateUUID(),
-		Name:        name,
-		KeyHash:     string(hash),
-		Permissions: permissions,
-		CreatedAt:   time.Now(),
-		ExpiresAt:   expiresAt,
-		IsActive:    true,
+		ID:           keyID,
+		Name:         name,
+		KeyHash:      string(hash),
+		LookupDigest: apiKeyLookupDigest(keyString),
+		Permissions:  permissions,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    expiresAt,
+		IsActive:     true,
 	}
 
 	s.mu.Lock()
