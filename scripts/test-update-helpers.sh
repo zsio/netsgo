@@ -62,6 +62,8 @@ if output="$(NETSGO_UPDATE_CACHE_DIR="$symlink_cache" run_helper 'cache_dir_for 
 fi
 assert_contains "$output" "符号链接更新缓存路径"
 
+unset NETSGO_UPDATE_CACHE_DIR
+
 # Default cache roots must be per-run private directories, not a predictable /tmp/netsgo-update-cache tree.
 default_output="$(TMPDIR="$safe_root" run_helper '
   first="$(cache_dir_for v1.2.3 linux_amd64)"
