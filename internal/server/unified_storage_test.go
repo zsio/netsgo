@@ -144,3 +144,48 @@ func validUnifiedTunnelInsertArgs(id string) []any {
 		0, 0, protocol.ProxyDesiredStateRunning, "active", "", "", now, now,
 	}
 }
+
+func TestTunnelStorePreservesExplicitServerExposeBindIP(t *testing.T) {
+	store := newTestTunnelStore(t)
+	stored := StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			ID:         "bind-loopback",
+			Name:       "bind-loopback",
+			Type:       protocol.ProxyTypeTCP,
+			LocalIP:    "127.0.0.1",
+			LocalPort:  8080,
+			RemotePort: reserveTCPPort(t),
+			BindIP:     "127.0.0.1",
+		},
+		ClientID:        "client-1",
+		Binding:         TunnelBindingClientID,
+		Topology:        TunnelTopologyServerExpose,
+		OwnerClientID:   "client-1",
+		Ingress:         EndpointSpec{Location: TunnelEndpointLocationServer, Type: TunnelIngressTypeTCPListen},
+		Target:          EndpointSpec{Location: TunnelEndpointLocationClient, ClientID: "client-1", Type: TunnelTargetTypeTCPService},
+		TransportPolicy: TunnelTransportServerRelayOnly,
+		ActualTransport: TunnelActualTransportUnknown,
+		P2P:             P2PState{State: TunnelP2PStateIdle},
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateOffline,
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	if err := store.AddTunnel(stored); err != nil {
+		t.Fatalf("AddTunnel failed: %v", err)
+	}
+	got, err := store.GetTunnelByIDE("client-1", "bind-loopback")
+	if err != nil {
+		t.Fatalf("GetTunnelByIDE failed: %v", err)
+	}
+	if got.BindIP != "127.0.0.1" {
+		t.Fatalf("stored ProxyNewRequest BindIP: want loopback, got %q", got.BindIP)
+	}
+	if bind := tunnelIngressBindIP(got); bind != "127.0.0.1" {
+		t.Fatalf("ingress config bind_ip: want loopback, got %q config=%s", bind, string(got.Ingress.Config))
+	}
+	config := storedTunnelToProxyConfig(got)
+	if config.BindIP != "127.0.0.1" {
+		t.Fatalf("proxy config BindIP: want loopback, got %q", config.BindIP)
+	}
+}
