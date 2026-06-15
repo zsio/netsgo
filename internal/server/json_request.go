@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,7 +46,7 @@ func decodeJSONRequestBodyWithPolicy(r *http.Request, dst any, allowEmpty bool) 
 		return nil
 	}
 
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	if err := decoder.Decode(dst); err != nil {
 		return err
 	}
