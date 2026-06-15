@@ -317,6 +317,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	tunnel.done = make(chan struct{})
 	tunnel.once = sync.Once{}
 	tunnel.Config.RemotePort = actualPort
+	bindIP := normalizeServerBindIP(tunnel.Config.BindIP)
 	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 	markTunnelServerRelayActive(tunnel, client.ID, time.Now())
 	listener := tunnel.Listener
@@ -327,7 +328,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	client.proxyMu.Unlock()
 
 	log.Printf("🚇 proxy tunnel created: %s [%s:%d → %s:%d] Client [%s]",
-		proxyName, normalizeServerBindIP(tunnel.Config.BindIP), actualPort, localIP, localPort, client.ID)
+		proxyName, bindIP, actualPort, localIP, localPort, client.ID)
 
 	go s.proxyAcceptLoop(client, tunnel, listener, done)
 	return nil

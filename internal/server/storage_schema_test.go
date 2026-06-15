@@ -117,12 +117,12 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "id", typ: "TEXT", primaryKey: true},
 			{name: "name", typ: "TEXT", notNull: true},
 			{name: "key_hash", typ: "TEXT", notNull: true},
-			{name: "lookup_digest", typ: "TEXT", notNull: true, defaultValue: "''"},
 			{name: "created_at", typ: "TEXT", notNull: true},
 			{name: "expires_at", typ: "TEXT"},
 			{name: "is_active", typ: "INTEGER", notNull: true},
 			{name: "max_uses", typ: "INTEGER", notNull: true},
 			{name: "use_count", typ: "INTEGER", notNull: true},
+			{name: "lookup_digest", typ: "TEXT", notNull: true, defaultValue: "''"},
 		},
 		"api_key_permissions": {
 			{name: "api_key_id", typ: "TEXT", notNull: true, primaryKey: true},
@@ -344,6 +344,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"004_tunnel_created_at",
 		"005_unified_tunnel_storage",
 		"006_admin_security",
+		"007_api_key_lookup_digest",
 	}
 	if got := appliedMigrationNames(t, db); !reflect.DeepEqual(got, wantMigrationNames) {
 		t.Fatalf("applied migrations = %#v, want %#v", got, wantMigrationNames)
@@ -379,6 +380,7 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"004_tunnel_created_at",
 		"005_unified_tunnel_storage",
 		"006_admin_security",
+		"007_api_key_lookup_digest",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -535,8 +537,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations failed: %v", err)
 	}
-	if count != 6 {
-		t.Fatalf("schema_migrations count = %d, want 6", count)
+	if count != 7 {
+		t.Fatalf("schema_migrations count = %d, want 7", count)
 	}
 }
 

@@ -242,6 +242,7 @@ func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 	if err := tunnel.normalize(); err != nil {
 		return StoredTunnel{}, err
 	}
+	tunnel.BindIP = tunnelIngressBindIP(tunnel)
 	return tunnel, nil
 }
 

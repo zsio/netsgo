@@ -621,6 +621,7 @@ func storedTunnelToProxyConfig(stored StoredTunnel) protocol.ProxyConfig {
 		LocalIP:           stored.LocalIP,
 		LocalPort:         stored.LocalPort,
 		RemotePort:        stored.RemotePort,
+		BindIP:            tunnelIngressBindIP(stored),
 		Domain:            stored.Domain,
 		ClientID:          stored.ClientID,
 		Topology:          stored.Topology,
