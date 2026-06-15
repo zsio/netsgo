@@ -285,8 +285,8 @@ type ProxyConfig struct {
 	LocalPort         int                 `json:"local_port"`  // 内网目标服务端口
 	RemotePort        int                 `json:"remote_port"` // 公网暴露端口
 	BindIP            string              `json:"bind_ip,omitempty"`
-	Domain            string              `json:"domain"`      // HTTP 类型时的域名
-	ClientID          string              `json:"client_id"`   // 所属 Client ID
+	Domain            string              `json:"domain"`    // HTTP 类型时的域名
+	ClientID          string              `json:"client_id"` // 所属 Client ID
 	Topology          string              `json:"topology,omitempty"`
 	OwnerClientID     string              `json:"owner_client_id,omitempty"`
 	Ingress           *EndpointSpec       `json:"ingress,omitempty"`

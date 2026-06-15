@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"

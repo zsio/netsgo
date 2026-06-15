@@ -57,7 +57,7 @@ type mfaAttemptEntry struct {
 	windowStart time.Time
 	failures    int
 	lockedUntil time.Time
-	expiresAt    time.Time
+	expiresAt   time.Time
 }
 
 func newMFAAttemptLimiter(window time.Duration, maxFailures int, lockoutDuration time.Duration) *mfaAttemptLimiter {
