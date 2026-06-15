@@ -1,8 +1,6 @@
 package server
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -46,10 +44,12 @@ var dataUpgrader = websocket.Upgrader{
 	Subprotocols:      []string{protocol.WSSubProtocolData},
 }
 
-func generateDataToken() string {
-	buf := make([]byte, 32)
-	rand.Read(buf)
-	return hex.EncodeToString(buf)
+func generateDataToken() (string, error) {
+	buf, err := randomBytes(32)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate data token: %w", err)
+	}
+	return fmt.Sprintf("%x", buf), nil
 }
 
 func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
@@ -259,6 +259,11 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 		clientID = "unmanaged-" + authReq.InstallID
 	}
 
+	dataToken, err := generateDataToken()
+	if err != nil {
+		return nil, err
+	}
+
 	client := &ClientConn{
 		ID:         clientID,
 		InstallID:  authReq.InstallID,
@@ -266,7 +271,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 		RemoteAddr: ip,
 		conn:       conn,
 		proxies:    make(map[string]*ProxyTunnel),
-		dataToken:  generateDataToken(),
+		dataToken:  dataToken,
 		generation: s.nextClientGeneration(),
 		state:      clientStatePendingData,
 	}

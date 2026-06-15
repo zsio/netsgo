@@ -388,8 +388,8 @@ func (s *AdminStore) CountUnusedRecoveryCodes(userID string) (int, error) {
 func generateRecoveryCodes(count int) ([]string, error) {
 	codes := make([]string, count)
 	for i := range codes {
-		raw := make([]byte, adminRecoveryCodeRandomBytes)
-		if _, err := rand.Read(raw); err != nil {
+		raw, err := randomBytes(adminRecoveryCodeRandomBytes)
+		if err != nil {
 			return nil, err
 		}
 		encoded := strings.ToLower(base64.RawStdEncoding.EncodeToString(raw))
@@ -409,8 +409,12 @@ func replaceRecoveryCodesInTx(tx *sql.Tx, userID string, codes []string) error {
 		if err != nil {
 			return err
 		}
+		id, err := generateUUIDE()
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`INSERT INTO admin_totp_recovery_codes (id, user_id, code_hash, created_at, used_at) VALUES (?, ?, ?, ?, NULL)`,
-			generateUUID(), userID, string(hash), now); err != nil {
+			id, userID, string(hash), now); err != nil {
 			return err
 		}
 	}
@@ -464,8 +468,12 @@ func (s *AdminStore) StoreAuthChallenge(userID, kind, sessionJSON string, metada
 		metadataJSON = string(raw)
 	}
 	now := time.Now()
+	challengeID, err := generateUUIDE()
+	if err != nil {
+		return AdminAuthChallenge{}, err
+	}
 	challenge := AdminAuthChallenge{
-		ID:           generateUUID(),
+		ID:           challengeID,
 		UserID:       userID,
 		Kind:         kind,
 		SessionJSON:  sessionJSON,
@@ -582,8 +590,12 @@ func (s *AdminStore) AddPasskey(userID, name, credentialID string, credential we
 		return nil, err
 	}
 	now := time.Now()
+	passkeyID, err := generateUUIDE()
+	if err != nil {
+		return nil, err
+	}
 	passkey := AdminPasskey{
-		ID:             generateUUID(),
+		ID:             passkeyID,
 		UserID:         userID,
 		Name:           name,
 		CredentialID:   credentialID,

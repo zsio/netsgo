@@ -21,6 +21,16 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+var cryptoRandRead = rand.Read
+
+func randomBytes(n int) ([]byte, error) {
+	buf := make([]byte, n)
+	if _, err := cryptoRandRead(buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
 // AdminStore manages persistence of admin accounts, API Keys, and sessions.
 type AdminStore struct {
 	path      string
@@ -78,7 +88,7 @@ func generateUUID() string {
 
 func generateUUIDE() (string, error) {
 	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
+	if _, err := cryptoRandRead(buf[:]); err != nil {
 		return "", fmt.Errorf("failed to generate uuid: %w", err)
 	}
 	buf[6] = (buf[6] & 0x0f) | 0x40
@@ -314,7 +324,7 @@ func (s *AdminStore) Initialize(username, password, serverAddr string, allowedPo
 	}
 
 	secretBytes := make([]byte, 32)
-	if _, err := rand.Read(secretBytes); err != nil {
+	if _, err := cryptoRandRead(secretBytes); err != nil {
 		return fmt.Errorf("failed to generate JWT secret: %w", err)
 	}
 	jwtSecret := hex.EncodeToString(secretBytes)
@@ -1791,7 +1801,7 @@ func hashToken(token string) string {
 // generateToken creates a random 256-bit token.
 func generateToken() (string, error) {
 	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
+	if _, err := cryptoRandRead(buf); err != nil {
 		return "", fmt.Errorf("failed to generate token: %w", err)
 	}
 	return "tk-" + hex.EncodeToString(buf), nil
