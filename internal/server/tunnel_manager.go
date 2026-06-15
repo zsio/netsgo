@@ -120,7 +120,11 @@ func (s *Server) createOfflineManagedTunnel(clientID string, req protocol.ProxyN
 		req.RemotePort = 0
 	}
 	// Tunnel IDs are server-owned stable identifiers.
-	req.ID = generateUUID()
+	id, err := generateUUIDE()
+	if err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+	req.ID = id
 	if err := s.validateProxyRequestWithExclusions(nil, req, "", clientID); err != nil {
 		return protocol.ProxyConfig{}, err
 	}
@@ -448,7 +452,14 @@ func (s *Server) ensureManagedTunnelIdentity(client *ClientConn, name string, tu
 		return nil
 	}
 
-	id := generateUUID()
+	id := ""
+	if needsID {
+		generatedID, err := generateUUIDE()
+		if err != nil {
+			return err
+		}
+		id = generatedID
+	}
 	var createdAt time.Time
 	if needsID && s.store != nil {
 		if stored, err := s.store.GetTunnelE(client.ID, name); err == nil {

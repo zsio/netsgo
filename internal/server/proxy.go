@@ -205,7 +205,11 @@ func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewReq
 
 func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, excludeName, excludeClientID string, createdAt time.Time) (*ProxyTunnel, error) {
 	if req.ID == "" {
-		req.ID = generateUUID()
+		id, err := generateUUIDE()
+		if err != nil {
+			return nil, err
+		}
+		req.ID = id
 	}
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()

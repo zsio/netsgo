@@ -756,7 +756,11 @@ func (s *Server) storedTunnelFromUnifiedRequest(req tunnelCreateRequestAPI, exis
 	}
 	id := existingID
 	if id == "" {
-		id = generateUUID()
+		generatedID, err := generateUUIDE()
+		if err != nil {
+			return StoredTunnel{}, err
+		}
+		id = generatedID
 	}
 	now := time.Now().UTC()
 	ingress := EndpointSpec{

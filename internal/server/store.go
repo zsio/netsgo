@@ -301,7 +301,11 @@ func (s *TunnelStore) tunnelIDExists(clientID, id string) (bool, error) {
 // AddTunnel adds a tunnel configuration and persists it.
 func (s *TunnelStore) AddTunnel(tunnel StoredTunnel) error {
 	if tunnel.ID == "" {
-		tunnel.ID = generateUUID()
+		id, err := generateUUIDE()
+		if err != nil {
+			return err
+		}
+		tunnel.ID = id
 	}
 	if err := tunnel.normalize(); err != nil {
 		return err
