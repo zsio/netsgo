@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"netsgo/pkg/fileutil"
 )
@@ -117,7 +118,7 @@ WantedBy=multi-user.target
 
 func rejectSystemdControlChars(name, value string) error {
 	for _, r := range value {
-		if r == '\n' || r == '\r' || r == 0 {
+		if r == 0 || unicode.IsControl(r) {
 			return fmt.Errorf("invalid systemd %s: control characters are not allowed", name)
 		}
 	}
