@@ -6,15 +6,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { versionCheckQueryKey, type VersionCheckTarget } from '@/hooks/use-version-check';
 import type { VersionCheckResult } from '@/types';
 
+import { VersionUpdateContent, VersionUpdateIndicator } from './VersionUpdateIndicator';
+import { manualVersionCheckToast } from './version-update-toast';
 import {
   safeReleaseUrl,
   safeUpgradeCommand,
   TRUSTED_RELEASE_URL,
   TRUSTED_UPGRADE_COMMAND,
-  VersionUpdateContent,
-  VersionUpdateIndicator,
-} from './VersionUpdateIndicator';
-import { manualVersionCheckToast } from './version-update-toast';
+} from './version-update-security';
 
 function result(overrides: Partial<VersionCheckResult> = {}): VersionCheckResult {
   return {
