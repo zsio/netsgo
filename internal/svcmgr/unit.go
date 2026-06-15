@@ -138,6 +138,6 @@ func systemdQuoteArg(value string) string {
 	if !needsQuote {
 		return value
 	}
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `$$`, "`", "\`")
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `$$`)
 	return `"` + replacer.Replace(value) + `"`
 }

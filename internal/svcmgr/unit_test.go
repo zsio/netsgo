@@ -102,7 +102,7 @@ func TestWriteUnitQuotesPathsWithSpaces(t *testing.T) {
 	layout.EnvPath = filepath.Join(root, "service env", "server.env")
 
 	if err := WriteServerUnit(layout); err != nil {
-		.Fatalf("WriteServerUnit() failed: %v", err)
+		t.Fatalf("WriteServerUnit() failed: %v", err)
 	}
 	content, err := os.ReadFile(layout.UnitPath)
 	if err != nil {
@@ -110,13 +110,11 @@ func TestWriteUnitQuotesPathsWithSpaces(t *testing.T) {
 	}
 	text := string(content)
 	if !strings.Contains(text, `EnvironmentFile="`+layout.EnvPath+`"`) {
-		t.Fatalf("unit should quote EnvironmentFile with spaces:
-%s", text)
+		t.Fatalf("unit should quote EnvironmentFile with spaces:\n%s", text)
 	}
 	wantExec := `ExecStart="` + layout.BinaryPath + `" server --data-dir "` + layout.DataDir + `"`
 	if !strings.Contains(text, wantExec) {
-		t.Fatalf("unit ExecStart missing quoted path %q:
-%s", wantExec, text)
+		t.Fatalf("unit ExecStart missing quoted path %q:\n%s", wantExec, text)
 	}
 
 	info, err := ReadUnitInfo(layout.UnitPath)
