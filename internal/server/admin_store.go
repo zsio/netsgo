@@ -1656,6 +1656,13 @@ func (s *AdminStore) validateClientKeyLocked(q dbQuerier, key string) (bool, err
 		return false, err
 	}
 	if len(keys) == 0 {
+		hasKeys, err := hasAnyAPIKeys(q)
+		if err != nil {
+			return false, err
+		}
+		if hasKeys {
+			return false, fmt.Errorf("API key is invalid")
+		}
 		initialized, _, err := s.loadConfigLifecycle(q)
 		if err != nil {
 			return false, err
@@ -1713,6 +1720,17 @@ func candidateAPIKeysForRaw(q dbQuerier, raw string) ([]APIKey, error) {
 		return keys, nil
 	}
 	return loadAPIKeysByLookupDigest(q, "")
+}
+
+func hasAnyAPIKeys(q dbQuerier) (bool, error) {
+	var exists int
+	if err := q.QueryRow(`SELECT 1 FROM api_keys LIMIT 1`).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func loadAPIKeysByLookupDigest(q dbQuerier, digest string) ([]APIKey, error) {

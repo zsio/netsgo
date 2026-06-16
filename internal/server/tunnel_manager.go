@@ -584,6 +584,7 @@ func (s *Server) upsertTunnelPlaceholderWithRevision(client *ClientConn, req pro
 		LocalIP:           req.LocalIP,
 		LocalPort:         req.LocalPort,
 		RemotePort:        req.RemotePort,
+		BindIP:            normalizeServerBindIP(req.BindIP),
 		Domain:            req.Domain,
 		ClientID:          client.ID,
 		BandwidthSettings: req.BandwidthSettings,
@@ -608,7 +609,9 @@ func (s *Server) upsertTunnelPlaceholderWithRevision(client *ClientConn, req pro
 func (s *Server) failRestoredTunnelAfterReady(client *ClientConn, stored StoredTunnel, message string) {
 	s.removeTunnelRuntime(client, stored.Name)
 	_ = s.notifyClientProxyClose(client, stored.Name, "provision_failed")
-	config := s.upsertTunnelPlaceholderWithRevision(client, stored.ProxyNewRequest, stored.Revision, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message, stored.CreatedAt)
+	req := stored.ProxyNewRequest
+	req.BindIP = tunnelIngressBindIP(stored)
+	config := s.upsertTunnelPlaceholderWithRevision(client, req, stored.Revision, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message, stored.CreatedAt)
 	_ = s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
 	s.emitTunnelChanged(client.ID, config, "error")
 }

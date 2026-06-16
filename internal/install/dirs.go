@@ -26,6 +26,9 @@ func ensureManagedRoleDirsWithRoot(root string, role svcmgr.Role, lookup userLoo
 	locksDir := filepath.Join(root, "locks")
 
 	for _, dir := range []string{root, runtimeDir, locksDir} {
+		if err := rejectExistingSymlink(dir); err != nil {
+			return err
+		}
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
@@ -54,6 +57,20 @@ func ensureManagedRoleDirsWithRoot(root string, role svcmgr.Role, lookup userLoo
 		return err
 	}
 	return chownTree(locksDir, uid, gid)
+}
+
+func rejectExistingSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to secure symlinked managed directory: %s", path)
+	}
+	return nil
 }
 
 func chownTree(root string, uid, gid int) error {

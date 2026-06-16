@@ -125,6 +125,36 @@ func TestEnsureManagedRoleDirsWithRootRejectsSymlinkRuntimeEntries(t *testing.T)
 	}
 }
 
+func TestEnsureManagedRoleDirsWithRootRejectsSymlinkManagedDirsBeforeChmod(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "netsgo")
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		t.Fatalf("create root dir: %v", err)
+	}
+	target := filepath.Join(t.TempDir(), "outside-runtime")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatalf("create symlink target: %v", err)
+	}
+	runtimeDir := filepath.Join(root, "server")
+	if err := os.Symlink(target, runtimeDir); err != nil {
+		t.Fatalf("create runtime symlink: %v", err)
+	}
+
+	current := &user.User{
+		Uid: strconv.Itoa(os.Getuid()),
+		Gid: strconv.Itoa(os.Getgid()),
+	}
+	err := ensureManagedRoleDirsWithRoot(root, svcmgr.RoleServer, func(string) (*user.User, error) {
+		return current, nil
+	})
+	if err == nil {
+		t.Fatal("ensureManagedRoleDirsWithRoot() error = nil, want symlinked directory rejection")
+	}
+	if !strings.Contains(err.Error(), "refusing to secure symlinked managed directory") {
+		t.Fatalf("ensureManagedRoleDirsWithRoot() error = %q, want symlinked directory rejection", err)
+	}
+	assertDirMode(t, target, 0o700)
+}
+
 func assertDirMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 	info, err := os.Stat(path)

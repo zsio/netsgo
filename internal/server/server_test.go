@@ -3855,6 +3855,11 @@ func TestFailRestoredTunnelAfterReadyPreservesCreatedAt(t *testing.T) {
 			LocalIP:   "127.0.0.1",
 			LocalPort: 8080,
 		},
+		Ingress: EndpointSpec{
+			Location: "server",
+			Type:     TunnelIngressTypeTCPListen,
+			Config:   mustRawJSON(tcpListenConfigAPI{BindIP: "127.0.0.1", Port: 18080}),
+		},
 		ClientID:  client.ID,
 		CreatedAt: createdAt,
 	}
@@ -3870,6 +3875,9 @@ func TestFailRestoredTunnelAfterReadyPreservesCreatedAt(t *testing.T) {
 	}
 	if !placeholder.Config.CreatedAt.Equal(createdAt) {
 		t.Fatalf("CreatedAt should be preserved: want %s, got %s", createdAt, placeholder.Config.CreatedAt)
+	}
+	if placeholder.Config.BindIP != "127.0.0.1" {
+		t.Fatalf("BindIP should be preserved from stored ingress config, got %q", placeholder.Config.BindIP)
 	}
 	if placeholder.Config.RuntimeState != protocol.ProxyRuntimeStateError {
 		t.Fatalf("RuntimeState should be error, got %q", placeholder.Config.RuntimeState)

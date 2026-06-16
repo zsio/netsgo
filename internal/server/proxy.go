@@ -95,6 +95,9 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 	if req.RemotePort == 80 || req.RemotePort == 443 {
 		return newProxyRequestValidationError(fmt.Errorf("TCP/UDP tunnels cannot use reserved port %d", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 	}
+	if err := validateServerBindIP(req.BindIP); err != nil {
+		return newProxyRequestValidationError(err, "bind_ip", protocol.TunnelMutationErrorCodeInvalidBindIP, http.StatusBadRequest)
+	}
 	if listenPort := serverListenPort(s); listenPort > 0 && req.RemotePort == listenPort {
 		return newProxyRequestValidationError(fmt.Errorf("port %d conflicts with the NetsGo management service listen port", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
@@ -117,6 +120,18 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 		return newProxyRequestValidationError(fmt.Errorf("port %d is already in use by another tunnel", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
 
+	return nil
+}
+
+func validateServerBindIP(bindIP string) error {
+	bindIP = strings.TrimSpace(bindIP)
+	if bindIP == "" {
+		return nil
+	}
+	ip := net.ParseIP(bindIP)
+	if ip == nil || ip.To4() == nil {
+		return fmt.Errorf("bind_ip must be a valid IPv4 address")
+	}
 	return nil
 }
 

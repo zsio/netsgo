@@ -621,6 +621,27 @@ func TestAdminStore_ValidateClientKey_Invalid(t *testing.T) {
 	}
 }
 
+func TestAdminStore_ValidateClientKey_InvalidModernDigestMiss(t *testing.T) {
+	store := newInitializedAdminStore(t)
+	if _, err := store.AddAPIKey("modern", "sk-real-key", []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
+
+	valid, err := store.ValidateClientKey("sk-wrong-key")
+	if valid {
+		t.Fatal("invalid key should be rejected")
+	}
+	if err == nil {
+		t.Fatal("invalid key should return error")
+	}
+	if !strings.Contains(err.Error(), "API key is invalid") {
+		t.Fatalf("invalid modern key should report invalid, got %v", err)
+	}
+	if strings.Contains(err.Error(), "no API keys configured") {
+		t.Fatalf("invalid modern key should not be reported as unconfigured, got %v", err)
+	}
+}
+
 func TestAdminStore_ValidateClientKey_EmptyWhenKeysExist(t *testing.T) {
 	store := newTestAdminStore(t)
 	if _, err := store.AddAPIKey("test", "sk-real-key", []string{"connect"}, nil); err != nil {
