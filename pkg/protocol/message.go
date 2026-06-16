@@ -179,7 +179,8 @@ type ProxyNewRequest struct {
 	LocalIP           string `json:"local_ip"`     // 内网目标 IP
 	LocalPort         int    `json:"local_port"`   // 内网目标端口
 	RemotePort        int    `json:"remote_port"`  // 公网暴露端口（TCP/UDP 类型时使用）
-	Domain            string `json:"domain"`       // 域名（HTTP 类型时使用）
+	BindIP            string `json:"bind_ip,omitempty"`
+	Domain            string `json:"domain"` // 域名（HTTP 类型时使用）
 	TransportPolicy   string `json:"transport_policy,omitempty"`
 	ActualTransport   string `json:"actual_transport,omitempty"`
 	ProvisionRevision uint64 `json:"provision_revision,omitempty"` // Server 生成的 provisioning 修订号；ACK 必须原样返回

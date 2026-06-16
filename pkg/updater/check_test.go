@@ -1,6 +1,8 @@
 package updater
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,25 @@ func TestComputeCheckResultStableUsesStableOnly(t *testing.T) {
 	}
 	if commandArgsContainForce(got.Commands.Command) {
 		t.Fatalf("web upgrade command must not include force flag: %+v", got.Commands)
+	}
+}
+
+func TestOneCommandInstallUpgradeStringsStayPinned(t *testing.T) {
+	root := filepath.Join("..", "..")
+	const installCommand = "curl -fsSL https://netsgo.zs.uy/install.sh | sh"
+	const upgradeCommand = "curl -fsSL https://netsgo.zs.uy/upgrade.sh | sh -s -- -y"
+	for _, name := range []string{"README.md", "README.zh-CN.md"} {
+		raw, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		text := string(raw)
+		if !strings.Contains(text, installCommand) {
+			t.Fatalf("%s must contain canonical install command %q", name, installCommand)
+		}
+		if !strings.Contains(text, upgradeCommand) {
+			t.Fatalf("%s must contain canonical upgrade command %q", name, upgradeCommand)
+		}
 	}
 }
 

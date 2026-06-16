@@ -54,7 +54,7 @@ export function ClientHeader({ client }: ClientHeaderProps) {
   const saveDisplayName = async () => {
     setIsSaving(true);
     try {
-      await api.put(`/api/clients/${client.id}/display-name`, {
+      await api.put(`/api/clients/${encodeURIComponent(client.id)}/display-name`, {
         display_name: editValue.trim(),
       });
       queryClient.invalidateQueries({ queryKey: ['clients'] });

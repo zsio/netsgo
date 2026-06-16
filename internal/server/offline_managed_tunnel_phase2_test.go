@@ -140,6 +140,47 @@ func TestOfflineManagedTunnel_Update_StoreFirstForTCPAndUDP(t *testing.T) {
 	}
 }
 
+func TestOfflineManagedTunnel_UpdatePreservesBindIPForConflictCheck(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	clientID := registerOfflineHTTPTestClient(t, s, "offline-update-bind")
+	remotePort := reserveTCPPort(t)
+	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
+		Name:       "loopback-one",
+		Type:       protocol.ProxyTypeTCP,
+		BindIP:     "127.0.0.1",
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8080,
+		RemotePort: remotePort,
+	}, protocol.ProxyStatusActive)
+	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{
+		Name:       "loopback-two",
+		Type:       protocol.ProxyTypeTCP,
+		BindIP:     "127.0.0.2",
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8081,
+		RemotePort: remotePort,
+	}, protocol.ProxyStatusActive)
+
+	body := []byte(fmt.Sprintf(`{"local_ip":"192.168.1.50","local_port":9090,"remote_port":%d,"domain":""}`, remotePort))
+	resp := doMuxRequest(t, handler, http.MethodPut, fmt.Sprintf("/api/clients/%s/tunnels/loopback-one", clientID), token, body)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("offline update should preserve existing bind_ip during conflict checks, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	stored, exists := s.store.GetTunnel(clientID, "loopback-one")
+	if !exists {
+		t.Fatal("updated tunnel should remain in store")
+	}
+	if stored.BindIP != "127.0.0.1" {
+		t.Fatalf("legacy update should preserve bind_ip, got %q", stored.BindIP)
+	}
+	if stored.LocalIP != "192.168.1.50" || stored.LocalPort != 9090 {
+		t.Fatalf("legacy update fields not written correctly, got %+v", stored)
+	}
+}
+
 func TestOfflineManagedTunnel_Stop_StoreFirstForTCPAndUDP(t *testing.T) {
 	testCases := []struct {
 		name       string

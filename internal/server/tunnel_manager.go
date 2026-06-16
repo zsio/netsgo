@@ -120,7 +120,11 @@ func (s *Server) createOfflineManagedTunnel(clientID string, req protocol.ProxyN
 		req.RemotePort = 0
 	}
 	// Tunnel IDs are server-owned stable identifiers.
-	req.ID = generateUUID()
+	id, err := generateUUIDE()
+	if err != nil {
+		return protocol.ProxyConfig{}, err
+	}
+	req.ID = id
 	if err := s.validateProxyRequestWithExclusions(nil, req, "", clientID); err != nil {
 		return protocol.ProxyConfig{}, err
 	}
@@ -302,6 +306,7 @@ func (s *Server) updateManagedTunnelWithRevision(client *ClientConn, selector st
 		ID:                currentConfig.ID,
 		Name:              newName,
 		Type:              tunnelType,
+		BindIP:            currentConfig.BindIP,
 		LocalIP:           localIP,
 		LocalPort:         localPort,
 		RemotePort:        remotePort,
@@ -448,7 +453,14 @@ func (s *Server) ensureManagedTunnelIdentity(client *ClientConn, name string, tu
 		return nil
 	}
 
-	id := generateUUID()
+	id := ""
+	if needsID {
+		generatedID, err := generateUUIDE()
+		if err != nil {
+			return err
+		}
+		id = generatedID
+	}
 	var createdAt time.Time
 	if needsID && s.store != nil {
 		if stored, err := s.store.GetTunnelE(client.ID, name); err == nil {
@@ -572,6 +584,7 @@ func (s *Server) upsertTunnelPlaceholderWithRevision(client *ClientConn, req pro
 		LocalIP:           req.LocalIP,
 		LocalPort:         req.LocalPort,
 		RemotePort:        req.RemotePort,
+		BindIP:            normalizeServerBindIP(req.BindIP),
 		Domain:            req.Domain,
 		ClientID:          client.ID,
 		BandwidthSettings: req.BandwidthSettings,
@@ -596,7 +609,9 @@ func (s *Server) upsertTunnelPlaceholderWithRevision(client *ClientConn, req pro
 func (s *Server) failRestoredTunnelAfterReady(client *ClientConn, stored StoredTunnel, message string) {
 	s.removeTunnelRuntime(client, stored.Name)
 	_ = s.notifyClientProxyClose(client, stored.Name, "provision_failed")
-	config := s.upsertTunnelPlaceholderWithRevision(client, stored.ProxyNewRequest, stored.Revision, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message, stored.CreatedAt)
+	req := stored.ProxyNewRequest
+	req.BindIP = tunnelIngressBindIP(stored)
+	config := s.upsertTunnelPlaceholderWithRevision(client, req, stored.Revision, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message, stored.CreatedAt)
 	_ = s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
 	s.emitTunnelChanged(client.ID, config, "error")
 }
@@ -610,6 +625,7 @@ func storedTunnelToProxyConfig(stored StoredTunnel) protocol.ProxyConfig {
 		LocalIP:           stored.LocalIP,
 		LocalPort:         stored.LocalPort,
 		RemotePort:        stored.RemotePort,
+		BindIP:            tunnelIngressBindIP(stored),
 		Domain:            stored.Domain,
 		ClientID:          stored.ClientID,
 		Topology:          stored.Topology,
@@ -713,6 +729,7 @@ func (s *Server) updateOfflineManagedTunnelWithRevision(clientID, selector strin
 		ID:                stored.ID,
 		Name:              newName,
 		Type:              stored.Type,
+		BindIP:            stored.BindIP,
 		LocalIP:           localIP,
 		LocalPort:         localPort,
 		RemotePort:        remotePort,

@@ -179,6 +179,75 @@ func TestValidateProxyRequest_RejectsConflictsAcrossRuntimeAndStore(t *testing.T
 	}
 }
 
+func TestValidateProxyRequest_TCPUDPConflictsRespectBindIP(t *testing.T) {
+	s := newProxyValidationTestServer(t, 28180, "https://panel.example.com", nil)
+
+	seedStoredTunnel(t, s, "client-store", protocol.ProxyNewRequest{
+		Name:       "stored-loopback-one",
+		Type:       protocol.ProxyTypeTCP,
+		BindIP:     "127.0.0.1",
+		LocalIP:    "127.0.0.1",
+		LocalPort:  3000,
+		RemotePort: 19092,
+	}, protocol.ProxyStatusStopped)
+
+	err := s.validateProxyRequest(nil, protocol.ProxyNewRequest{
+		Name:       "loopback-two",
+		Type:       protocol.ProxyTypeTCP,
+		BindIP:     "127.0.0.2",
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8080,
+		RemotePort: 19092,
+	})
+	if err != nil {
+		t.Fatalf("same port on different explicit bind IPs should be allowed: %v", err)
+	}
+
+	err = s.validateProxyRequest(nil, protocol.ProxyNewRequest{
+		Name:       "wildcard",
+		Type:       protocol.ProxyTypeTCP,
+		BindIP:     "0.0.0.0",
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8080,
+		RemotePort: 19092,
+	})
+	if err == nil {
+		t.Fatal("wildcard bind should conflict with an existing explicit bind on the same port")
+	}
+	if !strings.Contains(err.Error(), "already in use by another tunnel") {
+		t.Fatalf("error should indicate a port conflict, got %v", err)
+	}
+}
+
+func TestValidateProxyRequest_TCPUDPRejectsInvalidBindIP(t *testing.T) {
+	s := newProxyValidationTestServer(t, 28181, "https://panel.example.com", nil)
+
+	err := s.validateProxyRequest(nil, protocol.ProxyNewRequest{
+		Name:       "invalid-bind",
+		Type:       protocol.ProxyTypeTCP,
+		BindIP:     "localhost",
+		LocalIP:    "127.0.0.1",
+		LocalPort:  8080,
+		RemotePort: 19093,
+	})
+	if err == nil {
+		t.Fatal("invalid bind_ip should be rejected")
+	}
+	var validationErr *proxyRequestValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected proxyRequestValidationError, got %T", err)
+	}
+	if validationErr.ErrorCode() != protocol.TunnelMutationErrorCodeInvalidBindIP {
+		t.Fatalf("error_code: want %q, got %q", protocol.TunnelMutationErrorCodeInvalidBindIP, validationErr.ErrorCode())
+	}
+	if validationErr.Field() != "bind_ip" {
+		t.Fatalf("field: want bind_ip, got %q", validationErr.Field())
+	}
+	if validationErr.StatusCode() != 400 {
+		t.Fatalf("status: want 400, got %d", validationErr.StatusCode())
+	}
+}
+
 func TestValidateProxyRequestWithExclusions_AllowsUpdatingSameTunnelPort(t *testing.T) {
 	s := newProxyValidationTestServer(t, 38080, "https://panel.example.com", nil)
 

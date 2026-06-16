@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"netsgo/pkg/fileutil"
 )
@@ -121,8 +122,8 @@ func writeEnvFile(path string, values map[string]string) error {
 		if value == "" {
 			continue
 		}
-		if strings.HasPrefix(key, "NETSGO_INIT_") {
-			return fmt.Errorf("forbidden env key: %s", key)
+		if err := validateEnvEntry(key, value); err != nil {
+			return err
 		}
 		keys = append(keys, key)
 	}
@@ -144,6 +145,26 @@ func writeEnvFile(path string, values map[string]string) error {
 
 func RepairEnvFileOwnership(layout ServiceLayout) error {
 	return repairEnvFileOwnership(layout.EnvPath)
+}
+
+func validateEnvEntry(key, value string) error {
+	if strings.HasPrefix(key, "NETSGO_INIT_") {
+		return fmt.Errorf("forbidden env key: %s", key)
+	}
+	if strings.TrimSpace(key) != key || key == "" {
+		return fmt.Errorf("invalid env key: %q", key)
+	}
+	for _, r := range key {
+		if r != '_' && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return fmt.Errorf("invalid env key: %q", key)
+		}
+	}
+	for _, r := range value {
+		if r == '\n' || r == '\r' || r == 0 || unicode.IsControl(r) {
+			return fmt.Errorf("invalid env value for %s: control characters are not allowed", key)
+		}
+	}
+	return nil
 }
 
 func readEnvFile(path string) (map[string]string, error) {

@@ -92,3 +92,46 @@ func TestReadUnitExecStart(t *testing.T) {
 		t.Fatalf("ReadUnitExecStart() = %q, want %q", got, want)
 	}
 }
+
+func TestWriteUnitQuotesPathsWithSpaces(t *testing.T) {
+	layout := NewLayout(RoleServer)
+	root := t.TempDir()
+	layout.UnitPath = filepath.Join(root, "netsgo-server.service")
+	layout.BinaryPath = filepath.Join(root, "bin dir", "netsgo")
+	layout.DataDir = filepath.Join(root, "data dir")
+	layout.EnvPath = filepath.Join(root, "service env", "server.env")
+
+	if err := WriteServerUnit(layout); err != nil {
+		t.Fatalf("WriteServerUnit() failed: %v", err)
+	}
+	content, err := os.ReadFile(layout.UnitPath)
+	if err != nil {
+		t.Fatalf("read unit: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `EnvironmentFile="`+layout.EnvPath+`"`) {
+		t.Fatalf("unit should quote EnvironmentFile with spaces:\n%s", text)
+	}
+	wantExec := `ExecStart="` + layout.BinaryPath + `" server --data-dir "` + layout.DataDir + `"`
+	if !strings.Contains(text, wantExec) {
+		t.Fatalf("unit ExecStart missing quoted path %q:\n%s", wantExec, text)
+	}
+
+	info, err := ReadUnitInfo(layout.UnitPath)
+	if err != nil {
+		t.Fatalf("ReadUnitInfo() failed: %v", err)
+	}
+	if info.ExecStart != expectedExecStart(layout) {
+		t.Fatalf("ReadUnitInfo ExecStart = %q, want %q", info.ExecStart, expectedExecStart(layout))
+	}
+}
+
+func TestWriteUnitRejectsControlCharacters(t *testing.T) {
+	layout := NewLayout(RoleClient)
+	layout.UnitPath = filepath.Join(t.TempDir(), "netsgo-client.service")
+	layout.DataDir = "/var/lib/netsgo\nExecStart=/bin/sh"
+
+	if err := WriteClientUnit(layout); err == nil {
+		t.Fatal("WriteClientUnit() error = nil, want control-character rejection")
+	}
+}

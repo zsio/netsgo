@@ -26,6 +26,16 @@ jobs:
             exit 1
           }
       - uses: oven-sh/setup-bun@v2
+      - name: Verify install/update scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in scripts/common-update.sh scripts/install.sh scripts/upgrade.sh scripts/test-update-helpers.sh; do
+            sh -n "$script"
+          done
+          scripts/test-update-helpers.sh
+          bun scripts/generate-standalone-update-scripts.mjs
+          git diff --exit-code scripts/install.sh scripts/upgrade.sh
       - name: Install web dependencies
         working-directory: web
         run: bun install --frozen-lockfile

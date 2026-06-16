@@ -83,6 +83,60 @@ func TestStartProxy_UDP(t *testing.T) {
 	_ = sConn.Close()
 }
 
+func TestStartProxyUDP_DefaultBindIPListensWildcard(t *testing.T) {
+	s := New(0)
+	client := &ClientConn{ID: "udp-bind-default", proxies: make(map[string]*ProxyTunnel)}
+	s.clients.Store(client.ID, client)
+	cConn, sConn := net.Pipe()
+	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
+	client.dataSession = sSession
+	t.Cleanup(func() {
+		s.StopAllProxies(client)
+		_ = cConn.Close()
+		_ = sConn.Close()
+	})
+
+	req := protocol.ProxyNewRequest{Name: "udp-wildcard", Type: protocol.ProxyTypeUDP, RemotePort: reserveUDPPort(t)}
+	if err := s.StartProxy(client, req); err != nil {
+		t.Fatalf("StartProxy UDP failed: %v", err)
+	}
+	client.proxyMu.RLock()
+	addr := client.proxies[req.Name].UDPState.packetConn.LocalAddr().(*net.UDPAddr)
+	client.proxyMu.RUnlock()
+	if !addr.IP.IsUnspecified() {
+		t.Fatalf("omitted bind_ip should listen wildcard UDP, got %s", addr.IP)
+	}
+}
+
+func TestStartProxyUDP_ExplicitLoopbackBindIPUsesLoopback(t *testing.T) {
+	s := New(0)
+	client := &ClientConn{ID: "udp-bind-loopback", proxies: make(map[string]*ProxyTunnel)}
+	s.clients.Store(client.ID, client)
+	cConn, sConn := net.Pipe()
+	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
+	client.dataSession = sSession
+	t.Cleanup(func() {
+		s.StopAllProxies(client)
+		_ = cConn.Close()
+		_ = sConn.Close()
+	})
+
+	req := protocol.ProxyNewRequest{Name: "udp-loopback", Type: protocol.ProxyTypeUDP, BindIP: "127.0.0.1", RemotePort: reserveUDPPort(t)}
+	if err := s.StartProxy(client, req); err != nil {
+		t.Fatalf("StartProxy UDP failed: %v", err)
+	}
+	client.proxyMu.RLock()
+	tunnel := client.proxies[req.Name]
+	addr := tunnel.UDPState.packetConn.LocalAddr().(*net.UDPAddr)
+	client.proxyMu.RUnlock()
+	if !addr.IP.IsLoopback() {
+		t.Fatalf("explicit 127.0.0.1 bind should listen loopback UDP, got %s", addr.IP)
+	}
+	if tunnel.Config.BindIP != "127.0.0.1" {
+		t.Fatalf("runtime config should preserve UDP bind_ip, got %q", tunnel.Config.BindIP)
+	}
+}
+
 func TestStopProxy_UDP(t *testing.T) {
 	s := New(0)
 	clientID := "udp-stop-client"

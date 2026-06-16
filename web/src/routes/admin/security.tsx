@@ -38,6 +38,16 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
+import {
+  emptyCredentialForm,
+  emptyPasskeyForm,
+  emptyPasswordForm,
+  emptyUsernameForm,
+  type CredentialForm,
+  type PasskeyForm,
+  type PasswordForm,
+  type UsernameForm,
+} from './security-state';
 import type {
   PasskeyChallengeResponse,
   PasskeySummary,
@@ -51,30 +61,23 @@ export const adminSecurityRoute = createRoute({
   component: AdminSecurityPage,
 });
 
-type CredentialForm = {
-  currentPassword: string;
-  mfaCode: string;
-};
-
-const emptyCredentialForm: CredentialForm = { currentPassword: '', mfaCode: '' };
-
 function AdminSecurityPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const logout = useAuthStore((s) => s.logout);
   const { data, isLoading } = useAdminSecurity();
   const mutations = useAdminSecurityMutations();
-  const [usernameForm, setUsernameForm] = useState({ ...emptyCredentialForm, newUsername: '' });
-  const [passwordForm, setPasswordForm] = useState({ ...emptyCredentialForm, newPassword: '' });
-  const [totpForm, setTotpForm] = useState(emptyCredentialForm);
+  const [usernameForm, setUsernameForm] = useState(() => emptyUsernameForm());
+  const [passwordForm, setPasswordForm] = useState(() => emptyPasswordForm());
+  const [totpForm, setTotpForm] = useState(() => emptyCredentialForm());
   const [totpSetup, setTotpSetup] = useState<TOTPBeginResponse | null>(null);
   const [totpCode, setTotpCode] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
-  const [passkeyForm, setPasskeyForm] = useState({ ...emptyCredentialForm, name: '' });
+  const [passkeyForm, setPasskeyForm] = useState(() => emptyPasskeyForm());
   const [renamePasskey, setRenamePasskey] = useState<PasskeySummary | null>(null);
-  const [renameForm, setRenameForm] = useState({ ...emptyCredentialForm, name: '' });
+  const [renameForm, setRenameForm] = useState(() => emptyPasskeyForm());
   const [deletePasskey, setDeletePasskey] = useState<PasskeySummary | null>(null);
-  const [deleteForm, setDeleteForm] = useState(emptyCredentialForm);
+  const [deleteForm, setDeleteForm] = useState(() => emptyCredentialForm());
   const [securitySection, setSecuritySection] = useState('account');
   const [accountDialog, setAccountDialog] = useState<'username' | 'password' | null>(null);
   const [totpAction, setTotpAction] = useState<'enable' | 'regenerate' | 'disable' | null>(null);
@@ -86,10 +89,58 @@ function AdminSecurityPage() {
     toast.error(error instanceof Error ? error.message : t('errors.generic'));
   };
 
+  const clearCredentialDialogs = () => {
+    setUsernameForm(emptyUsernameForm());
+    setPasswordForm(emptyPasswordForm());
+    setTotpForm(emptyCredentialForm());
+    setTotpSetup(null);
+    setTotpCode('');
+    setPasskeyForm(emptyPasskeyForm());
+    setRenameForm(emptyPasskeyForm());
+    setDeleteForm(emptyCredentialForm());
+    setAccountDialog(null);
+    setTotpAction(null);
+    setPasskeyAddOpen(false);
+    setRenamePasskey(null);
+    setDeletePasskey(null);
+  };
+
   const forceRelogin = (message: string) => {
+    clearCredentialDialogs();
     toast.success(message);
     logout();
     void navigate({ to: '/login' });
+  };
+
+  const closeAccountDialog = () => {
+    setAccountDialog(null);
+    setUsernameForm(emptyUsernameForm());
+    setPasswordForm(emptyPasswordForm());
+  };
+
+  const closeTOTPAction = () => {
+    setTotpAction(null);
+    setTotpForm(emptyCredentialForm());
+  };
+
+  const closeTOTPSetup = () => {
+    setTotpSetup(null);
+    setTotpCode('');
+  };
+
+  const closePasskeyAdd = () => {
+    setPasskeyAddOpen(false);
+    setPasskeyForm(emptyPasskeyForm());
+  };
+
+  const closeRenamePasskey = () => {
+    setRenamePasskey(null);
+    setRenameForm(emptyPasskeyForm());
+  };
+
+  const closeDeletePasskey = () => {
+    setDeletePasskey(null);
+    setDeleteForm(emptyCredentialForm());
   };
 
   const currentUser = data?.user;
@@ -107,7 +158,7 @@ function AdminSecurityPage() {
         forceRelogin(t('admin.securityReloginRequired'));
         return;
       }
-      setAccountDialog(null);
+      closeAccountDialog();
     } catch (error) {
       showSecurityError(error);
     }
@@ -125,7 +176,7 @@ function AdminSecurityPage() {
         forceRelogin(t('admin.securityReloginRequired'));
         return;
       }
-      setAccountDialog(null);
+      closeAccountDialog();
     } catch (error) {
       showSecurityError(error);
     }
@@ -139,7 +190,7 @@ function AdminSecurityPage() {
         mfa_code: totpForm.mfaCode || undefined,
       });
       setTotpSetup(setup);
-      setTotpAction(null);
+      closeTOTPAction();
     } catch (error) {
       showSecurityError(error);
     }
@@ -153,8 +204,8 @@ function AdminSecurityPage() {
         code: totpCode,
       });
       setRecoveryCodes(resp.recovery_codes);
-      setTotpSetup(null);
-      setTotpCode('');
+      closeTOTPSetup();
+      setTotpForm(emptyCredentialForm());
     } catch (error) {
       showSecurityError(error);
     }
@@ -170,7 +221,7 @@ function AdminSecurityPage() {
         forceRelogin(t('admin.securityReloginRequired'));
         return;
       }
-      setTotpAction(null);
+      closeTOTPAction();
     } catch (error) {
       showSecurityError(error);
     }
@@ -183,7 +234,7 @@ function AdminSecurityPage() {
         mfa_code: totpForm.mfaCode || undefined,
       });
       setRecoveryCodes(resp.recovery_codes);
-      setTotpAction(null);
+      closeTOTPAction();
     } catch (error) {
       showSecurityError(error);
     }
@@ -216,8 +267,7 @@ function AdminSecurityPage() {
         forceRelogin(t('admin.securityReloginRequired'));
         return;
       }
-      setPasskeyAddOpen(false);
-      setPasskeyForm({ ...emptyCredentialForm, name: '' });
+      closePasskeyAdd();
     } catch (error) {
       showSecurityError(error);
     }
@@ -232,8 +282,7 @@ function AdminSecurityPage() {
         mfa_code: renameForm.mfaCode || undefined,
         name: renameForm.name,
       });
-      setRenamePasskey(null);
-      setRenameForm({ ...emptyCredentialForm, name: '' });
+      closeRenamePasskey();
       toast.success(t('admin.passkeyRenamed'));
     } catch (error) {
       showSecurityError(error);
@@ -248,7 +297,11 @@ function AdminSecurityPage() {
         current_password: deleteForm.currentPassword,
         mfa_code: deleteForm.mfaCode || undefined,
       });
-      if (resp.requires_relogin) forceRelogin(t('admin.securityReloginRequired'));
+      if (resp.requires_relogin) {
+        forceRelogin(t('admin.securityReloginRequired'));
+        return;
+      }
+      closeDeletePasskey();
     } catch (error) {
       showSecurityError(error);
     }
@@ -271,11 +324,11 @@ function AdminSecurityPage() {
           <AccountPasswordSection
             currentUser={currentUser}
             onEditUsername={() => {
-              setUsernameForm({ ...emptyCredentialForm, newUsername: currentUser.username });
+              setUsernameForm(emptyUsernameForm(currentUser.username));
               setAccountDialog('username');
             }}
             onEditPassword={() => {
-              setPasswordForm({ ...emptyCredentialForm, newPassword: '' });
+              setPasswordForm(emptyPasswordForm());
               setAccountDialog('password');
             }}
           />
@@ -286,15 +339,15 @@ function AdminSecurityPage() {
             enabled={data.totp_enabled}
             recoveryCodesRemaining={data.recovery_codes_remaining}
             onEnableRequest={() => {
-              setTotpForm(emptyCredentialForm);
+              setTotpForm(emptyCredentialForm());
               setTotpAction('enable');
             }}
             onRegenerateRequest={() => {
-              setTotpForm(emptyCredentialForm);
+              setTotpForm(emptyCredentialForm());
               setTotpAction('regenerate');
             }}
             onDisableRequest={() => {
-              setTotpForm(emptyCredentialForm);
+              setTotpForm(emptyCredentialForm());
               setTotpAction('disable');
             }}
           />
@@ -305,16 +358,16 @@ function AdminSecurityPage() {
             passkeys={data.passkeys}
             passkeySupported={passkeySupported}
             onAddRequest={() => {
-              setPasskeyForm({ ...emptyCredentialForm, name: '' });
+              setPasskeyForm(emptyPasskeyForm());
               setPasskeyAddOpen(true);
             }}
             onRename={(passkey) => {
               setRenamePasskey(passkey);
-              setRenameForm({ ...emptyCredentialForm, name: passkey.name });
+              setRenameForm(emptyPasskeyForm(passkey.name));
             }}
             onDelete={(passkey) => {
               setDeletePasskey(passkey);
-              setDeleteForm(emptyCredentialForm);
+              setDeleteForm(emptyCredentialForm());
             }}
           />
         </TabsContent>
@@ -326,7 +379,7 @@ function AdminSecurityPage() {
         requiresMFA={requiresMFA}
         isPending={mutations.updateUsername.isPending}
         onChange={(patch) => setUsernameForm({ ...usernameForm, ...patch })}
-        onClose={() => setAccountDialog(null)}
+        onClose={closeAccountDialog}
         onSubmit={handleUsernameSubmit}
       />
       <PasswordDialog
@@ -335,7 +388,7 @@ function AdminSecurityPage() {
         requiresMFA={requiresMFA}
         isPending={mutations.updatePassword.isPending}
         onChange={(patch) => setPasswordForm({ ...passwordForm, ...patch })}
-        onClose={() => setAccountDialog(null)}
+        onClose={closeAccountDialog}
         onSubmit={handlePasswordSubmit}
       />
       <TOTPActionDialog
@@ -350,12 +403,12 @@ function AdminSecurityPage() {
               : mutations.disableTOTP.isPending
         }
         onChange={(patch) => setTotpForm({ ...totpForm, ...patch })}
-        onClose={() => setTotpAction(null)}
+        onClose={closeTOTPAction}
         onBegin={beginTOTP}
         onRegenerate={regenerateRecoveryCodes}
         onDisable={disableTOTP}
       />
-      <TOTPSetupDialog setup={totpSetup} code={totpCode} onCodeChange={setTotpCode} onCancel={() => setTotpSetup(null)} onConfirm={confirmTOTP} />
+      <TOTPSetupDialog setup={totpSetup} code={totpCode} onCodeChange={setTotpCode} onCancel={closeTOTPSetup} onConfirm={confirmTOTP} />
       <RecoveryCodesDialog codes={recoveryCodes} onClose={() => {
         setRecoveryCodes([]);
         forceRelogin(t('admin.securityReloginRequired'));
@@ -367,14 +420,11 @@ function AdminSecurityPage() {
         passkeySupported={passkeySupported}
         isAdding={mutations.beginPasskey.isPending || mutations.finishPasskey.isPending}
         onChange={(patch) => setPasskeyForm({ ...passkeyForm, ...patch })}
-        onClose={() => {
-          setPasskeyAddOpen(false);
-          setPasskeyForm({ ...emptyCredentialForm, name: '' });
-        }}
+        onClose={closePasskeyAdd}
         onSubmit={addPasskey}
       />
-      <PasskeyNameDialog passkey={renamePasskey} form={renameForm} requiresMFA={requiresMFA} onChange={(patch) => setRenameForm({ ...renameForm, ...patch })} onClose={() => setRenamePasskey(null)} onSubmit={submitRenamePasskey} />
-      <PasskeyDeleteDialog passkey={deletePasskey} form={deleteForm} requiresMFA={requiresMFA} onChange={(patch) => setDeleteForm({ ...deleteForm, ...patch })} onClose={() => setDeletePasskey(null)} onSubmit={submitDeletePasskey} />
+      <PasskeyNameDialog passkey={renamePasskey} form={renameForm} requiresMFA={requiresMFA} onChange={(patch) => setRenameForm({ ...renameForm, ...patch })} onClose={closeRenamePasskey} onSubmit={submitRenamePasskey} />
+      <PasskeyDeleteDialog passkey={deletePasskey} form={deleteForm} requiresMFA={requiresMFA} onChange={(patch) => setDeleteForm({ ...deleteForm, ...patch })} onClose={closeDeletePasskey} onSubmit={submitDeletePasskey} />
     </div>
   );
 }
@@ -680,10 +730,10 @@ function UsernameDialog({
   onSubmit,
 }: {
   open: boolean;
-  form: CredentialForm & { newUsername: string };
+  form: UsernameForm;
   requiresMFA: boolean;
   isPending: boolean;
-  onChange: (patch: Partial<CredentialForm & { newUsername: string }>) => void;
+  onChange: (patch: Partial<UsernameForm>) => void;
   onClose: () => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
@@ -733,10 +783,10 @@ function PasswordDialog({
   onSubmit,
 }: {
   open: boolean;
-  form: CredentialForm & { newPassword: string };
+  form: PasswordForm;
   requiresMFA: boolean;
   isPending: boolean;
-  onChange: (patch: Partial<CredentialForm & { newPassword: string }>) => void;
+  onChange: (patch: Partial<PasswordForm>) => void;
   onClose: () => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
@@ -788,11 +838,11 @@ function PasskeyAddDialog({
   onSubmit,
 }: {
   open: boolean;
-  form: CredentialForm & { name: string };
+  form: PasskeyForm;
   requiresMFA: boolean;
   passkeySupported: boolean;
   isAdding: boolean;
-  onChange: (patch: Partial<CredentialForm & { name: string }>) => void;
+  onChange: (patch: Partial<PasskeyForm>) => void;
   onClose: () => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
@@ -971,9 +1021,9 @@ function RecoveryCodesDialog({ codes, onClose }: { codes: string[]; onClose: () 
 
 function PasskeyNameDialog({ passkey, form, requiresMFA, onChange, onClose, onSubmit }: {
   passkey: PasskeySummary | null;
-  form: CredentialForm & { name: string };
+  form: PasskeyForm;
   requiresMFA: boolean;
-  onChange: (patch: Partial<CredentialForm & { name: string }>) => void;
+  onChange: (patch: Partial<PasskeyForm>) => void;
   onClose: () => void;
   onSubmit: () => void;
 }) {

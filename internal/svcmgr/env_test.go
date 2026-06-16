@@ -120,6 +120,31 @@ func TestWriteRawEnvRejectsForbiddenKeys(t *testing.T) {
 	}
 }
 
+func TestWriteRawEnvRejectsUnsafeKeysAndValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		values map[string]string
+	}{
+		{name: "newline", values: map[string]string{"NETSGO_KEY": "first\nNETSGO_TLS_SKIP_VERIFY=true"}},
+		{name: "carriage return", values: map[string]string{"NETSGO_SERVER": "https://panel.example.com\r"}},
+		{name: "nul", values: map[string]string{"NETSGO_KEY": "abc\x00def"}},
+		{name: "invalid key", values: map[string]string{"NETSGO KEY": "value"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "client.env")
+			err := writeEnvFile(path, tt.values)
+			if err == nil {
+				t.Fatal("writeEnvFile() error = nil, want unsafe env rejection")
+			}
+			if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+				t.Fatalf("unsafe env write should not create %s, stat error = %v", path, statErr)
+			}
+		})
+	}
+}
+
 func stubLookupSystemUser(t *testing.T, gid string) {
 	t.Helper()
 	original := lookupSystemUser

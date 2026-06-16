@@ -164,6 +164,125 @@ func TestAPI_LoginRequiresMFAWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestAPI_MFAVerifyRateLimitsAfterTenInvalidCodes(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+	s.auth.mfaLimiter = newMFAAttemptLimiter(time.Minute, 10, 5*time.Minute)
+
+	user, err := s.auth.adminStore.ValidateAdminPassword("admin", "password123")
+	if err != nil {
+		t.Fatalf("ValidateAdminPassword failed: %v", err)
+	}
+	if _, err := s.auth.adminStore.db.Exec(`UPDATE admin_users SET totp_enabled = 1, totp_secret = ? WHERE id = ?`, "JBSWY3DPEHPK3PXP", user.ID); err != nil {
+		t.Fatalf("enable totp: %v", err)
+	}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader([]byte(`{"username":"admin","password":"password123"}`)))
+	loginReq.RemoteAddr = "203.0.113.10:1000"
+	loginResp := httptest.NewRecorder()
+	s.handleAPILogin(loginResp, loginReq)
+	if loginResp.Code != http.StatusOK {
+		t.Fatalf("login should begin MFA challenge, got %d: %s", loginResp.Code, loginResp.Body.String())
+	}
+	var loginBody struct {
+		MFAToken string `json:"mfa_token"`
+	}
+	if err := json.Unmarshal(loginResp.Body.Bytes(), &loginBody); err != nil {
+		t.Fatalf("decode login body: %v", err)
+	}
+	if loginBody.MFAToken == "" {
+		t.Fatal("mfa_token should be present")
+	}
+
+	body := []byte(`{"mfa_token":"` + loginBody.MFAToken + `","code":"000000"}`)
+	for i := 1; i <= 10; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/mfa/verify", bytes.NewReader(body))
+		req.RemoteAddr = "203.0.113.10:1000"
+		w := httptest.NewRecorder()
+		s.handleAPIMFAVerify(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: want 401, got %d body=%s", i, w.Code, w.Body.String())
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/mfa/verify", bytes.NewReader(body))
+	req.RemoteAddr = "203.0.113.10:1000"
+	w := httptest.NewRecorder()
+	s.handleAPIMFAVerify(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("attempt 11: want 429, got %d body=%s", w.Code, w.Body.String())
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Fatal("rate limited MFA response should include Retry-After")
+	}
+	var payload apiErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode 429 body: %v", err)
+	}
+	if payload.Code != "mfa_attempts_exceeded" {
+		t.Fatalf("want mfa_attempts_exceeded, got %#v", payload)
+	}
+}
+
+func TestAPI_MFAVerifyRateLimitSurvivesChallengeRotation(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+	s.auth.mfaLimiter = newMFAAttemptLimiter(time.Minute, 10, 5*time.Minute)
+
+	user, err := s.auth.adminStore.ValidateAdminPassword("admin", "password123")
+	if err != nil {
+		t.Fatalf("ValidateAdminPassword failed: %v", err)
+	}
+	if _, err := s.auth.adminStore.db.Exec(`UPDATE admin_users SET totp_enabled = 1, totp_secret = ? WHERE id = ?`, "JBSWY3DPEHPK3PXP", user.ID); err != nil {
+		t.Fatalf("enable totp: %v", err)
+	}
+
+	loginFromIP := func() string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader([]byte(`{"username":"admin","password":"password123"}`)))
+		req.RemoteAddr = "203.0.113.10:1000"
+		w := httptest.NewRecorder()
+		s.handleAPILogin(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("login should begin MFA challenge, got %d: %s", w.Code, w.Body.String())
+		}
+		var body struct {
+			MFAToken string `json:"mfa_token"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode login body: %v", err)
+		}
+		if body.MFAToken == "" {
+			t.Fatal("mfa_token should be present")
+		}
+		return body.MFAToken
+	}
+
+	firstToken := loginFromIP()
+	for i := 1; i <= 10; i++ {
+		body := []byte(`{"mfa_token":"` + firstToken + `","code":"000000"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/mfa/verify", bytes.NewReader(body))
+		req.RemoteAddr = "203.0.113.10:1000"
+		w := httptest.NewRecorder()
+		s.handleAPIMFAVerify(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: want 401, got %d body=%s", i, w.Code, w.Body.String())
+		}
+	}
+
+	secondToken := loginFromIP()
+	if secondToken == firstToken {
+		t.Fatal("rotated MFA challenge should issue a new token")
+	}
+	body := []byte(`{"mfa_token":"` + secondToken + `","code":"000000"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/mfa/verify", bytes.NewReader(body))
+	req.RemoteAddr = "203.0.113.10:1000"
+	w := httptest.NewRecorder()
+	s.handleAPIMFAVerify(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("rotated challenge attempt: want 429, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestAPI_AdminSecurityResponse(t *testing.T) {
 	_, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()

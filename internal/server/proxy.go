@@ -95,6 +95,9 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 	if req.RemotePort == 80 || req.RemotePort == 443 {
 		return newProxyRequestValidationError(fmt.Errorf("TCP/UDP tunnels cannot use reserved port %d", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusBadRequest)
 	}
+	if err := validateServerBindIP(req.BindIP); err != nil {
+		return newProxyRequestValidationError(err, "bind_ip", protocol.TunnelMutationErrorCodeInvalidBindIP, http.StatusBadRequest)
+	}
 	if listenPort := serverListenPort(s); listenPort > 0 && req.RemotePort == listenPort {
 		return newProxyRequestValidationError(fmt.Errorf("port %d conflicts with the NetsGo management service listen port", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
@@ -109,7 +112,7 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 		}
 	}
 
-	conflicts, err := findTCPUDPPortConflictNames(req.RemotePort, excludeName, excludeClientID, s)
+	conflicts, err := findTCPUDPPortConflictNames(req.RemotePort, req.BindIP, excludeName, excludeClientID, s)
 	if err != nil {
 		return newProxyRequestValidationError(fmt.Errorf("failed to check port conflicts: %w", err), protocol.TunnelMutationFieldRemotePort, "", http.StatusServiceUnavailable)
 	}
@@ -117,6 +120,18 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 		return newProxyRequestValidationError(fmt.Errorf("port %d is already in use by another tunnel", req.RemotePort), protocol.TunnelMutationFieldRemotePort, "", http.StatusConflict)
 	}
 
+	return nil
+}
+
+func validateServerBindIP(bindIP string) error {
+	bindIP = strings.TrimSpace(bindIP)
+	if bindIP == "" {
+		return nil
+	}
+	ip := net.ParseIP(bindIP)
+	if ip == nil || ip.To4() == nil {
+		return fmt.Errorf("bind_ip must be a valid IPv4 address")
+	}
 	return nil
 }
 
@@ -142,14 +157,15 @@ func serverListenPort(s *Server) int {
 	return 0
 }
 
-func findTCPUDPPortConflictNames(port int, excludeName, excludeClientID string, server *Server) ([]string, error) {
+func findTCPUDPPortConflictNames(port int, bindIP, excludeName, excludeClientID string, server *Server) ([]string, error) {
 	if port <= 0 || server == nil {
 		return []string{}, nil
 	}
 
+	bindIP = normalizeServerBindIP(bindIP)
 	conflicts := []string{}
 	seen := map[string]struct{}{}
-	matchAndAppend := func(clientID, name, tunnelType string, remotePort int) {
+	matchAndAppend := func(clientID, name, tunnelType string, remotePort int, tunnelBindIP string) {
 		if tunnelType != protocol.ProxyTypeTCP && tunnelType != protocol.ProxyTypeUDP {
 			return
 		}
@@ -157,6 +173,9 @@ func findTCPUDPPortConflictNames(port int, excludeName, excludeClientID string, 
 			return
 		}
 		if remotePort != port {
+			return
+		}
+		if !serverBindIPsConflict(bindIP, tunnelBindIP) {
 			return
 		}
 
@@ -170,7 +189,7 @@ func findTCPUDPPortConflictNames(port int, excludeName, excludeClientID string, 
 
 	server.RangeClients(func(clientID string, client *ClientConn) bool {
 		client.RangeProxies(func(name string, tunnel *ProxyTunnel) bool {
-			matchAndAppend(clientID, name, tunnel.Config.Type, tunnel.Config.RemotePort)
+			matchAndAppend(clientID, name, tunnel.Config.Type, tunnel.Config.RemotePort, tunnel.Config.BindIP)
 			return true
 		})
 		return true
@@ -182,11 +201,25 @@ func findTCPUDPPortConflictNames(port int, excludeName, excludeClientID string, 
 			return nil, fmt.Errorf("load persisted tunnels for proxy conflict detection: %w", err)
 		}
 		for _, tunnel := range allTunnels {
-			matchAndAppend(tunnel.ClientID, tunnel.Name, tunnel.Type, tunnel.RemotePort)
+			matchAndAppend(tunnel.ClientID, tunnel.Name, tunnel.Type, tunnel.RemotePort, tunnel.BindIP)
 		}
 	}
 
 	return conflicts, nil
+}
+
+func serverListenAddress(bindIP string, port int) string {
+	host := normalizeServerBindIP(bindIP)
+	if host == "0.0.0.0" {
+		host = ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func serverBindIPsConflict(a, b string) bool {
+	a = normalizeServerBindIP(a)
+	b = normalizeServerBindIP(b)
+	return a == "0.0.0.0" || b == "0.0.0.0" || a == b
 }
 
 func (s *Server) ensureClientDataReady(client *ClientConn) error {
@@ -205,7 +238,11 @@ func (s *Server) prepareProxyTunnel(client *ClientConn, req protocol.ProxyNewReq
 
 func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protocol.ProxyNewRequest, desiredState, runtimeState, excludeName, excludeClientID string, createdAt time.Time) (*ProxyTunnel, error) {
 	if req.ID == "" {
-		req.ID = generateUUID()
+		id, err := generateUUIDE()
+		if err != nil {
+			return nil, err
+		}
+		req.ID = id
 	}
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
@@ -237,6 +274,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 			LocalIP:           req.LocalIP,
 			LocalPort:         req.LocalPort,
 			RemotePort:        req.RemotePort,
+			BindIP:            normalizeServerBindIP(req.BindIP),
 			Domain:            req.Domain,
 			ClientID:          client.ID,
 			BandwidthSettings: req.BandwidthSettings,
@@ -293,10 +331,10 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 		return nil
 	}
 
-	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
+	addr := serverListenAddress(tunnel.Config.BindIP, tunnel.Config.RemotePort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to listen on port %d: %w", tunnel.Config.RemotePort, err)
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
 	actualPort := ln.Addr().(*net.TCPAddr).Port
@@ -312,6 +350,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	tunnel.done = make(chan struct{})
 	tunnel.once = sync.Once{}
 	tunnel.Config.RemotePort = actualPort
+	bindIP := normalizeServerBindIP(tunnel.Config.BindIP)
 	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 	markTunnelServerRelayActive(tunnel, client.ID, time.Now())
 	listener := tunnel.Listener
@@ -321,8 +360,8 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	localPort := tunnel.Config.LocalPort
 	client.proxyMu.Unlock()
 
-	log.Printf("🚇 proxy tunnel created: %s [:%d → %s:%d] Client [%s]",
-		proxyName, actualPort, localIP, localPort, client.ID)
+	log.Printf("🚇 proxy tunnel created: %s [%s:%d → %s:%d] Client [%s]",
+		proxyName, bindIP, actualPort, localIP, localPort, client.ID)
 
 	go s.proxyAcceptLoop(client, tunnel, listener, done)
 	return nil

@@ -90,8 +90,13 @@ func (s *Server) preflightClientIngress(req tunnelCreateRequestAPI, existingID s
 		}
 	}
 
+	requestID, err := generateUUIDE()
+	if err != nil {
+		return err
+	}
+
 	resp, err := s.waitForClientTunnelPreflight(client, protocol.TunnelPreflightRequest{
-		RequestID: generateUUID(),
+		RequestID: requestID,
 		TunnelID:  existingID,
 		Revision:  revision,
 		Role:      protocol.DataStreamRoleIngress,

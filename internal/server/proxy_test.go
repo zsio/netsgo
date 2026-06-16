@@ -75,6 +75,80 @@ func TestStartProxy_Success(t *testing.T) {
 	_ = sConn.Close()
 }
 
+func TestServerListenAddressPreservesWildcardHost(t *testing.T) {
+	tests := []struct {
+		name   string
+		bindIP string
+		want   string
+	}{
+		{name: "empty", bindIP: "", want: ":1234"},
+		{name: "wildcard", bindIP: "0.0.0.0", want: ":1234"},
+		{name: "trimmed wildcard", bindIP: " 0.0.0.0 ", want: ":1234"},
+		{name: "loopback", bindIP: "127.0.0.1", want: "127.0.0.1:1234"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := serverListenAddress(tt.bindIP, 1234); got != tt.want {
+				t.Fatalf("serverListenAddress(%q, 1234) = %q, want %q", tt.bindIP, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStartProxy_DefaultBindIPListensWildcard(t *testing.T) {
+	s := New(0)
+	client := &ClientConn{ID: "proxy-bind-default", proxies: make(map[string]*ProxyTunnel)}
+	s.clients.Store(client.ID, client)
+	cConn, sConn := net.Pipe()
+	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
+	client.dataSession = sSession
+	t.Cleanup(func() {
+		s.StopAllProxies(client)
+		_ = cConn.Close()
+		_ = sConn.Close()
+	})
+
+	req := protocol.ProxyNewRequest{Name: "wildcard", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 8080, RemotePort: reserveTCPPort(t)}
+	if err := s.StartProxy(client, req); err != nil {
+		t.Fatalf("StartProxy failed: %v", err)
+	}
+	client.proxyMu.RLock()
+	addr := client.proxies[req.Name].Listener.Addr().(*net.TCPAddr)
+	client.proxyMu.RUnlock()
+	if !addr.IP.IsUnspecified() {
+		t.Fatalf("omitted bind_ip should listen wildcard, got %s", addr.IP)
+	}
+}
+
+func TestStartProxy_ExplicitLoopbackBindIPUsesLoopback(t *testing.T) {
+	s := New(0)
+	client := &ClientConn{ID: "proxy-bind-loopback", proxies: make(map[string]*ProxyTunnel)}
+	s.clients.Store(client.ID, client)
+	cConn, sConn := net.Pipe()
+	sSession, _ := mux.NewServerSession(sConn, mux.DefaultConfig())
+	client.dataSession = sSession
+	t.Cleanup(func() {
+		s.StopAllProxies(client)
+		_ = cConn.Close()
+		_ = sConn.Close()
+	})
+
+	req := protocol.ProxyNewRequest{Name: "loopback", Type: protocol.ProxyTypeTCP, BindIP: "127.0.0.1", LocalIP: "127.0.0.1", LocalPort: 8080, RemotePort: reserveTCPPort(t)}
+	if err := s.StartProxy(client, req); err != nil {
+		t.Fatalf("StartProxy failed: %v", err)
+	}
+	client.proxyMu.RLock()
+	tunnel := client.proxies[req.Name]
+	addr := tunnel.Listener.Addr().(*net.TCPAddr)
+	client.proxyMu.RUnlock()
+	if !addr.IP.IsLoopback() {
+		t.Fatalf("explicit 127.0.0.1 bind should listen loopback, got %s", addr.IP)
+	}
+	if tunnel.Config.BindIP != "127.0.0.1" {
+		t.Fatalf("runtime config should preserve bind_ip, got %q", tunnel.Config.BindIP)
+	}
+}
+
 func TestStartProxy_NoDataChannel(t *testing.T) {
 	s := New(0)
 	clientID := "proxy-no-data"

@@ -38,7 +38,7 @@ require_linux_systemd() {
 
 require_tools() {
   log "检查依赖工具"
-  for tool in curl tar sha256sum jq awk sed sort grep head dirname rm mv mkdir mktemp chmod; do
+  for tool in curl tar sha256sum jq awk sed sort grep head dirname rm mv mkdir mktemp chmod id stat; do
     command -v "$tool" >/dev/null 2>&1 || die "缺少依赖: $tool"
   done
 }
@@ -179,11 +179,14 @@ download_official() {
   url="$1"
   out="$2"
   official_url_allowed "$url" || die "拒绝非官方下载 URL: $url"
+  reject_symlink_path "$out"
   tmp_out="${out}.part.$$"
   rm -f "$tmp_out"
   log "下载 $url"
   if curl -fL --progress-bar "$url" -o "$tmp_out"; then
+    reject_symlink_path "$out"
     mv "$tmp_out" "$out"
+    chmod 600 "$out" 2>/dev/null || true
     return 0
   fi
   rm -f "$tmp_out"
@@ -338,20 +341,96 @@ extract_netsgo() {
   chmod +x "$dest"
 }
 
+stat_owner_uid() {
+  stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1"
+}
+
+stat_mode_text() {
+  stat -c '%A' "$1" 2>/dev/null || stat -f '%Sp' "$1"
+}
+
+reject_symlink_path() {
+  [ ! -L "$1" ] || die "拒绝使用符号链接更新缓存路径: $1"
+}
+
 default_cache_root() {
-  printf '%s/netsgo-update-cache\n' "${TMPDIR:-/tmp}"
+  base="${TMPDIR:-/tmp}"
+  root="$(mktemp -d "$base/netsgo-update-cache.XXXXXXXXXX")" || die "无法创建私有更新缓存目录"
+  chmod 700 "$root" || die "无法保护私有更新缓存目录: $root"
+  printf '%s\n' "$root"
+}
+
+validate_cache_root() {
+  root="$1"
+  case "$root" in
+    /*) ;;
+    *) die "NETSGO_UPDATE_CACHE_DIR 必须是绝对路径: $root" ;;
+  esac
+  reject_symlink_path "$root"
+  if [ -e "$root" ] && [ ! -d "$root" ]; then
+    die "更新缓存路径不是目录: $root"
+  fi
+  if [ ! -e "$root" ]; then
+    old_umask="$(umask)"
+    umask 077
+    mkdir -p "$root" || { umask "$old_umask"; die "无法创建更新缓存目录: $root"; }
+    umask "$old_umask"
+  fi
+  reject_symlink_path "$root"
+  [ -d "$root" ] || die "更新缓存路径不是目录: $root"
+
+  owner_uid="$(stat_owner_uid "$root")" || die "无法读取更新缓存目录属主: $root"
+  current_uid="$(id -u)"
+  if [ "$owner_uid" != "$current_uid" ]; then
+    die "更新缓存目录必须归当前用户所有: $root"
+  fi
+
+  mode_text="$(stat_mode_text "$root")" || die "无法读取更新缓存目录权限: $root"
+  case "$mode_text" in
+    ?????w*|????????w*) die "更新缓存目录不得 group/world 可写: $root" ;;
+  esac
+}
+
+cache_root() {
+  if [ -n "${NETSGO_UPDATE_CACHE_DIR:-}" ]; then
+    validate_cache_root "$NETSGO_UPDATE_CACHE_DIR"
+    printf '%s\n' "$NETSGO_UPDATE_CACHE_DIR"
+    return 0
+  fi
+  default_cache_root
 }
 
 cache_dir_for() {
-  root="${NETSGO_UPDATE_CACHE_DIR:-$(default_cache_root)}"
+  if [ -n "${NETSGO_UPDATE_CACHE_DIR:-}" ]; then
+    validate_cache_root "$NETSGO_UPDATE_CACHE_DIR"
+    root="$NETSGO_UPDATE_CACHE_DIR"
+  else
+    root="$(default_cache_root)"
+  fi
   tag="$1"
   platform="$2"
   printf '%s/%s/%s\n' "$root" "$tag" "$platform"
 }
 
+ensure_cache_dir() {
+  cache_dir="$1"
+  parent="$(dirname "$cache_dir")"
+  reject_symlink_path "$parent"
+  reject_symlink_path "$cache_dir"
+  mkdir -p "$cache_dir" || die "无法创建更新缓存目录: $cache_dir"
+  reject_symlink_path "$parent"
+  reject_symlink_path "$cache_dir"
+  [ -d "$cache_dir" ] || die "更新缓存路径不是目录: $cache_dir"
+  chmod 700 "$parent" "$cache_dir" || die "无法保护更新缓存目录: $cache_dir"
+}
+
 cleanup_empty_cache_parents() {
   cache_dir="$1"
-  root="${NETSGO_UPDATE_CACHE_DIR:-$(default_cache_root)}"
+  if [ -n "${NETSGO_UPDATE_CACHE_DIR:-}" ]; then
+    root="$NETSGO_UPDATE_CACHE_DIR"
+  else
+    root="$(dirname "$(dirname "$cache_dir")")"
+  fi
   parent="$(dirname "$cache_dir")"
   if [ "$parent" != "$root" ] && [ -d "$parent" ]; then
     rmdir "$parent" 2>/dev/null || true
@@ -367,7 +446,8 @@ ensure_release_detail_cached() {
   asset="$3"
   cache_dir="$4"
   out="$cache_dir/release.json"
-  mkdir -p "$cache_dir"
+  ensure_cache_dir "$cache_dir"
+  reject_symlink_path "$out"
   if [ -s "$out" ] && validate_release_detail "$out" "$tag" "$asset" >/dev/null 2>&1; then
     log "复用已下载的 release detail: $out"
     printf '%s\n' "$out"
@@ -387,7 +467,10 @@ ensure_checksums_cached() {
   checksums="$cache_dir/checksums.txt"
   sig="$cache_dir/checksums.txt.sig"
   sshsig="$cache_dir/checksums.txt.sshsig"
-  mkdir -p "$cache_dir"
+  ensure_cache_dir "$cache_dir"
+  reject_symlink_path "$checksums"
+  reject_symlink_path "$sig"
+  reject_symlink_path "$sshsig"
   if [ -s "$checksums" ] && signature_valid "$checksums" "$sig" "$sshsig"; then
     log "复用已下载并验签的 checksums.txt"
     printf '%s\n' "$checksums"
@@ -411,7 +494,8 @@ ensure_archive_cached() {
   cache_dir="$4"
   checksums="$5"
   archive="$cache_dir/$asset"
-  mkdir -p "$cache_dir"
+  ensure_cache_dir "$cache_dir"
+  reject_symlink_path "$archive"
   if [ -s "$archive" ] && checksum_matches "$checksums" "$archive" "$asset"; then
     log "复用已下载并校验的 release archive: $archive"
     printf '%s\n' "$archive"

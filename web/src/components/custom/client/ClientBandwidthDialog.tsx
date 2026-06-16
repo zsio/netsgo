@@ -56,7 +56,7 @@ export function ClientBandwidthDialog({ client, trigger }: ClientBandwidthDialog
     setIsSaving(true);
     try {
       await api.put<ClientBandwidthSettingsResponse>(
-        `/api/clients/${client.id}/bandwidth-settings`,
+        `/api/clients/${encodeURIComponent(client.id)}/bandwidth-settings`,
         {
           ingress_bps: parsedIngressBps,
           egress_bps: parsedEgressBps,

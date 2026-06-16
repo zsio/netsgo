@@ -1,7 +1,7 @@
 package server
 
 import (
-	"encoding/json"
+	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -69,8 +69,8 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodeJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 
@@ -142,8 +142,8 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 			MaxUses     int      `json:"max_uses"`   // 0 = unlimited
 			ExpiresIn   string   `json:"expires_in"` // "1h","3h","24h","168h","" or "0" means no expiry
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid body")
+		if err := decodeJSONRequestBody(r, &req); err != nil {
+			writeJSONRequestDecodeError(w, err)
 			return
 		}
 
@@ -159,8 +159,11 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 			expiresAt = &t
 		}
 
-		// generate a random string as the raw key on the server side
-		rawKey := "sk-" + generateUUID()
+		rawKey, err := generateAPIKeySecret()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "api_key_generate_failed", "failed to generate api key")
+			return
+		}
 		key, err := s.auth.adminStore.AddAPIKey(req.Name, rawKey, req.Permissions, expiresAt)
 		if err != nil {
 			encodeJSON(w, http.StatusBadRequest, map[string]any{
@@ -199,6 +202,14 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "not allowed")
 	}
+}
+
+func generateAPIKeySecret() (string, error) {
+	raw, err := randomBytes(32)
+	if err != nil {
+		return "", err
+	}
+	return "sk-" + hex.EncodeToString(raw), nil
 }
 
 func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
@@ -277,8 +288,8 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPut:
 		var config ServerConfig
-		if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
-			writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid body")
+		if err := decodeJSONRequestBody(r, &config); err != nil {
+			writeJSONRequestDecodeError(w, err)
 			return
 		}
 

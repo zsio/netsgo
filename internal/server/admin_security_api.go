@@ -3,8 +3,10 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type authSuccessPayload struct {
@@ -49,14 +51,22 @@ func (s *Server) handleAPIMFAVerify(w http.ResponseWriter, r *http.Request) {
 		MFAToken string `json:"mfa_token"`
 		Code     string `json:"code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodeJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	challenge, err := s.auth.adminStore.GetAuthChallenge(req.MFAToken, adminAuthChallengeKindMFA)
 	if err != nil {
 		writeAPIError(w, http.StatusUnauthorized, "invalid_mfa_token", "invalid or expired mfa token")
 		return
+	}
+	limiterKey := s.mfaAttemptLimiterKey(r, challenge.UserID)
+	if s.auth.mfaLimiter != nil {
+		if allowed, retryAfter := s.auth.mfaLimiter.Allow(limiterKey, challenge.ExpiresAt); !allowed {
+			slog.Warn("MFA verification rate limited", "ip", s.clientIP(r), "module", "security")
+			writeMFARateLimitResponse(w, retryAfter)
+			return
+		}
 	}
 	user, err := s.auth.adminStore.GetAdminUserByID(challenge.UserID)
 	if err != nil {
@@ -69,6 +79,13 @@ func (s *Server) handleAPIMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
+		if s.auth.mfaLimiter != nil {
+			if locked, retryAfter := s.auth.mfaLimiter.RecordFailure(limiterKey, challenge.ExpiresAt); locked {
+				slog.Warn("MFA verification attempts exceeded", "ip", s.clientIP(r), "module", "security")
+				writeMFARateLimitResponse(w, retryAfter)
+				return
+			}
+		}
 		writeAPIError(w, http.StatusUnauthorized, "invalid_mfa_code", "invalid mfa code")
 		return
 	}
@@ -76,7 +93,23 @@ func (s *Server) handleAPIMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnauthorized, "invalid_mfa_token", "invalid or expired mfa token")
 		return
 	}
+	if s.auth.mfaLimiter != nil {
+		s.auth.mfaLimiter.Reset(limiterKey)
+	}
 	s.createAdminLoginSession(w, r, user)
+}
+
+func (s *Server) mfaAttemptLimiterKey(r *http.Request, userID string) string {
+	ip := s.clientIP(r)
+	if ip == "" {
+		ip = remoteIP(r.RemoteAddr)
+	}
+	return ip + ":" + userID
+}
+
+func writeMFARateLimitResponse(w http.ResponseWriter, retryAfter time.Duration) {
+	w.Header().Set("Retry-After", retryAfterString(retryAfter))
+	writeAPIError(w, http.StatusTooManyRequests, "mfa_attempts_exceeded", "too many mfa attempts, please try again later")
 }
 
 func (s *Server) verifyLoginMFA(user AdminUser, code string) (bool, error) {
@@ -167,8 +200,8 @@ func (s *Server) handleAPIPasskeyLoginFinish(w http.ResponseWriter, r *http.Requ
 		ChallengeID string          `json:"challenge_id"`
 		Credential  json.RawMessage `json:"credential"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodePasskeyJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	challenge, err := s.auth.adminStore.GetAuthChallenge(req.ChallengeID, adminAuthChallengeKindPasskeyLogin)
@@ -284,8 +317,8 @@ func (s *Server) handleAPIAdminSecurityUsername(w http.ResponseWriter, r *http.R
 		NewUsername     string `json:"new_username"`
 		MFACode         string `json:"mfa_code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodeJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	if _, err := s.auth.adminStore.VerifyAdminSecurityCredentials(user.ID, req.CurrentPassword, req.MFACode); err != nil {
@@ -314,8 +347,8 @@ func (s *Server) handleAPIAdminSecurityPassword(w http.ResponseWriter, r *http.R
 		NewPassword     string `json:"new_password"`
 		MFACode         string `json:"mfa_code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodeJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	if _, err := s.auth.adminStore.VerifyAdminSecurityCredentials(user.ID, req.CurrentPassword, req.MFACode); err != nil {
@@ -343,8 +376,8 @@ func (s *Server) handleAPIAdminSecurityTOTPBegin(w http.ResponseWriter, r *http.
 		CurrentPassword string `json:"current_password"`
 		MFACode         string `json:"mfa_code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodeJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	if _, err := s.auth.adminStore.VerifyAdminSecurityCredentials(user.ID, req.CurrentPassword, req.MFACode); err != nil {
@@ -377,8 +410,8 @@ func (s *Server) handleAPIAdminSecurityTOTPConfirm(w http.ResponseWriter, r *htt
 		SetupToken string `json:"setup_token"`
 		Code       string `json:"code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodeJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	codes, err := s.auth.adminStore.ConfirmTOTPSetup(user.ID, req.SetupToken, req.Code)
@@ -407,8 +440,8 @@ func (s *Server) handleAPIAdminSecurityTOTPDisable(w http.ResponseWriter, r *htt
 		CurrentPassword string `json:"current_password"`
 		MFACode         string `json:"mfa_code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && r.Body != http.NoBody {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodeOptionalJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	if _, err := s.auth.adminStore.VerifyAdminSecurityCredentials(user.ID, req.CurrentPassword, req.MFACode); err != nil {
@@ -436,8 +469,8 @@ func (s *Server) handleAPIAdminSecurityRecoveryRegenerate(w http.ResponseWriter,
 		CurrentPassword string `json:"current_password"`
 		MFACode         string `json:"mfa_code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodeJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	if _, err := s.auth.adminStore.VerifyAdminSecurityCredentials(user.ID, req.CurrentPassword, req.MFACode); err != nil {
@@ -484,8 +517,8 @@ func (s *Server) handleAPIAdminSecurityPasskeyItem(w http.ResponseWriter, r *htt
 			MFACode         string `json:"mfa_code"`
 			Name            string `json:"name"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+		if err := decodeJSONRequestBody(r, &req); err != nil {
+			writeJSONRequestDecodeError(w, err)
 			return
 		}
 		if _, err := s.auth.adminStore.VerifyAdminSecurityCredentials(user.ID, req.CurrentPassword, req.MFACode); err != nil {
@@ -502,8 +535,8 @@ func (s *Server) handleAPIAdminSecurityPasskeyItem(w http.ResponseWriter, r *htt
 			CurrentPassword string `json:"current_password"`
 			MFACode         string `json:"mfa_code"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+		if err := decodeJSONRequestBody(r, &req); err != nil {
+			writeJSONRequestDecodeError(w, err)
 			return
 		}
 		if _, err := s.auth.adminStore.VerifyAdminSecurityCredentials(user.ID, req.CurrentPassword, req.MFACode); err != nil {
@@ -535,8 +568,8 @@ func (s *Server) handleAPIAdminSecurityPasskeyBegin(w http.ResponseWriter, r *ht
 		MFACode         string `json:"mfa_code"`
 		Name            string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodeJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	if _, err := s.auth.adminStore.VerifyAdminSecurityCredentials(user.ID, req.CurrentPassword, req.MFACode); err != nil {
@@ -598,8 +631,8 @@ func (s *Server) handleAPIAdminSecurityPasskeyFinish(w http.ResponseWriter, r *h
 		ChallengeID string          `json:"challenge_id"`
 		Credential  json.RawMessage `json:"credential"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "invalid request body")
+	if err := decodePasskeyJSONRequestBody(r, &req); err != nil {
+		writeJSONRequestDecodeError(w, err)
 		return
 	}
 	challenge, err := s.auth.adminStore.GetAuthChallenge(req.ChallengeID, adminAuthChallengeKindPasskeyRegister)

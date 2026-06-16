@@ -193,10 +193,10 @@ type udpProxyRuntime struct {
 
 // bindUDPProxyRuntime opens the UDP listener and prepares detached runtime state.
 func (s *Server) bindUDPProxyRuntime(tunnel *ProxyTunnel) (*udpProxyRuntime, error) {
-	addr := fmt.Sprintf(":%d", tunnel.Config.RemotePort)
+	addr := serverListenAddress(tunnel.Config.BindIP, tunnel.Config.RemotePort)
 	packetConn, err := net.ListenPacket("udp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to listen on UDP port %d: %w", tunnel.Config.RemotePort, err)
+		return nil, fmt.Errorf("failed to listen on UDP %s: %w", addr, err)
 	}
 
 	actualPort := packetConn.LocalAddr().(*net.UDPAddr).Port
