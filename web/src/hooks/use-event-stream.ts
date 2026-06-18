@@ -24,6 +24,18 @@ import type {
 type EventStreamQueryClient = ReturnType<typeof useQueryClient>;
 type JsonObject = Record<string, unknown>;
 
+export interface EventStreamDiagnostics {
+  eventType: string;
+  action?: string;
+  clientId?: string;
+  tunnelId?: string;
+  tunnelName?: string;
+  runtimeState?: string;
+  desiredState?: string;
+  snapshotRequestId?: number;
+  tunnels?: string[];
+}
+
 const consoleSummaryFields = [
   'total_clients',
   'online_clients',
@@ -48,6 +60,7 @@ const serverStatusNumberFields = [
   'cpu_cores',
   'mem_used',
 ] as const satisfies readonly (keyof ServerStatus)[];
+let consoleSnapshotRequestSeq = 0;
 
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -194,6 +207,27 @@ function snapshotSummary(snapshot: ConsoleSnapshot): ConsoleSummary {
   return snapshot.summary ?? snapshot.server_status?.summary ?? EMPTY_CONSOLE_SUMMARY;
 }
 
+function isEventStreamDebugEnabled() {
+  try {
+    return localStorage.getItem('netsgo:debug:event-stream') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function logEventStreamDiagnostic(stage: string, diagnostic: EventStreamDiagnostics) {
+  if (!isEventStreamDebugEnabled()) {
+    return;
+  }
+  console.debug('[netsgo:event-stream]', stage, diagnostic);
+}
+
+function summarizeClientTunnelStates(clients: Client[] | undefined) {
+  return clients?.flatMap((client) =>
+    (client.proxies ?? []).map((proxy) => `${client.id}/${proxy.name}:${proxy.runtime_state}`),
+  );
+}
+
 function applyConsoleSnapshot(queryClient: EventStreamQueryClient, snapshot: ConsoleSnapshot) {
   const summary = snapshotSummary(snapshot);
   if (Array.isArray(snapshot.clients)) {
@@ -209,7 +243,15 @@ function applyConsoleSnapshot(queryClient: EventStreamQueryClient, snapshot: Con
 }
 
 async function resyncConsoleSnapshot(queryClient: EventStreamQueryClient) {
+  const snapshotRequestId = ++consoleSnapshotRequestSeq;
+  logEventStreamDiagnostic('snapshot_request_start', { eventType: 'snapshot_request', snapshotRequestId });
   const snapshot = await api.get<ConsoleSnapshot>('/api/console/snapshot');
+  logEventStreamDiagnostic('snapshot_request_apply', {
+    eventType: 'snapshot_request',
+    clientId: snapshot.clients?.[0]?.id,
+    snapshotRequestId,
+    tunnels: summarizeClientTunnelStates(snapshot.clients),
+  });
   applyConsoleSnapshot(queryClient, snapshot);
 }
 
@@ -263,11 +305,16 @@ function getTunnelChangedClientIds(event: TunnelChangedEvent) {
   ].filter((clientId): clientId is string => Boolean(clientId))));
 }
 
-function applyEvent(queryClient: EventStreamQueryClient, setStatus: (status: ConnectionStatus) => void, eventType: string, data: string) {
+export function applyEventForDiagnostics(queryClient: EventStreamQueryClient, setStatus: (status: ConnectionStatus) => void, eventType: string, data: string) {
   switch (eventType) {
     case 'snapshot': {
       const parsed = parseEventPayload(data, isConsoleSnapshot);
       if (parsed) {
+        logEventStreamDiagnostic('sse_snapshot_apply', {
+          eventType,
+          clientId: parsed.clients?.[0]?.id,
+          tunnels: summarizeClientTunnelStates(parsed.clients),
+        });
         applyConsoleSnapshot(queryClient, parsed);
       }
       return;
@@ -344,9 +391,19 @@ function applyEvent(queryClient: EventStreamQueryClient, setStatus: (status: Con
       {
         const parsed = parseEventPayload(data, isTunnelChangedEvent);
         if (!parsed) {
+          logEventStreamDiagnostic('tunnel_changed_invalid', { eventType });
           queryClient.invalidateQueries({ queryKey: ['clients'] });
           return;
         }
+        logEventStreamDiagnostic('tunnel_changed_apply', {
+          eventType,
+          action: parsed.action,
+          clientId: parsed.client_id,
+          tunnelId: parsed.tunnel.id,
+          tunnelName: parsed.tunnel.name,
+          runtimeState: parsed.tunnel.runtime_state,
+          desiredState: parsed.tunnel.desired_state,
+        });
         const relatedClientIds = getTunnelChangedClientIds(parsed);
         queryClient.setQueryData<Client[]>(['clients'], (old) =>
           old?.map((client) => {
@@ -483,7 +540,7 @@ export function useEventStream() {
             }
 
             buffer += decoder.decode(value, { stream: true });
-            buffer = parseSSE(buffer, (eventType, data) => applyEvent(queryClient, setStatus, eventType, data));
+            buffer = parseSSE(buffer, (eventType, data) => applyEventForDiagnostics(queryClient, setStatus, eventType, data));
           }
         } catch (error) {
           if (cancelled) {

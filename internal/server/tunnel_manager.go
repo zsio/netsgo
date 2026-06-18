@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"netsgo/pkg/protocol"
@@ -880,6 +881,10 @@ func (s *Server) writeControlMessage(client *ClientConn, message *protocol.Messa
 func (s *Server) emitTunnelChanged(clientID string, tunnel protocol.ProxyConfig, action string) {
 	_, clientOnline := s.loadLiveClient(clientID)
 	tunnel = proxyConfigForClientView(tunnel, clientOnline)
+	if os.Getenv("NETSGO_DEBUG_TUNNEL_EVENTS") == "1" {
+		log.Printf("🔎 tunnel_changed action=%s client_id=%s tunnel_id=%s name=%s desired=%s runtime=%s online=%v",
+			action, clientID, tunnel.ID, tunnel.Name, tunnel.DesiredState, tunnel.RuntimeState, clientOnline)
+	}
 	payload := map[string]any{
 		"client_id": clientID,
 		"action":    action,
