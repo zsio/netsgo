@@ -340,6 +340,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"004_tunnel_created_at",
 		"005_unified_tunnel_storage",
 		"006_admin_security",
+		"007_socks5_endpoint_types",
 	}
 	if got := appliedMigrationNames(t, db); !reflect.DeepEqual(got, wantMigrationNames) {
 		t.Fatalf("applied migrations = %#v, want %#v", got, wantMigrationNames)
@@ -375,6 +376,7 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"004_tunnel_created_at",
 		"005_unified_tunnel_storage",
 		"006_admin_security",
+		"007_socks5_endpoint_types",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -531,8 +533,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations failed: %v", err)
 	}
-	if count != 6 {
-		t.Fatalf("schema_migrations count = %d, want 6", count)
+	if count != 7 {
+		t.Fatalf("schema_migrations count = %d, want 7", count)
 	}
 }
 

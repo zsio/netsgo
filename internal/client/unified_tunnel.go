@@ -255,7 +255,7 @@ func (c *Client) handleTunnelPreflight(req protocol.TunnelPreflightRequest) prot
 	}
 	addr := net.JoinHostPort(cfg.BindIP, fmt.Sprintf("%d", cfg.Port))
 	switch req.Ingress.Type {
-	case protocol.IngressTypeTCPListen:
+	case protocol.IngressTypeTCPListen, protocol.IngressTypeSOCKS5Listen:
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			resp.Accepted = false
@@ -297,6 +297,16 @@ func (c *Client) handleTunnelProvision(rt *sessionRuntime, req protocol.TunnelPr
 
 	switch req.Role {
 	case protocol.DataStreamRoleTarget:
+		if req.Spec.Target.Type == protocol.TargetTypeSOCKS5ConnectHandler {
+			targetRuntime, err := newClientSOCKS5TargetRuntime(req)
+			if err != nil {
+				ack.Accepted = false
+				ack.Message = err.Error()
+				return ack
+			}
+			c.socks5Targets.Store(req.TunnelID, targetRuntime)
+			return ack
+		}
 		proxyReq, err := proxyRequestFromTunnelSpec(req.Spec)
 		if err != nil {
 			ack.Accepted = false
@@ -330,7 +340,19 @@ func (c *Client) handleTunnelUnprovision(req protocol.TunnelUnprovisionRequest) 
 	}
 
 	if req.Role == protocol.DataStreamRoleTarget || req.Role == "" {
+		c.deleteSOCKS5TargetByTunnelUnprovision(req)
 		c.deleteProxyByTunnelUnprovision(req)
+	}
+}
+
+func (c *Client) deleteSOCKS5TargetByTunnelUnprovision(req protocol.TunnelUnprovisionRequest) {
+	if req.TunnelID == "" {
+		return
+	}
+	if value, ok := c.socks5Targets.Load(req.TunnelID); ok {
+		if target, ok := value.(clientSOCKS5TargetRuntime); ok && tunnelUnprovisionCoversRevision(req.Revision, target.revision) {
+			c.socks5Targets.CompareAndDelete(req.TunnelID, value)
+		}
 	}
 }
 
@@ -403,6 +425,12 @@ func (c *Client) startIngressTunnelRuntime(rt *sessionRuntime, req protocol.Tunn
 			return fmt.Errorf("listen udp %s: %w", addr, err)
 		}
 		runtime.packetConn = conn
+	case protocol.IngressTypeSOCKS5Listen:
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("listen %s: %w", addr, err)
+		}
+		runtime.listener = ln
 	default:
 		return fmt.Errorf("unsupported ingress type %s", req.Spec.Ingress.Type)
 	}
@@ -418,6 +446,8 @@ func (c *Client) startIngressTunnelRuntime(rt *sessionRuntime, req protocol.Tunn
 		runtime.run(func() { c.acceptIngressTCP(rt, req, runtime) })
 	case protocol.IngressTypeUDPListen:
 		runtime.run(func() { c.acceptIngressUDP(rt, req, runtime) })
+	case protocol.IngressTypeSOCKS5Listen:
+		runtime.run(func() { c.acceptIngressSOCKS5(rt, req, runtime) })
 	}
 	return nil
 }

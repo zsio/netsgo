@@ -263,6 +263,10 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 		return err
 	}
 
+	if isSOCKS5ServerExpose(tunnel.Config) {
+		return s.activatePreparedSOCKS5ServerExposeTunnel(client, tunnel)
+	}
+
 	if tunnel.Config.Type == protocol.ProxyTypeHTTP {
 		client.proxyMu.Lock()
 		current, exists := client.proxies[name]

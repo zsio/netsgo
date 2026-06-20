@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"netsgo/internal/socks5wire"
 	"netsgo/pkg/protocol"
 )
 
@@ -314,6 +315,113 @@ func TestUnifiedServerExposeProvisionAndDataHeaderUseStoredRevision(t *testing.T
 	}
 	if header.SourceRole != protocol.DataStreamRoleServer || header.TargetRole != protocol.DataStreamRoleTarget || header.Transport != protocol.ActualTransportServerRelay {
 		t.Fatalf("data stream route mismatch: %+v", header)
+	}
+	select {
+	case result := <-openCh:
+		if result.err != nil {
+			t.Fatalf("open stream: %v", result.err)
+		}
+		mustClose(t, result.stream)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for open stream")
+	}
+}
+
+func TestUnifiedServerExposeSOCKS5DataHeaderCarriesDynamicTarget(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+
+	stored := StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			ID:   "server-expose-socks5-id",
+			Name: "server-expose-socks5",
+			Type: protocol.ProxyTypeTCP,
+		},
+		ClientID:        "target-client",
+		OwnerClientID:   "target-client",
+		Binding:         TunnelBindingClientID,
+		Revision:        11,
+		Topology:        TunnelTopologyServerExpose,
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateOffline,
+		TransportPolicy: protocol.TransportPolicyServerRelayOnly,
+		ActualTransport: protocol.ActualTransportUnknown,
+		P2P:             P2PState{State: TunnelP2PStateIdle},
+		Ingress: EndpointSpec{
+			Location: protocol.EndpointLocationServer,
+			Type:     protocol.IngressTypeSOCKS5Listen,
+			Config: mustRawJSON(protocol.SOCKS5ListenConfig{
+				BindIP:             "127.0.0.1",
+				Port:               reserveTCPPort(t),
+				AllowedSourceCIDRs: []string{"127.0.0.0/8"},
+				Auth:               protocol.SOCKS5AuthConfig{Type: protocol.SOCKS5AuthTypeNone},
+			}),
+		},
+		Target: EndpointSpec{
+			Location: protocol.EndpointLocationClient,
+			ClientID: "target-client",
+			Type:     protocol.TargetTypeSOCKS5ConnectHandler,
+			Config: mustRawJSON(protocol.SOCKS5ConnectHandlerConfig{
+				AllowedTargetCIDRs: []string{"0.0.0.0/0", "::/0"},
+				DialTimeoutSeconds: 5,
+			}),
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := stored.normalize(); err != nil {
+		t.Fatalf("normalize stored tunnel: %v", err)
+	}
+
+	clientSession, serverSession := newTestClientRelayDataSession(t)
+	target := &ClientConn{
+		ID:          stored.Target.ClientID,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(target.ID, target)
+	tunnel := &ProxyTunnel{
+		Config: storedTunnelToProxyConfig(stored),
+		limits: newDirectionalBandwidthRuntime(stored.BandwidthSettings, realBandwidthClock{}),
+		done:   make(chan struct{}),
+	}
+	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+	tunnel.runtime.Revision = uint64(stored.Revision)
+	initializeTunnelRuntimeFromState(tunnel, target.ID, time.Now())
+	target.proxies[stored.Name] = tunnel
+
+	request := socks5wire.ConnectRequest{
+		Host:         "example.com",
+		Port:         443,
+		AddrType:     protocol.SOCKS5AddrTypeDomain,
+		OriginalHost: "example.com",
+	}
+	type openResult struct {
+		stream net.Conn
+		err    error
+	}
+	openCh := make(chan openResult, 1)
+	go func() {
+		stream, err := s.openSOCKS5StreamToClient(target, tunnel, request)
+		openCh <- openResult{stream: stream, err: err}
+	}()
+
+	clientStream, err := clientSession.AcceptStream()
+	if err != nil {
+		t.Fatalf("accept client stream: %v", err)
+	}
+	defer mustClose(t, clientStream)
+	header, err := protocol.DecodeDataStreamHeader(clientStream)
+	if err != nil {
+		t.Fatalf("decode data stream header: %v", err)
+	}
+	if header.TunnelID != stored.ID || header.Revision != stored.Revision {
+		t.Fatalf("data stream header should use stored identity, got %+v", header)
+	}
+	if header.TargetHost != request.Host || header.TargetPort != request.Port || header.TargetAddrType != request.AddrType || header.OriginalHost != request.OriginalHost {
+		t.Fatalf("SOCKS5 dynamic target mismatch: got %+v request=%+v", header, request)
 	}
 	select {
 	case result := <-openCh:

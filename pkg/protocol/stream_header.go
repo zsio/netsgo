@@ -40,6 +40,10 @@ type DataStreamHeader struct {
 	Transport        string `json:"transport"`
 	OpenToken        string `json:"open_token,omitempty"`
 	ServerAuthorized bool   `json:"server_authorized,omitempty"`
+	TargetHost       string `json:"target_host,omitempty"`
+	TargetPort       int    `json:"target_port,omitempty"`
+	TargetAddrType   string `json:"target_addr_type,omitempty"`
+	OriginalHost     string `json:"original_host,omitempty"`
 }
 
 func NewDataStreamID() (string, error) {
@@ -171,6 +175,9 @@ func ValidateDataStreamHeader(header DataStreamHeader) error {
 		{"direction", header.Direction, DataStreamHeaderMaxStringLen},
 		{"transport", header.Transport, DataStreamHeaderMaxStringLen},
 		{"open_token", header.OpenToken, DataStreamHeaderMaxTokenLen},
+		{"target_host", header.TargetHost, DataStreamHeaderMaxStringLen},
+		{"target_addr_type", header.TargetAddrType, DataStreamHeaderMaxStringLen},
+		{"original_host", header.OriginalHost, DataStreamHeaderMaxStringLen},
 	}
 	for _, field := range strings {
 		if len(field.value) > field.limit {
@@ -196,6 +203,12 @@ func ValidateDataStreamHeader(header DataStreamHeader) error {
 		if header.TargetRole != DataStreamRoleTarget {
 			return fmt.Errorf("data stream header target_role %q is invalid for direction %q", header.TargetRole, header.Direction)
 		}
+	}
+	if header.TargetPort < 0 || header.TargetPort > 65535 {
+		return fmt.Errorf("data stream header target_port must be in range 0-65535")
+	}
+	if header.TargetAddrType != "" && header.TargetAddrType != SOCKS5AddrTypeIPv4 && header.TargetAddrType != SOCKS5AddrTypeDomain && header.TargetAddrType != SOCKS5AddrTypeIPv6 {
+		return fmt.Errorf("unsupported data stream target_addr_type %q", header.TargetAddrType)
 	}
 	return nil
 }

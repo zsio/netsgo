@@ -480,13 +480,15 @@ TunnelProvisionRequest.Spec -> proxyRequestFromTunnelSpec -> ProxyNewRequest
 本次推荐方向：
 
 1. 继续使用现有 unified `TunnelProvisionRequest` 下发 `TunnelSpec`；
-2. 修改 client target role 处理逻辑，不再把所有 target 都强制转换成 `ProxyNewRequest`；
-3. 引入新的 client 内部 target runtime config，或直接保存经过验证的 `TunnelSpec`；
-4. legacy `ProxyProvisionRequest = ProxyNewRequest` 仅保留给旧 `MsgTypeProxyProvision` 路径，不再作为 unified tunnel 的 canonical provisioning schema。
+2. 将 `TunnelProvisionRequest.Spec` 明确为 v2/unified provisioning 的 canonical schema；
+3. 修改 client unified tunnel 处理逻辑，不再把所有 role/endpoint 都强制降级为 `ProxyNewRequest`；
+4. 对 SOCKS5 ingress/target 从 `TunnelSpec` 构造 endpoint-specific runtime config，或直接保存经过验证的 `TunnelSpec`；
+5. legacy `ProxyProvisionRequest = ProxyNewRequest` 仅保留给旧 `MsgTypeProxyProvision` wire path，不再作为 unified tunnel 的 canonical provisioning schema；
+6. `ProxyNewRequest` 本期不得为了 SOCKS5 增加动态 target、target policy、auth 或 access policy 字段。
 
 不建议新增一个与 `TunnelSpec` 平行的 `ProxyProvisionPayload` 协议消息，除非后续要专门清理 legacy v1 provisioning；否则会增加第三套表达。该独立治理项记录在 [`docs/issue/proxy-provision-payload-split.md`](./issue/proxy-provision-payload-split.md)。
 
-本次必须解决的是：server -> client provisioning 能完整表达 SOCKS5 ingress config、target config 和 access policy。彻底清理 legacy `ProxyNewRequest` 的所有历史用途可以后续单独做，但不能因此让 SOCKS5 继续依赖 `local_ip/local_port` 语义。
+本次必须解决的是：server -> client provisioning 能完整表达 SOCKS5 ingress config、target config 和 access policy，且 SOCKS5 runtime 不依赖 `ProxyNewRequest` / `local_ip` / `local_port` 语义。彻底清理 legacy `ProxyNewRequest` 的所有历史用途可以后续单独做，但本次必须先切断 unified SOCKS5 对旧 flat 模型的依赖，并把 `ProxyNewRequest` 的剩余用途限定为 legacy-only。
 
 ### 11.1 最低可接受 payload 能力
 

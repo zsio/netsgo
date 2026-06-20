@@ -66,10 +66,11 @@ export interface Client {
 // --- Tunnel / Proxy ---
 
 export type ProxyType = "tcp" | "udp" | "http";
+export type TunnelFormType = ProxyType | "socks5";
 export type TunnelTopology = "server_expose" | "client_to_client";
 export type EndpointLocation = "server" | "client";
-export type IngressEndpointType = "tcp_listen" | "udp_listen" | "http_host";
-export type TargetEndpointType = "tcp_service" | "udp_service";
+export type IngressEndpointType = "tcp_listen" | "udp_listen" | "http_host" | "socks5_listen";
+export type TargetEndpointType = "tcp_service" | "udp_service" | "socks5_connect_handler";
 export type EndpointType = IngressEndpointType | TargetEndpointType;
 export type TransportPolicy = "server_relay_only" | "direct_preferred" | "direct_only";
 export type ActualTransport = "unknown" | "server_relay" | "peer_direct" | "turn_relay";
@@ -109,6 +110,27 @@ export interface TcpServiceConfig {
 
 export type UdpServiceConfig = TcpServiceConfig;
 
+export interface Socks5AuthConfig {
+  type: "none" | "username_password";
+  username?: string;
+  password?: string;
+  password_hash?: string;
+}
+
+export interface Socks5ListenConfig {
+  bind_ip: string;
+  port: number;
+  allowed_source_cidrs: string[];
+  auth: Socks5AuthConfig;
+}
+
+export interface Socks5ConnectHandlerConfig {
+  allowed_target_cidrs: string[];
+  allowed_target_hosts: string[];
+  allowed_target_ports: number[];
+  dial_timeout_seconds: number;
+}
+
 export type TunnelIngress =
   | {
     location: "server" | "client";
@@ -127,6 +149,12 @@ export type TunnelIngress =
     client_id?: string;
     type: "http_host";
     config: HttpHostConfig;
+  }
+  | {
+    location: "server" | "client";
+    client_id?: string;
+    type: "socks5_listen";
+    config: Socks5ListenConfig;
   };
 
 export type TunnelTarget =
@@ -141,6 +169,12 @@ export type TunnelTarget =
     client_id: string;
     type: "udp_service";
     config: UdpServiceConfig;
+  }
+  | {
+    location: "client";
+    client_id: string;
+    type: "socks5_connect_handler";
+    config: Socks5ConnectHandlerConfig;
   };
 
 export interface P2PState {
@@ -258,13 +292,24 @@ export interface CreateTunnelInput {
   topology?: TunnelTopology;
   ingress_client_id?: string;
   bind_ip?: string;
-  type: ProxyType;
+  type: TunnelFormType;
   local_ip: string;
   local_port: number;
   remote_port?: number;
   domain?: string;
   ingress_bps?: number;
   egress_bps?: number;
+  socks5?: {
+    allowed_source_cidrs?: string[];
+    auth_type: Socks5AuthConfig["type"];
+    username?: string;
+    password?: string;
+    allowed_target_cidrs?: string[];
+    allowed_target_hosts?: string[];
+    allowed_target_ports?: number[];
+    dial_timeout_seconds?: number;
+  };
+  confirm_no_auth_risk?: boolean;
 }
 
 export interface UpdateTunnelInput {
@@ -275,13 +320,15 @@ export interface UpdateTunnelInput {
   topology?: TunnelTopology;
   ingress_client_id?: string;
   bind_ip?: string;
-  type: ProxyType;
+  type: TunnelFormType;
   local_ip: string;
   local_port: number;
   remote_port?: number;
   domain?: string;
   ingress_bps?: number;
   egress_bps?: number;
+  socks5?: CreateTunnelInput["socks5"];
+  confirm_no_auth_risk?: boolean;
 }
 
 export type TrafficResolution = 'second' | 'minute' | 'hour';
@@ -353,6 +400,7 @@ export interface TunnelCreateRequest {
   target: TunnelTarget;
   transport_policy: TransportPolicy;
   bandwidth_settings: BandwidthSettings;
+  confirm_no_auth_risk?: boolean;
 }
 
 export interface TunnelUpdateRequest {

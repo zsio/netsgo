@@ -38,6 +38,26 @@ func TestDataStreamHeaderRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDataStreamHeaderRoundTripWithSOCKS5Target(t *testing.T) {
+	want := validTestDataStreamHeader()
+	want.TargetHost = "db.internal.example"
+	want.TargetPort = 5432
+	want.TargetAddrType = SOCKS5AddrTypeDomain
+	want.OriginalHost = "DB.Internal.Example"
+
+	encoded, err := WriteDataStreamHeaderToBytes(want)
+	if err != nil {
+		t.Fatalf("encode data stream header: %v", err)
+	}
+	got, err := DecodeDataStreamHeader(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("decode data stream header: %v", err)
+	}
+	if got != want {
+		t.Fatalf("round trip mismatch:\nwant %+v\n got %+v", want, got)
+	}
+}
+
 func TestDecodeDataStreamHeaderRejectsMalformedFrames(t *testing.T) {
 	valid := validTestDataStreamHeader()
 	validBytes, err := WriteDataStreamHeaderToBytes(valid)
@@ -106,6 +126,8 @@ func TestValidateDataStreamHeaderRejectsInvalidFields(t *testing.T) {
 		{name: "wrong source role for direction", mutate: func(h *DataStreamHeader) { h.SourceRole = DataStreamRoleTarget }},
 		{name: "wrong target role for direction", mutate: func(h *DataStreamHeader) { h.TargetRole = DataStreamRoleIngress }},
 		{name: "long token", mutate: func(h *DataStreamHeader) { h.OpenToken = strings.Repeat("x", DataStreamHeaderMaxTokenLen+1) }},
+		{name: "invalid target port", mutate: func(h *DataStreamHeader) { h.TargetPort = 70000 }},
+		{name: "unknown target addr type", mutate: func(h *DataStreamHeader) { h.TargetAddrType = "hostname-ish" }},
 	}
 
 	for _, tc := range tests {

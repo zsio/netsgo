@@ -61,6 +61,7 @@ type Client struct {
 	dataSession      *yamux.Session // yamux session for the data channel
 	dataMu           sync.RWMutex
 	proxies          sync.Map // proxy_name -> ProxyNewRequest
+	socks5Targets    sync.Map // tunnel_id -> clientSOCKS5TargetRuntime
 	tunnels          sync.Map // tunnel_id:role -> *clientTunnelRuntime
 	useTLS           bool
 	startTime        time.Time // Program start time, used to calculate process uptime
@@ -934,6 +935,14 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 		log.Printf("⚠️ Failed to read DataStreamHeader: %v", err)
 		return
 	}
+	if target, ok := c.socks5TargetForDataStreamHeader(header); ok {
+		if !dataStreamHeaderMatchesSOCKS5Target(header, target) {
+			log.Printf("⚠️ SOCKS5 DataStreamHeader rejected: tunnel=%s revision=%d source=%s target=%s direction=%s transport=%s", header.TunnelID, header.Revision, header.SourceRole, header.TargetRole, header.Direction, header.Transport)
+			return
+		}
+		c.handleSOCKS5TargetStream(stream, header, target)
+		return
+	}
 	proxyName, cfg, ok := c.proxyForDataStreamHeader(header)
 	if !ok {
 		log.Printf("⚠️ Unknown tunnel id: %s", header.TunnelID)
@@ -960,6 +969,18 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 
 	// Relay traffic in both directions.
 	mux.Relay(stream, localConn)
+}
+
+func (c *Client) socks5TargetForDataStreamHeader(header protocol.DataStreamHeader) (clientSOCKS5TargetRuntime, bool) {
+	if val, ok := c.socks5Targets.Load(header.TunnelID); ok {
+		target, ok := val.(clientSOCKS5TargetRuntime)
+		if !ok {
+			log.Printf("⚠️ invalid SOCKS5 target cache entry for tunnel %s: %T", header.TunnelID, val)
+			return clientSOCKS5TargetRuntime{}, false
+		}
+		return target, true
+	}
+	return clientSOCKS5TargetRuntime{}, false
 }
 
 func dataStreamHeaderMatchesProxyConfig(header protocol.DataStreamHeader, cfg protocol.ProxyNewRequest) bool {

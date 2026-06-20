@@ -9,7 +9,7 @@
 | [`runtime-state-active-exposed`](./issue/runtime-state-active-exposed.md) | Medium | Open | DB 使用 `active`，协议/API 使用 `exposed` 的双命名债务 |
 | [`endpoint-type-extensibility`](./issue/endpoint-type-extensibility.md) | Medium | Partial in SOCKS5 | 本次扩展 CHECK；长期是否移除 DB enum CHECK 后续治理 |
 | [`tunnel-resource-locks-hardening`](./issue/tunnel-resource-locks-hardening.md) | Medium | Partial in SOCKS5 | 本次做 SOCKS5/TCP 端口互斥；FK/CHECK 与脏数据处理后续治理 |
-| [`proxy-provision-payload-split`](./issue/proxy-provision-payload-split.md) | High | Partial in SOCKS5 | 本次必须解决 SOCKS5 provisioning 表达力；彻底拆分 legacy 类型后续治理 |
+| [`proxy-provision-payload-split`](./issue/proxy-provision-payload-split.md) | High | Partial in SOCKS5; Next phase planned | 本次切断 unified SOCKS5 对 `ProxyNewRequest` 的依赖并禁止扩张旧类型；下一期统一 v2 provisioning runtime、隔离/降级 legacy create/provision DTO |
 | [`v1-v2-api-unification`](./issue/v1-v2-api-unification.md) | Medium | Open | 统一 legacy v1 与 unified v2 API 写路径 |
 | [`secrets-management`](./issue/secrets-management.md) | High | Partial in SOCKS5 | 本次必须做 password hash/脱敏；通用 secret store 后续治理 |
 | [`ingress-access-policy-rollout`](./issue/ingress-access-policy-rollout.md) | Medium | In SOCKS5 | SOCKS5/TCP/UDP/HTTP source allowlist 本次一并补齐 |

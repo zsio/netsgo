@@ -50,25 +50,21 @@ func readControlMessageOfType(t *testing.T, conn interface {
 	ReadJSON(any) error
 }, wantType string) protocol.Message {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
-			t.Fatalf("set read deadline: %v", err)
-		}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	defer func() {
+		_ = conn.SetReadDeadline(time.Time{})
+	}()
+	for {
 		var msg protocol.Message
 		if err := conn.ReadJSON(&msg); err != nil {
-			var netErr net.Error
-			if !errors.As(err, &netErr) || !netErr.Timeout() {
-				t.Fatalf("read control message %s: %v", wantType, err)
-			}
-			continue
+			t.Fatalf("read control message %s: %v", wantType, err)
 		}
 		if msg.Type == wantType {
 			return msg
 		}
 	}
-	t.Fatalf("did not receive control message %s", wantType)
-	return protocol.Message{}
 }
 
 func readTunnelUnprovision(t *testing.T, conn interface {
@@ -163,6 +159,34 @@ func respondPreflight(t *testing.T, conn interface {
 	if err := conn.WriteJSON(resp); err != nil {
 		t.Fatalf("write preflight response: %v", err)
 	}
+}
+
+func acceptPreflight(t *testing.T, conn interface {
+	SetReadDeadline(time.Time) error
+	ReadJSON(any) error
+	WriteJSON(any) error
+}) protocol.TunnelPreflightRequest {
+	t.Helper()
+	msg := readControlMessageOfType(t, conn, protocol.MsgTypeTunnelPreflight)
+	var req protocol.TunnelPreflightRequest
+	if err := msg.ParsePayload(&req); err != nil {
+		t.Fatalf("parse preflight payload: %v", err)
+	}
+	resp, err := protocol.NewMessage(protocol.MsgTypeTunnelPreflightResp, protocol.TunnelPreflightResponse{
+		RequestID: req.RequestID,
+		TunnelID:  req.TunnelID,
+		Revision:  req.Revision,
+		Role:      req.Role,
+		Accepted:  true,
+		Message:   "ok",
+	})
+	if err != nil {
+		t.Fatalf("build preflight response: %v", err)
+	}
+	if err := conn.WriteJSON(resp); err != nil {
+		t.Fatalf("write preflight response: %v", err)
+	}
+	return req
 }
 
 func rejectPreflight(t *testing.T, conn interface {
@@ -347,6 +371,175 @@ func TestAPI_UnifiedTunnelCreateDerivesOwnerAndListsByClientRole(t *testing.T) {
 	}
 	if len(targetList) != 1 || targetList[0].ID != created.ID {
 		t.Fatalf("target list mismatch: %+v", targetList)
+	}
+}
+
+func TestAPI_UnifiedTunnelCreateSOCKS5ServerExpose(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	target := createUnifiedAPITestClient(t, s, "install-socks5-target", "socks5-target")
+	port := reserveTCPPort(t)
+	body := []byte(`{
+		"name":"socks5",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"socks5_listen","config":{
+			"bind_ip":"0.0.0.0",
+			"port":` + strconv.Itoa(port) + `,
+			"allowed_source_cidrs":["0.0.0.0/0","::/0"],
+			"auth":{"type":"none"}
+		}},
+		"target":{"location":"client","client_id":"` + target.ID + `","type":"socks5_connect_handler","config":{
+			"allowed_target_cidrs":["0.0.0.0/0","::/0"],
+			"allowed_target_hosts":["example.com"],
+			"allowed_target_ports":[443],
+			"dial_timeout_seconds":9
+		}},
+		"transport_policy":"server_relay_only",
+		"confirm_no_auth_risk":true,
+		"bandwidth_settings":{"ingress_bps":0,"egress_bps":0}
+	}`)
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("SOCKS5 create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode SOCKS5 create response: %v", err)
+	}
+	if created.Ingress.Type != protocol.IngressTypeSOCKS5Listen || created.Target.Type != protocol.TargetTypeSOCKS5ConnectHandler {
+		t.Fatalf("SOCKS5 endpoint types mismatch: %+v -> %+v", created.Ingress, created.Target)
+	}
+	if bytes.Contains(resp.Body.Bytes(), []byte(`"local_ip"`)) || bytes.Contains(resp.Body.Bytes(), []byte(`"local_port"`)) {
+		t.Fatalf("unified SOCKS5 response should be endpoint-spec based, got %s", resp.Body.String())
+	}
+
+	stored, err := s.store.GetTunnelByIDE(target.ID, created.ID)
+	if err != nil {
+		t.Fatalf("load stored SOCKS5 tunnel: %v", err)
+	}
+	if stored.LocalIP != "" || stored.LocalPort != 0 {
+		t.Fatalf("SOCKS5 must not store dynamic target in LocalIP/LocalPort: %+v", stored.ProxyNewRequest)
+	}
+	if stored.Target.Type != protocol.TargetTypeSOCKS5ConnectHandler {
+		t.Fatalf("stored target endpoint mismatch: %+v", stored.Target)
+	}
+}
+
+func TestAPI_UnifiedTunnelSOCKS5NoAuthRequiresSubmitConfirmation(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	target := createUnifiedAPITestClient(t, s, "install-socks5-no-auth-target", "socks5-no-auth-target")
+	body := []byte(`{
+		"name":"socks5-no-confirm",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"socks5_listen","config":{
+			"bind_ip":"0.0.0.0",
+			"port":` + strconv.Itoa(reserveTCPPort(t)) + `,
+			"allowed_source_cidrs":["0.0.0.0/0","::/0"],
+			"auth":{"type":"none"}
+		}},
+		"target":{"location":"client","client_id":"` + target.ID + `","type":"socks5_connect_handler","config":{
+			"allowed_target_cidrs":["0.0.0.0/0","::/0"],
+			"dial_timeout_seconds":10
+		}},
+		"transport_policy":"server_relay_only"
+	}`)
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, body)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("SOCKS5 no-auth without confirmation: want 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if _, err := s.store.GetTunnelE(target.ID, "socks5-no-confirm"); !errors.Is(err, ErrTunnelNotFound) {
+		t.Fatalf("missing no-auth confirmation must not persist config, got err=%v", err)
+	}
+}
+
+func TestAPI_UnifiedTunnelSOCKS5PasswordIsWriteOnly(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	target := createUnifiedAPITestClient(t, s, "install-socks5-password-target", "socks5-password-target")
+	secret := "super-secret-password"
+	body := []byte(`{
+		"name":"socks5-password",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"socks5_listen","config":{
+			"bind_ip":"0.0.0.0",
+			"port":` + strconv.Itoa(reserveTCPPort(t)) + `,
+			"allowed_source_cidrs":["127.0.0.0/8"],
+			"auth":{"type":"username_password","username":"alice","password":"` + secret + `"}
+		}},
+		"target":{"location":"client","client_id":"` + target.ID + `","type":"socks5_connect_handler","config":{
+			"allowed_target_cidrs":["0.0.0.0/0","::/0"],
+			"dial_timeout_seconds":10
+		}},
+		"transport_policy":"server_relay_only"
+	}`)
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("SOCKS5 password create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if bytes.Contains(resp.Body.Bytes(), []byte(secret)) || bytes.Contains(resp.Body.Bytes(), []byte(`"password"`)) {
+		t.Fatalf("SOCKS5 create response must not echo password, got %s", resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := mustDecodeJSON(t, resp.Body, &created); err != nil {
+		t.Fatalf("decode created tunnel: %v", err)
+	}
+	stored, err := s.store.GetTunnelByIDE(target.ID, created.ID)
+	if err != nil {
+		t.Fatalf("load stored SOCKS5 tunnel: %v", err)
+	}
+	if bytes.Contains(stored.Ingress.Config, []byte(secret)) || bytes.Contains(stored.Ingress.Config, []byte(`"password"`)) {
+		t.Fatalf("stored ingress config must not contain plaintext password: %s", string(stored.Ingress.Config))
+	}
+	if !bytes.Contains(stored.Ingress.Config, []byte(`"password_hash"`)) {
+		t.Fatalf("stored ingress config should contain password hash: %s", string(stored.Ingress.Config))
+	}
+	var storedIngress protocol.SOCKS5ListenConfig
+	if err := json.Unmarshal(stored.Ingress.Config, &storedIngress); err != nil {
+		t.Fatalf("decode stored ingress config: %v", err)
+	}
+	originalHash := storedIngress.Auth.PasswordHash
+	if originalHash == "" {
+		t.Fatalf("stored ingress config should contain password hash: %s", string(stored.Ingress.Config))
+	}
+
+	update := []byte(`{"expected_revision":` + strconv.FormatInt(created.Revision, 10) + `,"spec":{
+		"name":"socks5-password",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"socks5_listen","config":{
+			"bind_ip":"0.0.0.0",
+			"port":` + strconv.Itoa(stored.RemotePort) + `,
+			"allowed_source_cidrs":["127.0.0.0/8"],
+			"auth":{"type":"username_password","username":"alice"}
+		}},
+		"target":{"location":"client","client_id":"` + target.ID + `","type":"socks5_connect_handler","config":{
+			"allowed_target_cidrs":["0.0.0.0/0","::/0"],
+			"dial_timeout_seconds":20
+		}},
+		"transport_policy":"server_relay_only"
+	}}`)
+	updateResp := doMuxRequest(t, handler, http.MethodPut, "/api/tunnels/"+created.ID, token, update)
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("SOCKS5 password update without new password: want 200, got %d body=%s", updateResp.Code, updateResp.Body.String())
+	}
+	if bytes.Contains(updateResp.Body.Bytes(), []byte(secret)) ||
+		bytes.Contains(updateResp.Body.Bytes(), []byte(`"password"`)) ||
+		bytes.Contains(updateResp.Body.Bytes(), []byte(`"password_hash"`)) {
+		t.Fatalf("SOCKS5 update response must not echo password material, got %s", updateResp.Body.String())
+	}
+	updated, err := s.store.GetTunnelByIDE(target.ID, created.ID)
+	if err != nil {
+		t.Fatalf("load updated SOCKS5 tunnel: %v", err)
+	}
+	var updatedIngress protocol.SOCKS5ListenConfig
+	if err := json.Unmarshal(updated.Ingress.Config, &updatedIngress); err != nil {
+		t.Fatalf("decode updated ingress config: %v", err)
+	}
+	if updatedIngress.Auth.PasswordHash != originalHash {
+		t.Fatalf("SOCKS5 update without new password should preserve password hash")
 	}
 }
 
@@ -1797,6 +1990,53 @@ func TestAPI_UnifiedTunnelAllowsServerExposeTCPAndUDPSamePort(t *testing.T) {
 	}
 }
 
+func TestAPI_UnifiedTunnelRejectsServerExposeTCPAndSOCKS5SamePort(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	target := createUnifiedAPITestClient(t, s, "install-server-socks5-conflict-target", "server-socks5-conflict-target")
+	port := reserveTCPPort(t)
+	tcpBody := []byte(`{
+		"name":"server-conflict-tcp",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"tcp_listen","config":{"bind_ip":"0.0.0.0","port":` + strconv.Itoa(port) + `}},
+		"target":{"location":"client","client_id":"` + target.ID + `","type":"tcp_service","config":{"ip":"127.0.0.1","port":22}},
+		"transport_policy":"server_relay_only"
+	}`)
+	resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, tcpBody)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("server TCP create: want 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	socksBody := []byte(`{
+		"name":"server-conflict-socks5",
+		"topology":"server_expose",
+		"ingress":{"location":"server","type":"socks5_listen","config":{
+			"bind_ip":"0.0.0.0",
+			"port":` + strconv.Itoa(port) + `,
+			"allowed_source_cidrs":["0.0.0.0/0","::/0"],
+			"auth":{"type":"none"}
+		}},
+		"target":{"location":"client","client_id":"` + target.ID + `","type":"socks5_connect_handler","config":{
+			"allowed_target_cidrs":["0.0.0.0/0","::/0"],
+			"dial_timeout_seconds":10
+		}},
+		"transport_policy":"server_relay_only",
+		"confirm_no_auth_risk":true
+	}`)
+	resp = doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, socksBody)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("server SOCKS5 same TCP port create: want 409, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var bodyResp tunnelMutationErrorResponse
+	if err := mustDecodeJSON(t, resp.Body, &bodyResp); err != nil {
+		t.Fatalf("decode conflict error: %v", err)
+	}
+	if bodyResp.ErrorCode != protocol.TunnelMutationErrorCodeIngressResourceConflict || bodyResp.Field != "ingress.config.port" {
+		t.Fatalf("conflict error mismatch: %+v", bodyResp)
+	}
+}
+
 func TestAPI_UnifiedTunnelOnlineIngressPreflightFailureDoesNotPersist(t *testing.T) {
 	s, handler, token, cleanup := setupTestServerWithStores(t, true)
 	defer cleanup()
@@ -1830,6 +2070,63 @@ func TestAPI_UnifiedTunnelOnlineIngressPreflightFailureDoesNotPersist(t *testing
 	}
 	if _, err := s.store.GetTunnelByIDE(target.ID, "preflight-c2c"); !errors.Is(err, ErrTunnelNotFound) {
 		t.Fatalf("failed preflight must not persist config, got err=%v", err)
+	}
+}
+
+func TestAPI_UnifiedTunnelSOCKS5ClientIngressPreflightUsesMinimalConfig(t *testing.T) {
+	s := New(0)
+	initTestAdminStore(t, s)
+	s.store = newTestTunnelStore(t)
+	ts := httptest.NewServer(s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+
+	targetConn, targetAuth := connectAndAuthWithInstallID(t, ts, "socks5-preflight-target", "install-socks5-preflight-target")
+	defer mustClose(t, targetConn)
+	ingressConn, ingressAuth := connectAndAuthWithInstallID(t, ts, "socks5-preflight-ingress", "install-socks5-preflight-ingress")
+	defer mustClose(t, ingressConn)
+	setLiveClientDefaultCapabilities(t, s, targetAuth.ClientID)
+	setLiveClientDefaultCapabilities(t, s, ingressAuth.ClientID)
+
+	secret := "preflight-secret"
+	port := reserveTCPPort(t)
+	create := []byte(fmt.Sprintf(`{
+		"name":"socks5-preflight-c2c",
+		"topology":"client_to_client",
+		"ingress":{"location":"client","client_id":"%s","type":"socks5_listen","config":{
+			"bind_ip":"127.0.0.1",
+			"port":%d,
+			"allowed_source_cidrs":["127.0.0.0/8"],
+			"auth":{"type":"username_password","username":"alice","password":"%s"}
+		}},
+		"target":{"location":"client","client_id":"%s","type":"socks5_connect_handler","config":{
+			"allowed_target_cidrs":["0.0.0.0/0","::/0"],
+			"dial_timeout_seconds":10
+		}},
+		"transport_policy":"server_relay_only"
+	}`, ingressAuth.ClientID, port, secret, targetAuth.ClientID))
+	respCh := doMuxRequestAsync(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	preflightReq := acceptPreflight(t, ingressConn)
+	if preflightReq.Ingress.Type != protocol.IngressTypeSOCKS5Listen {
+		t.Fatalf("SOCKS5 preflight type mismatch: %+v", preflightReq.Ingress)
+	}
+	if bytes.Contains(preflightReq.Ingress.Config, []byte(secret)) ||
+		bytes.Contains(preflightReq.Ingress.Config, []byte(`"auth"`)) ||
+		bytes.Contains(preflightReq.Ingress.Config, []byte(`"password"`)) {
+		t.Fatalf("SOCKS5 preflight must carry only bind config, got %s", string(preflightReq.Ingress.Config))
+	}
+	var bind tcpListenConfigAPI
+	if err := json.Unmarshal(preflightReq.Ingress.Config, &bind); err != nil {
+		t.Fatalf("decode preflight bind config: %v", err)
+	}
+	if bind.BindIP != "127.0.0.1" || bind.Port != port {
+		t.Fatalf("preflight bind config mismatch: %+v", bind)
+	}
+	ackProvisionMessages(t, targetConn, 1)
+	ackProvisionMessages(t, ingressConn, 1)
+	resp := awaitMuxResponse(t, respCh)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("SOCKS5 c2c create: want 201, got %d body=%s", resp.Code, resp.Body.String())
 	}
 }
 

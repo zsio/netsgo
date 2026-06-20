@@ -82,7 +82,9 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 		s.unifiedRuntime.clearTunnelIssues(stored.ID)
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateIdle, "")
 	}
-	if stored.Ingress.Type != TunnelIngressTypeTCPListen && stored.Ingress.Type != TunnelIngressTypeUDPListen {
+	if stored.Ingress.Type != TunnelIngressTypeTCPListen &&
+		stored.Ingress.Type != TunnelIngressTypeUDPListen &&
+		stored.Ingress.Type != TunnelIngressTypeSOCKS5Listen {
 		return nil
 	}
 	if !s.isClientOnline(stored.Ingress.ClientID) || !s.isClientOnline(stored.Target.ClientID) {
@@ -334,7 +336,7 @@ func (s *Server) handleClientOpenedDataStream(openClient *ClientConn, openStream
 		return
 	}
 
-	targetStream, err := s.openRelayStreamToTarget(targetClient, stored)
+	targetStream, err := s.openRelayStreamToTarget(targetClient, stored, header)
 	if err != nil {
 		log.Printf("⚠️ client relay open target stream failed: %v", err)
 		s.unifiedRuntime.recordServerIssue(stored.ID, protocol.TunnelIssue{
@@ -433,10 +435,20 @@ func validateClientRelayHeader(stored StoredTunnel, openClientID string, header 
 	if header.Transport != protocol.ActualTransportServerRelay {
 		return fmt.Errorf("invalid relay transport %s", header.Transport)
 	}
+	if stored.Ingress.Type == TunnelIngressTypeSOCKS5Listen {
+		if header.TargetHost == "" || header.TargetPort < 1 || header.TargetPort > 65535 {
+			return fmt.Errorf("missing SOCKS5 dynamic target for tunnel %s", stored.ID)
+		}
+		if header.TargetAddrType != protocol.SOCKS5AddrTypeIPv4 &&
+			header.TargetAddrType != protocol.SOCKS5AddrTypeIPv6 &&
+			header.TargetAddrType != protocol.SOCKS5AddrTypeDomain {
+			return fmt.Errorf("invalid SOCKS5 target address type %q", header.TargetAddrType)
+		}
+	}
 	return nil
 }
 
-func (s *Server) openRelayStreamToTarget(client *ClientConn, stored StoredTunnel) (net.Conn, error) {
+func (s *Server) openRelayStreamToTarget(client *ClientConn, stored StoredTunnel, ingressHeader protocol.DataStreamHeader) (net.Conn, error) {
 	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
 		return nil, fmt.Errorf("client [%s] is not online", client.ID)
 	}
@@ -466,6 +478,10 @@ func (s *Server) openRelayStreamToTarget(client *ClientConn, stored StoredTunnel
 		Direction:        protocol.DataStreamDirectionIngressToTarget,
 		Transport:        protocol.ActualTransportServerRelay,
 		ServerAuthorized: true,
+		TargetHost:       ingressHeader.TargetHost,
+		TargetPort:       ingressHeader.TargetPort,
+		TargetAddrType:   ingressHeader.TargetAddrType,
+		OriginalHost:     ingressHeader.OriginalHost,
 	}
 	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
 		_ = stream.Close()

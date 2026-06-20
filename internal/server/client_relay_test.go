@@ -313,6 +313,108 @@ func TestClientRelayTCPTransfersBytes(t *testing.T) {
 	assertClientRelayTrafficBucket(t, s, trafficStore, stored, uint64(len(payload)), uint64(len(response)))
 }
 
+func TestClientRelaySOCKS5CopiesDynamicTargetHeader(t *testing.T) {
+	s := New(0)
+	stored := testClientRelayStoredTunnel(t)
+	stored.Ingress.Type = protocol.IngressTypeSOCKS5Listen
+	stored.Ingress.Config = mustRawJSON(protocol.SOCKS5ListenConfig{
+		BindIP:             "127.0.0.1",
+		Port:               18080,
+		AllowedSourceCIDRs: []string{"127.0.0.0/8"},
+		Auth:               protocol.SOCKS5AuthConfig{Type: protocol.SOCKS5AuthTypeNone},
+	})
+	stored.Target.Type = protocol.TargetTypeSOCKS5ConnectHandler
+	stored.Target.Config = mustRawJSON(protocol.SOCKS5ConnectHandlerConfig{
+		AllowedTargetCIDRs: []string{"0.0.0.0/0", "::/0"},
+		DialTimeoutSeconds: 5,
+	})
+	s.c2c.set(stored)
+
+	targetPipe, serverPipe := net.Pipe()
+	defer mustClose(t, targetPipe)
+	defer mustClose(t, serverPipe)
+	targetClientSession, err := mux.NewClientSession(targetPipe, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("target client session: %v", err)
+	}
+	defer mustClose(t, targetClientSession)
+	serverTargetSession, err := mux.NewServerSession(serverPipe, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("server target session: %v", err)
+	}
+	defer mustClose(t, serverTargetSession)
+
+	targetClient := &ClientConn{
+		ID:          stored.Target.ClientID,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverTargetSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(targetClient.ID, targetClient)
+	ingressClient := &ClientConn{
+		ID:         stored.Ingress.ClientID,
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+
+	targetStreamCh := make(chan net.Conn, 1)
+	go func() {
+		stream, err := targetClientSession.AcceptStream()
+		if err != nil {
+			targetStreamCh <- nil
+			return
+		}
+		targetStreamCh <- stream
+	}()
+
+	ingressStream, relayStream := net.Pipe()
+	defer mustClose(t, ingressStream)
+	defer mustClose(t, relayStream)
+	header := testClientRelayHeader(stored)
+	header.TargetHost = "example.com"
+	header.TargetPort = 443
+	header.TargetAddrType = protocol.SOCKS5AddrTypeDomain
+	header.OriginalHost = "example.com"
+
+	done := make(chan struct{})
+	go func() {
+		s.handleClientOpenedDataStream(ingressClient, relayStream, header)
+		close(done)
+	}()
+
+	var targetStream net.Conn
+	select {
+	case targetStream = <-targetStreamCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for target stream")
+	}
+	if targetStream == nil {
+		t.Fatal("target stream failed to open")
+	}
+	defer mustClose(t, targetStream)
+
+	targetHeader, err := protocol.DecodeDataStreamHeader(targetStream)
+	if err != nil {
+		t.Fatalf("decode target stream header: %v", err)
+	}
+	if targetHeader.TargetHost != header.TargetHost ||
+		targetHeader.TargetPort != header.TargetPort ||
+		targetHeader.TargetAddrType != header.TargetAddrType ||
+		targetHeader.OriginalHost != header.OriginalHost {
+		t.Fatalf("SOCKS5 dynamic target header not copied: got %+v want %+v", targetHeader, header)
+	}
+
+	_ = ingressStream.Close()
+	_ = targetStream.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SOCKS5 relay did not stop after streams closed")
+	}
+}
+
 func TestClientRelayRejectsStaleRevision(t *testing.T) {
 	s := New(0)
 	stored := testClientRelayStoredTunnel(t)

@@ -27,7 +27,7 @@ import { parseMbpsInputToBps } from '@/lib/format';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { cn } from '@/lib/utils';
-import type { Client, PortRange, ProxyType, TunnelTopology } from '@/types';
+import type { Client, PortRange, TunnelFormType, TunnelTopology } from '@/types';
 import { i18n } from '@/i18n';
 import { useTranslation } from 'react-i18next';
 import { getInitialTunnelFormState, type TunnelDialogEditData } from './tunnel-dialog-form';
@@ -53,10 +53,11 @@ interface TunnelDialogEditProps {
 
 type TunnelDialogProps = TunnelDialogCreateProps | TunnelDialogEditProps;
 
-const typeOptions: { value: ProxyType; label: string }[] = [
+const typeOptions: { value: TunnelFormType; label: string }[] = [
   { value: 'tcp', label: 'TCP' },
   { value: 'udp', label: 'UDP' },
   { value: 'http', label: 'HTTP' },
+  { value: 'socks5', label: 'SOCKS5' },
 ];
 
 interface LocalFieldError {
@@ -111,6 +112,14 @@ function parsePortInput(value: string) {
   }
   const port = Number.parseInt(value, 10);
   return port >= 1 && port <= 65535 ? port : null;
+}
+
+function parseCommaSeparatedList(value: string) {
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function parseCommaSeparatedPorts(value: string) {
+  return parseCommaSeparatedList(value).map((item) => Number.parseInt(item, 10)).filter((port) => Number.isInteger(port));
 }
 
 function localFieldError(field: string, message: string): LocalFieldError {
@@ -223,7 +232,7 @@ function TunnelDialogForm({
   const [targetClientId, setTargetClientId] = useState(initialForm.targetClientId);
   const [ingressClientId, setIngressClientId] = useState(initialForm.ingressClientId);
   const [bindIp, setBindIp] = useState(initialForm.bindIp);
-  const [type, setType] = useState<ProxyType>(initialForm.type);
+  const [type, setType] = useState<TunnelFormType>(initialForm.type);
   const [localIp, setLocalIp] = useState(initialForm.localIp);
   const [localPort, setLocalPort] = useState(initialForm.localPort);
   const [remotePort, setRemotePort] = useState(initialForm.remotePort);
@@ -231,6 +240,15 @@ function TunnelDialogForm({
   const [ingressBps, setIngressBps] = useState(initialForm.ingressBps);
   const [egressBps, setEgressBps] = useState(initialForm.egressBps);
   const [fieldError, setFieldError] = useState<LocalFieldError | null>(null);
+  const [socks5SourceCidrs, setSocks5SourceCidrs] = useState(initialForm.socks5SourceCidrs);
+  const [socks5AuthType, setSocks5AuthType] = useState(initialForm.socks5AuthType);
+  const [socks5Username, setSocks5Username] = useState(initialForm.socks5Username);
+  const [socks5Password, setSocks5Password] = useState(initialForm.socks5Password);
+  const [socks5TargetCidrs, setSocks5TargetCidrs] = useState(initialForm.socks5TargetCidrs);
+  const [socks5TargetHosts, setSocks5TargetHosts] = useState(initialForm.socks5TargetHosts);
+  const [socks5TargetPorts, setSocks5TargetPorts] = useState(initialForm.socks5TargetPorts);
+  const [socks5DialTimeout, setSocks5DialTimeout] = useState(initialForm.socks5DialTimeout);
+  const [confirmNoAuthRisk, setConfirmNoAuthRisk] = useState(initialForm.confirmNoAuthRisk);
 
   const clients = props.clients ?? [];
   const selectedTargetClientId = targetClientId || (props.mode === 'create' ? props.clientId : props.tunnel?.target?.client_id ?? props.tunnel?.owner_client_id ?? props.tunnel?.clientId ?? '');
@@ -241,9 +259,12 @@ function TunnelDialogForm({
     : ingressClientOptions[0]?.id || '';
   const isClientToClient = topology === 'client_to_client';
   const isHttp = type === 'http';
+  const isSocks5 = type === 'socks5';
+  const isEditing = props.mode === 'edit';
   const canUseClientToClient = ingressClientOptions.length > 0;
   const parsedLocalPort = parsePortInput(localPort);
   const parsedRemotePort = isHttp ? 0 : parsePortInput(remotePort);
+  const parsedSocks5DialTimeout = Number.parseInt(socks5DialTimeout, 10);
   const selectClassName = cn(
     'h-8 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-sm outline-none transition-colors',
     'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
@@ -276,7 +297,7 @@ function TunnelDialogForm({
     const parsedIngressBps = parseMbpsInputToBps(ingressBps);
     const parsedEgressBps = parseMbpsInputToBps(egressBps);
 
-    if (!parsedLocalPort) {
+    if (!isSocks5 && !parsedLocalPort) {
       setFieldError(localFieldError('local_port', portErrorMessage));
       return;
     }
@@ -294,6 +315,21 @@ function TunnelDialogForm({
     if (parsedIngressBps == null || parsedEgressBps == null) {
       toast.error(t('tunnels.bandwidthNonNegative'));
       return;
+    }
+
+	if (isSocks5) {
+      if (socks5AuthType === 'username_password' && (!socks5Username.trim() || (!isEditing && !socks5Password))) {
+        setFieldError(localFieldError('ingress.config.auth', t('tunnels.socks5AuthRequired')));
+        return;
+      }
+      if (!isClientToClient && socks5AuthType === 'none' && !confirmNoAuthRisk) {
+        setFieldError(localFieldError('confirm_no_auth_risk', t('tunnels.socks5NoAuthRequired')));
+        return;
+      }
+      if (!Number.isInteger(parsedSocks5DialTimeout) || parsedSocks5DialTimeout < 1 || parsedSocks5DialTimeout > 120) {
+        setFieldError(localFieldError('target.config.dial_timeout_seconds', t('tunnels.socks5DialTimeoutInvalid')));
+        return;
+      }
     }
 
     if (!isClientToClient && !isHttp && parsedRemotePort && !isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)) {
@@ -319,12 +355,23 @@ function TunnelDialogForm({
             : undefined,
           name,
           type,
-          local_ip: localIp,
-          local_port: parsedLocalPort,
+          local_ip: isSocks5 ? '' : localIp,
+          local_port: parsedLocalPort ?? 0,
           remote_port: parsedRemotePort ?? 0,
           domain,
           ingress_bps: parsedIngressBps,
           egress_bps: parsedEgressBps,
+          socks5: isSocks5 ? {
+            allowed_source_cidrs: parseCommaSeparatedList(socks5SourceCidrs),
+            auth_type: socks5AuthType,
+            username: socks5Username,
+            password: socks5Password,
+            allowed_target_cidrs: parseCommaSeparatedList(socks5TargetCidrs),
+            allowed_target_hosts: parseCommaSeparatedList(socks5TargetHosts),
+            allowed_target_ports: parseCommaSeparatedPorts(socks5TargetPorts),
+            dial_timeout_seconds: parsedSocks5DialTimeout,
+          } : undefined,
+          confirm_no_auth_risk: isSocks5 ? confirmNoAuthRisk : undefined,
         },
         {
           onSuccess: () => {
@@ -349,12 +396,23 @@ function TunnelDialogForm({
         bind_ip: isClientToClient ? bindIp : undefined,
         name,
         type,
-        local_ip: localIp,
-        local_port: parsedLocalPort,
+        local_ip: isSocks5 ? '' : localIp,
+        local_port: parsedLocalPort ?? 0,
         remote_port: parsedRemotePort ?? 0,
         domain,
         ingress_bps: parsedIngressBps,
         egress_bps: parsedEgressBps,
+        socks5: isSocks5 ? {
+          allowed_source_cidrs: parseCommaSeparatedList(socks5SourceCidrs),
+          auth_type: socks5AuthType,
+          username: socks5Username,
+          password: socks5Password,
+          allowed_target_cidrs: parseCommaSeparatedList(socks5TargetCidrs),
+          allowed_target_hosts: parseCommaSeparatedList(socks5TargetHosts),
+          allowed_target_ports: parseCommaSeparatedPorts(socks5TargetPorts),
+          dial_timeout_seconds: parsedSocks5DialTimeout,
+        } : undefined,
+        confirm_no_auth_risk: isSocks5 ? confirmNoAuthRisk : undefined,
       },
       {
         onSuccess: () => {
@@ -378,10 +436,12 @@ function TunnelDialogForm({
   const isValid = Boolean(
     name.trim()
     && selectedTargetClientId
-    && parsedLocalPort !== null
+    && (isSocks5 || parsedLocalPort !== null)
     && (isClientToClient ? canUseClientToClient && selectedIngressClientId && bindIp.trim() && type !== 'http' : true)
     && (isHttp ? domain.trim() : parsedRemotePort !== null)
-    && (isClientToClient || isHttp || (parsedRemotePort !== null && isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)))
+	&& (isClientToClient || isHttp || (parsedRemotePort !== null && isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)))
+    && (!isSocks5 || (socks5AuthType !== 'username_password' || (socks5Username.trim() && (isEditing || socks5Password))))
+    && (!isSocks5 || isClientToClient || socks5AuthType !== 'none' || confirmNoAuthRisk)
     && parsedIngressBps !== null
     && parsedEgressBps !== null,
   );
@@ -521,41 +581,42 @@ function TunnelDialogForm({
           <FieldErrorText error={fieldError} fields={['target.type', 'ingress.type']} />
         </div>
 
-        {/* 本地地址 */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">{isClientToClient ? t('tunnels.targetAddress') : t('tunnels.localIp')}</label>
-            <Input
-              aria-label={isClientToClient ? t('tunnels.targetAddress') : t('tunnels.localIp')}
-              placeholder="127.0.0.1"
-              value={localIp}
-              onChange={(e) => {
-                clearMutationFeedback();
-                setLocalIp(e.target.value);
-              }}
-            />
-            <FieldErrorText error={fieldError} fields={['target.config.ip', 'target.config.host', 'target.config', 'local_ip']} />
+        {!isSocks5 && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{isClientToClient ? t('tunnels.targetAddress') : t('tunnels.localIp')}</label>
+              <Input
+                aria-label={isClientToClient ? t('tunnels.targetAddress') : t('tunnels.localIp')}
+                placeholder="127.0.0.1"
+                value={localIp}
+                onChange={(e) => {
+                  clearMutationFeedback();
+                  setLocalIp(e.target.value);
+                }}
+              />
+              <FieldErrorText error={fieldError} fields={['target.config.ip', 'target.config.host', 'target.config', 'local_ip']} />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{isClientToClient ? t('tunnels.targetPort') : t('tunnels.localPort')}</label>
+              <Input
+                aria-label={isClientToClient ? t('tunnels.targetPort') : t('tunnels.localPort')}
+                type="number"
+                placeholder="e.g. 22"
+                value={localPort}
+                onChange={(e) => {
+                  clearMutationFeedback();
+                  setLocalPort(e.target.value);
+                }}
+                min={1}
+                max={65535}
+              />
+              <FieldErrorText error={fieldError} fields={['target.config.port', 'local_port']} />
+              {localPort && !parsedLocalPort && (
+                <p className="text-[11px] font-medium text-destructive">{portErrorMessage}</p>
+              )}
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">{isClientToClient ? t('tunnels.targetPort') : t('tunnels.localPort')}</label>
-            <Input
-              aria-label={isClientToClient ? t('tunnels.targetPort') : t('tunnels.localPort')}
-              type="number"
-              placeholder="e.g. 22"
-              value={localPort}
-              onChange={(e) => {
-                clearMutationFeedback();
-                setLocalPort(e.target.value);
-              }}
-              min={1}
-              max={65535}
-            />
-            <FieldErrorText error={fieldError} fields={['target.config.port', 'local_port']} />
-            {localPort && !parsedLocalPort && (
-              <p className="text-[11px] font-medium text-destructive">{portErrorMessage}</p>
-            )}
-          </div>
-        </div>
+        )}
 
         {isHttp ? (
           <div className="space-y-1.5">
@@ -623,6 +684,132 @@ function TunnelDialogForm({
                     : formatPortRanges(status.allowed_ports)}
                 </p>
               )}
+            </div>
+          </div>
+        )}
+
+        {isSocks5 && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">{t('tunnels.socks5SourceCidrs')}</label>
+                <Input
+                  aria-label={t('tunnels.socks5SourceCidrs')}
+                  value={socks5SourceCidrs}
+                  onChange={(e) => {
+                    clearMutationFeedback();
+                    setSocks5SourceCidrs(e.target.value);
+                  }}
+                />
+                <FieldErrorText error={fieldError} fields={['ingress.config.allowed_source_cidrs', 'ingress.config']} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">{t('tunnels.socks5DialTimeout')}</label>
+                <Input
+                  aria-label={t('tunnels.socks5DialTimeout')}
+                  type="number"
+                  value={socks5DialTimeout}
+                  onChange={(e) => {
+                    clearMutationFeedback();
+                    setSocks5DialTimeout(e.target.value);
+                  }}
+                  min={1}
+                  max={120}
+                />
+                <FieldErrorText error={fieldError} fields={['target.config.dial_timeout_seconds']} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">{t('tunnels.socks5TargetCidrs')}</label>
+                <Input
+                  aria-label={t('tunnels.socks5TargetCidrs')}
+                  value={socks5TargetCidrs}
+                  onChange={(e) => {
+                    clearMutationFeedback();
+                    setSocks5TargetCidrs(e.target.value);
+                  }}
+                />
+                <FieldErrorText error={fieldError} fields={['target.config.allowed_target_cidrs', 'target.config']} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">{t('tunnels.socks5TargetPorts')}</label>
+                <Input
+                  aria-label={t('tunnels.socks5TargetPorts')}
+                  value={socks5TargetPorts}
+                  onChange={(e) => {
+                    clearMutationFeedback();
+                    setSocks5TargetPorts(e.target.value);
+                  }}
+                />
+                <FieldErrorText error={fieldError} fields={['target.config.allowed_target_ports']} />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{t('tunnels.socks5TargetHosts')}</label>
+              <Input
+                aria-label={t('tunnels.socks5TargetHosts')}
+                value={socks5TargetHosts}
+                onChange={(e) => {
+                  clearMutationFeedback();
+                  setSocks5TargetHosts(e.target.value);
+                }}
+              />
+              <FieldErrorText error={fieldError} fields={['target.config.allowed_target_hosts']} />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">{t('tunnels.socks5Auth')}</label>
+              <select
+                aria-label={t('tunnels.socks5Auth')}
+                className={selectClassName}
+                value={socks5AuthType}
+                onChange={(e) => {
+                  clearMutationFeedback();
+                  setSocks5AuthType(e.target.value as typeof socks5AuthType);
+                }}
+              >
+                <option value="none">{t('tunnels.socks5AuthNone')}</option>
+                <option value="username_password">{t('tunnels.socks5AuthPassword')}</option>
+              </select>
+              {socks5AuthType === 'username_password' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <Input
+                    aria-label={t('tunnels.socks5Username')}
+                    placeholder={t('tunnels.socks5Username')}
+                    value={socks5Username}
+                    onChange={(e) => {
+                      clearMutationFeedback();
+                      setSocks5Username(e.target.value);
+                    }}
+                  />
+                  <Input
+                    aria-label={t('tunnels.socks5Password')}
+                    placeholder={t('tunnels.socks5Password')}
+                    type="password"
+                    value={socks5Password}
+                    onChange={(e) => {
+                      clearMutationFeedback();
+                      setSocks5Password(e.target.value);
+                    }}
+                  />
+                </div>
+              )}
+              <FieldErrorText error={fieldError} fields={['ingress.config.auth', 'ingress.config.auth.username', 'ingress.config.auth.password']} />
+              {!isClientToClient && socks5AuthType === 'none' && (
+                <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={confirmNoAuthRisk}
+                    onChange={(e) => {
+                      clearMutationFeedback();
+                      setConfirmNoAuthRisk(e.target.checked);
+                    }}
+                  />
+                  <span>{t('tunnels.socks5NoAuthConfirm')}</span>
+                </label>
+              )}
+              <FieldErrorText error={fieldError} fields={['confirm_no_auth_risk']} />
             </div>
           </div>
         )}

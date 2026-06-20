@@ -55,6 +55,15 @@ func testTunnelProvisionRequest(t *testing.T, role string, port int) protocol.Tu
 	}
 }
 
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal json: %v", err)
+	}
+	return data
+}
+
 func reserveClientTCPPort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -246,6 +255,37 @@ func TestClientTunnelProvisionTargetRegistersProxyByTunnelID(t *testing.T) {
 	}
 	if proxy.ProvisionRevision != uint64(req.Revision) {
 		t.Fatalf("provision revision mismatch: got %d want %d", proxy.ProvisionRevision, req.Revision)
+	}
+}
+
+func TestClientTunnelProvisionSOCKS5TargetUsesEndpointRuntime(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
+	req.Spec.Target.Type = protocol.TargetTypeSOCKS5ConnectHandler
+	req.Spec.Target.Config = mustJSON(t, protocol.SOCKS5ConnectHandlerConfig{
+		AllowedTargetCIDRs: []string{"127.0.0.0/8"},
+		AllowedTargetHosts: []string{"127.0.0.1"},
+		AllowedTargetPorts: []int{8080},
+		DialTimeoutSeconds: 2,
+	})
+
+	ack := c.handleTunnelProvision(&sessionRuntime{}, req)
+	if !ack.Accepted {
+		t.Fatalf("SOCKS5 target provision rejected: %s", ack.Message)
+	}
+	if _, ok := c.proxies.Load(req.TunnelID); ok {
+		t.Fatal("SOCKS5 target provision must not register legacy ProxyNewRequest")
+	}
+	value, ok := c.socks5Targets.Load(req.TunnelID)
+	if !ok {
+		t.Fatal("SOCKS5 target provision did not store endpoint-specific runtime")
+	}
+	target := value.(clientSOCKS5TargetRuntime)
+	if target.tunnelID != req.TunnelID || target.revision != req.Revision {
+		t.Fatalf("SOCKS5 target runtime identity mismatch: %+v", target)
+	}
+	if target.config.DialTimeoutSeconds != 2 {
+		t.Fatalf("SOCKS5 target config not preserved: %+v", target.config)
 	}
 }
 
@@ -451,6 +491,52 @@ func TestClientTunnelPreflightTCPBindSuccessAndFailure(t *testing.T) {
 	})
 	if resp.Accepted || resp.Code != protocol.TunnelMutationErrorCodeIngressPortInUse {
 		t.Fatalf("occupied tcp port preflight should fail with ingress_port_in_use: %+v", resp)
+	}
+}
+
+func TestClientTunnelPreflightSOCKS5UsesTCPBindResource(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	port := reserveClientTCPPort(t)
+	config, err := json.Marshal(protocol.SOCKS5ListenConfig{
+		BindIP:             "127.0.0.1",
+		Port:               port,
+		AllowedSourceCIDRs: []string{"127.0.0.0/8"},
+		Auth:               protocol.SOCKS5AuthConfig{Type: protocol.SOCKS5AuthTypeNone},
+	})
+	if err != nil {
+		t.Fatalf("marshal socks5 preflight config: %v", err)
+	}
+
+	resp := c.handleTunnelPreflight(protocol.TunnelPreflightRequest{
+		RequestID: "req-socks5-ok",
+		Role:      protocol.DataStreamRoleIngress,
+		Ingress: protocol.EndpointSpec{
+			Location: protocol.EndpointLocationClient,
+			Type:     protocol.IngressTypeSOCKS5Listen,
+			Config:   config,
+		},
+	})
+	if !resp.Accepted || resp.Code != "" {
+		t.Fatalf("free SOCKS5 tcp port preflight should pass: %+v", resp)
+	}
+
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("occupy tcp port: %v", err)
+	}
+	defer mustClose(t, ln)
+
+	resp = c.handleTunnelPreflight(protocol.TunnelPreflightRequest{
+		RequestID: "req-socks5-busy",
+		Role:      protocol.DataStreamRoleIngress,
+		Ingress: protocol.EndpointSpec{
+			Location: protocol.EndpointLocationClient,
+			Type:     protocol.IngressTypeSOCKS5Listen,
+			Config:   config,
+		},
+	})
+	if resp.Accepted || resp.Code != protocol.TunnelMutationErrorCodeIngressPortInUse {
+		t.Fatalf("SOCKS5 occupied tcp port preflight should fail with ingress_port_in_use: %+v", resp)
 	}
 }
 

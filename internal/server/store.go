@@ -22,19 +22,21 @@ var ErrTunnelNotFound = errors.New("tunnel not found")
 var ErrTunnelRevisionConflict = errors.New("tunnel revision conflict")
 
 const (
-	TunnelTopologyServerExpose       = protocol.TunnelTopologyServerExpose
-	TunnelTopologyClientToClient     = protocol.TunnelTopologyClientToClient
-	TunnelIngressTypeTCPListen       = protocol.IngressTypeTCPListen
-	TunnelIngressTypeUDPListen       = protocol.IngressTypeUDPListen
-	TunnelIngressTypeHTTPHost        = protocol.IngressTypeHTTPHost
-	TunnelTargetTypeTCPService       = protocol.TargetTypeTCPService
-	TunnelTargetTypeUDPService       = protocol.TargetTypeUDPService
-	TunnelTransportServerRelayOnly   = protocol.TransportPolicyServerRelayOnly
-	TunnelTransportDirectPreferred   = protocol.TransportPolicyDirectPreferred
-	TunnelTransportDirectOnly        = protocol.TransportPolicyDirectOnly
-	TunnelActualTransportUnknown     = protocol.ActualTransportUnknown
-	TunnelActualTransportServerRelay = protocol.ActualTransportServerRelay
-	TunnelP2PStateIdle               = protocol.P2PStateIdle
+	TunnelTopologyServerExpose           = protocol.TunnelTopologyServerExpose
+	TunnelTopologyClientToClient         = protocol.TunnelTopologyClientToClient
+	TunnelIngressTypeTCPListen           = protocol.IngressTypeTCPListen
+	TunnelIngressTypeUDPListen           = protocol.IngressTypeUDPListen
+	TunnelIngressTypeHTTPHost            = protocol.IngressTypeHTTPHost
+	TunnelIngressTypeSOCKS5Listen        = protocol.IngressTypeSOCKS5Listen
+	TunnelTargetTypeTCPService           = protocol.TargetTypeTCPService
+	TunnelTargetTypeUDPService           = protocol.TargetTypeUDPService
+	TunnelTargetTypeSOCKS5ConnectHandler = protocol.TargetTypeSOCKS5ConnectHandler
+	TunnelTransportServerRelayOnly       = protocol.TransportPolicyServerRelayOnly
+	TunnelTransportDirectPreferred       = protocol.TransportPolicyDirectPreferred
+	TunnelTransportDirectOnly            = protocol.TransportPolicyDirectOnly
+	TunnelActualTransportUnknown         = protocol.ActualTransportUnknown
+	TunnelActualTransportServerRelay     = protocol.ActualTransportServerRelay
+	TunnelP2PStateIdle                   = protocol.P2PStateIdle
 )
 
 // StoredTunnel is a tunnel configuration persisted to storage.
@@ -1050,12 +1052,12 @@ func validateUnifiedTunnelSpec(t StoredTunnel) error {
 		return fmt.Errorf("unsupported target location %q", t.Target.Location)
 	}
 	switch t.Ingress.Type {
-	case TunnelIngressTypeTCPListen, TunnelIngressTypeUDPListen, TunnelIngressTypeHTTPHost:
+	case TunnelIngressTypeTCPListen, TunnelIngressTypeUDPListen, TunnelIngressTypeHTTPHost, TunnelIngressTypeSOCKS5Listen:
 	default:
 		return fmt.Errorf("unsupported ingress type %q", t.Ingress.Type)
 	}
 	switch t.Target.Type {
-	case TunnelTargetTypeTCPService, TunnelTargetTypeUDPService:
+	case TunnelTargetTypeTCPService, TunnelTargetTypeUDPService, TunnelTargetTypeSOCKS5ConnectHandler:
 	default:
 		return fmt.Errorf("unsupported target type %q", t.Target.Type)
 	}
@@ -1226,7 +1228,7 @@ WHERE (` + strings.Join(clauses, " OR ") + `)`
 
 func tunnelIngressConflictPatterns(tunnel StoredTunnel) []string {
 	switch tunnel.Ingress.Type {
-	case TunnelIngressTypeTCPListen, TunnelIngressTypeUDPListen:
+	case TunnelIngressTypeTCPListen, TunnelIngressTypeUDPListen, TunnelIngressTypeSOCKS5Listen:
 	default:
 		return nil
 	}
@@ -1257,7 +1259,7 @@ func tunnelIngressConflictKeys(tunnel StoredTunnel) []string {
 		return nil
 	}
 	switch tunnel.Ingress.Type {
-	case TunnelIngressTypeTCPListen, TunnelIngressTypeUDPListen:
+	case TunnelIngressTypeTCPListen, TunnelIngressTypeUDPListen, TunnelIngressTypeSOCKS5Listen:
 	default:
 		return []string{key}
 	}
@@ -1293,7 +1295,7 @@ func tunnelIngressResourceLock(tunnel StoredTunnel) (key, kind, clientID string)
 		locationID += ":" + tunnel.Ingress.ClientID
 	}
 	switch tunnel.Ingress.Type {
-	case TunnelIngressTypeTCPListen:
+	case TunnelIngressTypeTCPListen, TunnelIngressTypeSOCKS5Listen:
 		port := tunnelIngressPort(tunnel)
 		if port <= 0 {
 			return "", "", ""
@@ -1391,6 +1393,13 @@ func tunnelTargetResourceKey(tunnel StoredTunnel) string {
 	if targetType == "" {
 		targetType = TunnelTargetTypeTCPService
 	}
+	targetClientID := tunnel.Target.ClientID
+	if targetClientID == "" {
+		targetClientID = tunnel.ClientID
+	}
+	if targetType == TunnelTargetTypeSOCKS5ConnectHandler {
+		return "target:client:" + targetClientID + ":" + targetType
+	}
 	host := tunnel.LocalIP
 	var cfg struct {
 		IP   string `json:"ip"`
@@ -1409,10 +1418,6 @@ func tunnelTargetResourceKey(tunnel StoredTunnel) string {
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		host = ip.String()
-	}
-	targetClientID := tunnel.Target.ClientID
-	if targetClientID == "" {
-		targetClientID = tunnel.ClientID
 	}
 	return "target:client:" + targetClientID + ":" + targetType + ":" + host + ":" + strconv.Itoa(tunnel.LocalPort)
 }

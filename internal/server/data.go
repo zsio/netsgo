@@ -219,6 +219,10 @@ func waitForDataStreamHandlers(streamWG *sync.WaitGroup, timeout time.Duration) 
 // openStreamToClient opens a new server-relay stream on the client's yamux session and
 // writes a DataStreamHeader that identifies the tunnel/revision before payload bytes.
 func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.Conn, error) {
+	return s.openStreamToClientWithHeader(client, proxyName, nil)
+}
+
+func (s *Server) openStreamToClientWithHeader(client *ClientConn, proxyName string, mutate func(*protocol.DataStreamHeader)) (net.Conn, error) {
 	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
 		return nil, fmt.Errorf("client [%s] is not online", client.ID)
 	}
@@ -257,6 +261,9 @@ func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.C
 	if tunnel.Config.TransportPolicy == protocol.TransportPolicyDirectOnly {
 		_ = stream.Close()
 		return nil, fmt.Errorf("direct_only tunnels must not use server relay")
+	}
+	if mutate != nil {
+		mutate(&header)
 	}
 
 	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {

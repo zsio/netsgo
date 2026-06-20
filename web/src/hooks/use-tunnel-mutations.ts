@@ -52,6 +52,8 @@ function buildTunnelSpec(data: {
   domain?: string;
   ingress_bps?: number;
   egress_bps?: number;
+  socks5?: CreateTunnelInput['socks5'];
+  confirm_no_auth_risk?: boolean;
 }) {
   if (data.topology === 'client_to_client') {
     return buildClientToClientTunnelSpecCreateRequest({
@@ -66,6 +68,8 @@ function buildTunnelSpec(data: {
       bind_ip: data.bind_ip ?? '',
       ingress_bps: data.ingress_bps,
       egress_bps: data.egress_bps,
+      socks5: data.socks5,
+      confirm_no_auth_risk: data.confirm_no_auth_risk,
     });
   }
   return buildTunnelSpecCreateRequest(data);
@@ -79,7 +83,7 @@ export function useCreateTunnel() {
       try {
         return await tunnelApi.create(buildTunnelSpec(data));
       } catch (error) {
-        if (!shouldUseLegacyTunnelEndpoint(error, data.topology)) {
+        if (data.type === 'socks5' || !shouldUseLegacyTunnelEndpoint(error, data.topology)) {
           throw error;
         }
         try {
@@ -164,7 +168,7 @@ export function useUpdateTunnel() {
           spec: buildTunnelSpec(data),
         });
       } catch (error) {
-        if (!shouldUseLegacyTunnelEndpoint(error, data.topology)) {
+        if (data.type === 'socks5' || !shouldUseLegacyTunnelEndpoint(error, data.topology)) {
           throw error;
         }
         try {

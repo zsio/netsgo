@@ -17,12 +17,14 @@ const (
 	EndpointLocationServer = "server"
 	EndpointLocationClient = "client"
 
-	IngressTypeTCPListen = "tcp_listen"
-	IngressTypeUDPListen = "udp_listen"
-	IngressTypeHTTPHost  = "http_host"
+	IngressTypeTCPListen    = "tcp_listen"
+	IngressTypeUDPListen    = "udp_listen"
+	IngressTypeHTTPHost     = "http_host"
+	IngressTypeSOCKS5Listen = "socks5_listen"
 
-	TargetTypeTCPService = "tcp_service"
-	TargetTypeUDPService = "udp_service"
+	TargetTypeTCPService           = "tcp_service"
+	TargetTypeUDPService           = "udp_service"
+	TargetTypeSOCKS5ConnectHandler = "socks5_connect_handler"
 
 	TransportPolicyServerRelayOnly = "server_relay_only"
 	TransportPolicyDirectPreferred = "direct_preferred"
@@ -202,8 +204,8 @@ func DefaultClientCapabilities() ClientCapabilities {
 		ProtocolVersion:     1,
 		StreamHeaderVersion: 1,
 		TunnelSpecVersion:   TunnelSpecVersion,
-		IngressTypes:        []string{IngressTypeTCPListen, IngressTypeUDPListen},
-		TargetTypes:         []string{TargetTypeTCPService, TargetTypeUDPService},
+		IngressTypes:        []string{IngressTypeTCPListen, IngressTypeUDPListen, IngressTypeSOCKS5Listen},
+		TargetTypes:         []string{TargetTypeTCPService, TargetTypeUDPService, TargetTypeSOCKS5ConnectHandler},
 		TransportPolicies:   []string{TransportPolicyServerRelayOnly},
 		P2P:                 P2PCapabilities{Supported: false},
 	}

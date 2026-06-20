@@ -8,8 +8,12 @@ import type {
   ProxyDesiredState,
   ProxyRuntimeState,
   ProxyType,
+  Socks5AuthConfig,
+  Socks5ConnectHandlerConfig,
+  Socks5ListenConfig,
   P2PStateValue,
   TargetEndpointType,
+  TunnelFormType,
   TransportPolicy,
   TunnelCapabilities,
   TunnelCreateRequest,
@@ -54,13 +58,26 @@ const requiredTunnelCapabilities = [
 ] as const;
 
 interface TunnelMutationPayloadInput {
-  type: ProxyType;
+  type: TunnelFormType;
   local_ip: string;
   local_port: number;
   remote_port?: number;
   domain?: string;
   ingress_bps?: number;
   egress_bps?: number;
+  socks5?: Socks5MutationInput;
+  confirm_no_auth_risk?: boolean;
+}
+
+export interface Socks5MutationInput {
+  allowed_source_cidrs?: string[];
+  auth_type: Socks5AuthConfig['type'];
+  username?: string;
+  password?: string;
+  allowed_target_cidrs?: string[];
+  allowed_target_hosts?: string[];
+  allowed_target_ports?: number[];
+  dial_timeout_seconds?: number;
 }
 
 export interface TunnelSpecMutationInput extends TunnelMutationPayloadInput {
@@ -75,8 +92,8 @@ export interface ClientToClientTunnelSpecMutationInput extends TunnelMutationPay
   bind_ip: string;
 }
 
-export const currentIngressTypes = ['tcp_listen', 'udp_listen', 'http_host'] as const satisfies readonly IngressEndpointType[];
-export const currentTargetTypes = ['tcp_service', 'udp_service'] as const satisfies readonly TargetEndpointType[];
+export const currentIngressTypes = ['tcp_listen', 'udp_listen', 'http_host', 'socks5_listen'] as const satisfies readonly IngressEndpointType[];
+export const currentTargetTypes = ['tcp_service', 'udp_service', 'socks5_connect_handler'] as const satisfies readonly TargetEndpointType[];
 export const futureOnlyTargetTypes = ['unix_socket', 'static_file', 'serial_device'] as const;
 
 const transportPolicyLabels = {
@@ -123,6 +140,30 @@ export function buildTunnelMutationPayload(input: TunnelMutationPayloadInput) {
 
 export function buildTunnelSpecCreateRequest(input: TunnelSpecMutationInput): TunnelCreateRequest {
   const payload = buildTunnelMutationPayload(input);
+  if (input.type === 'socks5') {
+    const socks5 = buildSocks5EndpointConfigs(input.socks5, payload.remote_port, '0.0.0.0');
+    return {
+      name: input.name,
+      topology: 'server_expose',
+      ingress: {
+        location: 'server',
+        type: 'socks5_listen',
+        config: socks5.listen,
+      },
+      target: {
+        location: 'client',
+        client_id: input.clientId,
+        type: 'socks5_connect_handler',
+        config: socks5.target,
+      },
+      transport_policy: 'server_relay_only',
+      bandwidth_settings: {
+        ingress_bps: payload.ingress_bps,
+        egress_bps: payload.egress_bps,
+      },
+      confirm_no_auth_risk: input.confirm_no_auth_risk,
+    };
+  }
   const target: TunnelTarget = input.type === 'udp'
     ? {
       location: 'client',
@@ -170,6 +211,30 @@ export function buildClientToClientTunnelSpecCreateRequest(
   const bindIP = input.bind_ip.trim();
   if (!bindIP) {
     throw new Error(i18n.t('errors.client_to_client_bind_ip_required'));
+  }
+  if (input.type === 'socks5') {
+    const socks5 = buildSocks5EndpointConfigs(input.socks5, payload.remote_port, bindIP);
+    return {
+      name: input.name,
+      topology: 'client_to_client',
+      ingress: {
+        location: 'client',
+        client_id: input.ingressClientId,
+        type: 'socks5_listen',
+        config: socks5.listen,
+      },
+      target: {
+        location: 'client',
+        client_id: input.targetClientId,
+        type: 'socks5_connect_handler',
+        config: socks5.target,
+      },
+      transport_policy: 'server_relay_only',
+      bandwidth_settings: {
+        ingress_bps: payload.ingress_bps,
+        egress_bps: payload.egress_bps,
+      },
+    };
   }
   const target: TunnelTarget = input.type === 'udp'
     ? {
@@ -389,6 +454,47 @@ function buildServerExposeIngress(
   }
 }
 
+function buildSocks5EndpointConfigs(
+  input: Socks5MutationInput | undefined,
+  port: number,
+  bindIP: string,
+): { listen: Socks5ListenConfig; target: Socks5ConnectHandlerConfig } {
+  const authType = input?.auth_type ?? 'none';
+  const auth: Socks5AuthConfig = authType === 'username_password'
+    ? {
+      type: 'username_password',
+      username: (input?.username ?? '').trim(),
+      password: input?.password ?? '',
+    }
+    : { type: 'none' };
+  return {
+    listen: {
+      bind_ip: bindIP,
+      port,
+      allowed_source_cidrs: normalizeStringList(input?.allowed_source_cidrs, ['0.0.0.0/0', '::/0']),
+      auth,
+    },
+    target: {
+      allowed_target_cidrs: normalizeStringList(input?.allowed_target_cidrs, ['0.0.0.0/0', '::/0']),
+      allowed_target_hosts: normalizeStringList(input?.allowed_target_hosts, []),
+      allowed_target_ports: normalizePortList(input?.allowed_target_ports),
+      dial_timeout_seconds: input?.dial_timeout_seconds ?? 10,
+    },
+  };
+}
+
+function normalizeStringList(values: string[] | undefined, fallback: string[]) {
+  const normalized = (values ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function normalizePortList(values: number[] | undefined) {
+  return (values ?? [])
+    .filter((value) => Number.isInteger(value) && value >= 1 && value <= 65535);
+}
+
 function getTopologyLabel(topology: TunnelTopology | undefined) {
   switch (topology) {
     case 'client_to_client':
@@ -431,6 +537,7 @@ function getTunnelIngressLabel(tunnel: ProxyConfig) {
         return ingress.config?.domain || '(domain not set)';
       case 'tcp_listen':
       case 'udp_listen':
+      case 'socks5_listen':
         return `${ingress.config?.bind_ip || '0.0.0.0'}:${ingress.config?.port ?? 0}`;
     }
   }
@@ -440,7 +547,7 @@ function getTunnelIngressLabel(tunnel: ProxyConfig) {
     : `:${tunnel.remote_port}`;
 }
 
-function getServiceTargetHost(target: TunnelTarget) {
+function getServiceTargetHost(target: Extract<TunnelTarget, { type: 'tcp_service' | 'udp_service' }>) {
   return target.config?.ip || target.config?.host || '';
 }
 
@@ -451,6 +558,8 @@ function getTunnelTargetLabel(tunnel: ProxyConfig) {
       case 'tcp_service':
       case 'udp_service':
         return `${getServiceTargetHost(target)}:${target.config?.port ?? 0}`;
+      case 'socks5_connect_handler':
+        return 'Dynamic SOCKS5 CONNECT';
     }
   }
 
@@ -462,7 +571,7 @@ function getIngressWarning(tunnel: ProxyConfig) {
   if (!ingress || ingress.location !== 'client') {
     return undefined;
   }
-  if (ingress.type !== 'tcp_listen' && ingress.type !== 'udp_listen') {
+  if (ingress.type !== 'tcp_listen' && ingress.type !== 'udp_listen' && ingress.type !== 'socks5_listen') {
     return undefined;
   }
   const bindIP = ingress.config?.bind_ip?.trim() ?? '';

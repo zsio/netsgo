@@ -699,3 +699,34 @@ func TestUnifiedTunnelControlMessagesJSONRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultClientCapabilitiesIncludeSOCKS5Endpoints(t *testing.T) {
+	caps := DefaultClientCapabilities()
+	if !containsString(caps.IngressTypes, IngressTypeSOCKS5Listen) {
+		t.Fatalf("default capabilities should include %q ingress: %+v", IngressTypeSOCKS5Listen, caps.IngressTypes)
+	}
+	if !containsString(caps.TargetTypes, TargetTypeSOCKS5ConnectHandler) {
+		t.Fatalf("default capabilities should include %q target: %+v", TargetTypeSOCKS5ConnectHandler, caps.TargetTypes)
+	}
+}
+
+func TestProxyNewRequestRemainsLegacyFlatSchema(t *testing.T) {
+	data, err := json.Marshal(ProxyNewRequest{})
+	if err != nil {
+		t.Fatalf("marshal ProxyNewRequest: %v", err)
+	}
+	for _, forbidden := range []string{"target_host", "target_port", "allowed_target_cidrs", "allowed_source_cidrs", "auth"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Fatalf("ProxyNewRequest must not grow SOCKS5 field %q: %s", forbidden, data)
+		}
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

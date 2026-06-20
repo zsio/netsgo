@@ -112,6 +112,26 @@ func computeTunnelCapabilities(config protocol.ProxyConfig) *protocol.TunnelCapa
 func proxyConfigForClientView(config protocol.ProxyConfig, clientOnline bool) protocol.ProxyConfig {
 	normalized := config
 	setProxyConfigStates(&normalized, normalized.DesiredState, normalized.RuntimeState, normalized.Error)
+	if normalized.Ingress != nil {
+		ingress := *normalized.Ingress
+		ingress.Config = endpointConfigForView(EndpointSpec{
+			Location: ingress.Location,
+			ClientID: ingress.ClientID,
+			Type:     ingress.Type,
+			Config:   ingress.Config,
+		})
+		normalized.Ingress = &ingress
+	}
+	if normalized.Target != nil {
+		target := *normalized.Target
+		target.Config = endpointConfigForView(EndpointSpec{
+			Location: target.Location,
+			ClientID: target.ClientID,
+			Type:     target.Type,
+			Config:   target.Config,
+		})
+		normalized.Target = &target
+	}
 	if !clientOnline &&
 		normalized.DesiredState == protocol.ProxyDesiredStateRunning &&
 		normalized.RuntimeState != protocol.ProxyRuntimeStateError {

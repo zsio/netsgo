@@ -296,6 +296,93 @@ describe('tunnel-model', () => {
     });
   });
 
+  test('SOCKS5 server_expose 创建请求只使用 endpoint config', () => {
+    expect(
+      buildTunnelSpecCreateRequest({
+        clientId: 'client-b',
+        name: 'socks',
+        type: 'socks5',
+        local_ip: '',
+        local_port: 0,
+        remote_port: 1080,
+        socks5: {
+          auth_type: 'none',
+          allowed_source_cidrs: ['0.0.0.0/0', '::/0'],
+          allowed_target_cidrs: ['10.0.0.0/8'],
+          allowed_target_hosts: ['db.internal'],
+          allowed_target_ports: [443],
+          dial_timeout_seconds: 7,
+        },
+        confirm_no_auth_risk: true,
+      }),
+    ).toEqual({
+      name: 'socks',
+      topology: 'server_expose',
+      ingress: {
+        location: 'server',
+        type: 'socks5_listen',
+        config: {
+          bind_ip: '0.0.0.0',
+          port: 1080,
+          allowed_source_cidrs: ['0.0.0.0/0', '::/0'],
+          auth: { type: 'none' },
+        },
+      },
+      target: {
+        location: 'client',
+        client_id: 'client-b',
+        type: 'socks5_connect_handler',
+        config: {
+          allowed_target_cidrs: ['10.0.0.0/8'],
+          allowed_target_hosts: ['db.internal'],
+          allowed_target_ports: [443],
+          dial_timeout_seconds: 7,
+        },
+      },
+      transport_policy: 'server_relay_only',
+      bandwidth_settings: {
+        ingress_bps: 0,
+        egress_bps: 0,
+      },
+      confirm_no_auth_risk: true,
+    });
+  });
+
+  test('SOCKS5 client_to_client 创建请求使用 ingress/target endpoint type', () => {
+    expect(
+      buildClientToClientTunnelSpecCreateRequest({
+        ingressClientId: 'client-b',
+        targetClientId: 'client-a',
+        name: 'socks-c2c',
+        type: 'socks5',
+        bind_ip: '127.0.0.1',
+        local_ip: '',
+        local_port: 0,
+        remote_port: 1081,
+        socks5: {
+          auth_type: 'username_password',
+          username: 'u',
+          password: 'p',
+          allowed_source_cidrs: ['127.0.0.0/8'],
+          allowed_target_cidrs: ['0.0.0.0/0', '::/0'],
+          dial_timeout_seconds: 10,
+        },
+      }),
+    ).toMatchObject({
+      topology: 'client_to_client',
+      ingress: {
+        location: 'client',
+        client_id: 'client-b',
+        type: 'socks5_listen',
+      },
+      target: {
+        location: 'client',
+        client_id: 'client-a',
+        type: 'socks5_connect_handler',
+      },
+    });
+  });
+
   test('TunnelSpec 字段优先驱动拓扑、参与方、传输和绑定提示文案', () => {
     const view = buildTunnelViewModel(
       createTunnel({
