@@ -89,7 +89,9 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIConsoleSnapshot(w http.ResponseWriter, r *http.Request) {
-	encodeJSON(w, http.StatusOK, s.collectSnapshot())
+	snapshot := s.collectSnapshot()
+	log.Printf("🔎 console_snapshot clients=%d tunnels=%s", len(snapshot.Clients), summarizeSnapshotTunnelStates(snapshot.Clients))
+	encodeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
@@ -259,6 +261,19 @@ func (s *Server) storedTunnelViewConfig(stored StoredTunnel) protocol.ProxyConfi
 		P2PError: spec.Transport.P2PError,
 	}
 	return config
+}
+
+func summarizeSnapshotTunnelStates(clients []clientView) string {
+	var parts []string
+	for _, client := range clients {
+		for _, tunnel := range client.Proxies {
+			parts = append(parts, fmt.Sprintf("%s/%s:%s", client.ID, tunnel.Name, tunnel.RuntimeState))
+		}
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ",")
 }
 
 func proxyConfigViewKey(config protocol.ProxyConfig) string {

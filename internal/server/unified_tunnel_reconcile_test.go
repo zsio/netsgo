@@ -232,8 +232,10 @@ func TestUnifiedServerExposeProvisionAndDataHeaderUseStoredRevision(t *testing.T
 	defer mustClose(t, targetWS)
 	defer mustClose(t, targetServerWS)
 	clientSession, serverSession := newTestClientRelayDataSession(t)
+	caps := protocol.DefaultClientCapabilities()
 	target := &ClientConn{
 		ID:          stored.Target.ClientID,
+		Info:        protocol.ClientInfo{Hostname: "target-client", Capabilities: &caps},
 		conn:        targetServerWS,
 		proxies:     make(map[string]*ProxyTunnel),
 		dataSession: serverSession,
@@ -243,10 +245,17 @@ func TestUnifiedServerExposeProvisionAndDataHeaderUseStoredRevision(t *testing.T
 	s.clients.Store(target.ID, target)
 	go s.controlLoop(target)
 
+	eventsCh := s.events.Subscribe()
+	defer s.events.Unsubscribe(eventsCh)
+
 	restoreDone := make(chan error, 1)
 	go func() {
 		restoreDone <- s.restoreUnifiedServerExposeTunnel(target, stored)
 	}()
+	pendingPayload := waitForTunnelChangedEvent(t, eventsCh, "pending", stored.Name)
+	if got, _ := pendingPayload["runtime_state"].(string); got != protocol.ProxyRuntimeStatePending {
+		t.Fatalf("pending event runtime_state: want %s, got %s", protocol.ProxyRuntimeStatePending, got)
+	}
 	msg := readControlMessageOfType(t, targetWS, protocol.MsgTypeTunnelProvision)
 	var provision protocol.TunnelProvisionRequest
 	if err := msg.ParsePayload(&provision); err != nil {
@@ -285,6 +294,17 @@ func TestUnifiedServerExposeProvisionAndDataHeaderUseStoredRevision(t *testing.T
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for restore")
+	}
+	restoredPayload := waitForTunnelChangedEvent(t, eventsCh, "restored", stored.Name)
+	if got, _ := restoredPayload["runtime_state"].(string); got != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("restored event runtime_state: want %s, got %s", protocol.ProxyRuntimeStateExposed, got)
+	}
+	snapshot := s.collectSnapshot()
+	if len(snapshot.Clients) != 1 || len(snapshot.Clients[0].Proxies) != 1 {
+		t.Fatalf("snapshot should include one restored tunnel, got %+v", snapshot.Clients)
+	}
+	if got := snapshot.Clients[0].Proxies[0].RuntimeState; got != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("snapshot runtime_state after restore: want %s, got %s", protocol.ProxyRuntimeStateExposed, got)
 	}
 	t.Cleanup(func() {
 		_ = s.CloseProxyRuntime(target, stored.Name)
