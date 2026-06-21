@@ -4,7 +4,7 @@ import {
   DialogDescription, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog';
 import {
-  AlertTriangle, ArrowDown, Cable, ChevronDown, Globe, GitBranchPlus,
+  AlertTriangle, ArrowRight, Cable, ChevronDown, Globe, GitBranchPlus,
   Network, Radio, Server, Target, Waypoints,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -626,7 +626,7 @@ function TunnelDialogForm({
   }
 
   return (
-    <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-lg">
+    <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <GitBranchPlus className="h-5 w-5 text-primary" />
@@ -641,6 +641,27 @@ function TunnelDialogForm({
 
       <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col gap-4">
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto -mr-4 pr-4 pl-0.5">
+        {/* 链路预览（常驻顶部） */}
+        <div className="sticky top-0 z-10 -mx-0.5 mb-1 bg-background/95 py-2 backdrop-blur supports-backdrop-filter:bg-background/70">
+          <div className="flex items-center gap-1.5 overflow-x-auto rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2">
+            {flowSegments.map((seg, index) => {
+              const Icon = seg.icon;
+              return (
+                <Fragment key={seg.label}>
+                  {index > 0 && <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />}
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />
+                    <div className="min-w-0">
+                      <div className="text-[9px] uppercase leading-none tracking-wide text-muted-foreground">{seg.label}</div>
+                      <div className="truncate font-mono text-xs leading-tight" title={seg.value}>{seg.value}</div>
+                    </div>
+                  </div>
+                </Fragment>
+              );
+            })}
+          </div>
+        </div>
+
         {/* 隧道名称 */}
         <div className="space-y-1.5">
           <label className="text-sm font-medium">{t('tunnels.name')}</label>
@@ -885,6 +906,7 @@ function TunnelDialogForm({
                 onBlur={validateRemotePortRange}
                 min={1}
                 max={65535}
+                className={isClientToClient ? '' : 'max-w-[200px]'}
               />
               <FieldErrorText error={fieldError} fields={['remote_port', 'ingress.config.port']} />
               {remotePort && !parsedRemotePort && (
@@ -1012,6 +1034,7 @@ function TunnelDialogForm({
                       }}
                       min={1}
                       max={120}
+                      className="w-36"
                     />
                     <FieldErrorText error={fieldError} fields={['target.config.dial_timeout_seconds']} />
                   </div>
@@ -1142,45 +1165,45 @@ function TunnelDialogForm({
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">{t('tunnels.ingressLimit')}</label>
-                  <InputGroup>
-                    <InputGroupInput
-                      aria-label={t('tunnels.ingressLimit')}
-                      type="number"
-                      step="any"
-                      placeholder="0"
-                      value={ingressBps}
-                      onChange={(e) => {
-                        clearMutationFeedback();
-                        setIngressBps(e.target.value);
-                      }}
-                      min={0}
-                    />
-                    <InputGroupAddon align="inline-end">
-                      <InputGroupText>MiB/s</InputGroupText>
-                    </InputGroupAddon>
-                  </InputGroup>
-                  <FieldErrorText error={fieldError} fields={['ingress_bps', 'bandwidth_settings.ingress_bps']} />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">{t('tunnels.egressLimit')}</label>
-                  <InputGroup>
-                    <InputGroupInput
-                      aria-label={t('tunnels.egressLimit')}
-                      type="number"
-                      step="any"
-                      placeholder="0"
-                      value={egressBps}
-                      onChange={(e) => {
-                        clearMutationFeedback();
-                        setEgressBps(e.target.value);
-                      }}
-                      min={0}
-                    />
-                    <InputGroupAddon align="inline-end">
-                      <InputGroupText>MiB/s</InputGroupText>
-                    </InputGroupAddon>
-                  </InputGroup>
-                  <FieldErrorText error={fieldError} fields={['egress_bps', 'bandwidth_settings.egress_bps']} />
+                    <InputGroup>
+                      <InputGroupInput
+                        aria-label={t('tunnels.ingressLimit')}
+                        type="number"
+                        step="any"
+                        placeholder="0"
+                        value={ingressBps}
+                        onChange={(e) => {
+                          clearMutationFeedback();
+                          setIngressBps(e.target.value);
+                        }}
+                        min={0}
+                      />
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupText>MiB/s</InputGroupText>
+                      </InputGroupAddon>
+                    </InputGroup>
+                    <FieldErrorText error={fieldError} fields={['ingress_bps', 'bandwidth_settings.ingress_bps']} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">{t('tunnels.egressLimit')}</label>
+                    <InputGroup>
+                      <InputGroupInput
+                        aria-label={t('tunnels.egressLimit')}
+                        type="number"
+                        step="any"
+                        placeholder="0"
+                        value={egressBps}
+                        onChange={(e) => {
+                          clearMutationFeedback();
+                          setEgressBps(e.target.value);
+                        }}
+                        min={0}
+                      />
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupText>MiB/s</InputGroupText>
+                      </InputGroupAddon>
+                    </InputGroup>
+                    <FieldErrorText error={fieldError} fields={['egress_bps', 'bandwidth_settings.egress_bps']} />
                   </div>
                 </div>
               </div>
@@ -1194,29 +1217,6 @@ function TunnelDialogForm({
             {getTunnelMutationErrorMessage(mutation.error)}
           </div>
         )}
-        </div>
-
-        <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2.5">
-          <p className="mb-2 text-[11px] font-medium text-muted-foreground">{t('tunnels.flowTitle')}</p>
-          <div className="flex flex-col gap-1">
-            {flowSegments.map((seg, index) => {
-              const Icon = seg.icon;
-              return (
-                <Fragment key={seg.label}>
-                  {index > 0 && (
-                    <ArrowDown className="ml-[9px] h-3 w-3 shrink-0 text-muted-foreground/50" />
-                  )}
-                  <div className="flex items-center gap-2 rounded-md bg-background px-2 py-1.5 ring-1 ring-border">
-                    <Icon className="h-4 w-4 shrink-0 text-primary" />
-                    <span className="w-14 shrink-0 text-[10px] text-muted-foreground">{seg.label}</span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-xs" title={seg.value}>
-                      {seg.value}
-                    </span>
-                  </div>
-                </Fragment>
-              );
-            })}
-          </div>
         </div>
 
         <DialogFooter>
