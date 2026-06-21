@@ -13,10 +13,6 @@ type ingressAccessPolicy struct {
 	sourceCIDRs        []*net.IPNet
 }
 
-func normalizeIngressAccessPolicy(values []string) ([]string, error) {
-	return ingresspolicy.NormalizeSourceCIDRs(values)
-}
-
 func allowAllSourceCIDRs() []string {
 	return ingresspolicy.AllowAllSourceCIDRs()
 }

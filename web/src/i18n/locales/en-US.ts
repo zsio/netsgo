@@ -470,6 +470,7 @@ export const enUS = {
     ingress_preflight_rejected: 'Ingress preflight was rejected.',
     ingress_port_in_use: 'Ingress port is already in use.',
     unsupported_endpoint_type: 'This target type is not supported yet. Only TCP/UDP services are supported.',
+    invalid_target_type: 'Ingress type and target type are not compatible.',
     direct_transport_unavailable: 'Direct P2P transport is unavailable for this node. Select Server relay.',
     unsupported_topology: 'Unsupported tunnel topology.',
     revision_conflict: 'Tunnel was changed by another request. Refresh and try again.',

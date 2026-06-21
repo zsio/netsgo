@@ -2,7 +2,7 @@
 
 ## Status
 
-In SOCKS5 CONNECT scope
+Done in SOCKS5 CONNECT scope
 
 ## Severity
 

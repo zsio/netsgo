@@ -84,10 +84,9 @@ NetsGo 整体是一个**架构清晰、分层合理、测试覆盖较高**的隧
 - **问题**: 未显式设置 `USER`，容器默认 root 运行，违反最小权限原则。
 - **建议**: 添加 `RUN addgroup/adduser` + `USER netsgo`；生产镜像使用 `scratch`/`distroless`。
 
-### 1.12 docker-compose.stack.yml 引用未定义的 proxy 服务
-- **位置**: `test/e2e/docker-compose.stack.yml:47,76`
-- **问题**: `bootstrap` 与 `client` 连接 `http://proxy`，但 proxy 服务未定义，compose 无法启动。
-- **建议**: 要么补齐 nginx/caddy proxy 定义，要么把地址改为 `http://server:8080`。
+### 1.12 E2E Compose 入口已重构
+- **位置**: `test/e2e/docker-compose.system.yml`、`test/e2e/docker-compose.proxy.*.yml`
+- **现状**: 旧 stack Compose 入口已被移除，系统级 E2E 由 Go 测试控制业务流程，Compose 只负责真实拓扑。
 
 ### 1.13 Vite 使用预发布版本
 - **位置**: `web/package.json:49` (`vite: ^8.0.0-beta.13`)
@@ -200,7 +199,7 @@ NetsGo 整体是一个**架构清晰、分层合理、测试覆盖较高**的隧
 - **`Dockerfile:36-49`** 未分离 `go.mod` 缓存层，每次源码变更都会重新下载模块。
 - **`Dockerfile:57`** 缺少 `HEALTHCHECK`。
 - **`docker-compose.dev.yml:69-90`** `client-key` 的 `entrypoint` 与脚本组合易混淆，需核对启动语义。
-- **`.github/workflows/ci.yml:136-162`** `make test-e2e-nginx/caddy` 引用未在仓库中找到的 compose 文件，CI 可能误报。
+- **`.github/workflows/ci.yml:136-162`** 系统级 E2E 已统一到 `make test-system-e2e-nginx/caddy`。
 - **`.github/workflows/ci.yml`** Go modules 与 Playwright 浏览器未缓存，CI 耗时与成本增加。
 
 ---
@@ -291,7 +290,7 @@ NetsGo 整体是一个**架构清晰、分层合理、测试覆盖较高**的隧
 3. Tunnel 创建竞态的 `BEGIN IMMEDIATE` / `ON CONFLICT` 修复（§1.3）
 4. Data Session 切换竞态（§1.4）
 5. 硬编码凭据与 root 容器（§1.10, §1.11）
-6. docker-compose.stack.yml proxy 服务补齐（§1.12）
+6. 系统级 E2E Compose harness 持续扩展（§1.12）
 7. UDP 读取错误分类与 packetConn 竞态（§1.7, §1.8）
 
 ### P1（发布前修复）

@@ -2,7 +2,7 @@
 
 ## Status
 
-In SOCKS5
+Done in SOCKS5
 
 ## Severity
 

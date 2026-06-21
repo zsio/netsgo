@@ -46,6 +46,7 @@ function requiredEnv(name: string) {
 }
 
 export const e2eConfig = {
+  baseURL: process.env.NETSGO_E2E_BASE_URL ?? 'http://127.0.0.1:19180',
   adminUser: process.env.NETSGO_ADMIN_USER ?? 'admin',
   adminPass: requiredEnv('NETSGO_ADMIN_PASS'),
   sourceHostname: process.env.NETSGO_SOURCE_CLIENT_HOSTNAME ?? 'playwright-source-client',
@@ -58,6 +59,10 @@ export const e2eConfig = {
 
 export function uniqueTunnelName(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
+}
+
+export function e2eURL(path: string) {
+  return new URL(path, e2eConfig.baseURL).toString();
 }
 
 export async function login(page: Page) {
@@ -74,7 +79,7 @@ export async function gotoWhenReady(page: Page, path: string) {
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await page.goto(path, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+      await page.goto(e2eURL(path), { waitUntil: 'domcontentloaded', timeout: 5_000 });
       return;
     } catch (err) {
       lastError = err;
@@ -95,7 +100,7 @@ async function ensureEnglishLocale(page: Page) {
 }
 
 export async function fetchClients(page: Page): Promise<ClientSummary[]> {
-  const response = await page.request.get('/api/clients');
+  const response = await page.request.get(e2eURL('/api/clients'));
   if (!response.ok()) {
     throw new Error(`fetch clients failed: ${response.status()} ${await response.text()}`);
   }
@@ -103,7 +108,7 @@ export async function fetchClients(page: Page): Promise<ClientSummary[]> {
 }
 
 export async function fetchTunnels(page: Page): Promise<TunnelSummary[]> {
-  const response = await page.request.get('/api/tunnels');
+  const response = await page.request.get(e2eURL('/api/tunnels'));
   if (!response.ok()) {
     throw new Error(`fetch tunnels failed: ${response.status()} ${await response.text()}`);
   }
@@ -132,7 +137,7 @@ export async function waitForClientPair(page: Page): Promise<ClientPair> {
 }
 
 export async function openCreateTunnelDialog(page: Page, clientID: string) {
-  await page.goto(`/#/dashboard/clients/${clientID}`);
+  await page.goto(e2eURL(`/#/dashboard/clients/${clientID}`));
   await expect(page.getByText('Child tunnels')).toBeVisible();
   await page.getByRole('button', { name: 'Add tunnel' }).click();
   const dialog = page.getByRole('dialog', { name: 'Create proxy tunnel' });

@@ -32,10 +32,6 @@ func isSOCKS5ServerExpose(config protocol.ProxyConfig) bool {
 		config.Target.Type == protocol.TargetTypeSOCKS5ConnectHandler
 }
 
-func decodeSOCKS5ServerListenRuntimeConfig(raw []byte) (socks5ServerListenRuntimeConfig, error) {
-	return decodeSOCKS5ServerListenRuntimeConfigFromSpec(raw, nil)
-}
-
 func decodeSOCKS5ServerListenRuntimeConfigFromSpec(raw []byte, targetRaw []byte) (socks5ServerListenRuntimeConfig, error) {
 	var cfg protocol.SOCKS5ListenConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {

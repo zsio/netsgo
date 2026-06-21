@@ -1,0 +1,137 @@
+x-netsgo-image: &netsgo-image
+  image: netsgo-e2e:local
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: e2e
+
+services:
+  server:
+    <<: *netsgo-image
+    hostname: system-server
+    command:
+      - server
+      - --data-dir
+      - /var/lib/netsgo
+      - --port
+      - "8080"
+      - --init-admin-username
+      - ${NETSGO_ADMIN_USER:-admin}
+      - --init-admin-password
+      - ${NETSGO_ADMIN_PASS:?NETSGO_ADMIN_PASS is required}
+      - --init-server-addr
+      - ${NETSGO_SERVER_ADDR:-http://panel.system.local}
+      - --tls-mode
+      - off
+      - --trusted-proxies
+      - 127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+    ports:
+      - "${UPSTREAM_PORT:-19081}:8080"
+      - "${SERVER_SOCKS5_PORT:-19095}:${SERVER_SOCKS5_PORT:-19095}"
+    volumes:
+      - netsgo-system-server-data:/var/lib/netsgo
+    networks:
+      - control
+
+  tcp-backend:
+    image: hashicorp/http-echo:1.0.0
+    hostname: tcp-backend
+    command:
+      - -text=system tcp backend response
+      - -listen=:18083
+    networks:
+      - target-backend
+
+  tcp-backend-alt:
+    image: hashicorp/http-echo:1.0.0
+    hostname: tcp-backend-alt
+    command:
+      - -text=system tcp alt response
+      - -listen=:18085
+    networks:
+      - target-backend
+
+  tcp-backend-slow:
+    <<: *netsgo-image
+    hostname: tcp-backend-slow
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          socat -T30 TCP-LISTEN:18086,fork,reuseaddr SYSTEM:'sleep 5'
+        done
+    networks:
+      - target-backend
+
+  udp-backend:
+    <<: *netsgo-image
+    hostname: udp-backend
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          socat -T30 UDP4-RECVFROM:18084,fork,reuseaddr SYSTEM:'cat'
+        done
+    networks:
+      - target-backend
+
+  target-client:
+    <<: *netsgo-image
+    hostname: ${NETSGO_TARGET_CLIENT_HOSTNAME:-system-target-client}
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - /opt/netsgo-e2e/run-client.sh
+    environment:
+      NETSGO_SERVER: ${NETSGO_CLIENT_SERVER:-http://proxy}
+      NETSGO_CLIENT_KEY: ${NETSGO_CLIENT_KEY:-}
+      NETSGO_DATA_DIR: /var/lib/netsgo
+    volumes:
+      - netsgo-system-target-data:/var/lib/netsgo
+    depends_on:
+      - server
+      - tcp-backend
+      - tcp-backend-alt
+      - tcp-backend-slow
+      - udp-backend
+    networks:
+      - control
+      - target-backend
+
+  ingress-client:
+    <<: *netsgo-image
+    hostname: ${NETSGO_INGRESS_CLIENT_HOSTNAME:-system-ingress-client}
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - /opt/netsgo-e2e/run-client.sh
+    environment:
+      NETSGO_SERVER: ${NETSGO_CLIENT_SERVER:-http://proxy}
+      NETSGO_CLIENT_KEY: ${NETSGO_CLIENT_KEY:-}
+      NETSGO_DATA_DIR: /var/lib/netsgo
+    ports:
+      - "${C2C_SOCKS5_PORT:-19096}:${C2C_SOCKS5_PORT:-19096}"
+      - "${C2C_SOCKS5_DENY_PORT:-19097}:${C2C_SOCKS5_DENY_PORT:-19097}"
+      - "${C2C_TCP_PORT:-19098}:${C2C_TCP_PORT:-19098}"
+      - "${C2C_TCP_ALT_PORT:-19099}:${C2C_TCP_ALT_PORT:-19099}"
+      - "${C2C_TCP_SLOW_PORT:-19100}:${C2C_TCP_SLOW_PORT:-19100}"
+      - "${C2C_UDP_PORT:-19101}:${C2C_UDP_PORT:-19101}/udp"
+      - "${C2C_SOCKS5_AUTH_PORT:-19102}:${C2C_SOCKS5_AUTH_PORT:-19102}"
+      - "${C2C_SOCKS5_SOURCE_DENY_PORT:-19103}:${C2C_SOCKS5_SOURCE_DENY_PORT:-19103}"
+    volumes:
+      - netsgo-system-ingress-data:/var/lib/netsgo
+    depends_on:
+      - server
+    networks:
+      - control
+
+networks:
+  control:
+  target-backend:
+
+volumes:
+  netsgo-system-ingress-data:
+  netsgo-system-server-data:
+  netsgo-system-target-data:

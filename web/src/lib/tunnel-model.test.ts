@@ -503,6 +503,20 @@ describe('tunnel-model', () => {
     });
   });
 
+  test('invalid_target_type 使用 i18n 文案而非后端英文原文', () => {
+    const error = new ApiError(400, 'Bad Request', 'http_host ingress requires tcp_service target', {
+      field: 'target.type',
+      code: 'invalid_target_type',
+    });
+
+    expect(getTunnelMutationErrorMessage(error)).toBe('Ingress type and target type are not compatible.');
+    expect(getTunnelMutationFieldError(error)).toEqual({
+      field: 'target.type',
+      message: 'Ingress type and target type are not compatible.',
+      code: 'invalid_target_type',
+    });
+  });
+
   test('无字段信息的 API 错误不生成字段提示', () => {
     const error = new ApiError(409, 'Conflict', 'port is already in use', {
       code: 'ingress_port_in_use',

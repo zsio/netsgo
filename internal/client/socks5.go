@@ -3,10 +3,12 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"strings"
+	"syscall"
 	"time"
 
 	"netsgo/internal/ingresspolicy"
@@ -223,7 +225,7 @@ func socks5DialResultFromError(err error) protocol.SOCKS5DialResult {
 	status := protocol.SOCKS5DialStatusGeneralFailure
 	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		status = protocol.SOCKS5DialStatusDialTimeout
-	} else if strings.Contains(strings.ToLower(err.Error()), "connection refused") {
+	} else if errors.Is(err, syscall.ECONNREFUSED) {
 		status = protocol.SOCKS5DialStatusConnectionRefused
 	}
 	return protocol.SOCKS5DialResult{Status: status, Message: err.Error()}
@@ -254,10 +256,6 @@ func (c *Client) acceptIngressSOCKS5(rt *sessionRuntime, req protocol.TunnelProv
 		}
 		go c.handleIngressSOCKS5Conn(rt, req, runtime, conn, listenCfg)
 	}
-}
-
-func decodeSOCKS5ListenRuntimeConfig(raw []byte) (socks5ListenRuntimeConfig, error) {
-	return decodeSOCKS5ListenRuntimeConfigFromSpec(raw, nil)
 }
 
 func decodeSOCKS5ListenRuntimeConfigFromSpec(raw []byte, targetRaw []byte) (socks5ListenRuntimeConfig, error) {

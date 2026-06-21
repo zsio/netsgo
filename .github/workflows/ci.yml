@@ -148,9 +148,9 @@ jobs:
       - name: Restore web dist
         run: tar -xzf /tmp/web-dist/web-dist.tgz -C web
       - name: Run E2E Nginx
-        run: make test-e2e-nginx
+        run: make test-system-e2e-nginx
       - name: Run E2E Caddy
-        run: make test-e2e-caddy
+        run: make test-system-e2e-caddy
       - uses: oven-sh/setup-bun@v2
       - name: Install web dependencies
         working-directory: web
@@ -159,6 +159,8 @@ jobs:
         working-directory: web
         run: bunx playwright install --with-deps chromium
       - name: Run Playwright client-to-client smoke E2E
+        env:
+          PLAYWRIGHT_RUNNER: xvfb-run -a
         run: make test-playwright-e2e-smoke
 
   cross-build:

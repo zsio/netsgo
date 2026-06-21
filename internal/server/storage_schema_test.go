@@ -122,6 +122,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "is_active", typ: "INTEGER", notNull: true},
 			{name: "max_uses", typ: "INTEGER", notNull: true},
 			{name: "use_count", typ: "INTEGER", notNull: true},
+			{name: "lookup_digest", typ: "TEXT", notNull: true, defaultValue: "''"},
 		},
 		"api_key_permissions": {
 			{name: "api_key_id", typ: "TEXT", notNull: true, primaryKey: true},
@@ -284,7 +285,10 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "idx_admin_auth_challenges_user_kind", unique: false, columns: []string{"user_id", "kind"}},
 			{name: "sqlite_autoindex_admin_auth_challenges_1", unique: true, columns: []string{"id"}},
 		},
-		"api_keys": {{name: "sqlite_autoindex_api_keys_1", unique: true, columns: []string{"id"}}},
+		"api_keys": {
+			{name: "idx_api_keys_lookup_digest", unique: false, columns: []string{"lookup_digest"}},
+			{name: "sqlite_autoindex_api_keys_1", unique: true, columns: []string{"id"}},
+		},
 		"api_key_permissions": {
 			{name: "sqlite_autoindex_api_key_permissions_1", unique: true, columns: []string{"api_key_id", "permission"}},
 		},
@@ -340,7 +344,8 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"004_tunnel_created_at",
 		"005_unified_tunnel_storage",
 		"006_admin_security",
-		"007_socks5_endpoint_types",
+		"007_api_key_lookup_digest",
+		"008_socks5_endpoint_types",
 	}
 	if got := appliedMigrationNames(t, db); !reflect.DeepEqual(got, wantMigrationNames) {
 		t.Fatalf("applied migrations = %#v, want %#v", got, wantMigrationNames)
@@ -376,7 +381,8 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"004_tunnel_created_at",
 		"005_unified_tunnel_storage",
 		"006_admin_security",
-		"007_socks5_endpoint_types",
+		"007_api_key_lookup_digest",
+		"008_socks5_endpoint_types",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -533,8 +539,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations failed: %v", err)
 	}
-	if count != 7 {
-		t.Fatalf("schema_migrations count = %d, want 7", count)
+	if count != 8 {
+		t.Fatalf("schema_migrations count = %d, want 8", count)
 	}
 }
 

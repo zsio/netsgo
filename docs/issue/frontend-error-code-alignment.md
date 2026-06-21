@@ -2,7 +2,7 @@
 
 ## Status
 
-Open; should be included if SOCKS5 frontend/API error handling is touched
+Done in SOCKS5
 
 ## Severity
 

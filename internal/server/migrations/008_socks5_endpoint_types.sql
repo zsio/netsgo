@@ -1,4 +1,4 @@
--- Name: 007_socks5_endpoint_types
+-- Name: 008_socks5_endpoint_types
 -- Description: Allow SOCKS5 endpoint types in unified tunnel storage.
 -- CreatedAt: 2026-06-20T00:00:00Z
 

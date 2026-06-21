@@ -2,7 +2,7 @@
 
 ## Status
 
-Open
+Partial done in SOCKS5; Open for secret store
 
 ## Severity
 

@@ -12,7 +12,6 @@ export default defineConfig([
     extends: [
       js.configs.recommended,
       tseslint.configs.recommended,
-      reactHooks.configs.flat.recommended,
     ],
     languageOptions: {
       ecmaVersion: 2020,
@@ -22,6 +21,9 @@ export default defineConfig([
   {
     files: ['src/**/*.{ts,tsx}'],
     ignores: ['src/routes/**/*', 'src/components/ui/**/*'],
+    extends: [
+      reactHooks.configs.flat.recommended,
+    ],
     plugins: {
       'react-refresh': reactRefresh,
     },

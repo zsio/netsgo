@@ -1502,7 +1502,7 @@ func scanAPIKeyBase(row dbScanner) (APIKey, error) {
 	var createdAt string
 	var expiresAt sql.NullString
 	var isActive int
-	if err := row.Scan(&key.ID, &key.Name, &key.KeyHash, &createdAt, &expiresAt, &isActive, &key.MaxUses, &key.UseCount); err != nil {
+	if err := row.Scan(&key.ID, &key.Name, &key.KeyHash, &key.LookupDigest, &createdAt, &expiresAt, &isActive, &key.MaxUses, &key.UseCount); err != nil {
 		return APIKey{}, err
 	}
 	parsedCreatedAt, err := parseTime(createdAt)
@@ -1520,7 +1520,7 @@ func scanAPIKeyBase(row dbScanner) (APIKey, error) {
 }
 
 func apiKeySelectColumns() string {
-	return `id, name, key_hash, created_at, expires_at, is_active, max_uses, use_count`
+	return `id, name, key_hash, lookup_digest, created_at, expires_at, is_active, max_uses, use_count`
 }
 
 func loadAPIKeyPermissions(q dbQuerier, keyID string) (permissions []string, err error) {
@@ -1581,9 +1581,9 @@ func loadAPIKeys(q dbQuerier) ([]APIKey, error) {
 }
 
 func insertAPIKey(exec dbExecer, key APIKey) error {
-	if _, err := exec.Exec(`INSERT INTO api_keys (id, name, key_hash, created_at, expires_at, is_active, max_uses, use_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		key.ID, key.Name, key.KeyHash, formatTime(key.CreatedAt), optionalTimePtrValue(key.ExpiresAt), boolToInt(key.IsActive), key.MaxUses, key.UseCount); err != nil {
+	if _, err := exec.Exec(`INSERT INTO api_keys (id, name, key_hash, lookup_digest, created_at, expires_at, is_active, max_uses, use_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key.ID, key.Name, key.KeyHash, key.LookupDigest, formatTime(key.CreatedAt), optionalTimePtrValue(key.ExpiresAt), boolToInt(key.IsActive), key.MaxUses, key.UseCount); err != nil {
 		return err
 	}
 	for _, permission := range key.Permissions {
@@ -1611,11 +1611,22 @@ func (s *AdminStore) ValidateClientKey(key string) (bool, error) {
 
 // validateClientKeyLocked is an internal method; caller must already hold mu.
 func (s *AdminStore) validateClientKeyLocked(q dbQuerier, key string) (bool, error) {
-	keys, err := loadAPIKeys(q)
+	if key == "" {
+		return false, fmt.Errorf("no valid API key provided and authentication is required")
+	}
+
+	keys, err := candidateAPIKeysForRaw(q, key)
 	if err != nil {
 		return false, err
 	}
 	if len(keys) == 0 {
+		hasKeys, err := hasAnyAPIKeys(q)
+		if err != nil {
+			return false, err
+		}
+		if hasKeys {
+			return false, fmt.Errorf("API key is invalid")
+		}
 		initialized, _, err := s.loadConfigLifecycle(q)
 		if err != nil {
 			return false, err
@@ -1624,10 +1635,6 @@ func (s *AdminStore) validateClientKeyLocked(q dbQuerier, key string) (bool, err
 			return false, fmt.Errorf("server not initialized; client connections are not accepted yet")
 		}
 		return false, fmt.Errorf("no API keys configured")
-	}
-
-	if key == "" {
-		return false, fmt.Errorf("no valid API key provided and authentication is required")
 	}
 
 	for _, k := range keys {
@@ -1649,7 +1656,7 @@ func (s *AdminStore) validateClientKeyLocked(q dbQuerier, key string) (bool, err
 }
 
 func findKeyByRawLocked(q dbQuerier, key string) (*APIKey, error) {
-	keys, err := loadAPIKeys(q)
+	keys, err := candidateAPIKeysForRaw(q, key)
 	if err != nil {
 		return nil, err
 	}
@@ -1660,6 +1667,67 @@ func findKeyByRawLocked(q dbQuerier, key string) (*APIKey, error) {
 		}
 	}
 	return nil, nil
+}
+
+func apiKeyLookupDigest(raw string) string {
+	sum := sha256.Sum256([]byte("netsgo-api-key-lookup:" + raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func candidateAPIKeysForRaw(q dbQuerier, raw string) ([]APIKey, error) {
+	digest := apiKeyLookupDigest(raw)
+	keys, err := loadAPIKeysByLookupDigest(q, digest)
+	if err != nil {
+		return nil, err
+	}
+	if len(keys) > 0 {
+		return keys, nil
+	}
+	return loadAPIKeysByLookupDigest(q, "")
+}
+
+func hasAnyAPIKeys(q dbQuerier) (bool, error) {
+	var exists int
+	if err := q.QueryRow(`SELECT 1 FROM api_keys LIMIT 1`).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func loadAPIKeysByLookupDigest(q dbQuerier, digest string) ([]APIKey, error) {
+	rows, err := q.Query(`SELECT `+apiKeySelectColumns()+` FROM api_keys WHERE lookup_digest = ? ORDER BY created_at, id`, digest)
+	if err != nil {
+		return nil, err
+	}
+	var keys []APIKey
+	for rows.Next() {
+		key, err := scanAPIKeyBase(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(keys) > 0 {
+		for i := range keys {
+			permissions, err := loadAPIKeyPermissions(q, keys[i].ID)
+			if err != nil {
+				return nil, err
+			}
+			keys[i].Permissions = permissions
+		}
+	}
+	return keys, nil
 }
 
 // ========== Client Tokens ==========
@@ -2120,13 +2188,14 @@ func (s *AdminStore) AddAPIKey(name, keyString string, permissions []string, exp
 	}
 
 	k := APIKey{
-		ID:          generateUUID(),
-		Name:        name,
-		KeyHash:     string(hash),
-		Permissions: permissions,
-		CreatedAt:   time.Now(),
-		ExpiresAt:   expiresAt,
-		IsActive:    true,
+		ID:           generateUUID(),
+		Name:         name,
+		KeyHash:      string(hash),
+		LookupDigest: apiKeyLookupDigest(keyString),
+		Permissions:  permissions,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    expiresAt,
+		IsActive:     true,
 	}
 
 	s.mu.Lock()

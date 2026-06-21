@@ -1,4 +1,4 @@
-.PHONY: build build-web build-go build-desktop-sidecar build-desktop build-desktop-macos-local sign-desktop-macos-app package-desktop-macos-local clean docs dev-server dev-client dev-bench dev-web test test-race lint test-e2e-nginx test-e2e-caddy test-playwright-e2e test-playwright-e2e-smoke test-playwright-e2e-full test-playwright-e2e-run bench-data soak-data compose-stack-up compose-stack-logs compose-stack-down compose-stack-clean test-compose-stack test-compose-stack-nginx test-compose-stack-caddy
+.PHONY: build build-web build-go build-desktop-sidecar build-desktop build-desktop-macos-local sign-desktop-macos-app package-desktop-macos-local clean docs dev-server dev-client dev-bench dev-web test test-race lint test-system-e2e test-system-e2e-nginx test-system-e2e-caddy test-playwright-e2e test-playwright-e2e-smoke test-playwright-e2e-full test-playwright-e2e-cdp test-playwright-e2e-cdp-smoke test-playwright-e2e-cdp-full test-playwright-e2e-cdp-run test-playwright-e2e-cdp-check test-playwright-e2e-run bench-data system-e2e-up system-e2e-logs system-e2e-down system-e2e-clean
 
 # 编译输出目录
 BIN_DIR=bin
@@ -91,19 +91,44 @@ DEV_KEY  ?=
 DEV_INIT_ADMIN_USERNAME ?= admin
 DEV_INIT_ADMIN_PASSWORD ?=
 DEV_INIT_SERVER_ADDR    ?= http://localhost:$(DEV_PORT)
-STACK_PROXY ?= nginx
-STACK_PROJECT ?= netsgo-stack-$(STACK_PROXY)
-STACK_PROXY_PORT ?= 19080
-STACK_UPSTREAM_PORT ?= 19081
-STACK_TUNNEL_PORT ?= 19082
-STACK_BASE_COMPOSE := $(CURDIR)/test/e2e/docker-compose.stack.yml
-STACK_PROXY_COMPOSE := $(CURDIR)/test/e2e/docker-compose.stack.$(STACK_PROXY).yml
+E2E_PROXY ?= nginx
+E2E_PROJECT ?= netsgo-system-$(E2E_PROXY)
+E2E_PROXY_PORT ?= 19080
+E2E_UPSTREAM_PORT ?= 19081
+E2E_SERVER_SOCKS5_PORT ?= 19095
+E2E_C2C_SOCKS5_PORT ?= 19096
+E2E_C2C_SOCKS5_DENY_PORT ?= 19097
+E2E_C2C_TCP_PORT ?= 19098
+E2E_C2C_TCP_ALT_PORT ?= 19099
+E2E_C2C_TCP_SLOW_PORT ?= 19100
+E2E_C2C_UDP_PORT ?= 19101
+E2E_C2C_SOCKS5_AUTH_PORT ?= 19102
+E2E_C2C_SOCKS5_SOURCE_DENY_PORT ?= 19103
+E2E_BASE_COMPOSE := $(CURDIR)/test/e2e/docker-compose.system.yml
+E2E_PROXY_COMPOSE := $(CURDIR)/test/e2e/docker-compose.proxy.$(E2E_PROXY).yml
+E2E_PORT_ENV = \
+	NETSGO_E2E_DIR=$(CURDIR) \
+	PROXY_PORT=$(E2E_PROXY_PORT) \
+	UPSTREAM_PORT=$(E2E_UPSTREAM_PORT) \
+	SERVER_SOCKS5_PORT=$(E2E_SERVER_SOCKS5_PORT) \
+	C2C_SOCKS5_PORT=$(E2E_C2C_SOCKS5_PORT) \
+	C2C_SOCKS5_DENY_PORT=$(E2E_C2C_SOCKS5_DENY_PORT) \
+	C2C_TCP_PORT=$(E2E_C2C_TCP_PORT) \
+	C2C_TCP_ALT_PORT=$(E2E_C2C_TCP_ALT_PORT) \
+	C2C_TCP_SLOW_PORT=$(E2E_C2C_TCP_SLOW_PORT) \
+	C2C_UDP_PORT=$(E2E_C2C_UDP_PORT) \
+	C2C_SOCKS5_AUTH_PORT=$(E2E_C2C_SOCKS5_AUTH_PORT) \
+	C2C_SOCKS5_SOURCE_DENY_PORT=$(E2E_C2C_SOCKS5_SOURCE_DENY_PORT)
 PLAYWRIGHT_PROJECT ?= netsgo-playwright
 PLAYWRIGHT_SERVER_PORT ?= 19180
 PLAYWRIGHT_TCP_INGRESS_PORT ?= 19190
 PLAYWRIGHT_UDP_INGRESS_PORT ?= 19191
 PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT ?= 19192
 PLAYWRIGHT_TCP_EDIT_INGRESS_PORT ?= 19193
+LOCAL_CHROME_CDP_ENDPOINT ?= http://127.0.0.1:9222
+LOCAL_CHROME_CDP_SLOW_MO_MS ?= 250
+LOCAL_CHROME_CDP_FINISH_DELAY_MS ?= 5000
+LOCAL_CHROME_CDP_KEEP_TAB ?= 1
 PLAYWRIGHT_COMPOSE := $(CURDIR)/test/e2e/docker-compose.playwright.yml
 
 # 启动服务端（-tags dev 跳过 go:embed，使用 Vite 独立前端）
@@ -149,11 +174,21 @@ lint:
 bench-data:
 	go test ./pkg/mux -run '^$$' -bench 'BenchmarkDataChannelTransport_YamuxOverPipe_vs_WSConn' -benchmem
 
-test-e2e-nginx:
-	NETSGO_E2E_PROXY=nginx NETSGO_E2E_COMPOSE_FILE=$(CURDIR)/test/e2e/docker-compose.nginx.yml go test -tags=e2e ./test/e2e -run TestProxyE2E -count=1
+test-system-e2e: test-system-e2e-nginx test-system-e2e-caddy
 
-test-e2e-caddy:
-	NETSGO_E2E_PROXY=caddy NETSGO_E2E_COMPOSE_FILE=$(CURDIR)/test/e2e/docker-compose.caddy.yml go test -tags=e2e ./test/e2e -run TestProxyE2E -count=1
+test-system-e2e-nginx:
+	$(MAKE) test-system-e2e-run E2E_PROXY=nginx E2E_PROJECT=netsgo-system-nginx
+
+test-system-e2e-caddy:
+	$(MAKE) test-system-e2e-run E2E_PROXY=caddy E2E_PROJECT=netsgo-system-caddy
+
+test-system-e2e-run:
+	@admin_pass="$${NETSGO_ADMIN_PASS:-$$(openssl rand -base64 18 2>/dev/null || uuidgen)}"; \
+	$(E2E_PORT_ENV) \
+	NETSGO_ADMIN_PASS="$${admin_pass}" \
+	NETSGO_E2E_COMPOSE_PROJECT=$(E2E_PROJECT) \
+	NETSGO_E2E_COMPOSE_FILES=$(E2E_BASE_COMPOSE),$(E2E_PROXY_COMPOSE) \
+	go test -tags=e2e ./test/e2e -run TestSystemE2E -count=1 -timeout 15m
 
 test-playwright-e2e: test-playwright-e2e-smoke
 
@@ -161,6 +196,25 @@ test-playwright-e2e-smoke: PLAYWRIGHT_ARGS=--grep @smoke
 test-playwright-e2e-smoke: test-playwright-e2e-run
 
 test-playwright-e2e-full: test-playwright-e2e-run
+
+test-playwright-e2e-cdp: test-playwright-e2e-cdp-smoke
+
+test-playwright-e2e-cdp-smoke: PLAYWRIGHT_ARGS=--grep @smoke
+test-playwright-e2e-cdp-smoke: test-playwright-e2e-cdp-run
+
+test-playwright-e2e-cdp-full: test-playwright-e2e-cdp-run
+
+test-playwright-e2e-cdp-run: PLAYWRIGHT_CDP_ENDPOINT=$(LOCAL_CHROME_CDP_ENDPOINT)
+test-playwright-e2e-cdp-run: test-playwright-e2e-cdp-check test-playwright-e2e-run
+
+test-playwright-e2e-cdp-check:
+	@curl -fsS "$(LOCAL_CHROME_CDP_ENDPOINT)/json/version" >/dev/null || { \
+		echo "Chrome CDP endpoint is not reachable: $(LOCAL_CHROME_CDP_ENDPOINT)"; \
+		echo "Start your local Chrome CDP profile first:"; \
+		echo "  devtools"; \
+		exit 1; \
+	}
+	@osascript -e 'tell application "Google Chrome" to activate' >/dev/null 2>&1 || true
 
 test-playwright-e2e-run: build-web
 	@set -e; \
@@ -189,40 +243,30 @@ test-playwright-e2e-run: build-web
 	PLAYWRIGHT_UDP_INGRESS_PORT=$(PLAYWRIGHT_UDP_INGRESS_PORT) \
 	PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT=$(PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT) \
 	PLAYWRIGHT_TCP_EDIT_INGRESS_PORT=$(PLAYWRIGHT_TCP_EDIT_INGRESS_PORT) \
-	bun run e2e:playwright $(if $(PLAYWRIGHT_ARGS),-- $(PLAYWRIGHT_ARGS),) || status=$$?; \
+	PLAYWRIGHT_CDP_ENDPOINT="$(PLAYWRIGHT_CDP_ENDPOINT)" \
+	PLAYWRIGHT_CDP_SLOW_MO_MS="$(LOCAL_CHROME_CDP_SLOW_MO_MS)" \
+	PLAYWRIGHT_CDP_FINISH_DELAY_MS="$(LOCAL_CHROME_CDP_FINISH_DELAY_MS)" \
+	PLAYWRIGHT_CDP_KEEP_TAB="$(LOCAL_CHROME_CDP_KEEP_TAB)" \
+	$${PLAYWRIGHT_RUNNER:-} bun run e2e:playwright $(if $(PLAYWRIGHT_ARGS),-- $(PLAYWRIGHT_ARGS),) || status=$$?; \
 	if [ "$${status:-0}" -ne 0 ]; then \
 		NETSGO_ADMIN_PASS="$${admin_pass}" docker compose -f $(PLAYWRIGHT_COMPOSE) -p $(PLAYWRIGHT_PROJECT) ps; \
 		NETSGO_ADMIN_PASS="$${admin_pass}" docker compose -f $(PLAYWRIGHT_COMPOSE) -p $(PLAYWRIGHT_PROJECT) logs --no-color --tail 200; \
 		exit $$status; \
 	fi
 
-soak-data:
-	@admin_pass="$${NETSGO_ADMIN_PASS:-$$(openssl rand -base64 18 2>/dev/null || uuidgen)}"; \
-	PROXY_PORT=$(STACK_PROXY_PORT) UPSTREAM_PORT=$(STACK_UPSTREAM_PORT) TUNNEL_REMOTE_PORT=$(STACK_TUNNEL_PORT) NETSGO_ADMIN_PASS="$${admin_pass}" NETSGO_E2E_COMPOSE_PROJECT=$(STACK_PROJECT)-soak NETSGO_E2E_STACK_COMPOSE_FILES=$(STACK_BASE_COMPOSE),$(STACK_PROXY_COMPOSE) NETSGO_E2E_SOAK_IDLE=45s NETSGO_E2E_SOAK_CYCLES=3 go test -tags=e2e ./test/e2e -run TestComposeStackSoak -count=1 -timeout 15m
-
-compose-stack-up:
+system-e2e-up:
 	@if [ -z "$${NETSGO_ADMIN_PASS:-}" ]; then \
-		echo "NETSGO_ADMIN_PASS is required for compose-stack-up."; \
-		echo "  NETSGO_ADMIN_PASS=$$(openssl rand -base64 18 2>/dev/null || uuidgen) make compose-stack-up"; \
+		echo "NETSGO_ADMIN_PASS is required for system-e2e-up."; \
+		echo "  NETSGO_ADMIN_PASS=$$(openssl rand -base64 18 2>/dev/null || uuidgen) make system-e2e-up"; \
 		exit 1; \
 	fi; \
-	PROXY_PORT=$(STACK_PROXY_PORT) UPSTREAM_PORT=$(STACK_UPSTREAM_PORT) TUNNEL_REMOTE_PORT=$(STACK_TUNNEL_PORT) NETSGO_ADMIN_PASS="$${NETSGO_ADMIN_PASS}" docker compose -f $(STACK_BASE_COMPOSE) -f $(STACK_PROXY_COMPOSE) -p $(STACK_PROJECT) up -d --build --remove-orphans
+	$(E2E_PORT_ENV) NETSGO_ADMIN_PASS="$${NETSGO_ADMIN_PASS}" docker compose -f $(E2E_BASE_COMPOSE) -f $(E2E_PROXY_COMPOSE) -p $(E2E_PROJECT) up -d --build --remove-orphans
 
-compose-stack-logs:
-	PROXY_PORT=$(STACK_PROXY_PORT) UPSTREAM_PORT=$(STACK_UPSTREAM_PORT) TUNNEL_REMOTE_PORT=$(STACK_TUNNEL_PORT) NETSGO_ADMIN_PASS="$${NETSGO_ADMIN_PASS:-unused-for-compose-command}" docker compose -f $(STACK_BASE_COMPOSE) -f $(STACK_PROXY_COMPOSE) -p $(STACK_PROJECT) logs -f
+system-e2e-logs:
+	$(E2E_PORT_ENV) NETSGO_ADMIN_PASS="$${NETSGO_ADMIN_PASS:-unused-for-compose-command}" docker compose -f $(E2E_BASE_COMPOSE) -f $(E2E_PROXY_COMPOSE) -p $(E2E_PROJECT) logs -f
 
-compose-stack-down:
-	PROXY_PORT=$(STACK_PROXY_PORT) UPSTREAM_PORT=$(STACK_UPSTREAM_PORT) TUNNEL_REMOTE_PORT=$(STACK_TUNNEL_PORT) NETSGO_ADMIN_PASS="$${NETSGO_ADMIN_PASS:-unused-for-compose-command}" docker compose -f $(STACK_BASE_COMPOSE) -f $(STACK_PROXY_COMPOSE) -p $(STACK_PROJECT) down --remove-orphans
+system-e2e-down:
+	$(E2E_PORT_ENV) NETSGO_ADMIN_PASS="$${NETSGO_ADMIN_PASS:-unused-for-compose-command}" docker compose -f $(E2E_BASE_COMPOSE) -f $(E2E_PROXY_COMPOSE) -p $(E2E_PROJECT) down --remove-orphans
 
-compose-stack-clean:
-	PROXY_PORT=$(STACK_PROXY_PORT) UPSTREAM_PORT=$(STACK_UPSTREAM_PORT) TUNNEL_REMOTE_PORT=$(STACK_TUNNEL_PORT) NETSGO_ADMIN_PASS="$${NETSGO_ADMIN_PASS:-unused-for-compose-command}" docker compose -f $(STACK_BASE_COMPOSE) -f $(STACK_PROXY_COMPOSE) -p $(STACK_PROJECT) down -v --remove-orphans
-
-test-compose-stack:
-	@admin_pass="$${NETSGO_ADMIN_PASS:-$$(openssl rand -base64 18 2>/dev/null || uuidgen)}"; \
-	PROXY_PORT=$(STACK_PROXY_PORT) UPSTREAM_PORT=$(STACK_UPSTREAM_PORT) TUNNEL_REMOTE_PORT=$(STACK_TUNNEL_PORT) NETSGO_ADMIN_PASS="$${admin_pass}" NETSGO_E2E_COMPOSE_PROJECT=$(STACK_PROJECT) NETSGO_E2E_STACK_COMPOSE_FILES=$(STACK_BASE_COMPOSE),$(STACK_PROXY_COMPOSE) go test -tags=e2e ./test/e2e -run TestComposeStackE2E -count=1 -timeout 12m
-
-test-compose-stack-nginx:
-	$(MAKE) test-compose-stack STACK_PROXY=nginx STACK_PROJECT=netsgo-stack-nginx
-
-test-compose-stack-caddy:
-	$(MAKE) test-compose-stack STACK_PROXY=caddy STACK_PROJECT=netsgo-stack-caddy
+system-e2e-clean:
+	$(E2E_PORT_ENV) NETSGO_ADMIN_PASS="$${NETSGO_ADMIN_PASS:-unused-for-compose-command}" docker compose -f $(E2E_BASE_COMPOSE) -f $(E2E_PROXY_COMPOSE) -p $(E2E_PROJECT) down -v --remove-orphans

@@ -8,15 +8,16 @@ import (
 
 // APIKey represents an authentication key used by a Client
 type APIKey struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	KeyHash     string     `json:"key_hash"` // for persistence only; must not be returned to the frontend
-	Permissions []string   `json:"permissions"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	IsActive    bool       `json:"is_active"`
-	MaxUses     int        `json:"max_uses"`  // maximum number of uses; 0 means unlimited
-	UseCount    int        `json:"use_count"` // number of times already used
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	KeyHash      string     `json:"key_hash"`                // for persistence only; must not be returned to the frontend
+	LookupDigest string     `json:"lookup_digest,omitempty"` // for candidate lookup only; must not be returned to the frontend
+	Permissions  []string   `json:"permissions"`
+	CreatedAt    time.Time  `json:"created_at"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	IsActive     bool       `json:"is_active"`
+	MaxUses      int        `json:"max_uses"`  // maximum number of uses; 0 means unlimited
+	UseCount     int        `json:"use_count"` // number of times already used
 }
 
 // AdminUser represents a web admin account

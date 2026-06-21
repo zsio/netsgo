@@ -2,7 +2,7 @@
 
 ## Status
 
-Open; SOCKS5 PR handles TCP/SOCKS5 port conflict only
+Partial done in SOCKS5; Open for FK/CHECK hardening
 
 ## Severity
 

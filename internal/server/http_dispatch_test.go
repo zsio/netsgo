@@ -161,6 +161,7 @@ func setHTTPDispatchIngressConfig(t *testing.T, s *Server, clientID, tunnelName 
 	tunnel := client.proxies[tunnelName]
 	if tunnel == nil {
 		t.Fatalf("tunnel %q not found", tunnelName)
+		return
 	}
 	cfg.Domain = tunnel.Config.Domain
 	if cfg.AllowedSourceCIDRs == nil {

@@ -2,7 +2,7 @@
 
 ## Status
 
-Partial in SOCKS5; next phase planned
+Partial done in SOCKS5; next phase planned
 
 ## Severity
 

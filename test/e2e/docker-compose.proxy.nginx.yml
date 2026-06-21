@@ -1,13 +1,15 @@
 services:
   proxy:
     image: nginx:1.27-alpine
-    hostname: compose-proxy
+    hostname: system-proxy
     ports:
       - "${PROXY_PORT:-19080}:80"
     environment:
       UPSTREAM_HOST: server
       UPSTREAM_PORT: "8080"
     volumes:
-      - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${NETSGO_E2E_DIR:-.}/test/e2e/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
     depends_on:
       - server
+    networks:
+      - control

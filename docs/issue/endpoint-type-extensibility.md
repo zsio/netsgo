@@ -2,7 +2,7 @@
 
 ## Status
 
-Open; SOCKS5 PR handles only known CHECK expansion
+Partial done in SOCKS5; Open for full CHECK relaxation
 
 ## Severity
 

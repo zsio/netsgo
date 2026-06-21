@@ -276,10 +276,6 @@ func (s *Server) notifyClientTunnelUnprovision(client *ClientConn, tunnelID stri
 	return s.writeControlMessage(client, msg)
 }
 
-func tunnelSpecProtocolFromStored(stored StoredTunnel, runtimeState string) protocol.TunnelSpec {
-	return tunnelSpecProtocolForRole(stored, runtimeState, "")
-}
-
 func tunnelSpecProtocolForRole(stored StoredTunnel, runtimeState, role string) protocol.TunnelSpec {
 	actual := stored.ActualTransport
 	if actual == "" {

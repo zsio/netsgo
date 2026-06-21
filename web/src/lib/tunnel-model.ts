@@ -326,9 +326,6 @@ export function getTunnelMutationErrorMessage(error: unknown) {
   if (error instanceof ApiError) {
     const body = error.body as TunnelMutationErrorResponse | undefined;
     const code = body?.code ?? body?.error_code;
-    if (code === 'unknown_target_type' || code === 'unsupported_target_type') {
-      return i18n.t('errors.unsupported_endpoint_type');
-    }
     if (code) {
       const localizedMessage = i18n.t(`errors.${code}`, { defaultValue: '' });
       if (localizedMessage) {

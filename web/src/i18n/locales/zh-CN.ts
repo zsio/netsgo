@@ -472,6 +472,7 @@ export const zhCN = {
     ingress_preflight_rejected: '入口预检被拒绝。',
     ingress_port_in_use: '入口端口已被占用。',
     unsupported_endpoint_type: '该目标类型暂未支持，当前仅支持 TCP/UDP 服务。',
+    invalid_target_type: '入口类型与目标类型不兼容。',
     direct_transport_unavailable: '当前节点暂不支持 P2P 直连传输，请先选择 Server 中继。',
     unsupported_topology: '不支持的隧道拓扑。',
     revision_conflict: '隧道已被其他请求修改，请刷新后重试。',

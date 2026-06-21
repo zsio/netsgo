@@ -537,11 +537,11 @@ func decodeListenEndpointConfig(endpoint endpointSpecAPI, topology string) (ingr
 	return decodeListenEndpointConfigWithOptions(endpoint, topology, true, true)
 }
 
-func decodeListenEndpointConfigForMutation(endpoint endpointSpecAPI, topology string, confirmNoAuthRisk bool) (ingressEndpointConfigAPI, error) {
-	return decodeListenEndpointConfigWithOptions(endpoint, topology, confirmNoAuthRisk, true)
+func decodeListenEndpointConfigForMutation(endpoint endpointSpecAPI, topology string, skipNoAuthConfirmation bool) (ingressEndpointConfigAPI, error) {
+	return decodeListenEndpointConfigWithOptions(endpoint, topology, skipNoAuthConfirmation, true)
 }
 
-func decodeListenEndpointConfigWithOptions(endpoint endpointSpecAPI, topology string, confirmNoAuthRisk bool, allowMissingSourceCIDRs bool) (ingressEndpointConfigAPI, error) {
+func decodeListenEndpointConfigWithOptions(endpoint endpointSpecAPI, topology string, skipNoAuthConfirmation bool, allowMissingSourceCIDRs bool) (ingressEndpointConfigAPI, error) {
 	switch endpoint.Type {
 	case tunnelIngressTypeHTTPHost:
 		var cfg httpHostConfigAPI
@@ -586,7 +586,7 @@ func decodeListenEndpointConfigWithOptions(endpoint endpointSpecAPI, topology st
 		}
 		return ingressEndpointConfigAPI{BindIP: cfg.BindIP, Port: cfg.Port, AllowedSourceCIDRs: sourcePolicy.allowedSourceCIDRs}, nil
 	case tunnelIngressTypeSOCKS5Listen:
-		cfg, err := normalizeSOCKS5ListenConfig(endpoint.Config, !confirmNoAuthRisk)
+		cfg, err := normalizeSOCKS5ListenConfig(endpoint.Config, !skipNoAuthConfirmation)
 		if err != nil {
 			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("invalid socks5_listen config: %w", err), "ingress.config", "invalid_endpoint_config", http.StatusBadRequest)
 		}
@@ -837,8 +837,8 @@ func (s *Server) storedTunnelFromUnifiedRequest(req tunnelCreateRequestAPI, exis
 	if err != nil {
 		return StoredTunnel{}, err
 	}
-	confirmNoAuthRisk := req.ConfirmNoAuthRisk || req.Topology != tunnelTopologyServerExpose
-	ingressConfig, err := decodeListenEndpointConfigForMutation(req.Ingress, req.Topology, confirmNoAuthRisk)
+	skipNoAuthConfirmation := req.ConfirmNoAuthRisk || req.Topology != tunnelTopologyServerExpose
+	ingressConfig, err := decodeListenEndpointConfigForMutation(req.Ingress, req.Topology, skipNoAuthConfirmation)
 	if err != nil {
 		return StoredTunnel{}, err
 	}
