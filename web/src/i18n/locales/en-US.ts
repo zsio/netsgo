@@ -116,6 +116,7 @@ export const enUS = {
     maxUsesUnlimited: 'Unlimited',
     maxUsesCount: 'Can be used up to {{count}} times',
     expiresIn: 'Expires in',
+    expiresInHint: 'Only limits the authentication window; once a client authenticates, this no longer applies.',
     expiry1h: '1 hour',
     expiry3h: '3 hours',
     expiry1d: '1 day',

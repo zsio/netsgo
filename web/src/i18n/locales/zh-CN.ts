@@ -118,6 +118,7 @@ export const zhCN = {
     maxUsesUnlimited: '无限制',
     maxUsesCount: '最多可使用 {{count}} 次',
     expiresIn: '失效时间',
+    expiresInHint: '仅限制认证时效，客户端认证成功后不受此时间限制。',
     expiry1h: '1 小时',
     expiry3h: '3 小时',
     expiry1d: '1 天',

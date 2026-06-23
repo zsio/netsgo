@@ -20,6 +20,7 @@ import { useAdminConfig } from '@/hooks/use-admin-config';
 import { useCreateAPIKey } from '@/hooks/use-admin-keys';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { useTranslation } from 'react-i18next';
+import { cn } from '@/lib/utils';
 
 import { resolveAddClientServiceAddress } from './client-service-address';
 import {
@@ -251,7 +252,10 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto sm:max-w-[640px]">
+      <DialogContent className={cn(
+        "max-h-[calc(100vh-2rem)] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto",
+        step === 'config' ? 'sm:max-w-[400px]' : 'sm:max-w-[640px]',
+      )}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <LayersPlus className="h-5 w-5 text-primary" />
@@ -300,6 +304,9 @@ export function AddClientDialog({ open, onOpenChange }: AddClientDialogProps) {
                   </button>
                 ))}
               </div>
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                {t('clients.expiresInHint')}
+              </p>
             </div>
 
             {/* 生成按钮 */}
