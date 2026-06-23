@@ -25,7 +25,9 @@ export type ClientPair = {
 
 export type ClientToClientTunnelInput = {
   sourceClientID: string;
+  sourceClientName?: string;
   ingressClientID: string;
+  ingressClientName?: string;
   name: string;
   protocol: 'TCP' | 'UDP';
   targetHost: string;
@@ -148,8 +150,8 @@ export async function openCreateTunnelDialog(page: Page, clientID: string) {
 export async function fillClientToClientTunnel(dialog: Locator, config: ClientToClientTunnelInput) {
   await dialog.getByLabel('Tunnel name').fill(config.name);
   await dialog.getByRole('button', { name: 'Client to Client' }).click();
-  await dialog.getByLabel('Service source client').selectOption(config.sourceClientID);
-  await dialog.getByLabel('Ingress client').selectOption(config.ingressClientID);
+  await selectRadixOption(dialog, 'Service source client', config.sourceClientName ?? config.sourceClientID);
+  await selectRadixOption(dialog, 'Ingress client', config.ingressClientName ?? config.ingressClientID);
   await dialog.getByRole('button', { name: config.protocol }).click();
   await dialog.getByLabel('Target service address').fill(config.targetHost);
   await dialog.getByLabel('Target service port').fill(config.targetPort);
@@ -162,6 +164,11 @@ export async function createClientToClientTunnel(page: Page, config: ClientToCli
   await fillClientToClientTunnel(dialog, config);
   await dialog.getByRole('button', { name: 'Create tunnel' }).click();
   await expect(dialog).toBeHidden({ timeout: 30_000 });
+}
+
+export async function selectRadixOption(scope: Locator, label: string, optionName: string) {
+  await scope.getByLabel(label).click();
+  await scope.page().getByRole('option', { name: optionName, exact: true }).click();
 }
 
 export async function waitForTunnelState(page: Page, name: string, state: string) {

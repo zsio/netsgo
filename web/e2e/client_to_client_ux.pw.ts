@@ -5,6 +5,7 @@ import {
   fillClientToClientTunnel,
   login,
   openCreateTunnelDialog,
+  selectRadixOption,
   uniqueTunnelName,
   waitForClientPair,
   waitForTunnelState,
@@ -21,16 +22,16 @@ test('client-to-client form exposes the right UX and responsive layout @ux', asy
   await expect(dialog.getByRole('button', { name: 'HTTP' })).toBeVisible();
 
   await dialog.getByRole('button', { name: 'Client to Client' }).click();
-  await expect(dialog.getByLabel('Service source client')).toHaveValue(source.id);
-  await expect(dialog.getByLabel('Ingress client')).toHaveValue(ingress.id);
+  await expect(dialog.getByLabel('Service source client')).toContainText(source.info.hostname);
+  await expect(dialog.getByLabel('Ingress client')).toContainText(ingress.info.hostname);
   await expect(dialog.getByLabel('Target service address')).toBeVisible();
   await expect(dialog.getByLabel('Target service port')).toBeVisible();
   await expect(dialog.getByLabel('Ingress bind address')).toBeVisible();
   await expect(dialog.getByLabel('Ingress bind port')).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'HTTP' })).toHaveCount(0);
 
-  await dialog.getByLabel('Service source client').selectOption(ingress.id);
-  await expect(dialog.getByLabel('Ingress client')).toHaveValue(source.id);
+  await selectRadixOption(dialog, 'Service source client', ingress.info.hostname);
+  await expect(dialog.getByLabel('Ingress client')).toContainText(source.info.hostname);
 
   await captureArtifact(dialog, testInfo, 'client-to-client-form-desktop');
   await page.setViewportSize({ width: 390, height: 800 });
@@ -47,7 +48,9 @@ test('client-to-client form keeps invalid input local and surfaces field errors 
   await expect(createButton).toBeDisabled();
   await fillClientToClientTunnel(dialog, {
     sourceClientID: source.id,
+    sourceClientName: source.info.hostname,
     ingressClientID: ingress.id,
+    ingressClientName: ingress.info.hostname,
     name: uniqueTunnelName('playwright-c2c-invalid'),
     protocol: 'TCP',
     targetHost: 'tcp-backend',
@@ -78,7 +81,9 @@ test('client-to-client port conflicts stay in the dialog with actionable feedbac
 
   await createClientToClientTunnel(page, {
     sourceClientID: source.id,
+    sourceClientName: source.info.hostname,
     ingressClientID: ingress.id,
+    ingressClientName: ingress.info.hostname,
     name: baseName,
     protocol: 'TCP',
     targetHost: 'tcp-backend',
@@ -91,7 +96,9 @@ test('client-to-client port conflicts stay in the dialog with actionable feedbac
   const dialog = await openCreateTunnelDialog(page, source.id);
   await fillClientToClientTunnel(dialog, {
     sourceClientID: source.id,
+    sourceClientName: source.info.hostname,
     ingressClientID: ingress.id,
+    ingressClientName: ingress.info.hostname,
     name: uniqueTunnelName('playwright-c2c-conflict-dup'),
     protocol: 'TCP',
     targetHost: 'tcp-backend',

@@ -219,6 +219,11 @@ test-playwright-e2e-cdp-check:
 test-playwright-e2e-run: build-web
 	@set -e; \
 	admin_pass="$${NETSGO_ADMIN_PASS:-$$(openssl rand -base64 18 2>/dev/null || uuidgen)}"; \
+	playwright_cdp_endpoint="$${PLAYWRIGHT_CDP_ENDPOINT:-}"; \
+	if [ -z "$${playwright_cdp_endpoint}" ] && curl -fsS "$(LOCAL_CHROME_CDP_ENDPOINT)/json/version" >/dev/null 2>&1; then \
+		playwright_cdp_endpoint="$(LOCAL_CHROME_CDP_ENDPOINT)"; \
+		echo "Using local Chrome CDP endpoint: $${playwright_cdp_endpoint}"; \
+	fi; \
 	cleanup() { \
 		PLAYWRIGHT_SERVER_PORT=$(PLAYWRIGHT_SERVER_PORT) \
 		PLAYWRIGHT_TCP_INGRESS_PORT=$(PLAYWRIGHT_TCP_INGRESS_PORT) \
@@ -243,7 +248,7 @@ test-playwright-e2e-run: build-web
 	PLAYWRIGHT_UDP_INGRESS_PORT=$(PLAYWRIGHT_UDP_INGRESS_PORT) \
 	PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT=$(PLAYWRIGHT_TCP_LIFECYCLE_INGRESS_PORT) \
 	PLAYWRIGHT_TCP_EDIT_INGRESS_PORT=$(PLAYWRIGHT_TCP_EDIT_INGRESS_PORT) \
-	PLAYWRIGHT_CDP_ENDPOINT="$(PLAYWRIGHT_CDP_ENDPOINT)" \
+	PLAYWRIGHT_CDP_ENDPOINT="$${playwright_cdp_endpoint}" \
 	PLAYWRIGHT_CDP_SLOW_MO_MS="$(LOCAL_CHROME_CDP_SLOW_MO_MS)" \
 	PLAYWRIGHT_CDP_FINISH_DELAY_MS="$(LOCAL_CHROME_CDP_FINISH_DELAY_MS)" \
 	PLAYWRIGHT_CDP_KEEP_TAB="$(LOCAL_CHROME_CDP_KEEP_TAB)" \

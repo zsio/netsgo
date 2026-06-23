@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -2686,6 +2687,10 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 		LocalIP:   "127.0.0.1",
 		LocalPort: 3000,
 	}, protocol.ProxyStatusStopped)
+	storedTunnel, err := s.store.GetTunnelE(authResp.ClientID, "editable-http")
+	if err != nil {
+		t.Fatalf("load seeded tunnel: %v", err)
+	}
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
@@ -2694,17 +2699,8 @@ func TestServer_UpdateTunnelHTTPConflictReturns409WithErrorCode(t *testing.T) {
 	client := value.(*ClientConn)
 	client.proxyMu.Lock()
 	client.proxies["editable-http"] = &ProxyTunnel{
-		Config: protocol.ProxyConfig{
-			Name:         "editable-http",
-			Type:         protocol.ProxyTypeHTTP,
-			LocalIP:      "127.0.0.1",
-			LocalPort:    3000,
-			Domain:       "editable.example.com",
-			ClientID:     authResp.ClientID,
-			DesiredState: protocol.ProxyDesiredStateStopped,
-			RuntimeState: protocol.ProxyRuntimeStateIdle,
-		},
-		done: make(chan struct{}),
+		Config: storedTunnelToProxyConfig(storedTunnel),
+		done:   make(chan struct{}),
 	}
 	client.proxyMu.Unlock()
 
@@ -2762,6 +2758,10 @@ func TestServer_UpdateStoppedHTTPTunnel_ResponseIncludesCapabilities(t *testing.
 		LocalIP:   "127.0.0.1",
 		LocalPort: 3000,
 	}, protocol.ProxyStatusStopped)
+	storedTunnel, err := s.store.GetTunnelE(authResp.ClientID, "editable-http")
+	if err != nil {
+		t.Fatalf("load seeded tunnel: %v", err)
+	}
 
 	value, ok := s.clients.Load(authResp.ClientID)
 	if !ok {
@@ -2770,17 +2770,8 @@ func TestServer_UpdateStoppedHTTPTunnel_ResponseIncludesCapabilities(t *testing.
 	client := value.(*ClientConn)
 	client.proxyMu.Lock()
 	client.proxies["editable-http"] = &ProxyTunnel{
-		Config: protocol.ProxyConfig{
-			Name:         "editable-http",
-			Type:         protocol.ProxyTypeHTTP,
-			LocalIP:      "127.0.0.1",
-			LocalPort:    3000,
-			Domain:       "editable.example.com",
-			ClientID:     authResp.ClientID,
-			DesiredState: protocol.ProxyDesiredStateStopped,
-			RuntimeState: protocol.ProxyRuntimeStateIdle,
-		},
-		done: make(chan struct{}),
+		Config: storedTunnelToProxyConfig(storedTunnel),
+		done:   make(chan struct{}),
 	}
 	client.proxyMu.Unlock()
 
@@ -2803,7 +2794,8 @@ func TestServer_UpdateStoppedHTTPTunnel_ResponseIncludesCapabilities(t *testing.
 	defer mustClose(t, resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("update stopped tunnel: want 200, got %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("update stopped tunnel: want 200, got %d body=%s", resp.StatusCode, string(body))
 	}
 
 	var body map[string]any
@@ -2827,6 +2819,101 @@ func TestServer_UpdateStoppedHTTPTunnel_ResponseIncludesCapabilities(t *testing.
 		if capabilities[key] != want {
 			t.Fatalf("%s: want %v, got %v", key, want, capabilities[key])
 		}
+	}
+}
+
+func TestServer_UpdateTunnelRuntimeLostDoesNotMutateStore(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	var err error
+	s.store = newTestTunnelStore(t)
+
+	wsConn, authResp := connectAndAuth(t, ts, "http-runtime-lost-update")
+	defer mustClose(t, wsConn)
+
+	seedStoredTunnel(t, s, authResp.ClientID, protocol.ProxyNewRequest{
+		Name:      "editable-http",
+		Type:      protocol.ProxyTypeHTTP,
+		Domain:    "editable.example.com",
+		LocalIP:   "127.0.0.1",
+		LocalPort: 3000,
+	}, protocol.ProxyStatusStopped)
+	storedTunnel, err := s.store.GetTunnelE(authResp.ClientID, "editable-http")
+	if err != nil {
+		t.Fatalf("load seeded tunnel: %v", err)
+	}
+
+	value, ok := s.clients.Load(authResp.ClientID)
+	if !ok {
+		t.Fatalf("client %s does not exist", authResp.ClientID)
+	}
+	client := value.(*ClientConn)
+	staleRuntime := &ProxyTunnel{
+		Config: storedTunnelToProxyConfig(storedTunnel),
+		done:   make(chan struct{}),
+	}
+	client.proxyMu.Lock()
+	client.proxies["editable-http"] = staleRuntime
+	client.proxyMu.Unlock()
+
+	beforeManagedTunnelUpdatePersistForTest = func(gotClient *ClientConn, gotName string) {
+		if gotClient != client || gotName != "editable-http" {
+			return
+		}
+		gotClient.proxyMu.Lock()
+		delete(gotClient.proxies, gotName)
+		gotClient.proxyMu.Unlock()
+	}
+	defer func() {
+		beforeManagedTunnelUpdatePersistForTest = nil
+	}()
+
+	session := mustCreateSession(t, s.auth.adminStore, "test-user", "admin", "admin", "127.0.0.1", "test")
+	token, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("failed to generate admin token: %v", err)
+	}
+
+	reqBody := []byte(`{"local_ip":"127.0.0.1","local_port":3001,"remote_port":0,"domain":"updated.example.com"}`)
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+fmt.Sprintf("/api/clients/%s/tunnels/%s", authResp.ClientID, storedTunnel.ID), bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "test")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("update tunnel request failed: %v", err)
+	}
+	defer mustClose(t, resp.Body)
+
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("update tunnel with lost runtime: want 404, got %d body=%s", resp.StatusCode, string(body))
+	}
+
+	reloaded, err := s.store.GetTunnelByIDE(authResp.ClientID, storedTunnel.ID)
+	if err != nil {
+		t.Fatalf("reload seeded tunnel: %v", err)
+	}
+	if reloaded.Name != "editable-http" {
+		t.Fatalf("store name mutated after lost runtime: want %q, got %q", "editable-http", reloaded.Name)
+	}
+	if reloaded.LocalPort != 3000 {
+		t.Fatalf("store local_port mutated after lost runtime: want %d, got %d", 3000, reloaded.LocalPort)
+	}
+	if reloaded.Domain != "editable.example.com" {
+		t.Fatalf("store domain mutated after lost runtime: want %q, got %q", "editable.example.com", reloaded.Domain)
+	}
+}
+
+func TestTunnelMutationErrorStatusMapsWrappedManagedTunnelNotFound(t *testing.T) {
+	status, body := tunnelMutationErrorStatusAndBody(fmt.Errorf("runtime update lost tunnel: %w", errManagedTunnelNotFound))
+	if status != http.StatusNotFound {
+		t.Fatalf("wrapped managed tunnel not found: want 404, got %d", status)
+	}
+	if body.Error != "tunnel not found" {
+		t.Fatalf("wrapped managed tunnel not found error: want %q, got %q", "tunnel not found", body.Error)
 	}
 }
 

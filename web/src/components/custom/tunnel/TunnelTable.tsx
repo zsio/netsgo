@@ -9,6 +9,11 @@ import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { getTrafficSeriesKey, getTunnelSeriesKey } from '@/lib/tunnel-traffic-keys';
 import { useTranslation } from 'react-i18next';
+import {
+  CLIENT_DETAIL_TUNNEL_ROLE,
+  getClientOwnedTunnelSource,
+  resolveTunnelOwnerClientId,
+} from '@/components/custom/tunnel/TunnelTable.helpers';
 
 interface TunnelTableProps {
   client: Client;
@@ -23,7 +28,7 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
     isLoading: isTraffic24hLoading,
     isError: isTraffic24hError,
   } = useClientTraffic(client.id, '24h');
-  const { data: relatedTunnels } = useClientTunnelsByRole(client.id, 'related');
+  const { data: ownerTunnels } = useClientTunnelsByRole(client.id, CLIENT_DETAIL_TUNNEL_ROLE);
 
   const traffic24hByTunnel = useMemo(() => {
     const totals = new Map<string, number>();
@@ -38,10 +43,10 @@ export function TunnelTable({ client, clients = [client] }: TunnelTableProps) {
     return totals;
   }, [trafficData?.items]);
 
-  const tunnelSource = relatedTunnels ?? client.proxies ?? [];
+  const tunnelSource = getClientOwnedTunnelSource(ownerTunnels, client.proxies, client.id);
   const tunnels: TunnelEntry[] = tunnelSource.map((proxy) => ({
     ...proxy,
-    clientId: client.id,
+    clientId: resolveTunnelOwnerClientId(proxy, client.id),
     clientName: getClientDisplayName(client),
     clientOnline: client.online,
     traffic24hBytes: trafficData ? (traffic24hByTunnel.get(getTunnelSeriesKey(proxy)) ?? 0) : undefined,

@@ -15,7 +15,9 @@ test('creates TCP and UDP client-to-client tunnels from the web UI @smoke', asyn
 
   await createClientToClientTunnel(page, {
     sourceClientID: source.id,
+    sourceClientName: source.info.hostname,
     ingressClientID: ingress.id,
+    ingressClientName: ingress.info.hostname,
     name: 'playwright-c2c-tcp',
     protocol: 'TCP',
     targetHost: 'tcp-backend',
@@ -28,7 +30,9 @@ test('creates TCP and UDP client-to-client tunnels from the web UI @smoke', asyn
 
   await createClientToClientTunnel(page, {
     sourceClientID: source.id,
+    sourceClientName: source.info.hostname,
     ingressClientID: ingress.id,
+    ingressClientName: ingress.info.hostname,
     name: 'playwright-c2c-udp',
     protocol: 'UDP',
     targetHost: 'udp-backend',

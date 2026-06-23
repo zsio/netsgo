@@ -21,7 +21,9 @@ test('client-to-client TCP tunnel can stop, edit, resume, and delete from the UI
 
   await createClientToClientTunnel(page, {
     sourceClientID: source.id,
+    sourceClientName: source.info.hostname,
     ingressClientID: ingress.id,
+    ingressClientName: ingress.info.hostname,
     name,
     protocol: 'TCP',
     targetHost: 'tcp-backend',
