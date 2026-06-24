@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"netsgo/pkg/protocol"
@@ -286,6 +287,16 @@ func TestAPI_AdminKeys_CreateAndList(t *testing.T) {
 	}
 	if resp["raw_key"] == nil || resp["raw_key"] == "" {
 		t.Errorf("creating a key should return raw_key and other frontend-facing fields")
+	}
+	rawKey, ok := resp["raw_key"].(string)
+	if !ok {
+		t.Fatalf("raw_key should be a string, got %T", resp["raw_key"])
+	}
+	if !strings.HasPrefix(rawKey, "sk-") {
+		t.Fatalf("raw_key should use sk- prefix, got %q", rawKey)
+	}
+	if len(rawKey) != len("sk-")+32 {
+		t.Fatalf("raw_key length = %d, want %d", len(rawKey), len("sk-")+32)
 	}
 	if keyPayload, ok := resp["key"].(map[string]any); ok {
 		if _, exists := keyPayload["key_hash"]; exists {

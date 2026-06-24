@@ -205,7 +205,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func generateAPIKeySecret() (string, error) {
-	raw, err := randomBytes(32)
+	raw, err := randomBytes(16)
 	if err != nil {
 		return "", err
 	}
