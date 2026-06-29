@@ -20,6 +20,7 @@ ARG TARGETVARIANT
 ARG NETSGO_VERSION=dev
 ARG NETSGO_COMMIT=unknown
 ARG NETSGO_DATE=unknown
+ARG NETSGO_GO_TAGS=
 
 WORKDIR /src
 
@@ -43,6 +44,7 @@ RUN set -eux; \
         export GOARM="${goarm}"; \
     fi; \
     go build \
+        ${NETSGO_GO_TAGS:+-tags="${NETSGO_GO_TAGS}"} \
         -trimpath \
         -ldflags="-s -w -X netsgo/pkg/version.Current=${NETSGO_VERSION} -X netsgo/pkg/version.Commit=${NETSGO_COMMIT} -X netsgo/pkg/version.Date=${NETSGO_DATE}" \
         -o /out/netsgo \

@@ -31,23 +31,23 @@ func (r *unifiedTunnelReconcileRegistry) run(tunnelID string, reconcile func() e
 	if r == nil {
 		return reconcile()
 	}
+	r.mu.Lock()
+	entry := r.entries[tunnelID]
+	if entry == nil {
+		entry = &unifiedTunnelReconcileEntry{}
+		r.entries[tunnelID] = entry
+	}
+	if entry.running {
+		entry.dirty = true
+		r.mu.Unlock()
+		return nil
+	}
+	entry.running = true
+	entry.dirty = false
+	r.mu.Unlock()
+
 	var lastErr error
 	for {
-		r.mu.Lock()
-		entry := r.entries[tunnelID]
-		if entry == nil {
-			entry = &unifiedTunnelReconcileEntry{}
-			r.entries[tunnelID] = entry
-		}
-		if entry.running {
-			entry.dirty = true
-			r.mu.Unlock()
-			return nil
-		}
-		entry.running = true
-		entry.dirty = false
-		r.mu.Unlock()
-
 		if err := reconcile(); err != nil {
 			lastErr = err
 		} else {
@@ -287,7 +287,7 @@ func (s *Server) recordServerExposeReconcileIssue(stored StoredTunnel, err error
 	case errors.As(err, &rejected):
 		s.recordServerExposeProvisionIssue(stored, protocol.TunnelIssueCodeProvisionAckRejected, err)
 	default:
-		s.recordServerExposeIngressIssue(stored.ID, stored.Type, err.Error())
+		s.recordServerExposeIngressIssue(stored.ID, stored.Ingress.Type, err.Error())
 	}
 }
 
@@ -303,13 +303,13 @@ func (s *Server) recordServerExposeProvisionIssue(stored StoredTunnel, code stri
 	})
 }
 
-func (s *Server) recordServerExposeIngressIssue(tunnelID, tunnelType, message string) {
+func (s *Server) recordServerExposeIngressIssue(tunnelID, ingressType, message string) {
 	message = strings.TrimSpace(message)
 	if tunnelID == "" || message == "" {
 		return
 	}
 	s.unifiedRuntime.recordServerIssue(tunnelID, protocol.TunnelIssue{
-		Code:       serverExposeIngressIssueCode(tunnelType, message),
+		Code:       serverExposeIngressIssueCode(ingressType, message),
 		Scope:      "server",
 		Severity:   "error",
 		Message:    message,
@@ -318,8 +318,8 @@ func (s *Server) recordServerExposeIngressIssue(tunnelID, tunnelType, message st
 	})
 }
 
-func serverExposeIngressIssueCode(tunnelType, message string) string {
-	if tunnelType == protocol.ProxyTypeHTTP {
+func serverExposeIngressIssueCode(ingressType, message string) string {
+	if ingressType == protocol.IngressTypeHTTPHost || ingressType == protocol.ProxyTypeHTTP {
 		return protocol.TunnelIssueCodeIngressRouteFailed
 	}
 	lower := strings.ToLower(message)

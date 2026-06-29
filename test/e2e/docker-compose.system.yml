@@ -1,5 +1,5 @@
-x-netsgo-image: &netsgo-image
-  image: netsgo-e2e:local
+x-netsgo-e2e-tools: &netsgo-e2e-tools
+  image: ${NETSGO_E2E_TOOLS_IMAGE:-netsgo-e2e:local}
   build:
     context: ../..
     dockerfile: Dockerfile
@@ -7,7 +7,10 @@ x-netsgo-image: &netsgo-image
 
 services:
   server:
-    <<: *netsgo-image
+    # Cross-version harnesses override image values and must start with
+    # --no-build so Compose does not rebuild these tags from the current tree.
+    <<: *netsgo-e2e-tools
+    image: ${NETSGO_SERVER_IMAGE:-netsgo-e2e:local}
     hostname: system-server
     command:
       - server
@@ -27,7 +30,12 @@ services:
       - 127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
     ports:
       - "${UPSTREAM_PORT:-19081}:8080"
+      - "${SERVER_TCP_PORT:-19093}:${SERVER_TCP_PORT:-19093}"
+      - "${SERVER_UDP_PORT:-19094}:${SERVER_UDP_PORT:-19094}/udp"
       - "${SERVER_SOCKS5_PORT:-19095}:${SERVER_SOCKS5_PORT:-19095}"
+      - "${SERVER_TCP_ALT_PORT:-19104}:${SERVER_TCP_ALT_PORT:-19104}"
+      - "${SERVER_UDP_ALT_PORT:-19105}:${SERVER_UDP_ALT_PORT:-19105}/udp"
+      - "${SERVER_SOCKS5_ALT_PORT:-19106}:${SERVER_SOCKS5_ALT_PORT:-19106}"
     volumes:
       - netsgo-system-server-data:/var/lib/netsgo
     networks:
@@ -52,7 +60,7 @@ services:
       - target-backend
 
   tcp-backend-slow:
-    <<: *netsgo-image
+    <<: *netsgo-e2e-tools
     hostname: tcp-backend-slow
     entrypoint:
       - /bin/sh
@@ -64,8 +72,21 @@ services:
     networks:
       - target-backend
 
+  tcp-backend-echo:
+    <<: *netsgo-e2e-tools
+    hostname: tcp-backend-echo
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          socat -T60 TCP-LISTEN:18087,fork,reuseaddr SYSTEM:'head -c 1048576 >/dev/null && printf NETSGO_LARGE_OK'
+        done
+    networks:
+      - target-backend
+
   udp-backend:
-    <<: *netsgo-image
+    <<: *netsgo-e2e-tools
     hostname: udp-backend
     entrypoint:
       - /bin/sh
@@ -78,7 +99,9 @@ services:
       - target-backend
 
   target-client:
-    <<: *netsgo-image
+    # See server note: compat/upgrade runs must prebuild images and use --no-build.
+    <<: *netsgo-e2e-tools
+    image: ${NETSGO_TARGET_CLIENT_IMAGE:-netsgo-e2e:local}
     hostname: ${NETSGO_TARGET_CLIENT_HOSTNAME:-system-target-client}
     restart: unless-stopped
     entrypoint:
@@ -95,13 +118,16 @@ services:
       - tcp-backend
       - tcp-backend-alt
       - tcp-backend-slow
+      - tcp-backend-echo
       - udp-backend
     networks:
       - control
       - target-backend
 
   ingress-client:
-    <<: *netsgo-image
+    # See server note: compat/upgrade runs must prebuild images and use --no-build.
+    <<: *netsgo-e2e-tools
+    image: ${NETSGO_INGRESS_CLIENT_IMAGE:-netsgo-e2e:local}
     hostname: ${NETSGO_INGRESS_CLIENT_HOSTNAME:-system-ingress-client}
     restart: unless-stopped
     entrypoint:

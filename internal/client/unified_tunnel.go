@@ -33,6 +33,19 @@ type clientTunnelRuntime struct {
 	once                sync.Once
 }
 
+type fixedServiceTargetRuntime struct {
+	tunnelID        string
+	revision        int64
+	targetType      string
+	host            string
+	port            int
+	transportPolicy string
+}
+
+func (r fixedServiceTargetRuntime) address() string {
+	return net.JoinHostPort(r.host, fmt.Sprintf("%d", r.port))
+}
+
 type clientUDPAssociation struct {
 	key        string
 	srcAddr    net.Addr
@@ -298,7 +311,8 @@ func (c *Client) handleTunnelProvision(rt *sessionRuntime, req protocol.TunnelPr
 
 	switch req.Role {
 	case protocol.DataStreamRoleTarget:
-		if req.Spec.Target.Type == protocol.TargetTypeSOCKS5ConnectHandler {
+		switch req.Spec.Target.Type {
+		case protocol.TargetTypeSOCKS5ConnectHandler:
 			targetRuntime, err := newClientSOCKS5TargetRuntime(req)
 			if err != nil {
 				ack.Accepted = false
@@ -307,15 +321,20 @@ func (c *Client) handleTunnelProvision(rt *sessionRuntime, req protocol.TunnelPr
 			}
 			c.socks5Targets.Store(req.TunnelID, &targetRuntime)
 			return ack
-		}
-		proxyReq, err := proxyRequestFromTunnelSpec(req.Spec)
-		if err != nil {
+		case protocol.TargetTypeTCPService, protocol.TargetTypeUDPService:
+			targetRuntime, err := newFixedServiceTargetRuntime(req)
+			if err != nil {
+				ack.Accepted = false
+				ack.Message = err.Error()
+				return ack
+			}
+			c.fixedTargetRuntimes.Store(req.TunnelID, &targetRuntime)
+			return ack
+		default:
 			ack.Accepted = false
-			ack.Message = err.Error()
+			ack.Message = fmt.Sprintf("unsupported target type %s", req.Spec.Target.Type)
 			return ack
 		}
-		c.proxies.Store(req.TunnelID, proxyReq)
-		return ack
 	case protocol.DataStreamRoleIngress:
 		if err := c.startIngressTunnelRuntime(rt, req); err != nil {
 			ack.Accepted = false
@@ -342,6 +361,7 @@ func (c *Client) handleTunnelUnprovision(req protocol.TunnelUnprovisionRequest) 
 
 	if req.Role == protocol.DataStreamRoleTarget || req.Role == "" {
 		c.deleteSOCKS5TargetByTunnelUnprovision(req)
+		c.deleteFixedTargetByTunnelUnprovision(req)
 		c.deleteProxyByTunnelUnprovision(req)
 	}
 }
@@ -353,6 +373,17 @@ func (c *Client) deleteSOCKS5TargetByTunnelUnprovision(req protocol.TunnelUnprov
 	if value, ok := c.socks5Targets.Load(req.TunnelID); ok {
 		if target, ok := value.(*clientSOCKS5TargetRuntime); ok && target != nil && tunnelUnprovisionCoversRevision(req.Revision, target.revision) {
 			c.socks5Targets.CompareAndDelete(req.TunnelID, value)
+		}
+	}
+}
+
+func (c *Client) deleteFixedTargetByTunnelUnprovision(req protocol.TunnelUnprovisionRequest) {
+	if req.TunnelID == "" {
+		return
+	}
+	if value, ok := c.fixedTargetRuntimes.Load(req.TunnelID); ok {
+		if target, ok := value.(*fixedServiceTargetRuntime); ok && target != nil && tunnelUnprovisionCoversRevision(req.Revision, target.revision) {
+			c.fixedTargetRuntimes.CompareAndDelete(req.TunnelID, value)
 		}
 	}
 }
@@ -775,36 +806,32 @@ func (c *Client) reportTunnelRuntimeError(rt *sessionRuntime, req protocol.Tunne
 	}
 }
 
-func proxyRequestFromTunnelSpec(spec protocol.TunnelSpec) (protocol.ProxyNewRequest, error) {
+func newFixedServiceTargetRuntime(req protocol.TunnelProvisionRequest) (fixedServiceTargetRuntime, error) {
 	var target struct {
 		IP   string `json:"ip"`
 		Host string `json:"host"`
 		Port int    `json:"port"`
 	}
-	if err := decodeEndpointConfig(spec.Target.Config, &target); err != nil {
-		return protocol.ProxyNewRequest{}, err
+	if err := decodeEndpointConfig(req.Spec.Target.Config, &target); err != nil {
+		return fixedServiceTargetRuntime{}, err
 	}
 	host := target.Host
 	if host == "" {
 		host = target.IP
 	}
 	if host == "" || target.Port <= 0 {
-		return protocol.ProxyNewRequest{}, fmt.Errorf("target host and port are required")
+		return fixedServiceTargetRuntime{}, fmt.Errorf("target host and port are required")
 	}
-	proxyType := protocol.ProxyTypeTCP
-	if spec.Target.Type == protocol.TargetTypeUDPService {
-		proxyType = protocol.ProxyTypeUDP
+	if req.Spec.Target.Type != protocol.TargetTypeTCPService && req.Spec.Target.Type != protocol.TargetTypeUDPService {
+		return fixedServiceTargetRuntime{}, fmt.Errorf("unsupported target type %s", req.Spec.Target.Type)
 	}
-	return protocol.ProxyNewRequest{
-		ID:                spec.ID,
-		Name:              spec.Name,
-		Type:              proxyType,
-		LocalIP:           host,
-		LocalPort:         target.Port,
-		TransportPolicy:   spec.TransportPolicy,
-		ActualTransport:   protocol.ActualTransportServerRelay,
-		ProvisionRevision: uint64(spec.Revision),
-		BandwidthSettings: spec.BandwidthSettings,
+	return fixedServiceTargetRuntime{
+		tunnelID:        req.TunnelID,
+		revision:        req.Revision,
+		targetType:      req.Spec.Target.Type,
+		host:            host,
+		port:            target.Port,
+		transportPolicy: req.Spec.TransportPolicy,
 	}, nil
 }
 

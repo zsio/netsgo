@@ -213,6 +213,9 @@ func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAP
 	}
 	stored.DesiredState = protocol.ProxyDesiredStateRunning
 	stored.RuntimeState = protocol.ProxyRuntimeStateOffline
+	if err := s.unprovisionStoredUnifiedTunnel(stored, "resume_reconcile", true); err != nil {
+		logUnifiedRuntimeCleanupFailure("resume", stored, err)
+	}
 	s.scheduleUnifiedTunnelReconcile(stored, "resume")
 	stored, err = s.store.GetTunnelByIDE(current.OwnerClientID, current.ID)
 	if err != nil {

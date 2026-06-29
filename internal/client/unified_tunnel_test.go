@@ -308,7 +308,7 @@ func assertTCPPortClosed(t *testing.T, addr string) {
 	t.Fatal("listener still accepts connections after unprovision")
 }
 
-func TestClientTunnelProvisionTargetRegistersProxyByTunnelID(t *testing.T) {
+func TestClientTunnelProvisionFixedTCPTargetDoesNotRegisterLegacyProxy(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
 
@@ -316,17 +316,98 @@ func TestClientTunnelProvisionTargetRegistersProxyByTunnelID(t *testing.T) {
 	if !ack.Accepted {
 		t.Fatalf("target provision rejected: %s", ack.Message)
 	}
-	value, ok := c.proxies.Load(req.TunnelID)
-	if !ok {
-		t.Fatal("target provision did not register proxy under tunnel id")
+	if _, ok := c.proxies.Load(req.TunnelID); ok {
+		t.Fatal("unified fixed TCP target provision must not register legacy ProxyNewRequest under tunnel id")
 	}
-	proxy := value.(protocol.ProxyNewRequest)
-	if proxy.Name != req.Spec.Name || proxy.LocalIP != "127.0.0.1" || proxy.LocalPort != 8080 {
-		t.Fatalf("proxy mismatch: %+v", proxy)
+	if _, ok := c.proxies.Load(req.Spec.Name); ok {
+		t.Fatal("unified fixed TCP target provision must not register legacy ProxyNewRequest under tunnel name")
 	}
-	if proxy.ProvisionRevision != uint64(req.Revision) {
-		t.Fatalf("provision revision mismatch: got %d want %d", proxy.ProvisionRevision, req.Revision)
+}
+
+func TestClientTunnelProvisionFixedUDPTargetDoesNotRegisterLegacyProxy(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	req := testUDPTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
+
+	ack := c.handleTunnelProvision(&sessionRuntime{}, req)
+	if !ack.Accepted {
+		t.Fatalf("udp target provision rejected: %s", ack.Message)
 	}
+	if _, ok := c.proxies.Load(req.TunnelID); ok {
+		t.Fatal("unified fixed UDP target provision must not register legacy ProxyNewRequest under tunnel id")
+	}
+	if _, ok := c.proxies.Load(req.Spec.Name); ok {
+		t.Fatal("unified fixed UDP target provision must not register legacy ProxyNewRequest under tunnel name")
+	}
+}
+
+func TestClientTunnelProvisionUnsupportedTargetRejectsWithoutRuntime(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
+	req.Spec.Target.Type = "future_target"
+	req.Spec.Target.Config = mustJSON(t, map[string]any{
+		"host": "127.0.0.1",
+		"port": 8080,
+	})
+
+	ack := c.handleTunnelProvision(&sessionRuntime{}, req)
+	if ack.Accepted {
+		t.Fatalf("unsupported target type must be rejected, got %+v", ack)
+	}
+	if ack.TunnelID != req.TunnelID || ack.Revision != req.Revision || ack.Role != protocol.DataStreamRoleTarget {
+		t.Fatalf("reject ack identity mismatch: %+v", ack)
+	}
+	if !strings.Contains(ack.Message, "unsupported target type future_target") {
+		t.Fatalf("reject ack should explain unsupported target type, got %q", ack.Message)
+	}
+	if _, ok := c.proxies.Load(req.TunnelID); ok {
+		t.Fatal("unsupported target reject must not write legacy proxy by tunnel id")
+	}
+	if _, ok := c.proxies.Load(req.Spec.Name); ok {
+		t.Fatal("unsupported target reject must not write legacy proxy by tunnel name")
+	}
+	if _, ok := c.socks5Targets.Load(req.TunnelID); ok {
+		t.Fatal("unsupported target reject must not write SOCKS5 target runtime")
+	}
+	if _, ok := c.tunnels.Load(tunnelRuntimeKey(req.TunnelID, protocol.DataStreamRoleIngress)); ok {
+		t.Fatal("unsupported target reject must not create ingress runtime")
+	}
+}
+
+func TestClientTunnelProvisionUnsupportedIngressRejectsWithoutRuntime(t *testing.T) {
+	c := New("ws://localhost:8080", "key")
+	port := reserveClientTCPPort(t)
+	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleIngress, port)
+	req.Spec.Ingress.Type = "future_ingress"
+	req.Spec.Ingress.Config = mustJSON(t, map[string]any{
+		"bind_ip":              "127.0.0.1",
+		"port":                 port,
+		"allowed_source_cidrs": []string{"0.0.0.0/0", "::/0"},
+	})
+
+	ack := c.handleTunnelProvision(&sessionRuntime{}, req)
+	if ack.Accepted {
+		t.Fatalf("unsupported ingress type must be rejected, got %+v", ack)
+	}
+	if ack.TunnelID != req.TunnelID || ack.Revision != req.Revision || ack.Role != protocol.DataStreamRoleIngress {
+		t.Fatalf("reject ack identity mismatch: %+v", ack)
+	}
+	if !strings.Contains(ack.Message, "unsupported ingress type future_ingress") {
+		t.Fatalf("reject ack should explain unsupported ingress type, got %q", ack.Message)
+	}
+	if _, ok := c.tunnels.Load(tunnelRuntimeKey(req.TunnelID, protocol.DataStreamRoleIngress)); ok {
+		t.Fatal("unsupported ingress reject must not create ingress runtime")
+	}
+	if _, ok := c.proxies.Load(req.TunnelID); ok {
+		t.Fatal("unsupported ingress reject must not write legacy proxy by tunnel id")
+	}
+	if _, ok := c.socks5Targets.Load(req.TunnelID); ok {
+		t.Fatal("unsupported ingress reject must not write SOCKS5 target runtime")
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("unsupported ingress reject must leave port reusable: %v", err)
+	}
+	mustClose(t, ln)
 }
 
 func TestClientTunnelProvisionSOCKS5TargetUsesEndpointRuntime(t *testing.T) {
@@ -361,6 +442,65 @@ func TestClientTunnelProvisionSOCKS5TargetUsesEndpointRuntime(t *testing.T) {
 	if target.config.DialTimeoutSeconds != 2 {
 		t.Fatalf("SOCKS5 target config not preserved: %+v", target.config)
 	}
+}
+
+func TestClientSOCKS5TargetStreamHeaderTransportPolicy(t *testing.T) {
+	baseReq := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
+	baseReq.Spec.Target.Type = protocol.TargetTypeSOCKS5ConnectHandler
+	baseReq.Spec.Target.Config = mustJSON(t, protocol.SOCKS5ConnectHandlerConfig{
+		AllowedTargetCIDRs: []string{"127.0.0.0/8"},
+		AllowedTargetHosts: []string{"127.0.0.1"},
+		AllowedTargetPorts: []int{8080},
+		DialTimeoutSeconds: 2,
+	})
+	baseHeader := protocol.DataStreamHeader{
+		TunnelID:   baseReq.TunnelID,
+		Revision:   baseReq.Revision,
+		SourceRole: protocol.DataStreamRoleServer,
+		TargetRole: protocol.DataStreamRoleTarget,
+		Direction:  protocol.DataStreamDirectionIngressToTarget,
+		Transport:  protocol.ActualTransportServerRelay,
+		TargetHost: "127.0.0.1",
+		TargetPort: 8080,
+	}
+
+	t.Run("server relay policy accepts server relay header", func(t *testing.T) {
+		req := baseReq
+		req.Spec.TransportPolicy = protocol.TransportPolicyServerRelayOnly
+		target, err := newClientSOCKS5TargetRuntime(req)
+		if err != nil {
+			t.Fatalf("new SOCKS5 target runtime: %v", err)
+		}
+		if !dataStreamHeaderMatchesSOCKS5Target(baseHeader, target) {
+			t.Fatal("server_relay_only SOCKS5 target should accept server-relay data stream headers")
+		}
+	})
+
+	t.Run("direct only policy rejects server relay header", func(t *testing.T) {
+		req := baseReq
+		req.Spec.TransportPolicy = protocol.TransportPolicyDirectOnly
+		target, err := newClientSOCKS5TargetRuntime(req)
+		if err != nil {
+			t.Fatalf("new SOCKS5 target runtime: %v", err)
+		}
+		if dataStreamHeaderMatchesSOCKS5Target(baseHeader, target) {
+			t.Fatal("direct_only SOCKS5 target must reject server-relay data stream headers")
+		}
+	})
+
+	t.Run("peer direct header remains rejected", func(t *testing.T) {
+		req := baseReq
+		req.Spec.TransportPolicy = protocol.TransportPolicyServerRelayOnly
+		target, err := newClientSOCKS5TargetRuntime(req)
+		if err != nil {
+			t.Fatalf("new SOCKS5 target runtime: %v", err)
+		}
+		header := baseHeader
+		header.Transport = protocol.ActualTransportPeerDirect
+		if dataStreamHeaderMatchesSOCKS5Target(header, target) {
+			t.Fatal("SOCKS5 target must reject peer-direct data stream headers in server-relay handler")
+		}
+	})
 }
 
 func TestClientTunnelUnprovisionDeletesSOCKS5TargetWithoutComparingUncomparableValue(t *testing.T) {
@@ -535,11 +675,17 @@ func TestClientTunnelUnprovisionNewerRevisionClosesOlderIngressRuntime(t *testin
 func TestClientTunnelUnprovisionIgnoresStaleTargetRevision(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
-
-	ack := c.handleTunnelProvision(&sessionRuntime{}, req)
-	if !ack.Accepted {
-		t.Fatalf("target provision rejected: %s", ack.Message)
+	proxy := protocol.ProxyNewRequest{
+		ID:                req.TunnelID,
+		Name:              req.Spec.Name,
+		Type:              protocol.ProxyTypeTCP,
+		LocalIP:           "127.0.0.1",
+		LocalPort:         8080,
+		TransportPolicy:   req.Spec.TransportPolicy,
+		ActualTransport:   protocol.ActualTransportServerRelay,
+		ProvisionRevision: uint64(req.Revision),
 	}
+	c.proxies.Store(req.TunnelID, proxy)
 
 	c.handleTunnelUnprovision(protocol.TunnelUnprovisionRequest{
 		TunnelID: req.TunnelID,
@@ -547,7 +693,7 @@ func TestClientTunnelUnprovisionIgnoresStaleTargetRevision(t *testing.T) {
 		Role:     protocol.DataStreamRoleTarget,
 	})
 	if _, ok := c.proxies.Load(req.TunnelID); !ok {
-		t.Fatal("stale target unprovision deleted current proxy")
+		t.Fatal("stale target unprovision deleted current legacy proxy")
 	}
 
 	c.handleTunnelUnprovision(protocol.TunnelUnprovisionRequest{
@@ -556,18 +702,24 @@ func TestClientTunnelUnprovisionIgnoresStaleTargetRevision(t *testing.T) {
 		Role:     protocol.DataStreamRoleTarget,
 	})
 	if _, ok := c.proxies.Load(req.TunnelID); ok {
-		t.Fatal("current target unprovision did not delete proxy")
+		t.Fatal("current target unprovision did not delete legacy proxy")
 	}
 }
 
 func TestClientTunnelUnprovisionNewerRevisionDeletesOlderTargetProxy(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
-
-	ack := c.handleTunnelProvision(&sessionRuntime{}, req)
-	if !ack.Accepted {
-		t.Fatalf("target provision rejected: %s", ack.Message)
+	proxy := protocol.ProxyNewRequest{
+		ID:                req.TunnelID,
+		Name:              req.Spec.Name,
+		Type:              protocol.ProxyTypeTCP,
+		LocalIP:           "127.0.0.1",
+		LocalPort:         8080,
+		TransportPolicy:   req.Spec.TransportPolicy,
+		ActualTransport:   protocol.ActualTransportServerRelay,
+		ProvisionRevision: uint64(req.Revision),
 	}
+	c.proxies.Store(req.TunnelID, proxy)
 
 	c.handleTunnelUnprovision(protocol.TunnelUnprovisionRequest{
 		TunnelID: req.TunnelID,
@@ -575,16 +727,22 @@ func TestClientTunnelUnprovisionNewerRevisionDeletesOlderTargetProxy(t *testing.
 		Role:     protocol.DataStreamRoleTarget,
 	})
 	if _, ok := c.proxies.Load(req.TunnelID); ok {
-		t.Fatal("newer target unprovision did not delete older proxy")
+		t.Fatal("newer target unprovision did not delete older legacy proxy")
 	}
 }
 
 func TestClientTunnelUnprovisionDeletesLegacyProxyByTunnelID(t *testing.T) {
 	c := New("ws://localhost:8080", "key")
 	req := testTunnelProvisionRequest(t, protocol.DataStreamRoleTarget, reserveClientTCPPort(t))
-	proxy, err := proxyRequestFromTunnelSpec(req.Spec)
-	if err != nil {
-		t.Fatalf("build proxy request: %v", err)
+	proxy := protocol.ProxyNewRequest{
+		ID:                req.TunnelID,
+		Name:              req.Spec.Name,
+		Type:              protocol.ProxyTypeTCP,
+		LocalIP:           "127.0.0.1",
+		LocalPort:         8080,
+		TransportPolicy:   req.Spec.TransportPolicy,
+		ActualTransport:   protocol.ActualTransportServerRelay,
+		ProvisionRevision: uint64(req.Revision),
 	}
 	c.proxies.Store(proxy.Name, proxy)
 

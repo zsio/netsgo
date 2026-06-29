@@ -1,0 +1,12 @@
+{
+  "id": "legacy-flat-http-id",
+  "name": "legacy-flat-http",
+  "type": "http",
+  "local_ip": "127.0.0.1",
+  "local_port": 8081,
+  "remote_port": 0,
+  "domain": "legacy.example.test",
+  "transport_policy": "server_relay_only",
+  "actual_transport": "unknown",
+  "provision_revision": 10
+}

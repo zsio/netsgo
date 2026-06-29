@@ -257,6 +257,9 @@ func (s *Server) waitForClientTunnelProvisionAck(client *ClientConn, req protoco
 			return &tunnelProvisionRejectedError{name: req.TunnelID, message: resp.message}
 		}
 		return nil
+	case <-s.done:
+		s.tunnels.unregisterProvisionAckWaiter(client, req.TunnelID, uint64(req.Revision), req.Role)
+		return errTunnelProvisionAckCancelled
 	case <-timer.C:
 		s.tunnels.unregisterProvisionAckWaiter(client, req.TunnelID, uint64(req.Revision), req.Role)
 		return errTunnelProvisionAckTimeout

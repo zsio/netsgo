@@ -200,6 +200,12 @@ type ClientCapabilities struct {
 // DefaultClientCapabilities returns the capabilities implemented by this client
 // binary without advertising future-only endpoint types.
 func DefaultClientCapabilities() ClientCapabilities {
+	return defaultClientCapabilities()
+}
+
+var defaultClientCapabilities = productionDefaultClientCapabilities
+
+func productionDefaultClientCapabilities() ClientCapabilities {
 	return ClientCapabilities{
 		ProtocolVersion:     1,
 		StreamHeaderVersion: 1,

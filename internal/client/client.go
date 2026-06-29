@@ -46,29 +46,30 @@ var (
 
 // Client is the core client structure.
 type Client struct {
-	ServerAddr       string // Server address (supports ws://, wss://, http://, and https://, normalized internally)
-	Key              string // Authentication key (used to exchange for a token)
-	Token            string // Client connection token (exchanged from Key)
-	InstallID        string // Stable installation ID
-	DataDir          string
-	ClientID         string // Stable client ID assigned by the server
-	TLSSkipVerify    bool
-	TLSFingerprint   string
-	dataToken        string
-	conn             *websocket.Conn
-	mu               sync.Mutex // Protects the current runtime and mirrored fields
-	done             chan struct{}
-	dataSession      *yamux.Session // yamux session for the data channel
-	dataMu           sync.RWMutex
-	proxies          sync.Map // proxy_name -> ProxyNewRequest
-	socks5Targets    sync.Map // tunnel_id -> clientSOCKS5TargetRuntime
-	tunnels          sync.Map // tunnel_id:role -> *clientTunnelRuntime
-	useTLS           bool
-	startTime        time.Time // Program start time, used to calculate process uptime
-	publicIPv4       string    // Cached public IPv4 address
-	publicIPv6       string    // Cached public IPv6 address
-	publicIPFetched  time.Time // Last fetch time
-	publicIPFetching bool      // Public IP refresh is currently running
+	ServerAddr          string // Server address (supports ws://, wss://, http://, and https://, normalized internally)
+	Key                 string // Authentication key (used to exchange for a token)
+	Token               string // Client connection token (exchanged from Key)
+	InstallID           string // Stable installation ID
+	DataDir             string
+	ClientID            string // Stable client ID assigned by the server
+	TLSSkipVerify       bool
+	TLSFingerprint      string
+	dataToken           string
+	conn                *websocket.Conn
+	mu                  sync.Mutex // Protects the current runtime and mirrored fields
+	done                chan struct{}
+	dataSession         *yamux.Session // yamux session for the data channel
+	dataMu              sync.RWMutex
+	proxies             sync.Map // proxy_name -> ProxyNewRequest
+	socks5Targets       sync.Map // tunnel_id -> clientSOCKS5TargetRuntime
+	fixedTargetRuntimes sync.Map // tunnel_id -> fixedServiceTargetRuntime
+	tunnels             sync.Map // tunnel_id:role -> *clientTunnelRuntime
+	useTLS              bool
+	startTime           time.Time // Program start time, used to calculate process uptime
+	publicIPv4          string    // Cached public IPv4 address
+	publicIPv6          string    // Cached public IPv6 address
+	publicIPFetched     time.Time // Last fetch time
+	publicIPFetching    bool      // Public IP refresh is currently running
 	// ProxyConfigs are delivered by the server and may also be set manually in benchmarks.
 	ProxyConfigs []protocol.ProxyNewRequest
 	// DisableReconnect disables automatic reconnect (used in tests and similar scenarios).
@@ -498,6 +499,10 @@ func (c *Client) cleanup() {
 	})
 	c.socks5Targets.Range(func(key, _ any) bool {
 		c.socks5Targets.Delete(key)
+		return true
+	})
+	c.fixedTargetRuntimes.Range(func(key, _ any) bool {
+		c.fixedTargetRuntimes.Delete(key)
 		return true
 	})
 	c.tunnels.Range(func(key, value any) bool {
@@ -947,6 +952,14 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 		c.handleSOCKS5TargetStream(stream, header, target)
 		return
 	}
+	if target, ok := c.fixedTargetForDataStreamHeader(header); ok {
+		if !dataStreamHeaderMatchesFixedTarget(header, target) {
+			log.Printf("⚠️ fixed target DataStreamHeader rejected: tunnel=%s revision=%d source=%s target=%s direction=%s transport=%s", header.TunnelID, header.Revision, header.SourceRole, header.TargetRole, header.Direction, header.Transport)
+			return
+		}
+		c.handleFixedTargetStream(stream, header, target)
+		return
+	}
 	proxyName, cfg, ok := c.proxyForDataStreamHeader(header)
 	if !ok {
 		log.Printf("⚠️ Unknown tunnel id: %s", header.TunnelID)
@@ -985,6 +998,59 @@ func (c *Client) socks5TargetForDataStreamHeader(header protocol.DataStreamHeade
 		return *target, true
 	}
 	return clientSOCKS5TargetRuntime{}, false
+}
+
+func (c *Client) fixedTargetForDataStreamHeader(header protocol.DataStreamHeader) (fixedServiceTargetRuntime, bool) {
+	if val, ok := c.fixedTargetRuntimes.Load(header.TunnelID); ok {
+		target, ok := val.(*fixedServiceTargetRuntime)
+		if !ok || target == nil {
+			log.Printf("⚠️ invalid fixed target cache entry for tunnel %s: %T", header.TunnelID, val)
+			return fixedServiceTargetRuntime{}, false
+		}
+		return *target, true
+	}
+	return fixedServiceTargetRuntime{}, false
+}
+
+func dataStreamHeaderMatchesFixedTarget(header protocol.DataStreamHeader, target fixedServiceTargetRuntime) bool {
+	if target.revision != 0 && header.Revision != target.revision {
+		return false
+	}
+	if header.TargetRole != protocol.DataStreamRoleTarget {
+		return false
+	}
+	if header.SourceRole != protocol.DataStreamRoleServer && header.SourceRole != protocol.DataStreamRoleIngress {
+		return false
+	}
+	if header.Direction != protocol.DataStreamDirectionIngressToTarget {
+		return false
+	}
+	if header.Transport != protocol.ActualTransportServerRelay {
+		return false
+	}
+	if target.transportPolicy == protocol.TransportPolicyDirectOnly {
+		return false
+	}
+	return true
+}
+
+func (c *Client) handleFixedTargetStream(stream *yamux.Stream, header protocol.DataStreamHeader, target fixedServiceTargetRuntime) {
+	switch target.targetType {
+	case protocol.TargetTypeUDPService:
+		conn, err := net.DialTimeout("udp", target.address(), 5*time.Second)
+		if err != nil {
+			log.Printf("⚠️ Failed to connect to fixed UDP target [%s → %s]: %v", header.TunnelID, target.address(), err)
+			return
+		}
+		mux.UDPRelay(stream, conn)
+	default:
+		conn, err := net.DialTimeout("tcp", target.address(), 5*time.Second)
+		if err != nil {
+			log.Printf("⚠️ Failed to connect to fixed TCP target [%s → %s]: %v", header.TunnelID, target.address(), err)
+			return
+		}
+		mux.Relay(stream, conn)
+	}
 }
 
 func dataStreamHeaderMatchesProxyConfig(header protocol.DataStreamHeader, cfg protocol.ProxyNewRequest) bool {

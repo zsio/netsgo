@@ -700,6 +700,81 @@ func TestUnifiedTunnelControlMessagesJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTunnelProvisionRequestEndpointConfigsRoundTrip(t *testing.T) {
+	cases := []struct {
+		name     string
+		topology string
+		ingress  EndpointSpec
+		target   EndpointSpec
+	}{
+		{
+			name:     "tcp",
+			topology: TunnelTopologyClientToClient,
+			ingress:  EndpointSpec{Location: EndpointLocationClient, ClientID: "ingress-client", Type: IngressTypeTCPListen, Config: json.RawMessage(`{"bind_ip":"127.0.0.1","port":18080,"allowed_source_cidrs":["127.0.0.0/8"]}`)},
+			target:   EndpointSpec{Location: EndpointLocationClient, ClientID: "target-client", Type: TargetTypeTCPService, Config: json.RawMessage(`{"host":"127.0.0.1","port":8080}`)},
+		},
+		{
+			name:     "udp",
+			topology: TunnelTopologyClientToClient,
+			ingress:  EndpointSpec{Location: EndpointLocationClient, ClientID: "ingress-client", Type: IngressTypeUDPListen, Config: json.RawMessage(`{"bind_ip":"127.0.0.1","port":18081,"allowed_source_cidrs":["127.0.0.0/8"]}`)},
+			target:   EndpointSpec{Location: EndpointLocationClient, ClientID: "target-client", Type: TargetTypeUDPService, Config: json.RawMessage(`{"host":"127.0.0.1","port":5353}`)},
+		},
+		{
+			name:     "http",
+			topology: TunnelTopologyServerExpose,
+			ingress:  EndpointSpec{Location: EndpointLocationServer, Type: IngressTypeHTTPHost, Config: json.RawMessage(`{"domain":"app.example.test","allowed_source_cidrs":["0.0.0.0/0","::/0"],"auth":{"type":"none"}}`)},
+			target:   EndpointSpec{Location: EndpointLocationClient, ClientID: "target-client", Type: TargetTypeTCPService, Config: json.RawMessage(`{"host":"127.0.0.1","port":8080}`)},
+		},
+		{
+			name:     "socks5",
+			topology: TunnelTopologyClientToClient,
+			ingress:  EndpointSpec{Location: EndpointLocationClient, ClientID: "ingress-client", Type: IngressTypeSOCKS5Listen, Config: json.RawMessage(`{"bind_ip":"127.0.0.1","port":1080,"allowed_source_cidrs":["127.0.0.0/8"],"auth":{"type":"none"}}`)},
+			target:   EndpointSpec{Location: EndpointLocationClient, ClientID: "target-client", Type: TargetTypeSOCKS5ConnectHandler, Config: json.RawMessage(`{"allowed_target_cidrs":["127.0.0.0/8"],"allowed_target_hosts":["localhost"],"allowed_target_ports":[80,443],"dial_timeout_seconds":5}`)},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := TunnelProvisionRequest{
+				TunnelID: "tun-" + tc.name,
+				Revision: 12,
+				Role:     DataStreamRoleTarget,
+				Spec: TunnelSpec{
+					ID:              "tun-" + tc.name,
+					Name:            "round-trip-" + tc.name,
+					Revision:        12,
+					Topology:        tc.topology,
+					OwnerClientID:   "target-client",
+					Ingress:         tc.ingress,
+					Target:          tc.target,
+					TransportPolicy: TransportPolicyServerRelayOnly,
+					ActualTransport: ActualTransportUnknown,
+				},
+			}
+			data, err := json.Marshal(req)
+			if err != nil {
+				t.Fatalf("marshal provision request: %v", err)
+			}
+			var got TunnelProvisionRequest
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("unmarshal provision request: %v", err)
+			}
+			if got.TunnelID != req.TunnelID || got.Revision != req.Revision || got.Role != req.Role {
+				t.Fatalf("identity mismatch: %+v", got)
+			}
+			if got.Spec.Ingress.Type != tc.ingress.Type || got.Spec.Target.Type != tc.target.Type {
+				t.Fatalf("endpoint type mismatch: ingress=%+v target=%+v", got.Spec.Ingress, got.Spec.Target)
+			}
+			if !reflect.DeepEqual(got.Spec.Ingress.Config, tc.ingress.Config) {
+				t.Fatalf("ingress config mismatch: got %s want %s", got.Spec.Ingress.Config, tc.ingress.Config)
+			}
+			if !reflect.DeepEqual(got.Spec.Target.Config, tc.target.Config) {
+				t.Fatalf("target config mismatch: got %s want %s", got.Spec.Target.Config, tc.target.Config)
+			}
+		})
+	}
+}
+
 func TestDefaultClientCapabilitiesIncludeSOCKS5Endpoints(t *testing.T) {
 	caps := DefaultClientCapabilities()
 	if !containsString(caps.IngressTypes, IngressTypeSOCKS5Listen) {
@@ -715,10 +790,60 @@ func TestProxyNewRequestRemainsLegacyFlatSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal ProxyNewRequest: %v", err)
 	}
-	for _, forbidden := range []string{"target_host", "target_port", "allowed_target_cidrs", "allowed_source_cidrs", "auth"} {
+	for _, forbidden := range []string{
+		"tunnel_id",
+		"revision",
+		"role",
+		"spec",
+		"target_host",
+		"target_port",
+		"dynamic_target_host",
+		"dynamic_target_port",
+		"allowed_target_cidrs",
+		"allowed_source_cidrs",
+		"auth",
+		"auth_config",
+	} {
 		if strings.Contains(string(data), forbidden) {
-			t.Fatalf("ProxyNewRequest must not grow SOCKS5 field %q: %s", forbidden, data)
+			t.Fatalf("ProxyNewRequest must not grow unified endpoint field %q: %s", forbidden, data)
 		}
+	}
+}
+
+func TestTunnelProvisionAckDoesNotLeakLegacyProxyFields(t *testing.T) {
+	cases := []struct {
+		name     string
+		accepted bool
+		message  string
+	}{
+		{name: "rejected", accepted: false, message: "unsupported target type"},
+		{name: "accepted", accepted: true, message: "ok"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(TunnelProvisionAck{
+				TunnelID: "tun-1",
+				Revision: 3,
+				Role:     DataStreamRoleTarget,
+				Accepted: tc.accepted,
+				Message:  tc.message,
+			})
+			if err != nil {
+				t.Fatalf("marshal TunnelProvisionAck: %v", err)
+			}
+			for _, forbidden := range []string{
+				`"name"`,
+				"provision_revision",
+				"local_ip",
+				"local_port",
+				"remote_port",
+				"domain",
+			} {
+				if strings.Contains(string(data), forbidden) {
+					t.Fatalf("TunnelProvisionAck (%s) must not leak legacy proxy field %s: %s", tc.name, forbidden, data)
+				}
+			}
+		})
 	}
 }
 

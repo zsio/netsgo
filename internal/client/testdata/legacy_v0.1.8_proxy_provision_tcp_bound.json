@@ -1,0 +1,14 @@
+{
+  "id": "legacy-flat-tcp-bound-id",
+  "name": "legacy-flat-tcp-bound",
+  "type": "tcp",
+  "local_ip": "127.0.0.1",
+  "local_port": 8083,
+  "remote_port": 19092,
+  "bind_ip": "127.0.0.1",
+  "transport_policy": "server_relay_only",
+  "actual_transport": "server_relay",
+  "provision_revision": 12,
+  "ingress_bps": 4096,
+  "egress_bps": 8192
+}

@@ -931,6 +931,219 @@ func TestClientRelayIngressProvisionFailureUnprovisionsTarget(t *testing.T) {
 	}
 }
 
+func resolveRejectedTunnelProvisionAck(t *testing.T, s *Server, client *ClientConn, req protocol.TunnelProvisionRequest, message string) {
+	t.Helper()
+	ack, err := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
+		TunnelID: req.TunnelID,
+		Revision: req.Revision,
+		Role:     req.Role,
+		Accepted: false,
+		Message:  message,
+	})
+	if err != nil {
+		t.Fatalf("build rejected tunnel provision ack: %v", err)
+	}
+	var parsedAck protocol.TunnelProvisionAck
+	if err := ack.ParsePayload(&parsedAck); err != nil {
+		t.Fatalf("parse rejected tunnel provision ack: %v", err)
+	}
+	if !s.tunnels.resolveProvisionAckWaiter(client.ID, client.generation, provisionAckResult{
+		name:     parsedAck.TunnelID,
+		accepted: parsedAck.Accepted,
+		message:  parsedAck.Message,
+		revision: uint64(parsedAck.Revision),
+		role:     parsedAck.Role,
+	}) {
+		t.Fatal("tunnel provision ack waiter was not registered")
+	}
+}
+
+func TestClientRelayRejectedTargetProvisionProjectsIssueWithoutResidualState(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	s.tunnels.tunnelReadyTimeout = 2 * time.Second
+
+	stored := testClientRelayStoredTunnel(t)
+	stored.RuntimeState = protocol.ProxyRuntimeStateOffline
+	mustAddStableTunnel(t, s.store, stored)
+
+	targetWS, targetServerWS := newTestWebSocketPair(t)
+	defer mustClose(t, targetWS)
+	defer mustClose(t, targetServerWS)
+	caps := protocol.DefaultClientCapabilities()
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+	targetClient := &ClientConn{
+		ID:          stored.Target.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		conn:        targetServerWS,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: targetSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	ingressClient := &ClientConn{
+		ID:          stored.Ingress.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: ingressSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(targetClient.ID, targetClient)
+	s.clients.Store(ingressClient.ID, ingressClient)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.reconcileClientRelayTunnel(stored)
+	}()
+
+	targetMsg := readControlMessageOfType(t, targetWS, protocol.MsgTypeTunnelProvision)
+	var targetReq protocol.TunnelProvisionRequest
+	if err := targetMsg.ParsePayload(&targetReq); err != nil {
+		t.Fatalf("parse target provision: %v", err)
+	}
+	if targetReq.TunnelID != stored.ID || targetReq.Revision != stored.Revision || targetReq.Role != protocol.DataStreamRoleTarget {
+		t.Fatalf("target provision mismatch: %+v", targetReq)
+	}
+	resolveRejectedTunnelProvisionAck(t, s, targetClient, targetReq, "unsupported target type future_target")
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("target provision reject should return an error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconcile did not return after target provision reject")
+	}
+	if _, ok := s.c2c.get(stored.ID); ok {
+		t.Fatal("rejected target provision must not leave client relay runtime")
+	}
+	s.tunnels.pendingProvisionAckMu.Lock()
+	pendingCount := len(s.tunnels.pendingProvisionAcks)
+	s.tunnels.pendingProvisionAckMu.Unlock()
+	if pendingCount != 0 {
+		t.Fatalf("rejected target provision must release ack waiters, got %d", pendingCount)
+	}
+	reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("reload tunnel: %v", err)
+	}
+	spec := specFromStoredTunnel(reloaded, s)
+	if spec.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("target provision reject should project error, got %q", spec.RuntimeState)
+	}
+	if len(spec.Issues) != 1 || spec.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckRejected || spec.Issues[0].ClientID != stored.Target.ClientID {
+		t.Fatalf("target provision reject issue mismatch: %+v", spec.Issues)
+	}
+	req := readTunnelUnprovision(t, targetWS)
+	if req.TunnelID != stored.ID || req.Revision != stored.Revision || req.Role != protocol.DataStreamRoleTarget || req.Reason != "target_provision_failed" {
+		t.Fatalf("target cleanup unprovision mismatch: %+v", req)
+	}
+}
+
+func TestClientRelayRejectedIngressProvisionUnprovisionsTargetWithoutResidualState(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	s.tunnels.tunnelReadyTimeout = 2 * time.Second
+
+	stored := testClientRelayStoredTunnel(t)
+	stored.RuntimeState = protocol.ProxyRuntimeStateOffline
+	mustAddStableTunnel(t, s.store, stored)
+
+	targetWS, targetServerWS := newTestWebSocketPair(t)
+	defer mustClose(t, targetWS)
+	defer mustClose(t, targetServerWS)
+	ingressWS, ingressServerWS := newTestWebSocketPair(t)
+	defer mustClose(t, ingressWS)
+	defer mustClose(t, ingressServerWS)
+	caps := protocol.DefaultClientCapabilities()
+	_, targetSession := newTestClientRelayDataSession(t)
+	_, ingressSession := newTestClientRelayDataSession(t)
+	targetClient := &ClientConn{
+		ID:          stored.Target.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		conn:        targetServerWS,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: targetSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	ingressClient := &ClientConn{
+		ID:          stored.Ingress.ClientID,
+		Info:        protocol.ClientInfo{Capabilities: &caps},
+		conn:        ingressServerWS,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: ingressSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(targetClient.ID, targetClient)
+	s.clients.Store(ingressClient.ID, ingressClient)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.reconcileClientRelayTunnel(stored)
+	}()
+
+	targetMsg := readControlMessageOfType(t, targetWS, protocol.MsgTypeTunnelProvision)
+	var targetReq protocol.TunnelProvisionRequest
+	if err := targetMsg.ParsePayload(&targetReq); err != nil {
+		t.Fatalf("parse target provision: %v", err)
+	}
+	if !s.tunnels.resolveProvisionAckWaiter(targetClient.ID, targetClient.generation, provisionAckResult{
+		name:     targetReq.TunnelID,
+		accepted: true,
+		revision: uint64(targetReq.Revision),
+		role:     targetReq.Role,
+	}) {
+		t.Fatal("target provision ack waiter was not registered")
+	}
+
+	ingressMsg := readControlMessageOfType(t, ingressWS, protocol.MsgTypeTunnelProvision)
+	var ingressReq protocol.TunnelProvisionRequest
+	if err := ingressMsg.ParsePayload(&ingressReq); err != nil {
+		t.Fatalf("parse ingress provision: %v", err)
+	}
+	if ingressReq.TunnelID != stored.ID || ingressReq.Revision != stored.Revision || ingressReq.Role != protocol.DataStreamRoleIngress {
+		t.Fatalf("ingress provision mismatch: %+v", ingressReq)
+	}
+	resolveRejectedTunnelProvisionAck(t, s, ingressClient, ingressReq, "unsupported ingress type future_ingress")
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("ingress provision reject should return an error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconcile did not return after ingress provision reject")
+	}
+	if _, ok := s.c2c.get(stored.ID); ok {
+		t.Fatal("rejected ingress provision must not leave client relay runtime")
+	}
+	s.tunnels.pendingProvisionAckMu.Lock()
+	pendingCount := len(s.tunnels.pendingProvisionAcks)
+	s.tunnels.pendingProvisionAckMu.Unlock()
+	if pendingCount != 0 {
+		t.Fatalf("rejected ingress provision must release ack waiters, got %d", pendingCount)
+	}
+	reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("reload tunnel: %v", err)
+	}
+	spec := specFromStoredTunnel(reloaded, s)
+	if spec.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("ingress provision reject should project error, got %q", spec.RuntimeState)
+	}
+	if len(spec.Issues) != 1 || spec.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckRejected || spec.Issues[0].ClientID != stored.Ingress.ClientID {
+		t.Fatalf("ingress provision reject issue mismatch: %+v", spec.Issues)
+	}
+	req := readTunnelUnprovision(t, targetWS)
+	if req.TunnelID != stored.ID || req.Revision != stored.Revision || req.Role != protocol.DataStreamRoleTarget || req.Reason != "ingress_provision_failed" {
+		t.Fatalf("target cleanup unprovision mismatch: %+v", req)
+	}
+}
+
 func TestClientRelaySOCKS5TargetProvisionDoesNotReceiveIngressPasswordHash(t *testing.T) {
 	stored := testClientRelayStoredTunnel(t)
 	stored.Ingress.Type = protocol.IngressTypeSOCKS5Listen
@@ -1034,49 +1247,83 @@ func TestClientRelayActiveReconcileIsIdempotent(t *testing.T) {
 }
 
 func TestClientRelayCapabilityLossProjectsErrorWithoutProvision(t *testing.T) {
-	s := New(0)
-	s.store = newTestTunnelStore(t)
-	stored := testClientRelayStoredTunnel(t)
-	mustAddStableTunnel(t, s.store, stored)
-	s.c2c.set(stored)
+	for _, tc := range []struct {
+		name           string
+		targetCaps     protocol.ClientCapabilities
+		ingressCaps    protocol.ClientCapabilities
+		wantIssueScope string
+	}{
+		{
+			name:           "ingress client loses ingress capability",
+			targetCaps:     protocol.DefaultClientCapabilities(),
+			ingressCaps:    protocol.ClientCapabilities{},
+			wantIssueScope: "ingress_client",
+		},
+		{
+			name: "target client loses target capability",
+			targetCaps: protocol.ClientCapabilities{
+				IngressTypes: protocol.DefaultClientCapabilities().IngressTypes,
+			},
+			ingressCaps:    protocol.DefaultClientCapabilities(),
+			wantIssueScope: "target_client",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := New(0)
+			s.store = newTestTunnelStore(t)
+			stored := testClientRelayStoredTunnel(t)
+			mustAddStableTunnel(t, s.store, stored)
+			s.c2c.set(stored)
 
-	targetCaps := protocol.DefaultClientCapabilities()
-	ingressCaps := protocol.ClientCapabilities{}
-	_, targetSession := newTestClientRelayDataSession(t)
-	_, ingressSession := newTestClientRelayDataSession(t)
-	s.clients.Store(stored.Target.ClientID, &ClientConn{
-		ID:          stored.Target.ClientID,
-		Info:        protocol.ClientInfo{Capabilities: &targetCaps},
-		proxies:     make(map[string]*ProxyTunnel),
-		dataSession: targetSession,
-		generation:  1,
-		state:       clientStateLive,
-	})
-	s.clients.Store(stored.Ingress.ClientID, &ClientConn{
-		ID:          stored.Ingress.ClientID,
-		Info:        protocol.ClientInfo{Capabilities: &ingressCaps},
-		proxies:     make(map[string]*ProxyTunnel),
-		dataSession: ingressSession,
-		generation:  1,
-		state:       clientStateLive,
-	})
+			_, targetSession := newTestClientRelayDataSession(t)
+			_, ingressSession := newTestClientRelayDataSession(t)
+			s.clients.Store(stored.Target.ClientID, &ClientConn{
+				ID:          stored.Target.ClientID,
+				Info:        protocol.ClientInfo{Capabilities: &tc.targetCaps},
+				proxies:     make(map[string]*ProxyTunnel),
+				dataSession: targetSession,
+				generation:  1,
+				state:       clientStateLive,
+			})
+			s.clients.Store(stored.Ingress.ClientID, &ClientConn{
+				ID:          stored.Ingress.ClientID,
+				Info:        protocol.ClientInfo{Capabilities: &tc.ingressCaps},
+				proxies:     make(map[string]*ProxyTunnel),
+				dataSession: ingressSession,
+				generation:  1,
+				state:       clientStateLive,
+			})
 
-	if err := s.reconcileClientRelayTunnel(stored); err != nil {
-		t.Fatalf("capability loss should project error without provisioning failure: %v", err)
-	}
-	if _, ok := s.c2c.get(stored.ID); ok {
-		t.Fatal("capability loss should release client relay runtime")
-	}
-	reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
-	if err != nil {
-		t.Fatalf("reload tunnel: %v", err)
-	}
-	spec := specFromStoredTunnel(reloaded, s)
-	if spec.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("capability loss should project error, got %q", spec.RuntimeState)
-	}
-	if len(spec.Issues) != 1 || spec.Issues[0].Code != protocol.TunnelIssueCodeCapabilityNotSupported || spec.Issues[0].ClientID != stored.Ingress.ClientID {
-		t.Fatalf("capability issue mismatch: %+v", spec.Issues)
+			if err := s.reconcileClientRelayTunnel(stored); err != nil {
+				t.Fatalf("capability loss should project error without provisioning failure: %v", err)
+			}
+			if _, ok := s.c2c.get(stored.ID); ok {
+				t.Fatal("capability loss should release client relay runtime")
+			}
+			reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+			if err != nil {
+				t.Fatalf("reload tunnel: %v", err)
+			}
+			spec := specFromStoredTunnel(reloaded, s)
+			if spec.RuntimeState != protocol.ProxyRuntimeStateError {
+				t.Fatalf("capability loss should project error, got %q", spec.RuntimeState)
+			}
+			wantClientID := ""
+			switch tc.wantIssueScope {
+			case "ingress_client":
+				wantClientID = stored.Ingress.ClientID
+			case "target_client":
+				wantClientID = stored.Target.ClientID
+			default:
+				t.Fatalf("unsupported issue scope fixture %q", tc.wantIssueScope)
+			}
+			if len(spec.Issues) != 1 ||
+				spec.Issues[0].Code != protocol.TunnelIssueCodeCapabilityNotSupported ||
+				spec.Issues[0].Scope != tc.wantIssueScope ||
+				spec.Issues[0].ClientID != wantClientID {
+				t.Fatalf("capability issue mismatch: %+v", spec.Issues)
+			}
+		})
 	}
 }
 

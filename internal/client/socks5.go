@@ -102,6 +102,11 @@ func dataStreamHeaderMatchesSOCKS5Target(header protocol.DataStreamHeader, targe
 	if header.Direction != protocol.DataStreamDirectionIngressToTarget || header.Transport != protocol.ActualTransportServerRelay {
 		return false
 	}
+	// Target runtimes only accept server-relay streams; direct-only tunnels must
+	// not be matched through the server data channel.
+	if target.spec.TransportPolicy == protocol.TransportPolicyDirectOnly {
+		return false
+	}
 	if header.TargetHost == "" || header.TargetPort < 1 || header.TargetPort > 65535 {
 		return false
 	}

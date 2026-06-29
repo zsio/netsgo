@@ -132,6 +132,8 @@ consistency. Append "[RULES I BROKE]: which, where, why."
 
 - 不要新造一套与 `pkg/protocol/` 平行的消息结构。
 - 不要随意修改认证、会话、在线状态语义；这类改动必须先读相关测试和现有状态流。
+- 不要随意删除跨版本兼容路径，尤其是 legacy flat provision、旧数据恢复、storage projection、old server/current client、current server/old client 相关逻辑；移除前必须先有明确版本支持窗口、release note/deprecation 计划、迁移/回滚设计，并跑对应 compat/upgrade E2E。
+- unified runtime 的语义来源必须是 `TunnelSpec` endpoint 字段；不得直接读取 `StoredTunnel.ProxyNewRequest` 的扁平字段来决定新运行态。legacy DTO 只能作为旧 wire/storage projection/兼容边界适配器存在，不能作为 unified runtime 的语义来源。
 - 不要默认引入数据库、消息队列、分布式锁等多实例前提；当前项目不是按这些前提设计的。
 - 涉及 `/ws/control`、`/ws/data`、TLS、反向代理、会话恢复的修改，必须考虑直连、nginx、caddy 三类路径。
 - 管理数据和隧道配置默认会写入 `~/.netsgo/`；排查本地行为时要注意历史状态文件的影响。

@@ -1,0 +1,15 @@
+{
+  "id": "legacy-flat-http-full-id",
+  "name": "legacy-flat-http-full",
+  "type": "http",
+  "local_ip": "127.0.0.1",
+  "local_port": 8082,
+  "remote_port": 0,
+  "bind_ip": "127.0.0.1",
+  "domain": "legacy-full.example.test",
+  "transport_policy": "server_relay_only",
+  "actual_transport": "server_relay",
+  "provision_revision": 11,
+  "ingress_bps": 1024,
+  "egress_bps": 2048
+}

@@ -221,11 +221,14 @@ func (s *Server) findRuntimeHTTPRoute(host string) (httpTunnelRoute, bool) {
 			if tunnel.Config.Type != protocol.ProxyTypeHTTP {
 				return true
 			}
-			if canonicalHost(tunnel.Config.Domain) != host {
+			domain := httpTunnelDomain(tunnel.Config)
+			if canonicalHost(domain) != host {
 				return true
 			}
+			config := tunnel.Config
+			config.Domain = domain
 			candidate := httpTunnelRoute{
-				config:      tunnel.Config,
+				config:      config,
 				client:      client,
 				sourceCIDRs: sourceCIDRsForTunnel(tunnel),
 			}
@@ -240,6 +243,16 @@ func (s *Server) findRuntimeHTTPRoute(host string) (httpTunnelRoute, bool) {
 	})
 
 	return route, found
+}
+
+func httpTunnelDomain(config protocol.ProxyConfig) string {
+	if config.Ingress != nil && config.Ingress.Type == protocol.IngressTypeHTTPHost {
+		var cfg httpHostConfigAPI
+		if err := json.Unmarshal(config.Ingress.Config, &cfg); err == nil && strings.TrimSpace(cfg.Domain) != "" {
+			return cfg.Domain
+		}
+	}
+	return config.Domain
 }
 
 func (s *Server) serveHTTPRoute(w http.ResponseWriter, r *http.Request, route httpTunnelRoute) {

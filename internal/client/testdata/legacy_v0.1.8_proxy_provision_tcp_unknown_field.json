@@ -1,0 +1,12 @@
+{
+  "id": "legacy-flat-tcp-unknown-id",
+  "name": "legacy-flat-tcp-unknown",
+  "type": "tcp",
+  "local_ip": "127.0.0.1",
+  "local_port": 8084,
+  "remote_port": 19094,
+  "transport_policy": "server_relay_only",
+  "actual_transport": "unknown",
+  "provision_revision": 14,
+  "future_legacy_field": "ignored-by-current-client"
+}

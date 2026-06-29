@@ -219,6 +219,120 @@ func relayDispatchStreamToBackend(stream *yamux.Stream, expectedTunnelName, back
 	mux.Relay(stream, backendConn)
 }
 
+func addUnifiedHTTPDispatchTunnelWithConflictingFlatDomain(t *testing.T, s *Server) func() {
+	t.Helper()
+
+	clientID := "client-unified-http"
+	tunnelName := "unified-http"
+	tunnelID := "unified-http-id"
+	client := &ClientConn{
+		ID:         clientID,
+		Info:       protocol.ClientInfo{Hostname: clientID + ".local"},
+		proxies:    make(map[string]*ProxyTunnel),
+		generation: 1,
+		state:      clientStateLive,
+	}
+	s.clients.Store(clientID, client)
+
+	pipeClient, pipeServer := net.Pipe()
+	var serverSession *yamux.Session
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		serverSession, _ = mux.NewServerSession(pipeServer, mux.DefaultConfig())
+		wg.Done()
+	}()
+	clientSession, err := mux.NewClientSession(pipeClient, mux.DefaultConfig())
+	if err != nil {
+		t.Fatalf("create client yamux session: %v", err)
+	}
+	wg.Wait()
+	client.dataMu.Lock()
+	client.dataSession = serverSession
+	client.dataMu.Unlock()
+
+	client.proxyMu.Lock()
+	client.proxies[tunnelName] = &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:                tunnelID,
+			Name:              tunnelName,
+			Revision:          4,
+			Type:              protocol.ProxyTypeHTTP,
+			LocalIP:           "127.0.0.1",
+			LocalPort:         3000,
+			Domain:            "flat.example.com",
+			ClientID:          clientID,
+			Topology:          protocol.TunnelTopologyServerExpose,
+			OwnerClientID:     clientID,
+			TransportPolicy:   protocol.TransportPolicyServerRelayOnly,
+			ActualTransport:   protocol.ActualTransportServerRelay,
+			DesiredState:      protocol.ProxyDesiredStateRunning,
+			RuntimeState:      protocol.ProxyRuntimeStateExposed,
+			BandwidthSettings: protocol.BandwidthSettings{},
+			Ingress: &protocol.EndpointSpec{
+				Location: protocol.EndpointLocationServer,
+				Type:     protocol.IngressTypeHTTPHost,
+				Config: mustRawJSON(httpHostConfigAPI{
+					Domain:             "endpoint.example.com",
+					AllowedSourceCIDRs: allowAllSourceCIDRs(),
+					Auth:               protocol.HTTPAuthConfig{Type: protocol.HTTPAuthTypeNone},
+				}),
+			},
+			Target: &protocol.EndpointSpec{
+				Location: protocol.EndpointLocationClient,
+				ClientID: clientID,
+				Type:     protocol.TargetTypeTCPService,
+				Config:   mustRawJSON(serviceConfigAPI{IP: "127.0.0.1", Port: 3000}),
+			},
+		},
+		done: make(chan struct{}),
+	}
+	client.proxyMu.Unlock()
+
+	stored := StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			ID:        tunnelID,
+			Name:      tunnelName,
+			Type:      protocol.ProxyTypeHTTP,
+			LocalIP:   "127.0.0.1",
+			LocalPort: 3000,
+			Domain:    "flat.example.com",
+		},
+		ClientID:        clientID,
+		OwnerClientID:   clientID,
+		Revision:        4,
+		Topology:        TunnelTopologyServerExpose,
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateExposed,
+		TransportPolicy: protocol.TransportPolicyServerRelayOnly,
+		ActualTransport: protocol.ActualTransportServerRelay,
+		Ingress: EndpointSpec{
+			Location: protocol.EndpointLocationServer,
+			Type:     protocol.IngressTypeHTTPHost,
+			Config: mustRawJSON(httpHostConfigAPI{
+				Domain:             "endpoint.example.com",
+				AllowedSourceCIDRs: allowAllSourceCIDRs(),
+				Auth:               protocol.HTTPAuthConfig{Type: protocol.HTTPAuthTypeNone},
+			}),
+		},
+		Target: EndpointSpec{
+			Location: protocol.EndpointLocationClient,
+			ClientID: clientID,
+			Type:     protocol.TargetTypeTCPService,
+			Config:   mustRawJSON(serviceConfigAPI{IP: "127.0.0.1", Port: 3000}),
+		},
+	}
+	mustAddStableTunnel(t, s.store, stored)
+
+	return func() {
+		_ = clientSession.Close()
+		_ = serverSession.Close()
+		_ = pipeClient.Close()
+		_ = pipeServer.Close()
+		s.clients.Delete(clientID)
+	}
+}
+
 func dialWSWithHost(t *testing.T, ts *httptest.Server, host, path string, subprotocols []string) (*websocket.Conn, *http.Response) {
 	t.Helper()
 
@@ -235,6 +349,29 @@ func dialWSWithHost(t *testing.T, ts *httptest.Server, host, path string, subpro
 		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	return conn, resp
+}
+
+func TestUnifiedHTTPHostDispatchRoutesByIngressEndpointDomain(t *testing.T) {
+	s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
+	cleanupTunnel := addUnifiedHTTPDispatchTunnelWithConflictingFlatDomain(t, s)
+	defer cleanupTunnel()
+
+	route, ok, err := s.findHTTPRouteByHost("endpoint.example.com")
+	if err != nil {
+		t.Fatalf("find endpoint-domain HTTP route: %v", err)
+	}
+	if !ok {
+		t.Fatal("unified HTTP dispatch must route by ingress endpoint domain, not legacy flat Domain")
+	}
+	if route.config.ID != "unified-http-id" {
+		t.Fatalf("endpoint-domain route selected wrong tunnel: %+v", route.config)
+	}
+
+	if _, ok, err := s.findHTTPRouteByHost("flat.example.com"); err != nil {
+		t.Fatalf("find flat-domain HTTP route: %v", err)
+	} else if ok {
+		t.Fatal("legacy flat Domain must not register a unified HTTP route when ingress endpoint domain conflicts")
+	}
 }
 
 func TestDispatch_InternalControl_ValidSubprotocol_OnNonManagementHost(t *testing.T) {

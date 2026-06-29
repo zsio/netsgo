@@ -1,0 +1,107 @@
+name: Cross-Version E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Stable tag used as the compatibility baseline
+        required: true
+        default: v0.1.8
+      run_compat_full:
+        description: Run full mixed-version compatibility matrix
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      run_upgrade:
+        description: Run upgrade and rollback matrix
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      run_capability_loss:
+        description: Run focused capability-loss reconciliation E2E
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-version-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  cross-version-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Verify requested baseline tag exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse --verify "refs/tags/${{ inputs.baseline }}" >/dev/null
+
+      - name: Run stable-only baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-baseline-e2e \
+            COMPAT_BASELINE="${{ inputs.baseline }}" \
+            BASELINE_MODE=full \
+            BASELINE_REBUILD_IMAGE=true
+
+      - name: Build current E2E image
+        shell: bash
+        run: |
+          set -euo pipefail
+          make docker-build-e2e-current E2E_CURRENT_IMAGE=netsgo-e2e:current
+
+      - name: Run full compatibility matrix
+        if: ${{ inputs.run_compat_full == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-compat-e2e \
+            COMPAT_BASELINE="${{ inputs.baseline }}" \
+            E2E_CURRENT_IMAGE=netsgo-e2e:current \
+            COMPAT_MODE=full \
+            COMPAT_ABORT_ON_FAILURE=true
+
+      - name: Run upgrade and rollback matrix
+        if: ${{ inputs.run_upgrade == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-upgrade-e2e \
+            COMPAT_BASELINE="${{ inputs.baseline }}" \
+            E2E_CURRENT_IMAGE=netsgo-e2e:current
+
+      - name: Run capability-loss reconciliation E2E
+        if: ${{ inputs.run_capability_loss == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-system-e2e-capability-loss \
+            E2E_CURRENT_IMAGE=netsgo-e2e:current \
+            E2E_CAPABILITY_LOSS_IMAGE=netsgo-e2e:capability-loss
