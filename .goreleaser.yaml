@@ -19,6 +19,8 @@ release:
     curl -fsSL https://netsgo.zs.uy/upgrade.sh | sh -s -- -y{{ if .Prerelease }} --channel beta{{ end }}
     ```
 
+    **Windows / macOS clients:** Desktop installers are no longer published with releases; run the NetsGo client with Docker instead (image: `zsio/netsgo`).
+
 builds:
   - id: netsgo-linux
     main: ./cmd/netsgo

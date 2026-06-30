@@ -70,153 +70,6 @@ jobs:
           path: /tmp/web-dist.tgz
           if-no-files-found: error
 
-  desktop-dist:
-    needs: binaries
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            artifact: desktop-macos-x64
-            bundles: app
-            desktop_os: macos
-            desktop_arch: x64
-            asset_ext: .dmg
-          - os: macos-15
-            target: aarch64-apple-darwin
-            artifact: desktop-macos-arm64
-            bundles: app
-            desktop_os: macos
-            desktop_arch: arm64
-            asset_ext: .dmg
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: desktop-windows-x64
-            bundles: msi,nsis
-            desktop_os: windows
-            desktop_arch: x64
-            asset_ext: .msi,.exe
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: oven-sh/setup-bun@v2
-      - name: Install desktop dependencies
-        working-directory: desktop
-        run: bun install --frozen-lockfile
-      - name: Build desktop sidecar
-        shell: bash
-        env:
-          VERSION: ${{ github.ref_name }}
-          COMMIT: ${{ github.sha }}
-        run: scripts/build-desktop-sidecar.sh "${{ matrix.target }}"
-      - name: Build desktop bundles
-        shell: bash
-        env:
-          VERSION: ${{ github.ref_name }}
-        working-directory: desktop
-        run: |
-          set -euo pipefail
-          version="${VERSION#v}"
-          cargo_version="${version%%-*}"
-          bun run tauri build \
-            --target "${{ matrix.target }}" \
-            --bundles "${{ matrix.bundles }}" \
-            --config "{\"version\":\"${cargo_version}\"}"
-      - name: Sign macOS app bundle
-        if: ${{ matrix.desktop_os == 'macos' }}
-        shell: bash
-        env:
-          CODESIGN_IDENTITY: "-"
-          CLEAR_QUARANTINE: "0"
-        run: |
-          set -euo pipefail
-          bundle_dir="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
-          app_dir="$(find "$bundle_dir" -type d -name '*.app' -print -quit)"
-          if [ -z "$app_dir" ]; then
-            echo "No macOS .app bundle found under $bundle_dir" >&2
-            find "$bundle_dir" -print >&2
-            exit 1
-          fi
-          scripts/sign-macos-app.sh "$app_dir"
-      - name: Normalize desktop artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          bundle_dir="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
-          out_dir="dist/desktop/${{ matrix.artifact }}"
-          mkdir -p "$out_dir"
-
-          if [ ! -d "$bundle_dir" ]; then
-            echo "Desktop bundle directory not found: $bundle_dir" >&2
-            exit 1
-          fi
-
-          case "${{ matrix.desktop_os }}/${{ matrix.desktop_arch }}" in
-            macos/x64)
-              app_dir="$(find "$bundle_dir" -type d -name '*.app' -print -quit)"
-              if [ -z "$app_dir" ]; then
-                echo "No macOS .app bundle found under $bundle_dir" >&2
-                find "$bundle_dir" -print >&2
-                exit 1
-              fi
-              scripts/package-macos-dmg.sh "$app_dir" "$out_dir/NetsGo_${version}_macos_x64.dmg"
-              ;;
-            macos/arm64)
-              app_dir="$(find "$bundle_dir" -type d -name '*.app' -print -quit)"
-              if [ -z "$app_dir" ]; then
-                echo "No macOS .app bundle found under $bundle_dir" >&2
-                find "$bundle_dir" -print >&2
-                exit 1
-              fi
-              scripts/package-macos-dmg.sh "$app_dir" "$out_dir/NetsGo_${version}_macos_arm64.dmg"
-              ;;
-            windows/x64)
-              exe="$(find "$bundle_dir" -type f -name '*.exe' -print -quit)"
-              msi="$(find "$bundle_dir" -type f -name '*.msi' -print -quit)"
-              if [ -z "$exe" ] || [ -z "$msi" ]; then
-                echo "Expected Windows NSIS .exe and MSI .msi under $bundle_dir" >&2
-                find "$bundle_dir" -print >&2
-                exit 1
-              fi
-              cp "$exe" "$out_dir/NetsGo_${version}_windows_x64-setup.exe"
-              cp "$msi" "$out_dir/NetsGo_${version}_windows_x64_en-US.msi"
-              ;;
-            *)
-              echo "Unsupported desktop artifact matrix entry: ${{ matrix.desktop_os }}/${{ matrix.desktop_arch }}" >&2
-              exit 1
-              ;;
-          esac
-
-          echo "Normalized desktop artifacts:"
-          find "$out_dir" -type f -print | sort
-      - name: Assert desktop artifact names include release version
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          case "${{ matrix.asset_ext }}" in
-            .msi,.exe)
-              test -f "dist/desktop/${{ matrix.artifact }}/NetsGo_${version}_${{ matrix.desktop_os }}_${{ matrix.desktop_arch }}_en-US.msi"
-              test -f "dist/desktop/${{ matrix.artifact }}/NetsGo_${version}_${{ matrix.desktop_os }}_${{ matrix.desktop_arch }}-setup.exe"
-              ;;
-            *)
-              test -f "dist/desktop/${{ matrix.artifact }}/NetsGo_${version}_${{ matrix.desktop_os }}_${{ matrix.desktop_arch }}${{ matrix.asset_ext }}"
-              ;;
-          esac
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist/desktop/${{ matrix.artifact }}/*
-          if-no-files-found: error
-
   verify:
     runs-on: ubuntu-latest
     needs: web-dist
@@ -306,7 +159,6 @@ jobs:
       contents: write
     needs:
       - binaries
-      - desktop-dist
       - mirror-source-to-cnb
     env:
       CNB_REPO_URL: ${{ secrets.CNB_REPO_URL }}
@@ -323,18 +175,6 @@ jobs:
         with:
           name: release-dist
           path: dist
-      - uses: actions/download-artifact@v7
-        with:
-          name: desktop-macos-x64
-          path: /tmp/desktop-artifacts
-      - uses: actions/download-artifact@v7
-        with:
-          name: desktop-macos-arm64
-          path: /tmp/desktop-artifacts
-      - uses: actions/download-artifact@v7
-        with:
-          name: desktop-windows-x64
-          path: /tmp/desktop-artifacts
       - uses: oven-sh/setup-bun@v2
       - name: Restore current release index
         shell: bash
@@ -364,14 +204,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -f dist/checksums.txt dist/checksums.txt.sig dist/checksums.txt.sshsig
-          while IFS= read -r -d '' artifact; do
-            cp "$artifact" dist/
-          done < <(find /tmp/desktop-artifacts -maxdepth 2 -type f -print0)
 
           assets=()
           while IFS= read -r asset; do
             assets+=("$asset")
-          done < <(find dist -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.app.zip' -o -name '*.msi' -o -name '*.exe' \) -exec basename {} \; | LC_ALL=C sort)
+          done < <(find dist -maxdepth 1 -type f -name 'netsgo_*.tar.gz' -exec basename {} \; | LC_ALL=C sort)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "No release assets found for checksum manifest" >&2
             exit 1
@@ -384,11 +221,6 @@ jobs:
           go run ./cmd/netsgo-release-sign dist/checksums.txt
 
           upload=(dist/checksums.txt dist/checksums.txt.sig dist/checksums.txt.sshsig)
-          for asset in "${assets[@]}"; do
-            case "$asset" in
-              NetsGo_*) upload+=("dist/$asset") ;;
-            esac
-          done
           gh release upload "$GITHUB_REF_NAME" "${upload[@]}" --clobber
       - name: Create CNB release
         id: cnb-release
@@ -502,7 +334,7 @@ jobs:
           }
 
           shopt -s nullglob
-          for file in dist/netsgo_*.tar.gz dist/*.dmg dist/*.app.tar.gz dist/*.app.zip dist/*.msi dist/*.exe dist/checksums.txt dist/checksums.txt.sig dist/checksums.txt.sshsig; do
+          for file in dist/netsgo_*.tar.gz dist/checksums.txt dist/checksums.txt.sig dist/checksums.txt.sshsig; do
             name="$(basename "$file")"
             size="$(stat -c%s "$file")"
             if ! upload_cnb_asset "$file" "$name" "$size"; then
