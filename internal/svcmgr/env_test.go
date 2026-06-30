@@ -5,6 +5,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -13,13 +14,14 @@ func TestWriteReadServerEnvRoundTrip(t *testing.T) {
 	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
 
 	want := ServerEnv{
-		Port:                        9527,
-		TLSMode:                     "off",
-		TLSCert:                     "/tmp/cert.pem",
-		TLSKey:                      "/tmp/key.pem",
-		TrustedProxies:              "127.0.0.1/32",
-		ServerAddr:                  "https://panel.example.com",
-		AllowLoopbackManagementHost: true,
+		Port:                               9527,
+		TLSMode:                            "off",
+		TLSCert:                            "/tmp/cert.pem",
+		TLSKey:                             "/tmp/key.pem",
+		TrustedProxies:                     "127.0.0.1/32",
+		ServerAddr:                         "https://panel.example.com",
+		AllowLoopbackManagementHost:        true,
+		AllowLoopbackManagementHostDefined: true,
 	}
 
 	if err := WriteServerEnv(layout, want); err != nil {
@@ -32,6 +34,149 @@ func TestWriteReadServerEnvRoundTrip(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("server env round trip = %#v, want %#v", got, want)
+	}
+}
+
+func TestReadServerEnvDefaultsLoopbackManagementHostToTrue(t *testing.T) {
+	layout := NewLayout(RoleServer)
+	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
+	if err := os.WriteFile(layout.EnvPath, []byte("NETSGO_PORT=9527\n"), 0o640); err != nil {
+		t.Fatalf("write env fixture: %v", err)
+	}
+
+	got, err := ReadServerEnv(layout)
+	if err != nil {
+		t.Fatalf("ReadServerEnv() failed: %v", err)
+	}
+	if !got.AllowLoopbackManagementHost {
+		t.Fatal("missing loopback management Host env should default to true")
+	}
+	if got.AllowLoopbackManagementHostDefined {
+		t.Fatal("missing loopback management Host env should not be marked explicitly defined")
+	}
+}
+
+func TestReadServerEnvIgnoresComments(t *testing.T) {
+	layout := NewLayout(RoleServer)
+	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
+	if err := os.WriteFile(layout.EnvPath, []byte("# comment\nNETSGO_PORT=9527\n"), 0o640); err != nil {
+		t.Fatalf("write env fixture: %v", err)
+	}
+
+	got, err := ReadServerEnv(layout)
+	if err != nil {
+		t.Fatalf("ReadServerEnv() failed: %v", err)
+	}
+	if got.Port != 9527 {
+		t.Fatalf("server env port = %d, want 9527", got.Port)
+	}
+}
+
+func TestWriteReadServerEnvPreservesExplicitFalseValue(t *testing.T) {
+	stubLookupSystemUser(t, strconv.Itoa(os.Getgid()))
+
+	layout := NewLayout(RoleServer)
+	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
+	want := ServerEnv{
+		Port:                               9527,
+		AllowLoopbackManagementHost:        false,
+		AllowLoopbackManagementHostDefined: true,
+	}
+
+	if err := WriteServerEnv(layout, want); err != nil {
+		t.Fatalf("WriteServerEnv() failed: %v", err)
+	}
+	got, err := ReadServerEnv(layout)
+	if err != nil {
+		t.Fatalf("ReadServerEnv() failed: %v", err)
+	}
+	if got != want {
+		t.Fatalf("server env round trip = %#v, want %#v", got, want)
+	}
+}
+
+func TestWriteServerEnvOverwritesLegacyLoopbackManagementHostFalse(t *testing.T) {
+	stubLookupSystemUser(t, strconv.Itoa(os.Getgid()))
+
+	layout := NewLayout(RoleServer)
+	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
+	if err := os.WriteFile(layout.EnvPath, []byte("NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST=false\n"), 0o640); err != nil {
+		t.Fatalf("write legacy env fixture: %v", err)
+	}
+
+	if err := WriteServerEnv(layout, ServerEnv{
+		Port:                               9527,
+		AllowLoopbackManagementHost:        true,
+		AllowLoopbackManagementHostDefined: true,
+	}); err != nil {
+		t.Fatalf("WriteServerEnv() failed: %v", err)
+	}
+	got, err := ReadServerEnv(layout)
+	if err != nil {
+		t.Fatalf("ReadServerEnv() failed: %v", err)
+	}
+	if !got.AllowLoopbackManagementHost || !got.AllowLoopbackManagementHostDefined {
+		t.Fatalf("server env should overwrite legacy false with explicit true, got %#v", got)
+	}
+}
+
+func TestEnableServerLoopbackManagementHostOverwritesFalseAndPreservesOtherEntries(t *testing.T) {
+	stubLookupSystemUser(t, strconv.Itoa(os.Getgid()))
+
+	layout := NewLayout(RoleServer)
+	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
+	fixture := strings.Join([]string{
+		"# keep this comment",
+		"NETSGO_PORT=9527",
+		"NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST=false",
+		"NETSGO_CUSTOM=value",
+		"",
+	}, "\n")
+	if err := os.WriteFile(layout.EnvPath, []byte(fixture), 0o640); err != nil {
+		t.Fatalf("write env fixture: %v", err)
+	}
+
+	if err := EnableServerLoopbackManagementHost(layout); err != nil {
+		t.Fatalf("EnableServerLoopbackManagementHost() failed: %v", err)
+	}
+	content, err := os.ReadFile(layout.EnvPath)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"# keep this comment",
+		"NETSGO_PORT=9527",
+		"NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST=true",
+		"NETSGO_CUSTOM=value",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("env file should contain %q, got %q", want, text)
+		}
+	}
+	if strings.Contains(text, "NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST=false") {
+		t.Fatalf("env file should not keep legacy false value, got %q", text)
+	}
+}
+
+func TestEnableServerLoopbackManagementHostAppendsMissingKey(t *testing.T) {
+	stubLookupSystemUser(t, strconv.Itoa(os.Getgid()))
+
+	layout := NewLayout(RoleServer)
+	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
+	if err := os.WriteFile(layout.EnvPath, []byte("NETSGO_PORT=9527\n"), 0o640); err != nil {
+		t.Fatalf("write env fixture: %v", err)
+	}
+
+	if err := EnableServerLoopbackManagementHost(layout); err != nil {
+		t.Fatalf("EnableServerLoopbackManagementHost() failed: %v", err)
+	}
+	content, err := os.ReadFile(layout.EnvPath)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	if !strings.Contains(string(content), "NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST=true\n") {
+		t.Fatalf("env file should append loopback management Host default, got %q", string(content))
 	}
 }
 

@@ -151,6 +151,12 @@ func TestInstallServerWithCustomTLSCollectsCertAndKey(t *testing.T) {
 	if writtenEnv.TLSCert != "/tmp/cert.pem" || writtenEnv.TLSKey != "/tmp/key.pem" {
 		t.Fatalf("custom TLS should write cert/key, got %#v", writtenEnv)
 	}
+	if !writtenEnv.AllowLoopbackManagementHost {
+		t.Fatal("server install should allow loopback management Host fallback by default")
+	}
+	if !writtenEnv.AllowLoopbackManagementHostDefined {
+		t.Fatal("server install should explicitly define loopback management Host fallback")
+	}
 	if len(ui.summaries) != 2 || ui.summaries[1].title != "Server 安装完成" {
 		t.Fatalf("should show completion summary after successful install, got %#v", ui.summaries)
 	}

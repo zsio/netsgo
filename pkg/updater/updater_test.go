@@ -2,8 +2,10 @@ package updater
 
 import (
 	"fmt"
+	"netsgo/internal/svcmgr"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -186,6 +188,56 @@ func TestUpgradeRepairsServiceEnvFilesBeforeRestart(t *testing.T) {
 	}
 	if fmt.Sprint(events) != fmt.Sprint(want) {
 		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestRepairServiceEnvFilesEnablesServerLoopbackManagementHost(t *testing.T) {
+	origNewServiceLayout := newServiceLayoutFunc
+	t.Cleanup(func() {
+		newServiceLayoutFunc = origNewServiceLayout
+	})
+
+	tmpDir := t.TempDir()
+	serverEnvPath := filepath.Join(tmpDir, "server.env")
+	clientEnvPath := filepath.Join(tmpDir, "client.env")
+	if err := os.WriteFile(serverEnvPath, []byte("NETSGO_PORT=9527\nNETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST=false\nNETSGO_CUSTOM=value\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clientEnvPath, []byte("NETSGO_SERVER=https://panel.example.com\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	newServiceLayoutFunc = func(role svcmgr.Role) svcmgr.ServiceLayout {
+		layout := svcmgr.NewLayout(role)
+		switch role {
+		case svcmgr.RoleServer:
+			layout.EnvPath = serverEnvPath
+		case svcmgr.RoleClient:
+			layout.EnvPath = clientEnvPath
+		}
+		return layout
+	}
+
+	err := repairServiceEnvFiles([]string{svcmgr.UnitName(svcmgr.RoleServer), svcmgr.UnitName(svcmgr.RoleClient)})
+	if err != nil {
+		t.Fatalf("repairServiceEnvFiles() failed: %v", err)
+	}
+	serverContent, err := os.ReadFile(serverEnvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverText := string(serverContent)
+	if !strings.Contains(serverText, "NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST=true\n") {
+		t.Fatalf("server env should enable loopback management Host after upgrade, got %q", serverText)
+	}
+	if !strings.Contains(serverText, "NETSGO_CUSTOM=value") {
+		t.Fatalf("server env should preserve unrelated entries, got %q", serverText)
+	}
+	clientContent, err := os.ReadFile(clientEnvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(clientContent) != "NETSGO_SERVER=https://panel.example.com\n" {
+		t.Fatalf("client env should remain unchanged, got %q", string(clientContent))
 	}
 }
 

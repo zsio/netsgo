@@ -18,17 +18,18 @@ var detectInstalledUnitsFunc = installedUnits
 var replaceBinaryFunc = replaceBinary
 var restoreBinaryFunc = restoreBinary
 var repairServiceEnvFilesFunc = repairServiceEnvFiles
+var newServiceLayoutFunc = svcmgr.NewLayout
 var installedBinaryPath = svcmgr.BinaryPath
 
 func repairServiceEnvFiles(units []string) error {
 	for _, unit := range units {
 		switch unit {
 		case svcmgr.UnitName(svcmgr.RoleServer):
-			if err := svcmgr.RepairEnvFileOwnership(svcmgr.NewLayout(svcmgr.RoleServer)); err != nil {
+			if err := svcmgr.EnableServerLoopbackManagementHost(newServiceLayoutFunc(svcmgr.RoleServer)); err != nil {
 				return fmt.Errorf("repair %s env: %w", unit, err)
 			}
 		case svcmgr.UnitName(svcmgr.RoleClient):
-			if err := svcmgr.RepairEnvFileOwnership(svcmgr.NewLayout(svcmgr.RoleClient)); err != nil {
+			if err := svcmgr.RepairEnvFileOwnership(newServiceLayoutFunc(svcmgr.RoleClient)); err != nil {
 				return fmt.Errorf("repair %s env: %w", unit, err)
 			}
 		}

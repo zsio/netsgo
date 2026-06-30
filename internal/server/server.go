@@ -84,17 +84,18 @@ type ClientConn struct {
 // New creates a new Server instance.
 func New(port int) *Server {
 	s := &Server{
-		Port:               port,
-		events:             NewEventBus(),
-		trafficAccumulator: newTrafficAccumulator(),
-		auth:               newAuthService(),
-		sessions:           newSessionManager(),
-		tunnels:            newTunnelRegistry(),
-		unifiedRuntime:     newUnifiedTunnelRuntimeRegistry(),
-		unifiedReconcile:   newUnifiedTunnelReconcileRegistry(),
-		c2c:                newClientRelayRegistry(),
-		startTime:          time.Now(),
-		done:               make(chan struct{}),
+		Port:                        port,
+		AllowLoopbackManagementHost: true,
+		events:                      NewEventBus(),
+		trafficAccumulator:          newTrafficAccumulator(),
+		auth:                        newAuthService(),
+		sessions:                    newSessionManager(),
+		tunnels:                     newTunnelRegistry(),
+		unifiedRuntime:              newUnifiedTunnelRuntimeRegistry(),
+		unifiedReconcile:            newUnifiedTunnelReconcileRegistry(),
+		c2c:                         newClientRelayRegistry(),
+		startTime:                   time.Now(),
+		done:                        make(chan struct{}),
 	}
 	s.releaseIndexCache = newReleaseIndexCache(fetchDefaultReleaseIndex)
 	s.updateCapabilityCache = newUpdateCapabilityCache(installmethod.Detect)

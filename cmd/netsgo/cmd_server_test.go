@@ -9,14 +9,79 @@ import (
 	"netsgo/internal/server"
 	"netsgo/pkg/flock"
 
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
+func TestServerAllowLoopbackManagementHostDefaultsTrue(t *testing.T) {
+	resetAllowLoopbackManagementHostFlagForTest(t)
+	unsetEnvForTest(t, "NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST")
+
+	got := serverCmd.Flags().Lookup("allow-loopback-management-host").DefValue
+	if got != "true" {
+		t.Fatalf("allow-loopback-management-host default = %q, want true", got)
+	}
+	if !viper.GetBool("allow-loopback-management-host") {
+		t.Fatal("allow-loopback-management-host should default to true through viper")
+	}
+}
+
+func TestServerAllowLoopbackManagementHostEnvCanDisableDefault(t *testing.T) {
+	resetAllowLoopbackManagementHostFlagForTest(t)
+	t.Setenv("NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST", "false")
+
+	if viper.GetBool("allow-loopback-management-host") {
+		t.Fatal("NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST=false should disable loopback management Host fallback")
+	}
+}
+
+func TestServerAllowLoopbackManagementHostFlagCanDisableDefault(t *testing.T) {
+	flag := resetAllowLoopbackManagementHostFlagForTest(t)
+
+	if err := flag.Value.Set("false"); err != nil {
+		t.Fatalf("set flag value: %v", err)
+	}
+	flag.Changed = true
+	if viper.GetBool("allow-loopback-management-host") {
+		t.Fatal("--allow-loopback-management-host=false should disable loopback management Host fallback")
+	}
+}
+
+func resetAllowLoopbackManagementHostFlagForTest(t *testing.T) *pflag.Flag {
+	t.Helper()
+	flag := serverCmd.Flags().Lookup("allow-loopback-management-host")
+	originalValue := flag.Value.String()
+	originalChanged := flag.Changed
+	if err := flag.Value.Set(flag.DefValue); err != nil {
+		t.Fatalf("reset flag value: %v", err)
+	}
+	flag.Changed = false
+	t.Cleanup(func() {
+		_ = flag.Value.Set(originalValue)
+		flag.Changed = originalChanged
+	})
+	return flag
+}
+
+func unsetEnvForTest(t *testing.T, key string) {
+	t.Helper()
+	value, ok := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if ok {
+			_ = os.Setenv(key, value)
+			return
+		}
+		_ = os.Unsetenv(key)
+	})
+}
+
 func TestBuildInitParamsFromViper(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Set("init-admin-username", "admin")
-	viper.Set("init-admin-password", "Password123")
-	viper.Set("init-server-addr", "https://panel.example.com")
+	t.Setenv("NETSGO_INIT_ADMIN_USERNAME", "admin")
+	t.Setenv("NETSGO_INIT_ADMIN_PASSWORD", "Password123")
+	t.Setenv("NETSGO_INIT_SERVER_ADDR", "https://panel.example.com")
 
 	params := buildInitParamsFromViper()
 	if params.AdminUsername != "admin" {

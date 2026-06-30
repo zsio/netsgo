@@ -231,7 +231,7 @@ func InstallServerWith(deps serverDeps) error {
 		DaemonReload:      deps.DaemonReload,
 		EnableAndStart:    deps.EnableAndStart,
 	}, func(layout svcmgr.ServiceLayout) error {
-		if err := deps.WriteServerEnv(layout, svcmgr.ServerEnv{Port: port, TLSMode: tlsMode, TLSCert: tlsCert, TLSKey: tlsKey, TrustedProxies: trustedProxies, ServerAddr: serverAddr}); err != nil {
+		if err := deps.WriteServerEnv(layout, svcmgr.ServerEnv{Port: port, TLSMode: tlsMode, TLSCert: tlsCert, TLSKey: tlsKey, TrustedProxies: trustedProxies, ServerAddr: serverAddr, AllowLoopbackManagementHost: true, AllowLoopbackManagementHostDefined: true}); err != nil {
 			return err
 		}
 		return deps.WriteServerUnit(layout)

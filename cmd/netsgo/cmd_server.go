@@ -233,7 +233,7 @@ func init() {
 	serverCmd.Flags().String("init-admin-password", "", "Admin password for first-time initialization")
 	serverCmd.Flags().String("init-server-addr", "", "Server external address for first-time initialization")
 	serverCmd.Flags().String("server-addr", "", "Force-override server external address or domain")
-	serverCmd.Flags().Bool("allow-loopback-management-host", false, "Explicitly allow localhost/127.0.0.1/::1 as fallback management Host")
+	serverCmd.Flags().Bool("allow-loopback-management-host", true, "Allow localhost/127.0.0.1/::1 as fallback management Host")
 
 	if err := viper.BindPFlag("port", serverCmd.Flags().Lookup("port")); err != nil {
 		panic(err)

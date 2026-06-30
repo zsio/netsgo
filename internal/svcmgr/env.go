@@ -13,13 +13,14 @@ import (
 )
 
 type ServerEnv struct {
-	Port                        int
-	TLSMode                     string
-	TLSCert                     string
-	TLSKey                      string
-	TrustedProxies              string
-	ServerAddr                  string
-	AllowLoopbackManagementHost bool
+	Port                               int
+	TLSMode                            string
+	TLSCert                            string
+	TLSKey                             string
+	TrustedProxies                     string
+	ServerAddr                         string
+	AllowLoopbackManagementHost        bool
+	AllowLoopbackManagementHostDefined bool
 }
 
 type ClientEnv struct {
@@ -49,7 +50,9 @@ func WriteServerEnv(layout ServiceLayout, env ServerEnv) error {
 	if env.ServerAddr != "" {
 		values["NETSGO_SERVER_ADDR"] = env.ServerAddr
 	}
-	if env.AllowLoopbackManagementHost {
+	if env.AllowLoopbackManagementHostDefined {
+		values["NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST"] = strconv.FormatBool(env.AllowLoopbackManagementHost)
+	} else if env.AllowLoopbackManagementHost {
 		values["NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST"] = "true"
 	}
 	return writeEnvFile(layout.EnvPath, values)
@@ -91,7 +94,12 @@ func ReadServerEnv(layout ServiceLayout) (ServerEnv, error) {
 	env.TLSKey = values["NETSGO_TLS_KEY"]
 	env.TrustedProxies = values["NETSGO_TRUSTED_PROXIES"]
 	env.ServerAddr = values["NETSGO_SERVER_ADDR"]
-	env.AllowLoopbackManagementHost = values["NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST"] == "true"
+	if raw, ok := values["NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST"]; ok {
+		env.AllowLoopbackManagementHost = raw == "true"
+		env.AllowLoopbackManagementHostDefined = true
+	} else {
+		env.AllowLoopbackManagementHost = true
+	}
 	return env, nil
 }
 
@@ -147,6 +155,62 @@ func RepairEnvFileOwnership(layout ServiceLayout) error {
 	return repairEnvFileOwnership(layout.EnvPath)
 }
 
+func EnableServerLoopbackManagementHost(layout ServiceLayout) error {
+	if err := setEnvFileValue(layout.EnvPath, "NETSGO_ALLOW_LOOPBACK_MANAGEMENT_HOST", "true"); err != nil {
+		return err
+	}
+	return repairEnvFileOwnership(layout.EnvPath)
+}
+
+func setEnvFileValue(path, key, value string) error {
+	if err := validateEnvEntry(key, value); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	updated := replaceOrAppendEnvValue(string(data), key, value)
+	if updated == string(data) {
+		return nil
+	}
+	return fileutil.AtomicWriteFile(path, []byte(updated), 0o640)
+}
+
+func replaceOrAppendEnvValue(content, key, value string) string {
+	lines := strings.Split(content, "\n")
+	hasTrailingNewline := strings.HasSuffix(content, "\n")
+	limit := len(lines)
+	if hasTrailingNewline {
+		limit--
+	}
+
+	found := false
+	for i := 0; i < limit; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		keyPart, _, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(keyPart) != key {
+			continue
+		}
+		lines[i] = key + "=" + value
+		found = true
+	}
+	if found {
+		return strings.Join(lines, "\n")
+	}
+
+	if content != "" && !hasTrailingNewline {
+		content += "\n"
+	}
+	return content + key + "=" + value + "\n"
+}
+
 func validateEnvEntry(key, value string) error {
 	if strings.HasPrefix(key, "NETSGO_INIT_") {
 		return fmt.Errorf("forbidden env key: %s", key)
@@ -175,7 +239,7 @@ func readEnvFile(path string) (map[string]string, error) {
 	values := map[string]string{}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")

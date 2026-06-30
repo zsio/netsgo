@@ -808,16 +808,15 @@ func TestDispatch_ExplicitLoopbackManagementHosts_AllowManagementAPI(t *testing.
 	}
 }
 
-func TestDispatch_ExplicitLoopbackManagementHostWithoutPort_AllowsLoopbackEquivalenceOnListenPort(t *testing.T) {
+func TestDispatch_ExplicitLoopbackManagementHostWithoutPort_UsesDefaultLoopbackFallback(t *testing.T) {
 	testCases := []struct {
-		name      string
-		reqHost   string
-		wantAllow bool
+		name    string
+		reqHost string
 	}{
-		{name: "ipv4 same listen port", reqHost: "127.0.0.1:8080", wantAllow: true},
-		{name: "ipv6 same listen port", reqHost: "[::1]:8080", wantAllow: true},
-		{name: "localhost no port", reqHost: "localhost", wantAllow: true},
-		{name: "ipv4 different port", reqHost: "127.0.0.1:9090", wantAllow: false},
+		{name: "ipv4 same listen port", reqHost: "127.0.0.1:8080"},
+		{name: "ipv6 same listen port", reqHost: "[::1]:8080"},
+		{name: "localhost no port", reqHost: "localhost"},
+		{name: "ipv4 different port", reqHost: "127.0.0.1:9090"},
 	}
 
 	for _, tc := range testCases {
@@ -830,42 +829,19 @@ func TestDispatch_ExplicitLoopbackManagementHostWithoutPort_AllowsLoopbackEquiva
 
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
-			if tc.wantAllow && w.Code != http.StatusOK {
+			if w.Code != http.StatusOK {
 				t.Fatalf("Explicit no-port loopback admin address should allow %s access, got %d", tc.reqHost, w.Code)
 			}
-			if !tc.wantAllow && w.Code != http.StatusNotFound {
-				t.Fatalf("Different port %s should not match admin plane, got %d", tc.reqHost, w.Code)
-			}
 		})
 	}
 }
 
-func TestDispatch_LoopbackHostsDoNotBypassManagementHostByDefault(t *testing.T) {
+func TestDispatch_LoopbackHostsUseManagementHostFallbackByDefault(t *testing.T) {
 	testCases := []string{"localhost", "127.0.0.1", "[::1]"}
 
 	for _, host := range testCases {
 		t.Run(host, func(t *testing.T) {
 			s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
-
-			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", host, nil)
-			w := httptest.NewRecorder()
-
-			s.StartHTTPOnly().ServeHTTP(w, req)
-
-			if w.Code != http.StatusNotFound {
-				t.Fatalf("Non-loopback admin address should not treat %s as implicit entry, got %d", host, w.Code)
-			}
-		})
-	}
-}
-
-func TestDispatch_AllowLoopbackManagementHostFallbackFlag(t *testing.T) {
-	testCases := []string{"localhost", "127.0.0.1", "[::1]"}
-
-	for _, host := range testCases {
-		t.Run(host, func(t *testing.T) {
-			s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
-			s.AllowLoopbackManagementHost = true
 
 			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", host, nil)
 			w := httptest.NewRecorder()
@@ -873,9 +849,69 @@ func TestDispatch_AllowLoopbackManagementHostFallbackFlag(t *testing.T) {
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
 			if w.Code != http.StatusOK {
-				t.Fatalf("Should allow access after explicitly enabling loopback Host fallback, got %d", w.Code)
+				t.Fatalf("Loopback Host should enter admin plane by default after HTTP tunnel miss, got %d", w.Code)
 			}
 		})
+	}
+}
+
+func TestDispatch_LoopbackManagementHostFallbackCanBeDisabled(t *testing.T) {
+	testCases := []string{"localhost", "127.0.0.1", "[::1]"}
+
+	for _, host := range testCases {
+		t.Run(host, func(t *testing.T) {
+			s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
+			s.AllowLoopbackManagementHost = false
+
+			req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", host, nil)
+			w := httptest.NewRecorder()
+
+			s.StartHTTPOnly().ServeHTTP(w, req)
+
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("Disabled loopback Host fallback should not enter admin plane, got %d", w.Code)
+			}
+		})
+	}
+}
+
+func TestDispatch_ExplicitLoopbackManagementHostStillWorksWhenFallbackDisabled(t *testing.T) {
+	s, _ := newDispatchTestServer(t, true, "http://localhost:8080")
+	s.Port = 8080
+	s.AllowLoopbackManagementHost = false
+
+	req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", "127.0.0.1:8080", nil)
+	w := httptest.NewRecorder()
+
+	s.StartHTTPOnly().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Explicit loopback management Host should still allow equivalent loopback Host when fallback is disabled, got %d", w.Code)
+	}
+}
+
+func TestDispatch_HTTPTunnelWinsBeforeDefaultLoopbackManagementFallback(t *testing.T) {
+	s, _ := newDispatchTestServer(t, true, "https://panel.example.com")
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Backend", "hit")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer backend.Close()
+
+	cleanupTunnel := addLiveHTTPDispatchTunnel(t, s, "client-http", "loopback-http", "127.0.0.1", backend.Listener.Addr())
+	defer cleanupTunnel()
+
+	req := newAuthenticatedManagementRequest(t, s, http.MethodGet, "/api/admin/config", "127.0.0.1", nil)
+	w := httptest.NewRecorder()
+
+	s.StartHTTPOnly().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("Matching HTTP tunnel should win before loopback management fallback, got %d", w.Code)
+	}
+	if got := w.Header().Get("X-Backend"); got != "hit" {
+		t.Fatalf("Matching HTTP tunnel should receive the request, got backend header %q", got)
 	}
 }
 
@@ -1049,17 +1085,16 @@ func TestDispatch_SSE_ImmediateFlush(t *testing.T) {
 	}
 }
 
-// TestDispatch_LoopbackEquivalence 验证 serverListenAddr 返回 localhost:PORT 时，
-// 用 127.0.0.1:PORT 或 [::1]:PORT 访问同样能进入管理面（Vite changeOrigin 场景）。
-func TestDispatch_LoopbackEquivalence(t *testing.T) {
+// TestDispatch_DefaultLoopbackFallbackWithListenAddr 验证 serverListenAddr 返回 localhost:PORT 时，
+// 其它 loopback Host 会在 HTTP 隧道未命中后兜底进入管理面。
+func TestDispatch_DefaultLoopbackFallbackWithListenAddr(t *testing.T) {
 	testCases := []struct {
-		name      string
-		reqHost   string
-		wantAllow bool
+		name    string
+		reqHost string
 	}{
-		{"127.0.0.1 same port", "127.0.0.1:8080", true},
-		{"[::1] same port", "[::1]:8080", true},
-		{"127.0.0.1 different port", "127.0.0.1:9090", false},
+		{"127.0.0.1 same port", "127.0.0.1:8080"},
+		{"[::1] same port", "[::1]:8080"},
+		{"127.0.0.1 different port", "127.0.0.1:9090"},
 	}
 
 	for _, tc := range testCases {
@@ -1081,11 +1116,8 @@ func TestDispatch_LoopbackEquivalence(t *testing.T) {
 
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
-			if tc.wantAllow && w.Code == http.StatusNotFound {
+			if w.Code == http.StatusNotFound {
 				t.Fatalf("Loopback equivalent address %s should be able to access admin plane, got 404", tc.reqHost)
-			}
-			if !tc.wantAllow && w.Code != http.StatusNotFound {
-				t.Fatalf("Different port %s should not match admin plane, got %d", tc.reqHost, w.Code)
 			}
 		})
 	}
