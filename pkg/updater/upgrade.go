@@ -47,7 +47,8 @@ func Upgrade(srcPath, oldVersion, newVersion string) (*Result, error) {
 	started := make([]string, 0, len(units))
 	originalBinary := filepath.Join(tmpDir, filepath.Base(installedBinaryPath)+".backup")
 	backupAvailable := false
-	defer recoverUpdateOrUpgradeOnPanic(orch, &started, &stopped, &originalBinary, &backupAvailable)
+	var envSnapshots []serviceEnvSnapshot
+	defer recoverUpdateOrUpgradeOnPanic(orch, &started, &stopped, &originalBinary, &backupAvailable, &envSnapshots)
 	stopPhaseArmed = false
 
 	if err := replaceBinaryFunc(installedBinaryPath, originalBinary); err != nil {
@@ -58,8 +59,17 @@ func Upgrade(srcPath, oldVersion, newVersion string) (*Result, error) {
 	}
 	backupAvailable = true
 
+	envSnapshots, err = snapshotServiceEnvFiles(units)
+	if err != nil {
+		rollbackErr := rollbackUpdateOrUpgrade(orch, nil, stopped, originalBinary, true, nil)
+		if rollbackErr != nil {
+			return result, errors.Join(err, rollbackErr)
+		}
+		return result, err
+	}
+
 	if err := replaceBinaryFunc(srcPath, installedBinaryPath); err != nil {
-		rollbackErr := rollbackUpdateOrUpgrade(orch, nil, stopped, originalBinary, true)
+		rollbackErr := rollbackUpdateOrUpgrade(orch, nil, stopped, originalBinary, true, envSnapshots)
 		if rollbackErr != nil {
 			return result, errors.Join(fmt.Errorf("replace: %w", err), rollbackErr)
 		}
@@ -67,7 +77,7 @@ func Upgrade(srcPath, oldVersion, newVersion string) (*Result, error) {
 	}
 
 	if err := repairServiceEnvFilesFunc(units); err != nil {
-		rollbackErr := rollbackUpdateOrUpgrade(orch, nil, stopped, originalBinary, true)
+		rollbackErr := rollbackUpdateOrUpgrade(orch, nil, stopped, originalBinary, true, envSnapshots)
 		if rollbackErr != nil {
 			return result, errors.Join(err, rollbackErr)
 		}
@@ -76,7 +86,7 @@ func Upgrade(srcPath, oldVersion, newVersion string) (*Result, error) {
 
 	err = orch.StartServices(units, &started)
 	if err != nil {
-		rollbackErr := rollbackUpdateOrUpgrade(orch, started, stopped, originalBinary, true)
+		rollbackErr := rollbackUpdateOrUpgrade(orch, started, stopped, originalBinary, true, envSnapshots)
 		if rollbackErr != nil {
 			return result, errors.Join(err, rollbackErr)
 		}

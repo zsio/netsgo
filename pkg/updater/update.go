@@ -36,7 +36,7 @@ type Result struct {
 	Started    []string
 }
 
-func rollbackUpdateOrUpgrade(orch *Orchestrator, started, stopped []string, backupPath string, restoreBinary bool) error {
+func rollbackUpdateOrUpgrade(orch *Orchestrator, started, stopped []string, backupPath string, restoreBinary bool, envSnapshots []serviceEnvSnapshot) error {
 	var rollbackErr error
 	if len(started) > 0 {
 		if err := orch.StopStartedServices(started); err != nil {
@@ -46,6 +46,11 @@ func rollbackUpdateOrUpgrade(orch *Orchestrator, started, stopped []string, back
 	if restoreBinary {
 		if err := restoreBinaryFunc(backupPath, installedBinaryPath); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore binary: %w", err))
+		}
+	}
+	if len(envSnapshots) > 0 {
+		if err := restoreServiceEnvSnapshots(envSnapshots); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
 		}
 	}
 	if err := orch.RestartStoppedServices(stopped); err != nil {
@@ -63,9 +68,9 @@ func recoverStoppedServicesOnPanic(orch *Orchestrator, stopped *[]string, armed 
 	}
 }
 
-func recoverUpdateOrUpgradeOnPanic(orch *Orchestrator, started, stopped *[]string, backupPath *string, restoreBinary *bool) {
+func recoverUpdateOrUpgradeOnPanic(orch *Orchestrator, started, stopped *[]string, backupPath *string, restoreBinary *bool, envSnapshots *[]serviceEnvSnapshot) {
 	if r := recover(); r != nil {
-		_ = rollbackUpdateOrUpgrade(orch, *started, *stopped, *backupPath, *restoreBinary)
+		_ = rollbackUpdateOrUpgrade(orch, *started, *stopped, *backupPath, *restoreBinary, *envSnapshots)
 		panic(r)
 	}
 }

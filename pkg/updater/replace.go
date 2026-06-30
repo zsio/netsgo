@@ -1,9 +1,11 @@
 package updater
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"netsgo/internal/svcmgr"
+	"netsgo/pkg/fileutil"
 	"os"
 )
 
@@ -21,20 +23,84 @@ var repairServiceEnvFilesFunc = repairServiceEnvFiles
 var newServiceLayoutFunc = svcmgr.NewLayout
 var installedBinaryPath = svcmgr.BinaryPath
 
+type serviceEnvSnapshot struct {
+	unit   string
+	layout svcmgr.ServiceLayout
+	data   []byte
+	perm   os.FileMode
+}
+
 func repairServiceEnvFiles(units []string) error {
 	for _, unit := range units {
-		switch unit {
-		case svcmgr.UnitName(svcmgr.RoleServer):
-			if err := svcmgr.EnableServerLoopbackManagementHost(newServiceLayoutFunc(svcmgr.RoleServer)); err != nil {
+		layout, ok := serviceLayoutForUnit(unit)
+		if !ok {
+			continue
+		}
+		switch layout.Role {
+		case svcmgr.RoleServer:
+			if err := svcmgr.EnableServerLoopbackManagementHost(layout); err != nil {
 				return fmt.Errorf("repair %s env: %w", unit, err)
 			}
-		case svcmgr.UnitName(svcmgr.RoleClient):
-			if err := svcmgr.RepairEnvFileOwnership(newServiceLayoutFunc(svcmgr.RoleClient)); err != nil {
+		case svcmgr.RoleClient:
+			if err := svcmgr.RepairEnvFileOwnership(layout); err != nil {
 				return fmt.Errorf("repair %s env: %w", unit, err)
 			}
 		}
 	}
 	return nil
+}
+
+func snapshotServiceEnvFiles(units []string) ([]serviceEnvSnapshot, error) {
+	snapshots := make([]serviceEnvSnapshot, 0, len(units))
+	for _, unit := range units {
+		layout, ok := serviceLayoutForUnit(unit)
+		if !ok {
+			continue
+		}
+		data, err := os.ReadFile(layout.EnvPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("snapshot %s env: %w", unit, err)
+		}
+		info, err := os.Stat(layout.EnvPath)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %s env metadata: %w", unit, err)
+		}
+		snapshots = append(snapshots, serviceEnvSnapshot{
+			unit:   unit,
+			layout: layout,
+			data:   data,
+			perm:   info.Mode().Perm(),
+		})
+	}
+	return snapshots, nil
+}
+
+func restoreServiceEnvSnapshots(snapshots []serviceEnvSnapshot) error {
+	var restoreErr error
+	for _, snapshot := range snapshots {
+		if err := fileutil.AtomicWriteFile(snapshot.layout.EnvPath, snapshot.data, snapshot.perm); err != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("restore %s env: %w", snapshot.unit, err))
+			continue
+		}
+		if err := os.Chmod(snapshot.layout.EnvPath, snapshot.perm); err != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("restore %s env mode: %w", snapshot.unit, err))
+		}
+	}
+	return restoreErr
+}
+
+func serviceLayoutForUnit(unit string) (svcmgr.ServiceLayout, bool) {
+	switch unit {
+	case svcmgr.UnitName(svcmgr.RoleServer):
+		return newServiceLayoutFunc(svcmgr.RoleServer), true
+	case svcmgr.UnitName(svcmgr.RoleClient):
+		return newServiceLayoutFunc(svcmgr.RoleClient), true
+	default:
+		return svcmgr.ServiceLayout{}, false
+	}
 }
 
 func (o *Orchestrator) StopServices(units []string, stopped *[]string) error {
