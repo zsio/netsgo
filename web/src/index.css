@@ -140,6 +140,31 @@ body {
 }
 
 
+@keyframes topology-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+@keyframes topology-pulse {
+  0% {
+    r: 25;
+    opacity: 0.5;
+  }
+  70% {
+    r: 40;
+    opacity: 0;
+  }
+  100% {
+    r: 40;
+    opacity: 0;
+  }
+}
+
+.topology-pulse {
+  animation: topology-pulse 3.2s ease-out infinite;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
