@@ -1,7 +1,8 @@
 import { useNavigate } from '@tanstack/react-router';
-import { MoveRight } from 'lucide-react';
+import { ArrowDown, ArrowUp, SquareArrowOutUpRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { formatNetSpeed } from '@/lib/format';
 import { buildTunnelViewModel } from '@/lib/tunnel-model';
 import { cn } from '@/lib/utils';
 import {
@@ -14,8 +15,8 @@ import {
 import {
   STATUS_DOT,
   STATUS_TEXT,
-  formatTrafficPair,
   hasTraffic,
+  rateOrZero,
   statusLabel,
 } from './topology-rendering';
 
@@ -44,26 +45,38 @@ export function TopologySidePanel({
 
   return (
     <div className="flex w-full shrink-0 flex-col border-t border-border/40 lg:h-full lg:min-h-0 lg:w-80 lg:overflow-hidden lg:border-l lg:border-t-0">
+      <button
+        type="button"
+        className="group flex w-full items-center gap-2 border-b border-border/30 px-4 pb-2 pt-3 text-left"
+        onClick={() => navigate({
+          to: '/dashboard/clients/$clientId',
+          params: { clientId: focusNode.id },
+        })}
+        title={focusNode.label}
+      >
+        <span className="min-w-0 truncate border-b border-dashed border-muted-foreground/50 text-xs font-medium text-foreground transition-colors group-hover:border-primary/60 group-hover:text-primary">
+          {focusNode.label}
+        </span>
+        <SquareArrowOutUpRight className="ml-auto size-3.5 shrink-0 text-muted-foreground/60 transition-colors group-hover:text-primary" />
+      </button>
       {relatedEdges.length === 0 ? (
         <p className="px-4 py-6 text-center text-xs text-muted-foreground">
           {t('dashboard.topologyNoTunnels')}
         </p>
       ) : (
-        <div className="max-h-72 min-h-0 flex-1 overflow-y-auto px-2 py-2 [scrollbar-width:thin] lg:max-h-none">
-          {relatedEdges.map((edge) => (
-            <TunnelListItem
-              key={edge.id}
-              edge={edge}
-              graph={graph}
-              trafficRate={trafficSnapshot.tunnelRates.get(edge.id)}
-              hovered={hoveredTunnelId === edge.id}
-              onHover={onHoverTunnel}
-              onNavigate={() => navigate({
-                to: '/dashboard/clients/$clientId',
-                params: { clientId: edge.tunnel.client_id },
-              })}
-            />
-          ))}
+        <div className="max-h-72 min-h-0 flex-1 overflow-y-auto [scrollbar-width:thin] lg:max-h-none">
+          <div className="flex flex-col divide-y divide-border/30">
+            {relatedEdges.map((edge) => (
+              <TunnelListItem
+                key={edge.id}
+                edge={edge}
+                graph={graph}
+                trafficRate={trafficSnapshot.tunnelRates.get(edge.id)}
+                hovered={hoveredTunnelId === edge.id}
+                onHover={onHoverTunnel}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -76,14 +89,12 @@ function TunnelListItem({
   trafficRate,
   hovered,
   onHover,
-  onNavigate,
 }: {
   edge: TopologyEdge;
   graph: TopologyGraph;
   trafficRate: TopologyTrafficRate | undefined;
   hovered: boolean;
   onHover: (id: string | null) => void;
-  onNavigate: () => void;
 }) {
   const { t } = useTranslation();
   const view = buildTunnelViewModel(edge.tunnel, true);
@@ -91,21 +102,25 @@ function TunnelListItem({
   const targetNode = graph.nodes.find((node) => node.id === edge.targetId);
   const sourceName = sourceNode?.kind === 'server' ? t('dashboard.topologyServer') : sourceNode?.label ?? '-';
   const targetName = targetNode?.kind === 'server' ? t('dashboard.topologyServer') : targetNode?.label ?? '-';
+  const rate = rateOrZero(trafficRate);
+  const active = hasTraffic(trafficRate);
 
   return (
-    <button
-      type="button"
+    <div
       className={cn(
-        'flex w-full flex-col gap-1 rounded-lg border border-transparent px-2.5 py-2 text-left transition-colors',
-        hovered ? 'border-border/40 bg-muted/50' : 'hover:border-border/40 hover:bg-muted/40',
+        'group relative flex w-full flex-col gap-2 px-4 py-2.5 text-left transition-colors',
+        hovered ? 'bg-muted/50' : 'hover:bg-muted/40',
       )}
       onMouseEnter={() => onHover(edge.id)}
       onMouseLeave={() => onHover(null)}
-      onFocus={() => onHover(edge.id)}
-      onBlur={() => onHover(null)}
-      onClick={onNavigate}
       title={`${view.routeLabel} · ${statusLabel(t, edge.status)}`}
     >
+      <span
+        className={cn(
+          'absolute inset-y-2 left-0 w-0.5 rounded-full bg-primary/70 transition-opacity',
+          hovered ? 'opacity-100' : 'opacity-0',
+        )}
+      />
       <span className="flex min-w-0 items-center gap-1.5">
         <span className={cn('size-1.5 shrink-0 rounded-full', STATUS_DOT[edge.status.key])} />
         <span className="min-w-0 truncate text-xs font-medium text-foreground">{edge.tunnel.name}</span>
@@ -116,20 +131,50 @@ function TunnelListItem({
           {statusLabel(t, edge.status)}
         </span>
       </span>
-      <span className="flex min-w-0 items-center gap-1 font-mono text-[10px] leading-4 text-muted-foreground">
-        <span className="truncate" title={`${sourceName} ${view.targetLabel}`}>{sourceName}</span>
-        <MoveRight className="size-3 shrink-0 text-emerald-500/70" />
-        <span className="truncate" title={`${targetName} ${view.destinationLabel}`}>{targetName}</span>
+      <span className="relative flex flex-col gap-1">
+        <span className="absolute bottom-[7px] left-[2.5px] top-[7px] w-px bg-border" aria-hidden />
+        <RouteRow kind="source" name={sourceName} address={view.targetLabel} />
+        <RouteRow kind="target" name={targetName} address={view.destinationLabel} />
       </span>
-      <span className="block min-w-0 truncate font-mono text-[10px] leading-4 text-primary/70">
-        {view.targetLabel} → {view.destinationLabel}
+      <span className="flex items-center gap-3 pl-3.5 font-mono text-[10px] leading-4">
+        <span className={cn('flex items-center gap-0.5', active && rate.ingressBps > 0 ? 'text-primary' : 'text-muted-foreground/70')}>
+          <ArrowDown className="size-2.5" />
+          {formatNetSpeed(rate.ingressBps)}
+        </span>
+        <span className={cn('flex items-center gap-0.5', active && rate.egressBps > 0 ? 'text-primary' : 'text-muted-foreground/70')}>
+          <ArrowUp className="size-2.5" />
+          {formatNetSpeed(rate.egressBps)}
+        </span>
       </span>
-      <span className={cn(
-        'block min-w-0 truncate font-mono text-[10px] leading-4',
-        hasTraffic(trafficRate) ? 'text-primary' : 'text-muted-foreground',
-      )}>
-        {formatTrafficPair(trafficRate)}
+    </div>
+  );
+}
+
+function RouteRow({
+  kind,
+  name,
+  address,
+}: {
+  kind: 'source' | 'target';
+  name: string;
+  address: string;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span
+        className={cn(
+          'size-1.5 shrink-0 rounded-full',
+          kind === 'source'
+            ? 'border border-muted-foreground/50 bg-background'
+            : 'bg-primary/70',
+        )}
+      />
+      <span className="min-w-0 flex-1 truncate text-[10px] leading-4 text-muted-foreground" title={name}>
+        {name}
       </span>
-    </button>
+      <span className="min-w-0 max-w-[55%] shrink-0 truncate font-mono text-[10px] leading-4 text-foreground/75" title={address}>
+        {address}
+      </span>
+    </span>
   );
 }

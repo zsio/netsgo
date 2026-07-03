@@ -68,6 +68,11 @@ export function flowDuration(rate: TopologyTrafficRate | undefined) {
   return `${(1.55 - trafficIntensity(rate) * 0.85).toFixed(2)}s`;
 }
 
+/** 渐变流光扫过整条边所需时长；流量越大扫得越快。 */
+export function flowSweepDuration(rate: TopologyTrafficRate | undefined) {
+  return `${(2.6 - trafficIntensity(rate) * 1.4).toFixed(2)}s`;
+}
+
 export function trafficStrokeWidth(rate: TopologyTrafficRate | undefined, base: number, emphasis: TopologyLinkEmphasis) {
   const emphasisBoost = emphasis === 'strong' ? 0.45 : 0;
   return base + trafficIntensity(rate) * 1.3 + emphasisBoost;

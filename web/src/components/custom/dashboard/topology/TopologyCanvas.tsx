@@ -45,6 +45,7 @@ import {
   LABEL_HALO,
   emphasisOpacity,
   flowDuration,
+  flowSweepDuration,
   formatTrafficPair,
   hasTraffic,
   trafficStrokeWidth,
@@ -72,18 +73,34 @@ function initialNodePosition(
     return { x: cx, y: cy };
   }
 
+  if (pinnedId !== SERVER_NODE_ID) {
+    // 焦点模式：server 固定停靠在右侧较近的位置，
+    // 邻居客户端铺在左半圆，避免节点共线导致连线互相穿插。
+    if (node.id === SERVER_NODE_ID) {
+      return { x: cx + Math.min(radius * 0.8, 150), y: cy };
+    }
+    const neighbors = nodes
+      .filter((candidate) => candidate.id !== pinnedId && candidate.id !== SERVER_NODE_ID)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const index = Math.max(0, neighbors.findIndex((candidate) => candidate.id === node.id));
+    const count = Math.max(1, neighbors.length);
+    const angle = Math.PI / 2 + ((index + 0.5) / count) * Math.PI;
+    return {
+      x: cx + Math.cos(angle) * radius,
+      y: cy + Math.sin(angle) * radius,
+    };
+  }
+
   const ringNodes = nodes
     .filter((candidate) => candidate.id !== pinnedId)
     .sort((a, b) => a.id.localeCompare(b.id));
   const index = Math.max(0, ringNodes.findIndex((candidate) => candidate.id === node.id));
   const count = Math.max(1, ringNodes.length);
-  const startAngle = pinnedId === SERVER_NODE_ID ? -Math.PI / 2 : -Math.PI;
-  const angle = startAngle + (index / count) * Math.PI * 2;
-  const nodeRadius = node.id === SERVER_NODE_ID ? Math.min(radius * 0.72, 140) : radius;
+  const angle = -Math.PI / 2 + (index / count) * Math.PI * 2;
 
   return {
-    x: cx + Math.cos(angle) * nodeRadius,
-    y: cy + Math.sin(angle) * nodeRadius,
+    x: cx + Math.cos(angle) * radius,
+    y: cy + Math.sin(angle) * radius,
   };
 }
 
@@ -229,6 +246,9 @@ export function TopologyCanvas({
     const nodes = visibleNodesRef.current;
     const edges = visibleEdgesRef.current;
     const pinnedId = effectiveFocusId ?? SERVER_NODE_ID;
+    // 焦点切换时旧坐标会导致节点/连线挤在一起，
+    // 重新按环形布局播种，再交给力导向微调。
+    const reseedAll = pinnedIdRef.current !== pinnedId;
     pinnedIdRef.current = pinnedId;
     let disposed = false;
     let sceneSettled = false;
@@ -243,6 +263,12 @@ export function TopologyCanvas({
           y: position.y,
         };
         nodePos.set(node.id, sim);
+      } else if (reseedAll) {
+        const position = initialNodePosition(node, nodes, pinnedId, cx, cy, ringRadius);
+        sim.x = position.x;
+        sim.y = position.y;
+        sim.vx = 0;
+        sim.vy = 0;
       }
       sim.fx = null;
       sim.fy = null;
@@ -308,10 +334,17 @@ export function TopologyCanvas({
       const offsets = edgeOffsetsRef.current;
       const edgeList = visibleEdgesRef.current;
       const geometryById = new Map<string, ReturnType<typeof computeQuadraticEdge>>();
+      const endpointsById = new Map<string, { x1: number; y1: number; x2: number; y2: number }>();
       for (const edge of edgeList) {
         const source = nodePos.get(edge.sourceId);
         const target = nodePos.get(edge.targetId);
         if (!source || !target) continue;
+        endpointsById.set(edge.id, {
+          x1: source.x ?? cx,
+          y1: source.y ?? cy,
+          x2: target.x ?? cx,
+          y2: target.y ?? cy,
+        });
         geometryById.set(edge.id, computeQuadraticEdge(
           edge.sourceId,
           edge.targetId,
@@ -320,6 +353,17 @@ export function TopologyCanvas({
           offsets.get(edge.id) ?? 0,
         ));
       }
+      select(svgRef.current)
+        .selectAll<SVGLinearGradientElement, unknown>('[data-flow-gradient]')
+        .each(function updateFlowGradient() {
+          const endpoints = endpointsById.get(this.dataset.flowGradient ?? '');
+          if (!endpoints) return;
+          select(this)
+            .attr('x1', endpoints.x1)
+            .attr('y1', endpoints.y1)
+            .attr('x2', endpoints.x2)
+            .attr('y2', endpoints.y2);
+        });
       sceneSel.selectAll<SVGGElement, unknown>('[data-edge-id]').each(function updateEdge() {
         const geometry = geometryById.get(this.dataset.edgeId ?? '');
         if (!geometry) return;
@@ -472,6 +516,33 @@ export function TopologyCanvas({
           <filter id="topo-soft" x="-60%" y="-60%" width="220%" height="220%">
             <feGaussianBlur stdDeviation="6" />
           </filter>
+          {/* 每条隧道边一个 userSpaceOnUse 渐变，端点在 tick 中同步为
+              ingress → target，流光扫过的方向即隧道映射方向。 */}
+          {visibleEdges.map((edge) => {
+            const rate = trafficSnapshot.tunnelRates.get(edge.id);
+            const duration = flowSweepDuration(rate);
+            const band = edge.status.key === 'error'
+              ? 'var(--destructive)'
+              : 'var(--primary)';
+            return (
+              <linearGradient
+                key={`flow-gradient-${edge.id}`}
+                id={`topo-flow-${edge.id}`}
+                data-flow-gradient={edge.id}
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0" stopColor={band} stopOpacity="0">
+                  <animate attributeName="offset" values="-0.4;1" dur={duration} repeatCount="indefinite" />
+                </stop>
+                <stop offset="0.2" stopColor={band} stopOpacity="0.95">
+                  <animate attributeName="offset" values="-0.2;1.2" dur={duration} repeatCount="indefinite" />
+                </stop>
+                <stop offset="0.4" stopColor={band} stopOpacity="0">
+                  <animate attributeName="offset" values="0;1.4" dur={duration} repeatCount="indefinite" />
+                </stop>
+              </linearGradient>
+            );
+          })}
         </defs>
 
         <rect
@@ -525,6 +596,11 @@ export function TopologyCanvas({
               const emphasis = getTunnelEdgeEmphasis(edge, viewState);
               const rate = trafficSnapshot.tunnelRates.get(edge.id);
               const active = hasTraffic(rate);
+              // 焦点模式下已建立的隧道即使没有流量也保留方向性流光
+              // （渐变扫过的方向即 ingress → target 的映射方向）。
+              const flowing = active
+                || (emphasis === 'strong' && edge.status.key === 'exposed');
+              const strokeWidth = trafficStrokeWidth(rate, hoveredTunnelId === edge.id ? 2.4 : 1.6, emphasis);
               return (
                 <g
                   key={edge.id}
@@ -535,19 +611,17 @@ export function TopologyCanvas({
                   <path
                     fill="none"
                     strokeLinecap="round"
-                    strokeWidth={trafficStrokeWidth(rate, hoveredTunnelId === edge.id ? 2.4 : 1.6, emphasis)}
+                    strokeWidth={strokeWidth}
                     className={EDGE_STROKE[edge.status.key]}
                   />
-                  {active && (
-                    <path
-                      fill="none"
-                      strokeLinecap="round"
-                      strokeWidth={trafficStrokeWidth(rate, 2.4, emphasis)}
-                      strokeDasharray="1.5 10.5"
-                      className={edge.status.key === 'error' ? 'stroke-destructive' : 'stroke-cyan-400'}
-                      style={{ animation: `topology-flow ${flowDuration(rate)} linear infinite` }}
-                    />
-                  )}
+                  <path
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeWidth={strokeWidth}
+                    stroke={`url(#topo-flow-${edge.id})`}
+                    className="transition-opacity duration-300"
+                    style={{ opacity: flowing ? (active ? 1 : 0.7) : 0 }}
+                  />
                 </g>
               );
             })}
@@ -569,62 +643,63 @@ export function TopologyCanvas({
             ))}
           </g>
 
+          {/* 标签组始终挂载、由 tick 定位，仅用透明度控制可见性；
+              否则模拟稳定后才出现的标签会停留在原点。 */}
           <g data-layer="labels" className="pointer-events-none">
-            {!effectiveFocusId && controlNodes
-              .filter((node) => hasTraffic(trafficSnapshot.clientRates.get(node.id)))
-              .map((node) => {
-                const rate = trafficSnapshot.clientRates.get(node.id);
-                const emphasis = getControlLinkEmphasis(node.id, viewState);
-                return (
-                  <g
-                    key={`control-label-${node.id}`}
-                    data-control-label={node.id}
-                    className="transition-opacity duration-300"
-                    style={{ opacity: emphasis === 'strong' ? 1 : 0.35 }}
+            {controlNodes.map((node) => {
+              const rate = trafficSnapshot.clientRates.get(node.id);
+              const emphasis = getControlLinkEmphasis(node.id, viewState);
+              const visible = !effectiveFocusId && hasTraffic(rate);
+              return (
+                <g
+                  key={`control-label-${node.id}`}
+                  data-control-label={node.id}
+                  className="transition-opacity duration-300"
+                  style={{ opacity: visible ? (emphasis === 'strong' ? 1 : 0.35) : 0 }}
+                >
+                  <text
+                    textAnchor="middle"
+                    dy={-6}
+                    className="fill-primary font-mono text-[9px] transition-opacity duration-300"
+                    style={LABEL_HALO}
                   >
+                    {formatTrafficPair(rate)}
+                  </text>
+                </g>
+              );
+            })}
+            {visibleEdges.map((edge) => {
+              const rate = trafficSnapshot.tunnelRates.get(edge.id);
+              const showTrafficLabel = hasTraffic(rate) || hoveredTunnelId === edge.id;
+              const visible = getTunnelEdgeEmphasis(edge, viewState) === 'strong' && showTrafficLabel;
+              return (
+                <g
+                  key={`edge-label-${edge.id}`}
+                  data-edge-label={edge.id}
+                  className="transition-opacity duration-300"
+                  style={{ opacity: visible ? 1 : 0 }}
+                >
+                  {showTrafficLabel && (
                     <text
                       textAnchor="middle"
-                      dy={-6}
-                      className="fill-primary font-mono text-[9px] transition-opacity duration-300"
+                      dy={-8}
+                      className="fill-primary font-mono text-[9px]"
                       style={LABEL_HALO}
                     >
                       {formatTrafficPair(rate)}
                     </text>
-                  </g>
-                );
-              })}
-            {visibleEdges
-              .filter((edge) => {
-                const rate = trafficSnapshot.tunnelRates.get(edge.id);
-                return getTunnelEdgeEmphasis(edge, viewState) === 'strong'
-                  && (hasTraffic(rate) || hoveredTunnelId === edge.id);
-              })
-              .map((edge) => {
-                const rate = trafficSnapshot.tunnelRates.get(edge.id);
-                const showTrafficLabel = hasTraffic(rate);
-                return (
-                  <g key={`edge-label-${edge.id}`} data-edge-label={edge.id}>
-                    {showTrafficLabel && (
-                      <text
-                        textAnchor="middle"
-                        dy={-8}
-                        className="fill-primary font-mono text-[9px]"
-                        style={LABEL_HALO}
-                      >
-                        {formatTrafficPair(rate)}
-                      </text>
-                    )}
-                    <text
-                      textAnchor="middle"
-                      dy={showTrafficLabel ? 6 : -5}
-                      className="fill-muted-foreground font-mono text-[9px]"
-                      style={LABEL_HALO}
-                    >
-                      {truncateLabel(edge.tunnel.name)}
-                    </text>
-                  </g>
-                );
-              })}
+                  )}
+                  <text
+                    textAnchor="middle"
+                    dy={showTrafficLabel ? 6 : -5}
+                    className="fill-muted-foreground font-mono text-[9px]"
+                    style={LABEL_HALO}
+                  >
+                    {truncateLabel(edge.tunnel.name)}
+                  </text>
+                </g>
+              );
+            })}
           </g>
         </g>
       </svg>
