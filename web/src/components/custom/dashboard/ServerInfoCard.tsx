@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Server as ServerIcon, HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp, Globe, Wifi } from 'lucide-react';
+import { HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp, Globe, Wifi } from 'lucide-react';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
@@ -56,13 +56,6 @@ export function ServerInfoCard() {
 
   return (
     <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden flex flex-col">
-      <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-border/40 bg-muted/20 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <ServerIcon className="h-5 w-5 text-primary" />
-          <h3 className="font-semibold text-foreground">{t('admin.serverInfo')}</h3>
-        </div>
-      </div>
-
       {/* 基础网络与软件信息 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 divide-y sm:divide-y-0 border-b border-border/40">
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">

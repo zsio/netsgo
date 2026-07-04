@@ -1,6 +1,7 @@
-import type { Client, ProxyConfig } from '@/types';
+import type { Client, ClientTrafficResponse, ProxyConfig } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { resolveTunnelStatus, type TunnelStatusPresentation } from '@/lib/tunnel-model';
+import { getTrafficSeriesKey, getTunnelSeriesKey } from '@/lib/tunnel-traffic-keys';
 
 export const SERVER_NODE_ID = '__server__';
 
@@ -25,6 +26,31 @@ export interface TopologyGraph {
   edges: TopologyEdge[];
 }
 
+export interface TopologyTrafficRate {
+  ingressBps: number;
+  egressBps: number;
+  totalBps: number;
+}
+
+export interface TopologyTrafficSnapshot {
+  clientRates: Map<string, TopologyTrafficRate>;
+  tunnelRates: Map<string, TopologyTrafficRate>;
+}
+
+export type TopologyLinkEmphasis = 'hidden' | 'muted' | 'strong';
+
+export interface TopologyViewState {
+  focusId: string | null;
+  hoverNodeId: string | null;
+  hoveredTunnelId: string | null;
+}
+
+export const EMPTY_TOPOLOGY_TRAFFIC_RATE: TopologyTrafficRate = {
+  ingressBps: 0,
+  egressBps: 0,
+  totalBps: 0,
+};
+
 export function resolveTunnelIngressNodeId(tunnel: ProxyConfig): string {
   if (tunnel.ingress?.location === 'client') {
     const clientId = tunnel.ingress.client_id || tunnel.participants?.ingress?.client_id;
@@ -39,6 +65,61 @@ export function resolveTunnelTargetNodeId(tunnel: ProxyConfig): string {
   return tunnel.target?.client_id
     || tunnel.participants?.target?.client_id
     || tunnel.client_id;
+}
+
+export function topologyEdgeTouches(edge: Pick<TopologyEdge, 'sourceId' | 'targetId'>, nodeId: string) {
+  return edge.sourceId === nodeId || edge.targetId === nodeId;
+}
+
+export function normalizeTopologyFocusId(focusId: string | null) {
+  return focusId === SERVER_NODE_ID ? null : focusId;
+}
+
+export function isTopologyOverview(focusId: string | null) {
+  return normalizeTopologyFocusId(focusId) === null;
+}
+
+export function getTunnelEdgeEmphasis(edge: TopologyEdge, state: TopologyViewState): TopologyLinkEmphasis {
+  const focusId = normalizeTopologyFocusId(state.focusId);
+  if (focusId === null) {
+    if (state.hoveredTunnelId) {
+      return edge.id === state.hoveredTunnelId ? 'muted' : 'hidden';
+    }
+    if (
+      state.hoverNodeId
+      && state.hoverNodeId !== SERVER_NODE_ID
+      && topologyEdgeTouches(edge, state.hoverNodeId)
+    ) {
+      return 'muted';
+    }
+    return 'hidden';
+  }
+
+  return topologyEdgeTouches(edge, focusId) ? 'strong' : 'hidden';
+}
+
+export function shouldRenderControlLink(clientId: string, state: TopologyViewState) {
+  const focusId = normalizeTopologyFocusId(state.focusId);
+  if (focusId === null) {
+    return true;
+  }
+  return clientId === focusId;
+}
+
+export function getControlLinkEmphasis(clientId: string, state: TopologyViewState): TopologyLinkEmphasis {
+  if (!shouldRenderControlLink(clientId, state)) {
+    return 'hidden';
+  }
+  if (!isTopologyOverview(state.focusId)) {
+    return 'muted';
+  }
+  if (state.hoveredTunnelId) {
+    return 'muted';
+  }
+  if (state.hoverNodeId && state.hoverNodeId !== SERVER_NODE_ID && state.hoverNodeId !== clientId) {
+    return 'muted';
+  }
+  return 'strong';
 }
 
 function sortClientsForTopology(clients: Client[]) {
@@ -97,6 +178,89 @@ export function buildTopologyGraph(clients: Client[] | undefined): TopologyGraph
   }
 
   return { nodes, edges };
+}
+
+function rateFromLatestSecond(item: ClientTrafficResponse['items'][number]): TopologyTrafficRate {
+  let latestTime = -Infinity;
+  let latestPoint: ClientTrafficResponse['items'][number]['points'][number] | undefined;
+
+  for (const point of item.points) {
+    const time = Date.parse(point.bucket_start);
+    if (!Number.isFinite(time) || time < latestTime) {
+      continue;
+    }
+    latestTime = time;
+    latestPoint = point;
+  }
+
+  if (!latestPoint) {
+    return EMPTY_TOPOLOGY_TRAFFIC_RATE;
+  }
+
+  return {
+    ingressBps: latestPoint.ingress_bytes,
+    egressBps: latestPoint.egress_bytes,
+    totalBps: latestPoint.total_bytes,
+  };
+}
+
+function addRates(a: TopologyTrafficRate, b: TopologyTrafficRate): TopologyTrafficRate {
+  return {
+    ingressBps: a.ingressBps + b.ingressBps,
+    egressBps: a.egressBps + b.egressBps,
+    totalBps: a.totalBps + b.totalBps,
+  };
+}
+
+export function aggregateClientTrafficRate(data: ClientTrafficResponse | undefined): TopologyTrafficRate {
+  if (!data || data.resolution !== 'second') {
+    return EMPTY_TOPOLOGY_TRAFFIC_RATE;
+  }
+
+  return data.items.reduce(
+    (total, item) => addRates(total, rateFromLatestSecond(item)),
+    EMPTY_TOPOLOGY_TRAFFIC_RATE,
+  );
+}
+
+export function buildTopologyTrafficSnapshot(
+  graph: TopologyGraph,
+  trafficByClientId: Map<string, ClientTrafficResponse | undefined>,
+): TopologyTrafficSnapshot {
+  const clientRates = new Map<string, TopologyTrafficRate>();
+  const tunnelRates = new Map<string, TopologyTrafficRate>();
+  const tunnelIdBySeriesKey = new Map<string, string>();
+
+  for (const edge of graph.edges) {
+    tunnelIdBySeriesKey.set(getTunnelSeriesKey(edge.tunnel), edge.id);
+  }
+
+  for (const node of graph.nodes) {
+    if (node.kind !== 'client') {
+      continue;
+    }
+
+    const data = trafficByClientId.get(node.id);
+    clientRates.set(node.id, aggregateClientTrafficRate(data));
+    if (!data || data.resolution !== 'second') {
+      continue;
+    }
+
+    for (const item of data.items) {
+      const tunnelId = tunnelIdBySeriesKey.get(getTrafficSeriesKey(item));
+      if (!tunnelId) {
+        continue;
+      }
+
+      const rate = rateFromLatestSecond(item);
+      const existing = tunnelRates.get(tunnelId);
+      if (!existing || rate.totalBps > existing.totalBps) {
+        tunnelRates.set(tunnelId, rate);
+      }
+    }
+  }
+
+  return { clientRates, tunnelRates };
 }
 
 export function getTopologyNeighborIds(graph: TopologyGraph, nodeId: string): Set<string> {
