@@ -67,12 +67,20 @@ export function e2eURL(path: string) {
   return new URL(path, e2eConfig.baseURL).toString();
 }
 
+async function expectDashboardShell(page: Page) {
+  await expect(page).toHaveURL(/#\/dashboard(?:$|[/?])/);
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /Topology/i })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /Endpoints/i })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /Tunnels/i })).toBeVisible();
+}
+
 export async function login(page: Page) {
   await gotoWhenReady(page, '/#/login');
   await page.getByPlaceholder('Enter username').fill(e2eConfig.adminUser);
   await page.getByPlaceholder('Enter password').fill(e2eConfig.adminPass);
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
-  await expect(page.getByText('Online endpoints (Clients)')).toBeVisible();
+  await expectDashboardShell(page);
 }
 
 export async function gotoWhenReady(page: Page, path: string) {
