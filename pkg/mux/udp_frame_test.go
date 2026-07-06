@@ -209,9 +209,10 @@ func TestUDPRelay_Bidirectional(t *testing.T) {
 	// 6. 关闭 testSide，Relay 应该结束
 	mustClose(t, testSide)
 
+	// stream 关闭后 UDPRelay 在 grace period 后结束（见 UDPRelay 文档）。
 	select {
 	case <-relayDone:
-	case <-time.After(3 * time.Second):
+	case <-time.After(8 * time.Second):
 		t.Error("UDPRelay 超时未结束")
 	}
 }
@@ -298,10 +299,13 @@ func TestUDPRelay_StreamCloseEndsRelay(t *testing.T) {
 		close(done)
 	}()
 
+	// stream 关闭后 UDPRelay 会在 grace period（5s）后结束：
+	// stream→UDP 方向 EOF 后只关 stream，UDP→stream 方向靠
+	// ReadDeadline 超时退出。这里允许足够的等待窗口。
 	select {
 	case <-done:
 		// 正常退出
-	case <-time.After(3 * time.Second):
+	case <-time.After(8 * time.Second):
 		t.Error("stream 关闭后 UDPRelay 超时未结束")
 	}
 }
