@@ -1,6 +1,7 @@
 package manage
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -32,6 +33,10 @@ func TestManageClientReauthenticateHappyPath(t *testing.T) {
 			TLSFingerprint: "sha256:old",
 		}, true, nil
 	}
+	deps.PreflightClientTokenClear = func() error {
+		order = append(order, "preflight")
+		return nil
+	}
 	deps.EnableAndStart = func() error {
 		order = append(order, "start")
 		return nil
@@ -43,7 +48,7 @@ func TestManageClientReauthenticateHappyPath(t *testing.T) {
 	if updatedKey != "sk-new-key" {
 		t.Fatalf("reauth should trim and update client key, got %q", updatedKey)
 	}
-	if got := strings.Join(order, ","); got != "stop,update:sk-new-key,clear,start" {
+	if got := strings.Join(order, ","); got != "preflight,stop,update:sk-new-key,clear,start" {
 		t.Fatalf("reauth operation order = %s", got)
 	}
 	if len(ui.passwordCalls) != 1 || ui.passwordCalls[0].prompt != "新的 client key" {
@@ -123,6 +128,114 @@ func TestManageClientReauthenticateCancelDoesNotMutate(t *testing.T) {
 		t.Fatalf("canceling reauth should print the standard cancellation summary, got %#v", ui.summaries)
 	}
 	assertConfirmPhrase(t, ui.confirmCalls, "继续重新认证 client？", "reauth client")
+}
+
+func TestManageClientReauthenticatePreflightFailureDoesNotMutate(t *testing.T) {
+	ui := &fakeUI{
+		passwords: []string{"sk-new-key"},
+		confirms:  []bool{true},
+	}
+	deps, _ := newInstalledClientDeps(t, ui)
+	ui.selects = []int{clientServiceActionIndex(t, deps, "重新认证"), clientServiceActionIndex(t, deps, "返回")}
+	operations := []string{}
+	deps.PreflightClientTokenClear = func() error {
+		return errors.New("refusing to use symlinked client identity database")
+	}
+	deps.DisableAndStop = func() error {
+		operations = append(operations, "stop")
+		return nil
+	}
+	deps.UpdateClientKey = func(string) error {
+		operations = append(operations, "update")
+		return nil
+	}
+	deps.ClearClientToken = func() (clientstate.ClientIdentity, bool, error) {
+		operations = append(operations, "clear")
+		return clientstate.ClientIdentity{}, false, nil
+	}
+	deps.EnableAndStart = func() error {
+		operations = append(operations, "start")
+		return nil
+	}
+
+	err := ManageClientWith(deps)
+	if err == nil || !strings.Contains(err.Error(), "preflight clear client token") {
+		t.Fatalf("preflight failure error = %v, want wrapped preflight error", err)
+	}
+	if len(operations) != 0 {
+		t.Fatalf("preflight failure should not mutate service state, operations=%v", operations)
+	}
+}
+
+func TestManageClientReauthenticateRestoresOldKeyAndStartsWhenUpdateFails(t *testing.T) {
+	ui := &fakeUI{
+		passwords: []string{"sk-new-key"},
+		confirms:  []bool{true},
+	}
+	deps, _ := newInstalledClientDeps(t, ui)
+	ui.selects = []int{clientServiceActionIndex(t, deps, "重新认证")}
+	operations := []string{}
+	deps.UpdateClientKey = func(key string) error {
+		operations = append(operations, "update:"+key)
+		if key == "sk-new-key" {
+			return errors.New("repair client env ownership")
+		}
+		return nil
+	}
+	deps.DisableAndStop = func() error {
+		operations = append(operations, "stop")
+		return nil
+	}
+	deps.ClearClientToken = func() (clientstate.ClientIdentity, bool, error) {
+		operations = append(operations, "clear")
+		return clientstate.ClientIdentity{}, false, nil
+	}
+	deps.EnableAndStart = func() error {
+		operations = append(operations, "start")
+		return nil
+	}
+
+	err := ManageClientWith(deps)
+	if err == nil || !strings.Contains(err.Error(), "update client key") {
+		t.Fatalf("update failure error = %v, want wrapped update error", err)
+	}
+	if got := strings.Join(operations, ","); got != "stop,update:sk-new-key,update:sk-secret,start" {
+		t.Fatalf("update failure operation order = %s", got)
+	}
+}
+
+func TestManageClientReauthenticateRestoresOldKeyAndStartsWhenClearFails(t *testing.T) {
+	ui := &fakeUI{
+		passwords: []string{"sk-new-key"},
+		confirms:  []bool{true},
+	}
+	deps, _ := newInstalledClientDeps(t, ui)
+	ui.selects = []int{clientServiceActionIndex(t, deps, "重新认证")}
+	operations := []string{}
+	deps.UpdateClientKey = func(key string) error {
+		operations = append(operations, "update:"+key)
+		return nil
+	}
+	deps.DisableAndStop = func() error {
+		operations = append(operations, "stop")
+		return nil
+	}
+	deps.ClearClientToken = func() (clientstate.ClientIdentity, bool, error) {
+		operations = append(operations, "clear")
+		return clientstate.ClientIdentity{}, false, errors.New("refusing to use symlinked client identity database")
+	}
+	deps.EnableAndStart = func() error {
+		operations = append(operations, "start")
+		return nil
+	}
+
+	err := ManageClientWith(deps)
+	if err == nil || !strings.Contains(err.Error(), "clear client token") {
+		t.Fatalf("clear failure error = %v, want wrapped clear error", err)
+	}
+	if got := strings.Join(operations, ","); got != "stop,update:sk-new-key,clear,update:sk-secret,start" {
+		t.Fatalf("clear failure operation order = %s", got)
+	}
 }
 
 func clientServiceActionIndex(t *testing.T, deps clientDeps, label string) int {

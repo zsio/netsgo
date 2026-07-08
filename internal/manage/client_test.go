@@ -36,6 +36,9 @@ func newInstalledClientDeps(t *testing.T, ui *fakeUI) (clientDeps, svcmgr.Servic
 		UpdateClientKey: func(string) error {
 			return nil
 		},
+		PreflightClientTokenClear: func() error {
+			return nil
+		},
 		ClearClientToken: func() (clientstate.ClientIdentity, bool, error) {
 			return clientstate.ClientIdentity{}, false, nil
 		},

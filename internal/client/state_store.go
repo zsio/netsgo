@@ -117,6 +117,22 @@ func LoadClientIdentity(path string) (ClientIdentity, bool, error) {
 	return store.Load()
 }
 
+func CheckClientTokenClear(path string) error {
+	legacyPath := legacyClientStatePath(path)
+	legacyExists, err := usableClientStateFile(legacyPath, "legacy client identity")
+	if err != nil {
+		return err
+	}
+	found, err := checkClientDBTokenClear(path)
+	if err != nil {
+		return err
+	}
+	if found || !legacyExists {
+		return nil
+	}
+	return checkLegacyClientToken(legacyPath)
+}
+
 func ClearClientToken(path string) (ClientIdentity, bool, error) {
 	legacyPath := legacyClientStatePath(path)
 	if _, err := usableClientStateFile(legacyPath, "legacy client identity"); err != nil {
@@ -139,18 +155,28 @@ func ClearClientToken(path string) (ClientIdentity, bool, error) {
 	return legacyState, legacyFound, nil
 }
 
+func checkClientDBTokenClear(path string) (bool, error) {
+	exists, err := usableClientDBFiles(path)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	_, found, err := LoadClientIdentity(path)
+	if err != nil {
+		return false, fmt.Errorf("inspect client identity database: %w", err)
+	}
+	return found, nil
+}
+
 func clearClientDBToken(path string) (ClientIdentity, bool, error) {
-	exists, err := usableClientStateFile(path, "client identity database")
+	exists, err := usableClientDBFiles(path)
 	if err != nil {
 		return ClientIdentity{}, false, err
 	}
 	if !exists {
 		return ClientIdentity{}, false, nil
-	}
-	for _, sidecarPath := range []string{path + "-wal", path + "-shm"} {
-		if _, err := usableClientStateFile(sidecarPath, "client identity database sidecar"); err != nil {
-			return ClientIdentity{}, false, err
-		}
 	}
 
 	store, err := newClientStateStore(path)
@@ -173,6 +199,37 @@ func clearClientDBToken(path string) (ClientIdentity, bool, error) {
 	return state, true, nil
 }
 
+func usableClientDBFiles(path string) (bool, error) {
+	exists, err := usableClientStateFile(path, "client identity database")
+	if err != nil || !exists {
+		return exists, err
+	}
+	for _, sidecarPath := range []string{path + "-wal", path + "-shm"} {
+		if _, err := usableClientStateFile(sidecarPath, "client identity database sidecar"); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func checkLegacyClientToken(path string) error {
+	_, err := readLegacyClientIdentity(path)
+	return err
+}
+
+func readLegacyClientIdentity(path string) (ClientIdentity, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ClientIdentity{}, fmt.Errorf("read legacy client identity: %w", err)
+	}
+
+	var state ClientIdentity
+	if err := json.Unmarshal(data, &state); err != nil {
+		return ClientIdentity{}, fmt.Errorf("decode legacy client identity: %w", err)
+	}
+	return state, nil
+}
+
 func clearLegacyClientToken(path string) (ClientIdentity, bool, error) {
 	exists, err := usableClientStateFile(path, "legacy client identity")
 	if err != nil {
@@ -182,14 +239,9 @@ func clearLegacyClientToken(path string) (ClientIdentity, bool, error) {
 		return ClientIdentity{}, false, nil
 	}
 
-	data, err := os.ReadFile(path)
+	state, err := readLegacyClientIdentity(path)
 	if err != nil {
-		return ClientIdentity{}, false, fmt.Errorf("read legacy client identity: %w", err)
-	}
-
-	var state ClientIdentity
-	if err := json.Unmarshal(data, &state); err != nil {
-		return ClientIdentity{}, false, fmt.Errorf("decode legacy client identity: %w", err)
+		return ClientIdentity{}, false, err
 	}
 	state.Token = ""
 	updated, err := json.Marshal(state)
