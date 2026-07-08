@@ -98,3 +98,4 @@ views.json
 events.jsonl
 config.json
 /.playwright-cli
+/.omo
