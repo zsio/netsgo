@@ -61,6 +61,41 @@ func TestRepairClientRuntimeOwnershipRejectsSymlinkedStateFile(t *testing.T) {
 	}
 }
 
+func TestCheckClientRuntimeStateRejectsSymlinkedRuntimeDirectory(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	layout := NewLayout(RoleClient)
+	layout.RuntimeDir = filepath.Join(dir, "client")
+	if err := os.Symlink(target, layout.RuntimeDir); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	err := CheckClientRuntimeState(layout)
+	if err == nil || !strings.Contains(err.Error(), "symlinked runtime directory") {
+		t.Fatalf("CheckClientRuntimeState() error = %v, want symlink rejection", err)
+	}
+}
+
+func TestCheckClientRuntimeStateRejectsSymlinkedStateFile(t *testing.T) {
+	layout := NewLayout(RoleClient)
+	layout.RuntimeDir = t.TempDir()
+	target := filepath.Join(layout.RuntimeDir, "target")
+	if err := os.WriteFile(target, []byte("state"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(layout.RuntimeDir, "client.json")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	err := CheckClientRuntimeState(layout)
+	if err == nil || !strings.Contains(err.Error(), "symlinked runtime file") {
+		t.Fatalf("CheckClientRuntimeState() error = %v, want symlink rejection", err)
+	}
+}
+
 func testRuntimeOwnershipOps(calls *[]runtimeOwnershipCall) runtimeOwnershipOps {
 	return runtimeOwnershipOps{
 		lookup: func(string) (*user.User, error) {

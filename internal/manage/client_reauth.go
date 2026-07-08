@@ -9,7 +9,7 @@ import (
 )
 
 func reauthenticateClient(deps clientDeps) error {
-	if deps.UpdateClientKey == nil || deps.ClearClientToken == nil || deps.DisableAndStop == nil || deps.EnableAndStart == nil {
+	if deps.ReadClientEnv == nil || deps.UpdateClientKey == nil || deps.PreflightClientTokenClear == nil || deps.ClearClientToken == nil || deps.DisableAndStop == nil || deps.EnableAndStart == nil {
 		return errors.New("manage dependencies are incomplete")
 	}
 
@@ -43,15 +43,22 @@ func reauthenticateClient(deps clientDeps) error {
 		return nil
 	}
 
+	currentEnv, err := deps.ReadClientEnv()
+	if err != nil {
+		return fmt.Errorf("read current client env: %w", err)
+	}
+	if err := deps.PreflightClientTokenClear(); err != nil {
+		return fmt.Errorf("preflight clear client token: %w", err)
+	}
 	if err := deps.DisableAndStop(); err != nil {
 		return fmt.Errorf("stop client service: %w", err)
 	}
 	if err := deps.UpdateClientKey(key); err != nil {
-		return fmt.Errorf("update client key: %w", err)
+		return recoverClientReauthenticationFailure(deps, currentEnv.Key, fmt.Errorf("update client key: %w", err))
 	}
 	_, foundState, err := deps.ClearClientToken()
 	if err != nil {
-		return fmt.Errorf("clear client token: %w", err)
+		return recoverClientReauthenticationFailure(deps, currentEnv.Key, fmt.Errorf("clear client token: %w", err))
 	}
 	if err := deps.EnableAndStart(); err != nil {
 		return fmt.Errorf("start client service: %w", err)
@@ -68,6 +75,22 @@ func reauthenticateClient(deps clientDeps) error {
 		{"服务", "已重启"},
 	})
 	return nil
+}
+
+func recoverClientReauthenticationFailure(deps clientDeps, oldKey string, cause error) error {
+	var recoveryErrs []error
+	if strings.TrimSpace(oldKey) != "" {
+		if err := deps.UpdateClientKey(oldKey); err != nil {
+			recoveryErrs = append(recoveryErrs, fmt.Errorf("restore client key: %w", err))
+		}
+	}
+	if err := deps.EnableAndStart(); err != nil {
+		recoveryErrs = append(recoveryErrs, fmt.Errorf("restart client service: %w", err))
+	}
+	if len(recoveryErrs) > 0 {
+		return fmt.Errorf("%w; recovery failed: %w", cause, errors.Join(recoveryErrs...))
+	}
+	return cause
 }
 
 func validateClientReauthenticationKey(value string) error {

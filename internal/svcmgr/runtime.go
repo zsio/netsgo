@@ -42,6 +42,56 @@ func repairClientRuntimeOwnership(layout ServiceLayout, ops runtimeOwnershipOps)
 	return nil
 }
 
+func CheckClientRuntimeState(layout ServiceLayout) error {
+	return checkClientRuntimeState(layout, os.Lstat)
+}
+
+func checkClientRuntimeState(layout ServiceLayout, lstat func(string) (os.FileInfo, error)) error {
+	if err := checkRuntimeDir(layout.RuntimeDir, lstat); err != nil {
+		return err
+	}
+	for _, path := range clientRuntimeStatePaths(layout) {
+		if err := checkRuntimeFile(path, lstat); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkRuntimeDir(path string, lstat func(string) (os.FileInfo, error)) error {
+	info, err := lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to use symlinked runtime directory: %s", path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("runtime path is not a directory: %s", path)
+	}
+	return nil
+}
+
+func checkRuntimeFile(path string, lstat func(string) (os.FileInfo, error)) error {
+	info, err := lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to use symlinked runtime file: %s", path)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("runtime state path is a directory: %s", path)
+	}
+	return nil
+}
+
 func secureRuntimeDir(path string, uid, gid int, ops runtimeOwnershipOps) error {
 	info, err := ops.lstat(path)
 	if err != nil {

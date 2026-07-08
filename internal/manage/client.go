@@ -11,21 +11,22 @@ import (
 )
 
 type clientDeps struct {
-	UI               uiProvider
-	Inspect          func() svcmgr.InstallInspection
-	IsActive         func() (bool, error)
-	IsEnabled        func() (bool, error)
-	Logs             func() error
-	RunInstall       func() error
-	ReadClientEnv    func() (svcmgr.ClientEnv, error)
-	DisableAndStop   func() error
-	UpdateClientKey  func(string) error
-	ClearClientToken func() (clientstate.ClientIdentity, bool, error)
-	EnableAndStart   func() error
-	DaemonReload     func() error
-	RemovePaths      func(paths ...string) error
-	RemoveBinary     func() error
-	DetectServer     func() svcmgr.InstallState
+	UI                        uiProvider
+	Inspect                   func() svcmgr.InstallInspection
+	IsActive                  func() (bool, error)
+	IsEnabled                 func() (bool, error)
+	Logs                      func() error
+	RunInstall                func() error
+	ReadClientEnv             func() (svcmgr.ClientEnv, error)
+	DisableAndStop            func() error
+	UpdateClientKey           func(string) error
+	PreflightClientTokenClear func() error
+	ClearClientToken          func() (clientstate.ClientIdentity, bool, error)
+	EnableAndStart            func() error
+	DaemonReload              func() error
+	RemovePaths               func(paths ...string) error
+	RemoveBinary              func() error
+	DetectServer              func() svcmgr.InstallState
 }
 
 func ManageClient() error {
@@ -99,6 +100,13 @@ func defaultClientDeps() clientDeps {
 		DisableAndStop: func() error { return svcmgr.DisableAndStop(svcmgr.UnitName(svcmgr.RoleClient)) },
 		UpdateClientKey: func(key string) error {
 			return svcmgr.UpdateClientKey(svcmgr.NewLayout(svcmgr.RoleClient), key)
+		},
+		PreflightClientTokenClear: func() error {
+			layout := svcmgr.NewLayout(svcmgr.RoleClient)
+			if err := svcmgr.CheckClientRuntimeState(layout); err != nil {
+				return err
+			}
+			return clientstate.CheckClientTokenClear(filepath.Join(clientDataPath(layout), clientstate.ClientDBFileName))
 		},
 		ClearClientToken: func() (clientstate.ClientIdentity, bool, error) {
 			layout := svcmgr.NewLayout(svcmgr.RoleClient)
