@@ -1789,25 +1789,14 @@ func TestAPI_UnifiedTunnelMigrateRejectsPendingTunnel(t *testing.T) {
 	// Given
 	currentTarget := createUnifiedAPITestClient(t, s, "install-migrate-pending-current", "migrate-pending-current")
 	nextTarget := createUnifiedAPITestClient(t, s, "install-migrate-pending-next", "migrate-pending-next")
-	createResp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, unifiedCreatePayload("migrate-pending", currentTarget.ID, reserveTCPPort(t)))
-	if createResp.Code != http.StatusCreated {
-		t.Fatalf("POST /api/tunnels: want 201, got %d body=%s", createResp.Code, createResp.Body.String())
-	}
-	var created tunnelSpecAPI
-	if err := mustDecodeJSON(t, createResp.Body, &created); err != nil {
-		t.Fatalf("decode created tunnel: %v", err)
-	}
-	stored, err := s.store.GetTunnelByIDE(currentTarget.ID, created.ID)
-	if err != nil {
-		t.Fatalf("load tunnel before marking pending: %v", err)
-	}
-	if err := s.store.UpdateStates(currentTarget.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, ""); err != nil {
-		t.Fatalf("mark tunnel pending: %v", err)
-	}
-	before, err := s.store.GetTunnelByIDE(currentTarget.ID, created.ID)
+	stored := testStoredServerExposeTCPTunnel("migrate-pending-id", "migrate-pending", currentTarget.ID, 22, reserveTCPPort(t), time.Now().UTC())
+	stored.RuntimeState = protocol.ProxyRuntimeStatePending
+	mustAddStableTunnel(t, s.store, stored)
+	created, err := s.store.GetTunnelByID(stored.ID)
 	if err != nil {
 		t.Fatalf("load pending tunnel: %v", err)
 	}
+	before := created
 
 	// When
 	body := []byte(`{"expected_revision":` + strconv.FormatInt(created.Revision, 10) + `,"target_client_id":"` + nextTarget.ID + `"}`)
