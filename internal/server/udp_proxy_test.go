@@ -306,7 +306,10 @@ func TestUDPReadLoopRejectsDisallowedLoopbackSourceBeforeCreatingSession(t *test
 		state:      clientStateLive,
 	}
 	tunnel := &ProxyTunnel{Config: protocol.ProxyConfig{Name: "udp-source-policy", Type: protocol.ProxyTypeUDP}}
-	go s.udpReadLoop(client, tunnel, state)
+	go s.udpReadLoop(client, tunnel, state, proxyActivationSnapshot{
+		config:      tunnel.Config,
+		sourceCIDRs: append([]*net.IPNet(nil), state.sourceCIDRs...),
+	})
 
 	sender, err := net.Dial("udp", packetConn.LocalAddr().String())
 	if err != nil {
@@ -320,6 +323,115 @@ func TestUDPReadLoopRejectsDisallowedLoopbackSourceBeforeCreatingSession(t *test
 
 	if got := state.sessionCount.Load(); got != 0 {
 		t.Fatalf("disallowed UDP source should not create session, got %d", got)
+	}
+}
+
+func TestMarkUDPProxyRuntimeErrorIfCurrent_StaleRevisionDoesNotDemoteStore(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	client := &ClientConn{ID: "stale-udp-revision-client", proxies: make(map[string]*ProxyTunnel)}
+	s.clients.Store(client.ID, client)
+
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen UDP: %v", err)
+	}
+	state := &UDPProxyState{
+		packetConn: packetConn,
+		sessionIPs: make(map[string]int),
+		done:       make(chan struct{}),
+	}
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:            "stale-udp-revision-id",
+			Name:          "stale-udp-revision",
+			Revision:      1,
+			Type:          protocol.ProxyTypeUDP,
+			LocalIP:       "127.0.0.1",
+			LocalPort:     5353,
+			RemotePort:    packetConn.LocalAddr().(*net.UDPAddr).Port,
+			ClientID:      client.ID,
+			OwnerClientID: client.ID,
+			Topology:      protocol.TunnelTopologyServerExpose,
+			DesiredState:  protocol.ProxyDesiredStateRunning,
+			RuntimeState:  protocol.ProxyRuntimeStateExposed,
+		},
+		UDPState: state,
+		done:     make(chan struct{}),
+	}
+	client.proxies[tunnel.Config.Name] = tunnel
+	stored := storedTunnelFromRuntimeForTest(client, tunnel)
+	mustAddStableTunnel(t, s.store, stored)
+
+	next := stored
+	next.Revision++
+	next.RuntimeState = protocol.ProxyRuntimeStateExposed
+	next.UpdatedAt = time.Now().UTC()
+	if err := s.store.ReplaceTunnelByID(client.ID, stored.ID, stored.Revision, next); err != nil {
+		t.Fatalf("advance stored tunnel revision: %v", err)
+	}
+	s.unifiedRuntime.recordServerIssue(next.ID, next.Revision, protocol.TunnelIssue{
+		Code:    "current-revision-issue",
+		Scope:   "server",
+		Message: "keep current issue",
+	})
+
+	s.markUDPProxyRuntimeErrorIfCurrent(client, tunnel.Config.Name, tunnel, state, "late old UDP failure")
+
+	reloaded, err := s.store.GetTunnelByIDE(client.ID, stored.ID)
+	if err != nil {
+		t.Fatalf("reload tunnel: %v", err)
+	}
+	if reloaded.Revision != next.Revision || reloaded.RuntimeState != protocol.ProxyRuntimeStateExposed || reloaded.Error != "" {
+		t.Fatalf("old UDP runtime changed new revision state: %+v", reloaded)
+	}
+	issues := s.unifiedRuntime.issuesForStoredTunnel(reloaded, true)
+	if len(issues) != 1 || issues[0].Code != "current-revision-issue" {
+		t.Fatalf("old UDP runtime changed new revision issues: %+v", issues)
+	}
+}
+
+func TestMarkUDPProxyRuntimeErrorIfCurrent_LegacyCleanupDoesNotDependOnStoreRow(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	clientWS, serverWS := newTestWebSocketPair(t)
+	defer mustClose(t, clientWS)
+	defer mustClose(t, serverWS)
+	client := &ClientConn{ID: "legacy-udp-error-client", conn: serverWS, proxies: make(map[string]*ProxyTunnel)}
+
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen UDP: %v", err)
+	}
+	state := &UDPProxyState{
+		packetConn: packetConn,
+		sessionIPs: make(map[string]int),
+		done:       make(chan struct{}),
+	}
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:           "legacy-udp-error-id",
+			Name:         "legacy-udp-error",
+			Revision:     1,
+			Type:         protocol.ProxyTypeUDP,
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateExposed,
+		},
+		UDPState: state,
+		done:     make(chan struct{}),
+	}
+	client.proxies[tunnel.Config.Name] = tunnel
+
+	s.markUDPProxyRuntimeErrorIfCurrent(client, tunnel.Config.Name, tunnel, state, "legacy UDP listener failed")
+
+	msg := readControlMessageOfType(t, clientWS, protocol.MsgTypeProxyClose)
+	var closeReq protocol.ProxyCloseRequest
+	if err := msg.ParsePayload(&closeReq); err != nil {
+		t.Fatalf("parse legacy UDP proxy close: %v", err)
+	}
+	if closeReq.Name != tunnel.Config.Name || closeReq.Reason != "runtime_error" {
+		t.Fatalf("legacy UDP runtime cleanup mismatch: %+v", closeReq)
 	}
 }
 

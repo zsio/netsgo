@@ -5,9 +5,87 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"netsgo/pkg/protocol"
 )
+
+func TestProxyHTTPRequestRejectsStaleRouteActivation(t *testing.T) {
+	s := New(0)
+	clientSession, serverSession := newDataTestYamuxSessionPair(t)
+	client := &ClientConn{
+		ID:          "http-activation-client",
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(client.ID, client)
+
+	oldTunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:              "http-activation-id",
+			Name:            "http-activation",
+			Revision:        8,
+			Type:            protocol.ProxyTypeHTTP,
+			Domain:          "stale.example.com",
+			DesiredState:    protocol.ProxyDesiredStateRunning,
+			RuntimeState:    protocol.ProxyRuntimeStateExposed,
+			ActualTransport: protocol.ActualTransportServerRelay,
+		},
+		limits: newDirectionalBandwidthRuntime(protocol.BandwidthSettings{}, realBandwidthClock{}),
+		done:   make(chan struct{}),
+	}
+	oldTunnel.runtime.Revision = 8
+	client.proxies[oldTunnel.Config.Name] = oldTunnel
+	activation := proxyActivationSnapshotLocked(oldTunnel)
+	route := httpTunnelRoute{
+		config:      activation.config,
+		client:      client,
+		tunnel:      oldTunnel,
+		activation:  activation,
+		sourceCIDRs: activation.sourceCIDRs,
+	}
+
+	newTunnel := &ProxyTunnel{Config: oldTunnel.Config, done: make(chan struct{})}
+	newTunnel.Config.Revision = 9
+	newTunnel.runtime.Revision = 9
+	client.proxies[oldTunnel.Config.Name] = newTunnel
+
+	type acceptedStreamResult struct {
+		accepted bool
+		header   protocol.DataStreamHeader
+		err      error
+	}
+	accepted := make(chan acceptedStreamResult, 1)
+	go func() {
+		stream, err := clientSession.Accept()
+		if err != nil {
+			accepted <- acceptedStreamResult{err: err}
+			return
+		}
+		defer func() { _ = stream.Close() }()
+		_ = stream.SetReadDeadline(time.Now().Add(time.Second))
+		header, err := protocol.DecodeDataStreamHeader(stream)
+		accepted <- acceptedStreamResult{accepted: true, header: header, err: err}
+	}()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "http://stale.example.com/", nil)
+	s.proxyHTTPRequest(recorder, request, route)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("stale HTTP route status = %d, want %d", recorder.Code, http.StatusBadGateway)
+	}
+	_ = serverSession.Close()
+	select {
+	case result := <-accepted:
+		if result.accepted {
+			t.Fatalf("stale HTTP route opened a target stream (revision=%d decode_err=%v)", result.header.Revision, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stale HTTP route stream rejection")
+	}
+}
 
 func newHTTPRuleTestServer(t *testing.T) (*Server, func()) {
 	t.Helper()

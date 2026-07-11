@@ -401,7 +401,7 @@ func TestAPI_ConsoleSummaryContractAlignsAcrossStatusAndSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load error tunnel: %v", err)
 	}
-	s.recordServerExposeIngressIssue(errorStored.ID, errorStored.Type, "boom")
+	s.recordServerExposeIngressIssue(errorStored.ID, errorStored.Revision, errorStored.Type, "boom")
 	client.proxyMu.Lock()
 	client.proxies["active"] = &ProxyTunnel{Config: protocol.ProxyConfig{ID: activeStored.ID, Name: "active", Type: protocol.ProxyTypeHTTP, Domain: "active.example.com", ClientID: authResp.ClientID, DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStateExposed}, done: make(chan struct{})}
 	client.proxies["pending"] = &ProxyTunnel{Config: protocol.ProxyConfig{ID: pendingStored.ID, Name: "pending", Type: protocol.ProxyTypeTCP, ClientID: authResp.ClientID, DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStatePending}, done: make(chan struct{})}
@@ -676,6 +676,22 @@ func TestAPI_DeleteClient_OfflineClient(t *testing.T) {
 		LocalPort:  8080,
 		RemotePort: 18080,
 	}, protocol.ProxyStatusStopped)
+	beforeDelete, err := s.store.GetTunnelsByClientID(clientID)
+	if err != nil || len(beforeDelete) != 1 {
+		t.Fatalf("load tunnel before client delete: tunnels=%+v err=%v", beforeDelete, err)
+	}
+	deletedTunnel := beforeDelete[0]
+	s.unifiedRuntime.recordServerIssue(deletedTunnel.ID, deletedTunnel.Revision, protocol.TunnelIssue{
+		Code:    "delete-client-test",
+		Scope:   "server",
+		Message: "should be purged",
+	})
+	s.unifiedRuntime.recordReport(clientID, protocol.TunnelRuntimeReport{
+		TunnelID: deletedTunnel.ID,
+		Revision: deletedTunnel.Revision,
+		Role:     protocol.DataStreamRoleTarget,
+		Message:  "should be purged",
+	}, time.Now())
 
 	resp := doMuxRequest(t, handler, http.MethodDelete, "/api/clients/"+clientID, token, nil)
 	if resp.Code != http.StatusNoContent {
@@ -690,6 +706,14 @@ func TestAPI_DeleteClient_OfflineClient(t *testing.T) {
 	}
 	if len(tunnels) != 0 {
 		t.Fatalf("client tunnels should be deleted, got %d", len(tunnels))
+	}
+	s.unifiedRuntime.mu.RLock()
+	_, hasIssues := s.unifiedRuntime.serverIssues[deletedTunnel.ID]
+	_, hasReport := s.unifiedRuntime.reports[runtimeReportKey(deletedTunnel.ID, protocol.DataStreamRoleTarget)]
+	watermark := s.unifiedRuntime.purged[deletedTunnel.ID]
+	s.unifiedRuntime.mu.RUnlock()
+	if hasIssues || hasReport || watermark.revision != deletedTunnel.Revision {
+		t.Fatalf("client delete runtime purge mismatch: issues=%v report=%v watermark=%+v", hasIssues, hasReport, watermark)
 	}
 }
 

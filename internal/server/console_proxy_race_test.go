@@ -170,12 +170,12 @@ func TestCollectClientViews_UDPActivationSnapshotRace(t *testing.T) {
 			client.proxies[name] = tunnel
 			client.proxyMu.Unlock()
 
-			runtime, err := s.bindUDPProxyRuntime(tunnel)
+			runtime, err := s.bindUDPProxyRuntime(tunnel.Config)
 			if err != nil {
 				errCh <- fmt.Errorf("bindUDPProxyRuntime failed: %w", err)
 				return
 			}
-			if _, _, err := s.publishUDPProxyRuntime(client, tunnel, runtime); err != nil {
+			if _, _, err := s.publishUDPProxyRuntime(client, tunnel, name, runtime); err != nil {
 				errCh <- fmt.Errorf("publishUDPProxyRuntime failed: %w", err)
 				return
 			}
@@ -218,7 +218,7 @@ func TestPublishUDPProxyRuntime_StaleActivationClosesFreshState(t *testing.T) {
 		t.Fatalf("prepareProxyTunnel failed: %v", err)
 	}
 
-	runtime, err := s.bindUDPProxyRuntime(tunnel)
+	runtime, err := s.bindUDPProxyRuntime(tunnel.Config)
 	if err != nil {
 		t.Fatalf("bindUDPProxyRuntime failed: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestPublishUDPProxyRuntime_StaleActivationClosesFreshState(t *testing.T) {
 	client.proxies[tunnel.Config.Name] = replacement
 	client.proxyMu.Unlock()
 
-	if _, _, err := s.publishUDPProxyRuntime(client, tunnel, runtime); err == nil {
+	if _, _, err := s.publishUDPProxyRuntime(client, tunnel, tunnel.Config.Name, runtime); err == nil {
 		t.Fatal("publishUDPProxyRuntime should reject stale activation")
 	}
 

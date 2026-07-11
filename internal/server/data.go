@@ -219,10 +219,24 @@ func waitForDataStreamHandlers(streamWG *sync.WaitGroup, timeout time.Duration) 
 // openStreamToClient opens a new server-relay stream on the client's yamux session and
 // writes a DataStreamHeader that identifies the tunnel/revision before payload bytes.
 func (s *Server) openStreamToClient(client *ClientConn, proxyName string) (net.Conn, error) {
-	return s.openStreamToClientWithHeader(client, proxyName, nil)
+	return s.openStreamToClientWithHeaderMatching(client, proxyName, nil, nil, nil)
 }
 
-func (s *Server) openStreamToClientWithHeader(client *ClientConn, proxyName string, mutate func(*protocol.DataStreamHeader)) (net.Conn, error) {
+func (s *Server) openStreamToClientForActivation(client *ClientConn, tunnel *ProxyTunnel, activation proxyActivationSnapshot) (net.Conn, error) {
+	return s.openStreamToClientWithHeaderMatching(client, activation.config.Name, tunnel, &activation, nil)
+}
+
+func (s *Server) openStreamToClientWithHeaderForActivation(client *ClientConn, tunnel *ProxyTunnel, activation proxyActivationSnapshot, mutate func(*protocol.DataStreamHeader)) (net.Conn, error) {
+	return s.openStreamToClientWithHeaderMatching(client, activation.config.Name, tunnel, &activation, mutate)
+}
+
+func (s *Server) openStreamToClientWithHeaderMatching(
+	client *ClientConn,
+	proxyName string,
+	expectedTunnel *ProxyTunnel,
+	activation *proxyActivationSnapshot,
+	mutate func(*protocol.DataStreamHeader),
+) (net.Conn, error) {
 	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
 		return nil, fmt.Errorf("client [%s] is not online", client.ID)
 	}
@@ -234,6 +248,15 @@ func (s *Server) openStreamToClientWithHeader(client *ClientConn, proxyName stri
 	if session == nil || session.IsClosed() {
 		return nil, fmt.Errorf("client [%s] data channel not established", client.ID)
 	}
+	if activation != nil {
+		client.proxyMu.RLock()
+		current := client.proxies[proxyName]
+		activationCurrent := proxyActivationCurrentLocked(current, expectedTunnel, *activation)
+		client.proxyMu.RUnlock()
+		if !activationCurrent {
+			return nil, fmt.Errorf("proxy tunnel %q activation is no longer current", proxyName)
+		}
+	}
 
 	stream, err := session.Open()
 	if err != nil {
@@ -242,12 +265,18 @@ func (s *Server) openStreamToClientWithHeader(client *ClientConn, proxyName stri
 
 	client.proxyMu.Lock()
 	tunnel, ok := client.proxies[proxyName]
-	if ok {
-		ensureTunnelRuntimeRevision(tunnel)
-	}
 	var header protocol.DataStreamHeader
-	if ok {
-		header, err = dataStreamHeaderForServerRelay(client, tunnel, proxyName)
+	var transportPolicy string
+	if ok && activation != nil {
+		ok = proxyActivationCurrentLocked(tunnel, expectedTunnel, *activation)
+		if ok {
+			header, err = dataStreamHeaderForServerRelayConfig(client, activation.config, activation.runtimeRevision, proxyName)
+			transportPolicy = activation.config.TransportPolicy
+		}
+	} else if ok {
+		runtimeRevision := ensureTunnelRuntimeRevision(tunnel)
+		header, err = dataStreamHeaderForServerRelayConfig(client, tunnel.Config, runtimeRevision, proxyName)
+		transportPolicy = tunnel.Config.TransportPolicy
 	}
 	client.proxyMu.Unlock()
 	if err != nil {
@@ -256,9 +285,12 @@ func (s *Server) openStreamToClientWithHeader(client *ClientConn, proxyName stri
 	}
 	if !ok {
 		_ = stream.Close()
+		if activation != nil {
+			return nil, fmt.Errorf("proxy tunnel %q activation is no longer current", proxyName)
+		}
 		return nil, fmt.Errorf("proxy tunnel %q not found", proxyName)
 	}
-	if tunnel.Config.TransportPolicy == protocol.TransportPolicyDirectOnly {
+	if transportPolicy == protocol.TransportPolicyDirectOnly {
 		_ = stream.Close()
 		return nil, fmt.Errorf("direct_only tunnels must not use server relay")
 	}
@@ -274,8 +306,30 @@ func (s *Server) openStreamToClientWithHeader(client *ClientConn, proxyName stri
 	return stream, nil
 }
 
-func dataStreamHeaderForServerRelay(client *ClientConn, tunnel *ProxyTunnel, fallbackName string) (protocol.DataStreamHeader, error) {
-	tunnelID := tunnel.Config.ID
+func proxyActivationCurrentLocked(current, expected *ProxyTunnel, activation proxyActivationSnapshot) bool {
+	if current == nil || expected == nil || current != expected || !isTunnelExposed(current.Config) {
+		return false
+	}
+	if current.Config.ID != activation.config.ID ||
+		current.Config.Name != activation.config.Name ||
+		current.Config.Revision != activation.config.Revision ||
+		current.runtime.Revision != activation.runtimeRevision {
+		return false
+	}
+	if activation.listener != nil && current.Listener != activation.listener {
+		return false
+	}
+	if activation.udpState != nil && current.UDPState != activation.udpState {
+		return false
+	}
+	if activation.done == nil || current.done != activation.done || !proxyActivationDoneOpen(activation.done) {
+		return false
+	}
+	return true
+}
+
+func dataStreamHeaderForServerRelayConfig(client *ClientConn, config protocol.ProxyConfig, runtimeRevision uint64, fallbackName string) (protocol.DataStreamHeader, error) {
+	tunnelID := config.ID
 	if tunnelID == "" {
 		tunnelID = fallbackName
 	}
@@ -286,7 +340,7 @@ func dataStreamHeaderForServerRelay(client *ClientConn, tunnel *ProxyTunnel, fal
 	return protocol.DataStreamHeader{
 		Kind:             protocol.DataStreamHeaderKindTunnelStream,
 		TunnelID:         tunnelID,
-		Revision:         int64(ensureTunnelRuntimeRevision(tunnel)),
+		Revision:         int64(runtimeRevision),
 		StreamID:         streamID,
 		OpenClientID:     client.ID,
 		SourceRole:       protocol.DataStreamRoleServer,

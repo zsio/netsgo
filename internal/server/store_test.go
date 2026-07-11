@@ -1118,6 +1118,77 @@ func TestTunnelStore_UpdateStates(t *testing.T) {
 	}
 }
 
+func TestTunnelStore_TransitionRuntimeStateIfCurrentRequiresExpectedRuntime(t *testing.T) {
+	store := newTestTunnelStore(t)
+	stored := testStoredServerExposeTCPTunnel("runtime-transition-id", "runtime-transition", "client-1", 8080, 18080, time.Now().UTC())
+	stored.Revision = 4
+	stored.RuntimeState = protocol.ProxyRuntimeStatePending
+	stored.ActualTransport = protocol.ActualTransportUnknown
+	mustAddStableTunnel(t, store, stored)
+
+	updated, err := store.TransitionRuntimeStateIfCurrent(
+		stored.OwnerClientID,
+		stored.ID,
+		stored.Revision,
+		protocol.ProxyDesiredStateRunning,
+		protocol.ProxyRuntimeStateOffline,
+		protocol.ProxyRuntimeStateExposed,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("mismatched runtime transition: %v", err)
+	}
+	if updated {
+		t.Fatal("transition should not update when expected runtime state mismatches")
+	}
+
+	updated, err = store.TransitionRuntimeStateIfCurrent(
+		stored.OwnerClientID,
+		stored.ID,
+		stored.Revision,
+		protocol.ProxyDesiredStateRunning,
+		protocol.ProxyRuntimeStatePending,
+		protocol.ProxyRuntimeStateExposed,
+		"",
+	)
+	if err != nil || !updated {
+		t.Fatalf("pending to exposed transition: updated=%v err=%v", updated, err)
+	}
+
+	if _, err := store.UpdateStatesIfCurrent(
+		stored.OwnerClientID,
+		stored.ID,
+		stored.Revision,
+		protocol.ProxyDesiredStateRunning,
+		protocol.ProxyRuntimeStateError,
+		"runtime failed",
+	); err != nil {
+		t.Fatalf("seed runtime error: %v", err)
+	}
+	updated, err = store.TransitionRuntimeStateIfCurrent(
+		stored.OwnerClientID,
+		stored.ID,
+		stored.Revision,
+		protocol.ProxyDesiredStateRunning,
+		protocol.ProxyRuntimeStatePending,
+		protocol.ProxyRuntimeStateExposed,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("late activation transition: %v", err)
+	}
+	if updated {
+		t.Fatal("late activation must not overwrite a same-revision runtime error")
+	}
+	reloaded, err := store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("reload runtime transition tunnel: %v", err)
+	}
+	if reloaded.RuntimeState != protocol.ProxyRuntimeStateError || reloaded.Error != "runtime failed" {
+		t.Fatalf("runtime error was overwritten: %+v", reloaded)
+	}
+}
+
 func TestTunnelStore_UpdateStates_NotFound(t *testing.T) {
 	store := newTestTunnelStore(t)
 	if err := store.UpdateStates("ghost", "no-tunnel", protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, ""); err == nil {

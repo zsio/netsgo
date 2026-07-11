@@ -613,6 +613,48 @@ func (s *TunnelStore) UpdateStatesIfCurrent(clientID, id string, revision int64,
 	return rowsAffected > 0, nil
 }
 
+// TransitionRuntimeStateIfCurrent updates a stable tunnel only when its
+// identity, desired state, and current runtime state still match. It is used
+// for transitions such as pending -> exposed where a concurrent runtime error
+// must win instead of being overwritten by a late activation.
+func (s *TunnelStore) TransitionRuntimeStateIfCurrent(clientID, id string, revision int64, desiredState, expectedRuntimeState, runtimeState, errMsg string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalized := StoredTunnel{ClientID: clientID, Binding: TunnelBindingClientID}
+	setStoredTunnelStates(&normalized, desiredState, runtimeState, errMsg)
+	if err := s.maybeFailSave(); err != nil {
+		return false, err
+	}
+
+	storageRuntimeState := storageRuntimeStateFromProtocol(normalized.RuntimeState)
+	actualTransport := TunnelActualTransportUnknown
+	if storageRuntimeState == "active" {
+		actualTransport = TunnelActualTransportServerRelay
+	}
+	result, err := s.db.Exec(
+		`UPDATE tunnels SET desired_state = ?, runtime_state = ?, error = ?, actual_transport = ?, updated_at = ? WHERE client_id = ? AND id = ? AND revision = ? AND desired_state = ? AND runtime_state = ?`,
+		normalized.DesiredState,
+		storageRuntimeState,
+		normalized.Error,
+		actualTransport,
+		formatTime(time.Now().UTC()),
+		clientID,
+		id,
+		revision,
+		normalized.DesiredState,
+		storageRuntimeStateFromProtocol(expectedRuntimeState),
+	)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rowsAffected > 0, nil
+}
+
 // UpdateTunnel updates the mutable tunnel configuration and persists it.
 func (s *TunnelStore) UpdateTunnel(clientID, name string, localIP string, localPort, remotePort int, domain string, ingressBPS, egressBPS int64) error {
 	s.mu.Lock()
@@ -1084,27 +1126,43 @@ func (s *TunnelStore) GetTunnelsByClientID(clientID string) ([]StoredTunnel, err
 }
 
 func (s *TunnelStore) DeleteTunnelsByClientID(clientID string) error {
+	_, err := s.DeleteTunnelsByClientIDReturningDeleted(clientID)
+	return err
+}
+
+func (s *TunnelStore) DeleteTunnelsByClientIDReturningDeleted(clientID string) ([]StoredTunnel, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if err := s.maybeFailSave(); err != nil {
-		return err
+		return nil, err
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	committed := false
 	defer rollbackUnlessCommitted(tx, &committed)
+	rows, err := tx.Query(`SELECT `+tunnelSelectColumns+` FROM tunnels WHERE client_id = ? OR owner_client_id = ? OR ingress_client_id = ? OR target_client_id = ? ORDER BY created_at DESC, name`, clientID, clientID, clientID, clientID)
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := scanStoredTunnelRows(rows)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := tx.Exec(`DELETE FROM tunnel_resource_locks WHERE tunnel_id IN (
 		SELECT id FROM tunnels WHERE client_id = ? OR owner_client_id = ? OR ingress_client_id = ? OR target_client_id = ?
 	)`, clientID, clientID, clientID, clientID); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := tx.Exec(`DELETE FROM tunnels WHERE client_id = ? OR owner_client_id = ? OR ingress_client_id = ? OR target_client_id = ?`, clientID, clientID, clientID, clientID); err != nil {
-		return err
+		return nil, err
 	}
-	return commitTx(tx, &committed)
+	if err := commitTx(tx, &committed); err != nil {
+		return nil, err
+	}
+	return deleted, nil
 }
 
 // GetTunnelsByHostname returns all tunnels matching the given hostname (for display/query purposes).

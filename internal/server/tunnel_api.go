@@ -131,9 +131,13 @@ func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.store != nil {
-		if err := s.store.DeleteTunnelsByClientID(clientID); err != nil {
+		deletedTunnels, err := s.store.DeleteTunnelsByClientIDReturningDeleted(clientID)
+		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "client_tunnels_delete_failed", err.Error())
 			return
+		}
+		for _, tunnel := range deletedTunnels {
+			s.unifiedRuntime.purgeTunnelIssues(tunnel.ID, tunnel.Revision)
 		}
 	}
 	if s.trafficStore != nil {

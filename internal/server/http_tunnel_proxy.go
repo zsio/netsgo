@@ -70,6 +70,8 @@ func (c *countingConn) Write(b []byte) (int, error) {
 type httpTunnelRoute struct {
 	config      protocol.ProxyConfig
 	client      *ClientConn
+	tunnel      *ProxyTunnel
+	activation  proxyActivationSnapshot
 	sourceCIDRs []*net.IPNet
 }
 
@@ -77,7 +79,8 @@ func (r httpTunnelRoute) serviceable() bool {
 	return r.client != nil &&
 		r.client.isLive() &&
 		clientHasDataSession(r.client) &&
-		isTunnelExposed(r.config)
+		isTunnelExposed(r.config) &&
+		proxyActivationDoneOpen(r.activation.done)
 }
 
 func (s *Server) hostDispatchHandler(management http.Handler) http.Handler {
@@ -217,28 +220,37 @@ func (s *Server) findRuntimeHTTPRoute(host string) (httpTunnelRoute, bool) {
 	var found bool
 
 	s.RangeClients(func(_ string, client *ClientConn) bool {
-		client.RangeProxies(func(_ string, tunnel *ProxyTunnel) bool {
+		client.proxyMu.Lock()
+		candidates := make([]httpTunnelRoute, 0, 1)
+		for _, tunnel := range client.proxies {
 			if tunnel.Config.Type != protocol.ProxyTypeHTTP {
-				return true
+				continue
 			}
 			domain := httpTunnelDomain(tunnel.Config)
 			if canonicalHost(domain) != host {
-				return true
+				continue
 			}
-			config := tunnel.Config
+			activation := proxyActivationSnapshotLocked(tunnel)
+			config := activation.config
 			config.Domain = domain
-			candidate := httpTunnelRoute{
+			candidates = append(candidates, httpTunnelRoute{
 				config:      config,
 				client:      client,
-				sourceCIDRs: sourceCIDRsForTunnel(tunnel),
-			}
+				tunnel:      tunnel,
+				activation:  activation,
+				sourceCIDRs: activation.sourceCIDRs,
+			})
+		}
+		client.proxyMu.Unlock()
+
+		for _, candidate := range candidates {
 			if !candidate.serviceable() {
-				return true
+				continue
 			}
 			route = candidate
 			found = true
-			return false
-		})
+			break
+		}
 		return !found
 	})
 
@@ -329,15 +341,14 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 		DisableCompression:    false,
 		ResponseHeaderTimeout: 0,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			conn, err := s.openStreamToClient(route.client, route.config.Name)
+			conn, err := s.openStreamToClientForActivation(route.client, route.tunnel, route.activation)
 			if err != nil {
 				return nil, err
 			}
-			tunnelRuntime := s.tunnelBandwidthRuntime(route.client, route.config.Name)
 			cc = &countingConn{
 				Conn:         conn,
-				ingressSlots: payloadBudgetSlots(payloadDirectionIngress, route.client.BandwidthRuntime(), tunnelRuntime),
-				egressSlots:  payloadBudgetSlots(payloadDirectionEgress, route.client.BandwidthRuntime(), tunnelRuntime),
+				ingressSlots: payloadBudgetSlots(payloadDirectionIngress, route.client.BandwidthRuntime(), route.activation.limits),
+				egressSlots:  payloadBudgetSlots(payloadDirectionEgress, route.client.BandwidthRuntime(), route.activation.limits),
 			}
 			return cc, nil
 		},

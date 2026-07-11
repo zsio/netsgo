@@ -344,6 +344,11 @@ func TestHandleProxyConnRejectsDisallowedSourceBeforeOpeningStream(t *testing.T)
 			},
 		},
 	}
+	activation := proxyActivationSnapshot{
+		config:      tunnel.Config,
+		sourceCIDRs: mustParseRuntimeCIDRs(t, []string{"203.0.113.0/24"}),
+		limits:      tunnel.limits,
+	}
 
 	accepted := make(chan struct{}, 1)
 	go func() {
@@ -367,7 +372,7 @@ func TestHandleProxyConnRejectsDisallowedSourceBeforeOpeningStream(t *testing.T)
 			s.handleProxyConn(client, tunnel, nil, remoteAddrConn{
 				Conn:   extConn,
 				remote: &net.TCPAddr{IP: net.ParseIP(tc.ip), Port: 40000},
-			})
+			}, activation)
 
 			select {
 			case <-accepted:
@@ -420,6 +425,11 @@ func TestHandleSOCKS5ProxyConnRejectsDisallowedSourceBeforeHandshake(t *testing.
 		sourceCIDRs:        mustParseRuntimeCIDRs(t, []string{"203.0.113.0/24"}),
 		dialTimeoutSeconds: 1,
 	}
+	activation := proxyActivationSnapshot{
+		config:      tunnel.Config,
+		sourceCIDRs: append([]*net.IPNet(nil), listenCfg.sourceCIDRs...),
+		limits:      tunnel.limits,
+	}
 
 	accepted := make(chan struct{}, 1)
 	go func() {
@@ -445,7 +455,7 @@ func TestHandleSOCKS5ProxyConnRejectsDisallowedSourceBeforeHandshake(t *testing.
 				s.handleSOCKS5ProxyConn(client, tunnel, nil, remoteAddrConn{
 					Conn:   extConn,
 					remote: &net.TCPAddr{IP: net.ParseIP(tc.ip), Port: 40000},
-				}, listenCfg)
+				}, listenCfg, activation)
 				close(done)
 			}()
 
@@ -768,6 +778,247 @@ func TestStartProxy_ConcurrentPortConflict(t *testing.T) {
 	s.StopAllProxies(client2)
 }
 
+func TestActivatePreparedHTTPRuntimeReplacesClosedActivationToken(t *testing.T) {
+	s := New(0)
+	_, serverSession := newTestClientRelayDataSession(t)
+	client := &ClientConn{ID: "http-reopen-client", proxies: make(map[string]*ProxyTunnel), dataSession: serverSession}
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:              "http-reopen-id",
+			Name:            "http-reopen",
+			Revision:        2,
+			Type:            protocol.ProxyTypeHTTP,
+			Domain:          "http-reopen.example.com",
+			ClientID:        client.ID,
+			DesiredState:    protocol.ProxyDesiredStateRunning,
+			RuntimeState:    protocol.ProxyRuntimeStateExposed,
+			ActualTransport: protocol.ActualTransportServerRelay,
+		},
+		done: make(chan struct{}),
+	}
+	tunnel.runtime.Revision = 2
+	client.proxies[tunnel.Config.Name] = tunnel
+	closedDone := tunnel.done
+	closeTunnelRuntimeResources(tunnel)
+
+	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
+		t.Fatalf("reactivate HTTP runtime: %v", err)
+	}
+	client.proxyMu.RLock()
+	currentDone := tunnel.done
+	config := tunnel.Config
+	client.proxyMu.RUnlock()
+	if currentDone == closedDone {
+		t.Fatal("HTTP reactivation must replace the closed activation token")
+	}
+	select {
+	case <-currentDone:
+		t.Fatal("HTTP reactivation token should be open")
+	default:
+	}
+	if !isTunnelExposed(config) {
+		t.Fatalf("HTTP reactivation should be exposed: %+v", config)
+	}
+}
+
+func TestActivatePreparedTunnelDoesNotPublishForExpiredGeneration(t *testing.T) {
+	s := New(0)
+	_, serverSession := newTestClientRelayDataSession(t)
+	remotePort := reserveTCPPort(t)
+	client := &ClientConn{
+		ID:          "expired-generation-client",
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  9,
+		state:       clientStateLive,
+	}
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:           "expired-generation-id",
+			Name:         "expired-generation",
+			Revision:     3,
+			Type:         protocol.ProxyTypeTCP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    8080,
+			RemotePort:   remotePort,
+			BindIP:       "127.0.0.1",
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStatePending,
+		},
+		done: make(chan struct{}),
+	}
+	tunnel.runtime.Revision = 3
+	client.proxies[tunnel.Config.Name] = tunnel
+
+	if err := s.activatePreparedTunnel(client, tunnel); err == nil {
+		t.Fatal("expired client generation should prevent runtime publication")
+	}
+	client.proxyMu.RLock()
+	listener := tunnel.Listener
+	runtimeState := tunnel.Config.RuntimeState
+	client.proxyMu.RUnlock()
+	if listener != nil || runtimeState != protocol.ProxyRuntimeStatePending {
+		t.Fatalf("expired generation published runtime: listener=%v state=%s", listener, runtimeState)
+	}
+	probe, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+	if err != nil {
+		t.Fatalf("expired generation leaked listener on port %d: %v", remotePort, err)
+	}
+	_ = probe.Close()
+}
+
+func TestActivatePreparedUDPTunnelDoesNotPublishForExpiredGeneration(t *testing.T) {
+	s := New(0)
+	_, serverSession := newTestClientRelayDataSession(t)
+	remotePort := reserveUDPPort(t)
+	client := &ClientConn{
+		ID:          "expired-udp-client",
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  10,
+		state:       clientStateLive,
+	}
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:           "expired-udp-id",
+			Name:         "expired-udp",
+			Revision:     3,
+			Type:         protocol.ProxyTypeUDP,
+			LocalIP:      "127.0.0.1",
+			LocalPort:    5353,
+			RemotePort:   remotePort,
+			BindIP:       "127.0.0.1",
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStatePending,
+		},
+		done: make(chan struct{}),
+	}
+	tunnel.runtime.Revision = 3
+	client.proxies[tunnel.Config.Name] = tunnel
+
+	if err := s.activatePreparedTunnel(client, tunnel); err == nil {
+		t.Fatal("expired client generation should prevent UDP runtime publication")
+	}
+	client.proxyMu.RLock()
+	state := tunnel.UDPState
+	runtimeState := tunnel.Config.RuntimeState
+	client.proxyMu.RUnlock()
+	if state != nil || runtimeState != protocol.ProxyRuntimeStatePending {
+		t.Fatalf("expired generation published UDP runtime: state=%v runtime=%s", state, runtimeState)
+	}
+	probe, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+	if err != nil {
+		t.Fatalf("expired generation leaked UDP listener on port %d: %v", remotePort, err)
+	}
+	_ = probe.Close()
+}
+
+func TestActivatePreparedSOCKS5TunnelDoesNotPublishForExpiredGeneration(t *testing.T) {
+	s := New(0)
+	_, serverSession := newTestClientRelayDataSession(t)
+	remotePort := reserveTCPPort(t)
+	client := &ClientConn{
+		ID:          "expired-socks5-client",
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  11,
+		state:       clientStateLive,
+	}
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:           "expired-socks5-id",
+			Name:         "expired-socks5",
+			Revision:     4,
+			Type:         protocol.ProxyTypeTCP,
+			RemotePort:   remotePort,
+			BindIP:       "127.0.0.1",
+			ClientID:     client.ID,
+			Topology:     protocol.TunnelTopologyServerExpose,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStatePending,
+			Ingress: &protocol.EndpointSpec{
+				Location: protocol.EndpointLocationServer,
+				Type:     protocol.IngressTypeSOCKS5Listen,
+				Config: mustRawJSON(protocol.SOCKS5ListenConfig{
+					BindIP:             "127.0.0.1",
+					Port:               remotePort,
+					AllowedSourceCIDRs: allowAllSourceCIDRs(),
+					Auth:               protocol.SOCKS5AuthConfig{Type: protocol.SOCKS5AuthTypeNone},
+				}),
+			},
+			Target: &protocol.EndpointSpec{
+				Location: protocol.EndpointLocationClient,
+				ClientID: client.ID,
+				Type:     protocol.TargetTypeSOCKS5ConnectHandler,
+				Config: mustRawJSON(protocol.SOCKS5ConnectHandlerConfig{
+					AllowedTargetCIDRs: []string{"0.0.0.0/0", "::/0"},
+					DialTimeoutSeconds: 5,
+				}),
+			},
+		},
+		done: make(chan struct{}),
+	}
+	tunnel.runtime.Revision = 4
+	client.proxies[tunnel.Config.Name] = tunnel
+
+	if err := s.activatePreparedTunnel(client, tunnel); err == nil {
+		t.Fatal("expired client generation should prevent SOCKS5 runtime publication")
+	}
+	client.proxyMu.RLock()
+	listener := tunnel.Listener
+	runtimeState := tunnel.Config.RuntimeState
+	client.proxyMu.RUnlock()
+	if listener != nil || runtimeState != protocol.ProxyRuntimeStatePending {
+		t.Fatalf("expired generation published SOCKS5 runtime: listener=%v state=%s", listener, runtimeState)
+	}
+	probe, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+	if err != nil {
+		t.Fatalf("expired generation leaked SOCKS5 listener on port %d: %v", remotePort, err)
+	}
+	_ = probe.Close()
+}
+
+func TestActivatePreparedHTTPTunnelDoesNotPublishForExpiredGeneration(t *testing.T) {
+	s := New(0)
+	_, serverSession := newTestClientRelayDataSession(t)
+	client := &ClientConn{
+		ID:          "expired-http-client",
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  12,
+		state:       clientStateLive,
+	}
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:           "expired-http-id",
+			Name:         "expired-http",
+			Revision:     5,
+			Type:         protocol.ProxyTypeHTTP,
+			Domain:       "expired-http.example.com",
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStatePending,
+		},
+		done: make(chan struct{}),
+	}
+	tunnel.runtime.Revision = 5
+	client.proxies[tunnel.Config.Name] = tunnel
+	originalDone := tunnel.done
+
+	if err := s.activatePreparedTunnel(client, tunnel); err == nil {
+		t.Fatal("expired client generation should prevent HTTP runtime publication")
+	}
+	client.proxyMu.RLock()
+	currentDone := tunnel.done
+	runtimeState := tunnel.Config.RuntimeState
+	client.proxyMu.RUnlock()
+	if currentDone != originalDone || runtimeState != protocol.ProxyRuntimeStatePending {
+		t.Fatalf("expired generation published HTTP runtime: token_changed=%v state=%s", currentDone != originalDone, runtimeState)
+	}
+}
+
 type scriptedListener struct {
 	addr      net.Addr
 	acceptCh  chan error
@@ -828,14 +1079,17 @@ func TestProxyAcceptLoop_UnexpectedAcceptFailureMarksTunnelError(t *testing.T) {
 	listener := newScriptedListener(t)
 	tunnel := &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:         "accept-error-tunnel",
-			Type:         protocol.ProxyTypeTCP,
-			LocalIP:      "127.0.0.1",
-			LocalPort:    8080,
-			RemotePort:   listener.addr.(*net.TCPAddr).Port,
-			ClientID:     client.ID,
-			DesiredState: protocol.ProxyDesiredStateRunning,
-			RuntimeState: protocol.ProxyRuntimeStateExposed,
+			ID:            "accept-error-tunnel-id",
+			Name:          "accept-error-tunnel",
+			Revision:      1,
+			Type:          protocol.ProxyTypeTCP,
+			LocalIP:       "127.0.0.1",
+			LocalPort:     8080,
+			RemotePort:    listener.addr.(*net.TCPAddr).Port,
+			ClientID:      client.ID,
+			OwnerClientID: client.ID,
+			DesiredState:  protocol.ProxyDesiredStateRunning,
+			RuntimeState:  protocol.ProxyRuntimeStateExposed,
 			Ingress: &protocol.EndpointSpec{
 				Type: protocol.IngressTypeTCPListen,
 				Config: mustRawJSON(tcpListenConfigAPI{
@@ -853,7 +1107,7 @@ func TestProxyAcceptLoop_UnexpectedAcceptFailureMarksTunnelError(t *testing.T) {
 	mustAddStableTunnel(t, s.store, storedTunnelFromRuntimeForTest(client, tunnel))
 
 	listener.acceptCh <- errors.New("boom")
-	s.proxyAcceptLoop(client, tunnel, listener, tunnel.done)
+	s.proxyAcceptLoop(client, tunnel, listener, tunnel.done, proxyActivationSnapshot{config: tunnel.Config})
 
 	client.proxyMu.RLock()
 	got := client.proxies[tunnel.Config.Name].Config
@@ -895,14 +1149,17 @@ func TestProxyAcceptLoop_ClosedDoneDoesNotMarkTunnelError(t *testing.T) {
 	listener := newScriptedListener(t)
 	tunnel := &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:         "accept-shutdown-tunnel",
-			Type:         protocol.ProxyTypeTCP,
-			LocalIP:      "127.0.0.1",
-			LocalPort:    8080,
-			RemotePort:   listener.addr.(*net.TCPAddr).Port,
-			ClientID:     client.ID,
-			DesiredState: protocol.ProxyDesiredStateRunning,
-			RuntimeState: protocol.ProxyRuntimeStateExposed,
+			ID:            "accept-shutdown-tunnel-id",
+			Name:          "accept-shutdown-tunnel",
+			Revision:      1,
+			Type:          protocol.ProxyTypeTCP,
+			LocalIP:       "127.0.0.1",
+			LocalPort:     8080,
+			RemotePort:    listener.addr.(*net.TCPAddr).Port,
+			ClientID:      client.ID,
+			OwnerClientID: client.ID,
+			DesiredState:  protocol.ProxyDesiredStateRunning,
+			RuntimeState:  protocol.ProxyRuntimeStateExposed,
 		},
 		Listener: listener,
 		done:     make(chan struct{}),
@@ -913,7 +1170,7 @@ func TestProxyAcceptLoop_ClosedDoneDoesNotMarkTunnelError(t *testing.T) {
 
 	close(tunnel.done)
 	listener.acceptCh <- net.ErrClosed
-	s.proxyAcceptLoop(client, tunnel, listener, tunnel.done)
+	s.proxyAcceptLoop(client, tunnel, listener, tunnel.done, proxyActivationSnapshot{config: tunnel.Config})
 
 	client.proxyMu.RLock()
 	got := client.proxies[tunnel.Config.Name].Config
@@ -946,14 +1203,17 @@ func TestMarkTCPProxyRuntimeErrorIfCurrent_StaleListenerDoesNotDemote(t *testing
 	currentListener := newScriptedListener(t)
 	tunnel := &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:         "stale-listener-tunnel",
-			Type:         protocol.ProxyTypeTCP,
-			LocalIP:      "127.0.0.1",
-			LocalPort:    8080,
-			RemotePort:   currentListener.addr.(*net.TCPAddr).Port,
-			ClientID:     client.ID,
-			DesiredState: protocol.ProxyDesiredStateRunning,
-			RuntimeState: protocol.ProxyRuntimeStateExposed,
+			ID:            "stale-listener-tunnel-id",
+			Name:          "stale-listener-tunnel",
+			Revision:      1,
+			Type:          protocol.ProxyTypeTCP,
+			LocalIP:       "127.0.0.1",
+			LocalPort:     8080,
+			RemotePort:    currentListener.addr.(*net.TCPAddr).Port,
+			ClientID:      client.ID,
+			OwnerClientID: client.ID,
+			DesiredState:  protocol.ProxyDesiredStateRunning,
+			RuntimeState:  protocol.ProxyRuntimeStateExposed,
 		},
 		Listener: currentListener,
 		done:     make(chan struct{}),
@@ -962,7 +1222,7 @@ func TestMarkTCPProxyRuntimeErrorIfCurrent_StaleListenerDoesNotDemote(t *testing
 
 	mustAddStableTunnel(t, s.store, storedTunnelFromRuntimeForTest(client, tunnel))
 
-	s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, oldListener, "stale accept failure")
+	s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel.Config.Name, tunnel, oldListener, "stale accept failure")
 
 	client.proxyMu.RLock()
 	got := client.proxies[tunnel.Config.Name].Config
@@ -985,6 +1245,140 @@ func TestMarkTCPProxyRuntimeErrorIfCurrent_StaleListenerDoesNotDemote(t *testing
 	}
 }
 
+func TestMarkTCPProxyRuntimeErrorIfCurrent_StaleRevisionDoesNotDemoteStore(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	client := &ClientConn{ID: "stale-tcp-revision-client", proxies: make(map[string]*ProxyTunnel)}
+	s.clients.Store(client.ID, client)
+
+	listener := newScriptedListener(t)
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:            "stale-tcp-revision-id",
+			Name:          "stale-tcp-revision",
+			Revision:      1,
+			Type:          protocol.ProxyTypeTCP,
+			LocalIP:       "127.0.0.1",
+			LocalPort:     8080,
+			RemotePort:    listener.addr.(*net.TCPAddr).Port,
+			ClientID:      client.ID,
+			OwnerClientID: client.ID,
+			Topology:      protocol.TunnelTopologyServerExpose,
+			DesiredState:  protocol.ProxyDesiredStateRunning,
+			RuntimeState:  protocol.ProxyRuntimeStateExposed,
+		},
+		Listener: listener,
+		done:     make(chan struct{}),
+	}
+	client.proxies[tunnel.Config.Name] = tunnel
+	stored := storedTunnelFromRuntimeForTest(client, tunnel)
+	mustAddStableTunnel(t, s.store, stored)
+
+	next := stored
+	next.Revision++
+	next.RuntimeState = protocol.ProxyRuntimeStateExposed
+	next.UpdatedAt = time.Now().UTC()
+	if err := s.store.ReplaceTunnelByID(client.ID, stored.ID, stored.Revision, next); err != nil {
+		t.Fatalf("advance stored tunnel revision: %v", err)
+	}
+	s.unifiedRuntime.recordServerIssue(next.ID, next.Revision, protocol.TunnelIssue{
+		Code:    "current-revision-issue",
+		Scope:   "server",
+		Message: "keep current issue",
+	})
+
+	s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel.Config.Name, tunnel, listener, "late old listener failure")
+
+	reloaded, err := s.store.GetTunnelByIDE(client.ID, stored.ID)
+	if err != nil {
+		t.Fatalf("reload tunnel: %v", err)
+	}
+	if reloaded.Revision != next.Revision || reloaded.RuntimeState != protocol.ProxyRuntimeStateExposed || reloaded.Error != "" {
+		t.Fatalf("old TCP runtime changed new revision state: %+v", reloaded)
+	}
+	issues := s.unifiedRuntime.issuesForStoredTunnel(reloaded, true)
+	if len(issues) != 1 || issues[0].Code != "current-revision-issue" {
+		t.Fatalf("old TCP runtime changed new revision issues: %+v", issues)
+	}
+}
+
+func TestMarkTCPProxyRuntimeErrorIfCurrent_LegacyCleanupDoesNotDependOnStoreRow(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	clientWS, serverWS := newTestWebSocketPair(t)
+	defer mustClose(t, clientWS)
+	defer mustClose(t, serverWS)
+	client := &ClientConn{ID: "legacy-runtime-error-client", conn: serverWS, proxies: make(map[string]*ProxyTunnel)}
+
+	listener := newScriptedListener(t)
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:           "legacy-runtime-error-id",
+			Name:         "legacy-runtime-error",
+			Revision:     1,
+			Type:         protocol.ProxyTypeTCP,
+			ClientID:     client.ID,
+			DesiredState: protocol.ProxyDesiredStateRunning,
+			RuntimeState: protocol.ProxyRuntimeStateExposed,
+		},
+		Listener: listener,
+		done:     make(chan struct{}),
+	}
+	client.proxies[tunnel.Config.Name] = tunnel
+
+	s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel.Config.Name, tunnel, listener, "legacy listener failed")
+
+	msg := readControlMessageOfType(t, clientWS, protocol.MsgTypeProxyClose)
+	var closeReq protocol.ProxyCloseRequest
+	if err := msg.ParsePayload(&closeReq); err != nil {
+		t.Fatalf("parse legacy proxy close: %v", err)
+	}
+	if closeReq.Name != tunnel.Config.Name || closeReq.Reason != "runtime_error" {
+		t.Fatalf("legacy runtime cleanup mismatch: %+v", closeReq)
+	}
+}
+
+func TestMarkTCPProxyRuntimeErrorIfCurrent_UnprovisionsWhenStoreWriteFails(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	clientWS, serverWS := newTestWebSocketPair(t)
+	defer mustClose(t, clientWS)
+	defer mustClose(t, serverWS)
+	client := &ClientConn{ID: "unified-runtime-error-client", conn: serverWS, proxies: make(map[string]*ProxyTunnel)}
+
+	listener := newScriptedListener(t)
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:            "unified-runtime-error-id",
+			Name:          "unified-runtime-error",
+			Revision:      3,
+			Type:          protocol.ProxyTypeTCP,
+			ClientID:      client.ID,
+			OwnerClientID: client.ID,
+			Topology:      protocol.TunnelTopologyServerExpose,
+			DesiredState:  protocol.ProxyDesiredStateRunning,
+			RuntimeState:  protocol.ProxyRuntimeStateExposed,
+		},
+		Listener: listener,
+		done:     make(chan struct{}),
+	}
+	client.proxies[tunnel.Config.Name] = tunnel
+	mustAddStableTunnel(t, s.store, storedTunnelFromRuntimeForTest(client, tunnel))
+	s.store.failSaveErr = errors.New("injected runtime error save failure")
+	s.store.failSaveCount = 1
+
+	s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel.Config.Name, tunnel, listener, "listener failed")
+
+	msg := readControlMessageOfType(t, clientWS, protocol.MsgTypeTunnelUnprovision)
+	var unprovision protocol.TunnelUnprovisionRequest
+	if err := msg.ParsePayload(&unprovision); err != nil {
+		t.Fatalf("parse unified tunnel unprovision: %v", err)
+	}
+	if unprovision.TunnelID != tunnel.Config.ID || unprovision.Revision != tunnel.Config.Revision || unprovision.Reason != "runtime_error" {
+		t.Fatalf("unified runtime cleanup mismatch: %+v", unprovision)
+	}
+}
+
 func TestHandleProxyConn_OpenStreamFailureMarksTunnelError(t *testing.T) {
 	s := New(0)
 	s.store = newTestTunnelStore(t)
@@ -998,14 +1392,17 @@ func TestHandleProxyConn_OpenStreamFailureMarksTunnelError(t *testing.T) {
 	listener := newScriptedListener(t)
 	tunnel := &ProxyTunnel{
 		Config: protocol.ProxyConfig{
-			Name:         "open-stream-error-tunnel",
-			Type:         protocol.ProxyTypeTCP,
-			LocalIP:      "127.0.0.1",
-			LocalPort:    8080,
-			RemotePort:   listener.addr.(*net.TCPAddr).Port,
-			ClientID:     client.ID,
-			DesiredState: protocol.ProxyDesiredStateRunning,
-			RuntimeState: protocol.ProxyRuntimeStateExposed,
+			ID:            "open-stream-error-tunnel-id",
+			Name:          "open-stream-error-tunnel",
+			Revision:      1,
+			Type:          protocol.ProxyTypeTCP,
+			LocalIP:       "127.0.0.1",
+			LocalPort:     8080,
+			RemotePort:    listener.addr.(*net.TCPAddr).Port,
+			ClientID:      client.ID,
+			OwnerClientID: client.ID,
+			DesiredState:  protocol.ProxyDesiredStateRunning,
+			RuntimeState:  protocol.ProxyRuntimeStateExposed,
 		},
 		Listener: listener,
 		done:     make(chan struct{}),
@@ -1018,11 +1415,16 @@ func TestHandleProxyConn_OpenStreamFailureMarksTunnelError(t *testing.T) {
 	defer mustClose(t, peerConn)
 
 	done := make(chan struct{})
+	activation := proxyActivationSnapshot{
+		config:      tunnel.Config,
+		sourceCIDRs: mustParseRuntimeCIDRs(t, allowAllSourceCIDRs()),
+		limits:      tunnel.limits,
+	}
 	go func() {
 		s.handleProxyConn(client, tunnel, listener, remoteAddrConn{
 			Conn:   extConn,
 			remote: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		})
+		}, activation)
 		close(done)
 	}()
 

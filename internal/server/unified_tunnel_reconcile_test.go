@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -107,6 +108,58 @@ func TestScheduleUnifiedTunnelReconcileAfterShutdownDoesNotMutateState(t *testin
 		}
 	}
 	t.Fatal("scheduleUnifiedTunnelReconcile does not start a reconcile goroutine")
+}
+
+func TestUnifiedMutationEventsPublishBeforeSchedulingReconcile(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "unified_tunnel_api.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse unified_tunnel_api.go: %v", err)
+	}
+	tests := []struct {
+		function string
+		emitCall string
+	}{
+		{function: "createUnifiedStoredTunnel", emitCall: "emitTunnelChangedIfStored"},
+		{function: "updateUnifiedStoredTunnel", emitCall: "emitTunnelChangedIfStored"},
+		{function: "migrateUnifiedStoredTunnel", emitCall: "emitMigratedTunnelOwnerEvents"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.function, func(t *testing.T) {
+			fn := findFuncDecl(file, tc.function)
+			if fn == nil || fn.Body == nil {
+				t.Fatalf("function %s not found", tc.function)
+			}
+			emitPos := firstSelectorCallPosition(fn.Body, tc.emitCall)
+			schedulePos := firstSelectorCallPosition(fn.Body, "scheduleUnifiedTunnelReconcile")
+			if emitPos == token.NoPos || schedulePos == token.NoPos {
+				t.Fatalf("missing event/schedule calls: emit=%v schedule=%v", emitPos, schedulePos)
+			}
+			if emitPos > schedulePos {
+				t.Fatalf("%s must publish %s before scheduling reconcile", tc.function, tc.emitCall)
+			}
+		})
+	}
+}
+
+func firstSelectorCallPosition(node ast.Node, name string) token.Pos {
+	position := token.NoPos
+	ast.Inspect(node, func(node ast.Node) bool {
+		if position != token.NoPos {
+			return false
+		}
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if ok && selector.Sel.Name == name {
+			position = call.Pos()
+			return false
+		}
+		return true
+	})
+	return position
 }
 
 func findFuncDecl(file *ast.File, name string) *ast.FuncDecl {
@@ -782,7 +835,7 @@ func TestLegacyFlatHTTPRecordReconcileIssueUsesNormalizedEndpointType(t *testing
 	}
 }
 
-func TestUnifiedServerExposeReconcileRejectsStaleProvisionAckAfterRevisionAdvance(t *testing.T) {
+func TestUnifiedServerExposeReconcilePreservesNewRuntimeAfterLateRevisionAdvance(t *testing.T) {
 	s := New(0)
 	s.store = newTestTunnelStore(t)
 
@@ -857,6 +910,31 @@ func TestUnifiedServerExposeReconcileRejectsStaleProvisionAckAfterRevisionAdvanc
 
 	eventsCh := s.events.Subscribe()
 	defer s.events.Unsubscribe(eventsCh)
+	next := stored
+	next.Revision = stored.Revision + 1
+	next.RuntimeState = protocol.ProxyRuntimeStateOffline
+	next.Target.Config = mustRawJSON(serviceConfigAPI{IP: "127.0.0.1", Port: 65023})
+	next.LocalPort = 65023
+	next.UpdatedAt = time.Now().UTC()
+	replacement := &ProxyTunnel{
+		Config: storedTunnelToProxyConfig(next),
+		limits: newDirectionalBandwidthRuntime(next.BandwidthSettings, realBandwidthClock{}),
+		done:   make(chan struct{}),
+	}
+	initializeTunnelRuntimeFromState(replacement, target.ID, time.Now())
+	hookErrCh := make(chan error, 1)
+	var hookOnce sync.Once
+	s.serverExposeActivatedHook = func(_ StoredTunnel, _ *ProxyTunnel) {
+		hookOnce.Do(func() {
+			if err := s.store.ReplaceTunnelByID(stored.OwnerClientID, stored.ID, stored.Revision, next); err != nil {
+				hookErrCh <- fmt.Errorf("advance stored tunnel revision after old activation: %w", err)
+				return
+			}
+			target.proxyMu.Lock()
+			target.proxies[stored.Name] = replacement
+			target.proxyMu.Unlock()
+		})
+	}
 
 	restoreDone := make(chan error, 1)
 	go func() {
@@ -871,16 +949,6 @@ func TestUnifiedServerExposeReconcileRejectsStaleProvisionAckAfterRevisionAdvanc
 	}
 	if provision.TunnelID != stored.ID || provision.Revision != stored.Revision || provision.Role != protocol.DataStreamRoleTarget {
 		t.Fatalf("provision identity mismatch: %+v", provision)
-	}
-
-	next := stored
-	next.Revision = stored.Revision + 1
-	next.RuntimeState = protocol.ProxyRuntimeStateOffline
-	next.Target.Config = mustRawJSON(serviceConfigAPI{IP: "127.0.0.1", Port: 65023})
-	next.LocalPort = 65023
-	next.UpdatedAt = time.Now().UTC()
-	if err := s.store.ReplaceTunnelByID(stored.OwnerClientID, stored.ID, stored.Revision, next); err != nil {
-		t.Fatalf("advance stored tunnel revision while old provision is pending: %v", err)
 	}
 
 	if err := reservedListener.Close(); err != nil {
@@ -903,19 +971,29 @@ func TestUnifiedServerExposeReconcileRejectsStaleProvisionAckAfterRevisionAdvanc
 
 	select {
 	case err := <-restoreDone:
-		if err == nil {
-			t.Fatal("stale provision ack for superseded stored revision must not activate server-expose runtime")
+		if !errors.Is(err, errTunnelProvisionAckCancelled) {
+			t.Fatalf("late old restore should be cancelled, got %v", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for stale restore to finish")
 	}
-
-	if name, tunnel, exists := findTunnelBySelector(target, stored.ID); exists {
-		config, runtimeHeld, stillExists := serverExposeTunnelSnapshot(target, name, tunnel)
-		if stillExists && (runtimeHeld || config.RuntimeState == protocol.ProxyRuntimeStateExposed) {
-			t.Fatalf("stale revision left active runtime: name=%s runtime_state=%s revision=%d", name, config.RuntimeState, config.Revision)
-		}
+	select {
+	case err := <-hookErrCh:
+		t.Fatal(err)
+	default:
 	}
+
+	target.proxyMu.RLock()
+	currentRuntime := target.proxies[stored.Name]
+	target.proxyMu.RUnlock()
+	if currentRuntime != replacement {
+		t.Fatal("late old restore must not delete or replace the new revision runtime")
+	}
+	probe, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(remotePort)))
+	if err != nil {
+		t.Fatalf("late old restore must release its listener: %v", err)
+	}
+	_ = probe.Close()
 	got, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
 	if err != nil {
 		t.Fatalf("load stored tunnel after stale ack: %v", err)
@@ -923,23 +1001,12 @@ func TestUnifiedServerExposeReconcileRejectsStaleProvisionAckAfterRevisionAdvanc
 	if got.Revision != next.Revision {
 		t.Fatalf("stale ack must not roll back stored revision: got %d want %d", got.Revision, next.Revision)
 	}
-	if got.RuntimeState != protocol.ProxyRuntimeStateError {
-		t.Fatalf("stale provision ack should persist runtime error, got %s", got.RuntimeState)
+	if got.RuntimeState != protocol.ProxyRuntimeStateOffline {
+		t.Fatalf("late old restore must preserve new revision runtime state, got %s", got.RuntimeState)
 	}
 	spec := specFromStoredTunnel(got, s)
-	if len(spec.Issues) == 0 {
-		t.Fatalf("stale provision ack must record a reconcile issue; got none on tunnel %s", got.ID)
-	}
-	issue := spec.Issues[len(spec.Issues)-1]
-	switch issue.Code {
-	case protocol.TunnelIssueCodeProvisionAckRejected,
-		protocol.TunnelIssueCodeProvisionAckCancelled,
-		protocol.TunnelIssueCodeProvisionAckTimeout:
-	default:
-		t.Fatalf("stale provision ack issue code should be one of the ack-failure codes, got %q", issue.Code)
-	}
-	if issue.ClientID != stored.Target.ClientID {
-		t.Fatalf("stale provision ack issue client_id mismatch: got %q want %q", issue.ClientID, stored.Target.ClientID)
+	if len(spec.Issues) != 0 {
+		t.Fatalf("late old restore must not project an issue onto the new revision: %+v", spec.Issues)
 	}
 }
 
@@ -1018,7 +1085,7 @@ func TestUnifiedServerExposeRejectedProvisionLeavesNoListenerOrAckWaiter(t *test
 
 	restoreDone := make(chan error, 1)
 	go func() {
-		restoreDone <- s.restoreUnifiedServerExposeTunnel(target, stored)
+		restoreDone <- s.reconcileServerExposeTunnel(stored)
 	}()
 
 	msg := readControlMessageOfType(t, targetWS, protocol.MsgTypeTunnelProvision)
@@ -1085,6 +1152,298 @@ func TestUnifiedServerExposeRejectedProvisionLeavesNoListenerOrAckWaiter(t *test
 	spec := specFromStoredTunnel(got, s)
 	if len(spec.Issues) != 1 || spec.Issues[0].Code != protocol.TunnelIssueCodeProvisionAckRejected || spec.Issues[0].ClientID != stored.Target.ClientID {
 		t.Fatalf("rejected provision issue mismatch: %+v", spec.Issues)
+	}
+
+	retryDone := make(chan error, 1)
+	go func() {
+		current, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+		if err != nil {
+			retryDone <- err
+			return
+		}
+		retryDone <- s.reconcileServerExposeTunnel(current)
+	}()
+
+	retryMsg := readControlMessageOfType(t, targetWS, protocol.MsgTypeTunnelProvision)
+	var retryProvision protocol.TunnelProvisionRequest
+	if err := retryMsg.ParsePayload(&retryProvision); err != nil {
+		t.Fatalf("parse retry provision payload: %v", err)
+	}
+	if retryProvision.TunnelID != stored.ID || retryProvision.Revision != stored.Revision {
+		t.Fatalf("retry provision identity mismatch: %+v", retryProvision)
+	}
+	retryAck, err := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
+		TunnelID: retryProvision.TunnelID,
+		Revision: retryProvision.Revision,
+		Role:     retryProvision.Role,
+		Accepted: true,
+	})
+	if err != nil {
+		t.Fatalf("build retry provision ack: %v", err)
+	}
+	if err := targetWS.WriteJSON(retryAck); err != nil {
+		t.Fatalf("write retry provision ack: %v", err)
+	}
+	select {
+	case err := <-retryDone:
+		if err != nil {
+			t.Fatalf("error placeholder should be replaceable on retry: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for rejected provision retry")
+	}
+
+	retried, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("load stored tunnel after retry: %v", err)
+	}
+	if retried.RuntimeState != protocol.ProxyRuntimeStateExposed {
+		t.Fatalf("retry should expose tunnel, got %s", retried.RuntimeState)
+	}
+	if issues := specFromStoredTunnel(retried, s).Issues; len(issues) != 0 {
+		t.Fatalf("successful retry should clear rejected provision issue: %+v", issues)
+	}
+}
+
+func TestUnifiedServerExposeRuntimeErrorWinsActivationTransition(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	stored := testStoredServerExposeTCPTunnel(
+		"activation-error-id",
+		"activation-error",
+		"activation-error-client",
+		65022,
+		reserveTCPPort(t),
+		time.Now().UTC(),
+	)
+	stored.Revision = 6
+	stored.RuntimeState = protocol.ProxyRuntimeStateOffline
+	stored.ActualTransport = protocol.ActualTransportUnknown
+	mustAddStableTunnel(t, s.store, stored)
+
+	clientWS, serverWS := newTestWebSocketPair(t)
+	defer mustClose(t, clientWS)
+	defer mustClose(t, serverWS)
+	_, serverSession := newTestClientRelayDataSession(t)
+	caps := protocol.DefaultClientCapabilities()
+	client := &ClientConn{
+		ID:          stored.OwnerClientID,
+		Info:        protocol.ClientInfo{Hostname: stored.OwnerClientID, Capabilities: &caps},
+		conn:        serverWS,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(client.ID, client)
+	go s.controlLoop(client)
+
+	runtimeErrorDone := make(chan struct{})
+	s.serverExposeActivatedHook = func(_ StoredTunnel, tunnel *ProxyTunnel) {
+		client.proxyMu.RLock()
+		listener := tunnel.Listener
+		proxyName := tunnel.Config.Name
+		client.proxyMu.RUnlock()
+		go func() {
+			s.markTCPProxyRuntimeErrorIfCurrent(client, proxyName, tunnel, listener, "injected activation failure")
+			close(runtimeErrorDone)
+		}()
+	}
+
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- s.reconcileServerExposeTunnel(stored)
+	}()
+	msg := readControlMessageOfType(t, clientWS, protocol.MsgTypeTunnelProvision)
+	var provision protocol.TunnelProvisionRequest
+	if err := msg.ParsePayload(&provision); err != nil {
+		t.Fatalf("parse activation provision: %v", err)
+	}
+	ack, err := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
+		TunnelID: provision.TunnelID,
+		Revision: provision.Revision,
+		Role:     provision.Role,
+		Accepted: true,
+	})
+	if err != nil {
+		t.Fatalf("build activation ack: %v", err)
+	}
+	if err := clientWS.WriteJSON(ack); err != nil {
+		t.Fatalf("write activation ack: %v", err)
+	}
+
+	select {
+	case err := <-reconcileDone:
+		if err != nil {
+			t.Fatalf("activation should finish before serialized runtime error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for activation")
+	}
+	select {
+	case <-runtimeErrorDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for serialized runtime error")
+	}
+
+	got, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("load tunnel after activation error: %v", err)
+	}
+	if got.RuntimeState != protocol.ProxyRuntimeStateError || got.Error != "injected activation failure" {
+		t.Fatalf("runtime error must remain final: state=%s error=%q", got.RuntimeState, got.Error)
+	}
+	name, tunnel, exists := findTunnelBySelector(client, stored.ID)
+	if !exists {
+		t.Fatal("runtime error should retain an exact retry placeholder")
+	}
+	config, runtimeHeld, stillExists := serverExposeTunnelSnapshot(client, name, tunnel)
+	if !stillExists || runtimeHeld || config.RuntimeState != protocol.ProxyRuntimeStateError {
+		t.Fatalf("runtime error placeholder mismatch: config=%+v held=%v exists=%v", config, runtimeHeld, stillExists)
+	}
+	issues := specFromStoredTunnel(got, s).Issues
+	if len(issues) != 1 || issues[0].Message != "injected activation failure" {
+		t.Fatalf("activation runtime issue should remain visible: %+v", issues)
+	}
+}
+
+func TestUnifiedServerExposeRetryWaitsForRuntimeErrorCleanup(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	listener := newScriptedListener(t)
+	stored := testStoredServerExposeTCPTunnel(
+		"runtime-cleanup-order-id",
+		"runtime-cleanup-order",
+		"runtime-cleanup-client",
+		65022,
+		listener.addr.(*net.TCPAddr).Port,
+		time.Now().UTC(),
+	)
+	stored.Revision = 7
+	mustAddStableTunnel(t, s.store, stored)
+
+	clientWS, serverWS := newTestWebSocketPair(t)
+	defer mustClose(t, clientWS)
+	defer mustClose(t, serverWS)
+	_, serverSession := newTestClientRelayDataSession(t)
+	caps := protocol.DefaultClientCapabilities()
+	client := &ClientConn{
+		ID:          stored.OwnerClientID,
+		Info:        protocol.ClientInfo{Hostname: stored.OwnerClientID, Capabilities: &caps},
+		conn:        serverWS,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(client.ID, client)
+	go s.controlLoop(client)
+	tunnel := &ProxyTunnel{
+		Config:   storedTunnelToProxyConfig(stored),
+		Listener: listener,
+		limits:   newDirectionalBandwidthRuntime(stored.BandwidthSettings, realBandwidthClock{}),
+		done:     make(chan struct{}),
+	}
+	tunnel.runtime.Revision = uint64(stored.Revision)
+	initializeTunnelRuntimeFromState(tunnel, client.ID, time.Now())
+	client.proxies[stored.Name] = tunnel
+	t.Cleanup(func() {
+		if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
+			_ = s.CloseProxyRuntime(client, name)
+		}
+	})
+
+	cleanupEntered := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	s.runtimeErrorCleanupHook = func(config protocol.ProxyConfig) {
+		if config.ID != stored.ID {
+			return
+		}
+		close(cleanupEntered)
+		<-releaseCleanup
+	}
+	markDone := make(chan struct{})
+	go func() {
+		s.markTCPProxyRuntimeErrorIfCurrent(client, stored.Name, tunnel, listener, "ordered runtime failure")
+		close(markDone)
+	}()
+	select {
+	case <-cleanupEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime cleanup barrier")
+	}
+
+	current, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("load error state before retry: %v", err)
+	}
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- s.reconcileServerExposeTunnel(current)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.tunnelRuntimeOps.mu.Lock()
+		entry := s.tunnelRuntimeOps.entries[tunnelRuntimeOperationKey(stored.ID, stored.OwnerClientID, stored.Name)]
+		refs := 0
+		if entry != nil {
+			refs = entry.refs
+		}
+		s.tunnelRuntimeOps.mu.Unlock()
+		if refs >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retry did not wait on runtime cleanup operation")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	client.proxyMu.RLock()
+	stillOldRuntime := client.proxies[stored.Name] == tunnel
+	client.proxyMu.RUnlock()
+	if !stillOldRuntime {
+		t.Fatal("retry replaced runtime before old revision cleanup completed")
+	}
+
+	close(releaseCleanup)
+	select {
+	case <-markDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime cleanup")
+	}
+	unprovisionMsg := readControlMessageOfType(t, clientWS, protocol.MsgTypeTunnelUnprovision)
+	var unprovision protocol.TunnelUnprovisionRequest
+	if err := unprovisionMsg.ParsePayload(&unprovision); err != nil {
+		t.Fatalf("parse ordered unprovision: %v", err)
+	}
+	if unprovision.TunnelID != stored.ID || unprovision.Revision != stored.Revision {
+		t.Fatalf("ordered unprovision identity mismatch: %+v", unprovision)
+	}
+
+	provisionMsg := readControlMessageOfType(t, clientWS, protocol.MsgTypeTunnelProvision)
+	var provision protocol.TunnelProvisionRequest
+	if err := provisionMsg.ParsePayload(&provision); err != nil {
+		t.Fatalf("parse ordered retry provision: %v", err)
+	}
+	ack, err := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
+		TunnelID: provision.TunnelID,
+		Revision: provision.Revision,
+		Role:     provision.Role,
+		Accepted: true,
+	})
+	if err != nil {
+		t.Fatalf("build ordered retry ack: %v", err)
+	}
+	if err := clientWS.WriteJSON(ack); err != nil {
+		t.Fatalf("write ordered retry ack: %v", err)
+	}
+	select {
+	case err := <-reconcileDone:
+		if err != nil {
+			t.Fatalf("retry after ordered cleanup: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for retry after runtime cleanup")
 	}
 }
 
@@ -1340,6 +1699,167 @@ func TestUnifiedServerExposeCapabilityLossCleansListenerAndProjectsIssue(t *test
 	}
 }
 
+func TestUnifiedServerExposeHTTPCapabilityRecoveryReactivatesClosedRuntime(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	stored := StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{
+			ID:        "http-capability-recovery-id",
+			Name:      "http-capability-recovery",
+			Type:      protocol.ProxyTypeHTTP,
+			LocalIP:   "127.0.0.1",
+			LocalPort: 65022,
+			Domain:    "http-capability-recovery.example.com",
+		},
+		ClientID:        "http-capability-client",
+		OwnerClientID:   "http-capability-client",
+		Binding:         TunnelBindingClientID,
+		Revision:        5,
+		Topology:        TunnelTopologyServerExpose,
+		DesiredState:    protocol.ProxyDesiredStateRunning,
+		RuntimeState:    protocol.ProxyRuntimeStateExposed,
+		TransportPolicy: protocol.TransportPolicyServerRelayOnly,
+		ActualTransport: protocol.ActualTransportServerRelay,
+		P2P:             P2PState{State: TunnelP2PStateIdle},
+		Ingress: EndpointSpec{
+			Location: protocol.EndpointLocationServer,
+			Type:     protocol.IngressTypeHTTPHost,
+			Config: mustRawJSON(httpHostConfigAPI{
+				Domain:             "http-capability-recovery.example.com",
+				AllowedSourceCIDRs: allowAllSourceCIDRs(),
+			}),
+		},
+		Target: EndpointSpec{
+			Location: protocol.EndpointLocationClient,
+			ClientID: "http-capability-client",
+			Type:     protocol.TargetTypeTCPService,
+			Config:   mustRawJSON(serviceConfigAPI{IP: "127.0.0.1", Port: 65022}),
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := stored.normalize(); err != nil {
+		t.Fatalf("normalize HTTP capability tunnel: %v", err)
+	}
+	mustAddStableTunnel(t, s.store, stored)
+
+	clientWS, serverWS := newTestWebSocketPair(t)
+	defer mustClose(t, clientWS)
+	defer mustClose(t, serverWS)
+	clientSession, serverSession := newTestClientRelayDataSession(t)
+	caps := protocol.DefaultClientCapabilities()
+	target := &ClientConn{
+		ID:          stored.OwnerClientID,
+		Info:        protocol.ClientInfo{Hostname: stored.OwnerClientID, Capabilities: &caps},
+		conn:        serverWS,
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(target.ID, target)
+	go s.controlLoop(target)
+	tunnel := &ProxyTunnel{
+		Config: storedTunnelToProxyConfig(stored),
+		limits: newDirectionalBandwidthRuntime(stored.BandwidthSettings, realBandwidthClock{}),
+		done:   make(chan struct{}),
+	}
+	tunnel.runtime.Revision = uint64(stored.Revision)
+	initializeTunnelRuntimeFromState(tunnel, target.ID, time.Now())
+	target.proxies[stored.Name] = tunnel
+	t.Cleanup(func() {
+		if name, _, exists := findTunnelBySelector(target, stored.ID); exists {
+			_ = s.CloseProxyRuntime(target, name)
+		}
+	})
+
+	noCaps := protocol.ClientCapabilities{}
+	target.SetInfo(protocol.ClientInfo{Hostname: stored.OwnerClientID, Capabilities: &noCaps})
+	if err := s.reconcileServerExposeTunnel(stored); err != nil {
+		t.Fatalf("HTTP capability loss reconcile: %v", err)
+	}
+	if _, held, exists := serverExposeTunnelSnapshot(target, stored.Name, tunnel); !exists || held {
+		t.Fatalf("closed HTTP activation should not be held: exists=%v held=%v", exists, held)
+	}
+
+	target.SetInfo(protocol.ClientInfo{Hostname: stored.OwnerClientID, Capabilities: &caps})
+	current, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID)
+	if err != nil {
+		t.Fatalf("load HTTP capability error state: %v", err)
+	}
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- s.reconcileServerExposeTunnel(current)
+	}()
+	provisionMsg := readControlMessageOfType(t, clientWS, protocol.MsgTypeTunnelProvision)
+	var provision protocol.TunnelProvisionRequest
+	if err := provisionMsg.ParsePayload(&provision); err != nil {
+		t.Fatalf("parse HTTP recovery provision: %v", err)
+	}
+	ack, err := protocol.NewMessage(protocol.MsgTypeTunnelProvisionAck, protocol.TunnelProvisionAck{
+		TunnelID: provision.TunnelID,
+		Revision: provision.Revision,
+		Role:     provision.Role,
+		Accepted: true,
+	})
+	if err != nil {
+		t.Fatalf("build HTTP recovery ack: %v", err)
+	}
+	if err := clientWS.WriteJSON(ack); err != nil {
+		t.Fatalf("write HTTP recovery ack: %v", err)
+	}
+	select {
+	case err := <-reconcileDone:
+		if err != nil {
+			t.Fatalf("HTTP capability recovery reconcile: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for HTTP capability recovery")
+	}
+
+	name, activeTunnel, exists := findTunnelBySelector(target, stored.ID)
+	if !exists {
+		t.Fatal("HTTP capability recovery did not create a runtime")
+	}
+	target.proxyMu.Lock()
+	activation := proxyActivationSnapshotLocked(activeTunnel)
+	target.proxyMu.Unlock()
+	if _, held, stillExists := serverExposeTunnelSnapshot(target, name, activeTunnel); !stillExists || !held {
+		t.Fatalf("HTTP capability recovery runtime mismatch: exists=%v held=%v", stillExists, held)
+	}
+
+	type openResult struct {
+		stream net.Conn
+		err    error
+	}
+	openDone := make(chan openResult, 1)
+	go func() {
+		stream, err := s.openStreamToClientForActivation(target, activeTunnel, activation)
+		openDone <- openResult{stream: stream, err: err}
+	}()
+	clientStream, err := clientSession.Accept()
+	if err != nil {
+		t.Fatalf("accept HTTP recovery stream: %v", err)
+	}
+	defer mustClose(t, clientStream)
+	header, err := protocol.DecodeDataStreamHeader(clientStream)
+	if err != nil {
+		t.Fatalf("decode HTTP recovery stream header: %v", err)
+	}
+	if header.TunnelID != stored.ID || header.Revision != stored.Revision {
+		t.Fatalf("HTTP recovery stream identity mismatch: %+v", header)
+	}
+	select {
+	case result := <-openDone:
+		if result.err != nil || result.stream == nil {
+			t.Fatalf("open HTTP recovery stream: stream=%v err=%v", result.stream, result.err)
+		}
+		_ = result.stream.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out opening HTTP recovery stream")
+	}
+}
+
 func TestUnifiedServerExposeSOCKS5DataHeaderCarriesDynamicTarget(t *testing.T) {
 	s := New(0)
 	s.store = newTestTunnelStore(t)
@@ -1404,6 +1924,7 @@ func TestUnifiedServerExposeSOCKS5DataHeaderCarriesDynamicTarget(t *testing.T) {
 	tunnel.runtime.Revision = uint64(stored.Revision)
 	initializeTunnelRuntimeFromState(tunnel, target.ID, time.Now())
 	target.proxies[stored.Name] = tunnel
+	activation := proxyActivationSnapshotLocked(tunnel)
 
 	request := socks5wire.ConnectRequest{
 		Host:         "example.com",
@@ -1417,7 +1938,7 @@ func TestUnifiedServerExposeSOCKS5DataHeaderCarriesDynamicTarget(t *testing.T) {
 	}
 	openCh := make(chan openResult, 1)
 	go func() {
-		stream, err := s.openSOCKS5StreamToClient(target, tunnel, request)
+		stream, err := s.openSOCKS5StreamToClient(target, tunnel, activation, request)
 		openCh <- openResult{stream: stream, err: err}
 	}()
 

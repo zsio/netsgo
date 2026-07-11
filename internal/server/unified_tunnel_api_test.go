@@ -190,6 +190,29 @@ func acceptPreflight(t *testing.T, conn interface {
 	return req
 }
 
+func waitForPendingPreflight(t *testing.T, s *Server, clientID string) {
+	t.Helper()
+	deadline := time.Now().Add(testReadTimeout(15 * time.Second))
+	for {
+		s.tunnels.pendingPreflightMu.Lock()
+		found := false
+		for key := range s.tunnels.pendingPreflights {
+			if key.clientID == clientID {
+				found = true
+				break
+			}
+		}
+		s.tunnels.pendingPreflightMu.Unlock()
+		if found {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for client %s preflight waiter", clientID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func rejectPreflight(t *testing.T, conn interface {
 	SetReadDeadline(time.Time) error
 	ReadJSON(any) error
@@ -1914,13 +1937,14 @@ func TestAPI_UnifiedTunnelMigrateRejectsMalformedJSONEmptyTargetAndInvalidRevisi
 			resp := doMuxRequest(t, handler, http.MethodPost, "/api/tunnels/"+created.ID+"/migrate", token, tc.body)
 
 			// Then
-			if tc.wantCode == "invalid_request_body" {
+			switch tc.wantCode {
+			case "invalid_request_body":
 				if resp.Code != tc.wantStatus {
 					t.Fatalf("%s: want %d, got %d body=%s", tc.name, tc.wantStatus, resp.Code, resp.Body.String())
 				}
-			} else if tc.wantCode == protocol.TunnelMutationErrorCodeRevisionConflict {
+			case protocol.TunnelMutationErrorCodeRevisionConflict:
 				assertMigrateRevisionConflictResponse(t, resp, tc.wantStatus, created.Revision)
-			} else {
+			default:
 				assertMigrateErrorResponse(t, resp, tc.wantStatus, tc.wantCode, tc.wantField)
 			}
 			assertMigrateRejectDidNotMutate(t, s, before, currentTarget.ID, "missing-target")
@@ -3485,7 +3509,7 @@ func TestAPI_UnifiedTunnelProjectsRuntimeReportIssuesFromMemory(t *testing.T) {
 	caps := protocol.DefaultClientCapabilities()
 	s.clients.Store(target.ID, &ClientConn{ID: target.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: targetSession})
 	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: ingressSession})
-	s.unifiedRuntime.clearServerIssues(stored.ID)
+	s.unifiedRuntime.clearServerIssues(stored.ID, stored.Revision)
 	s.unifiedRuntime.recordReport(ingress.ID, protocol.TunnelRuntimeReport{
 		TunnelID: stored.ID,
 		Revision: stored.Revision,
@@ -3985,6 +4009,7 @@ func TestAPI_UnifiedTunnelSOCKS5ClientIngressPreflightUsesMinimalConfig(t *testi
 		"transport_policy":"server_relay_only"
 	}`, ingressAuth.ClientID, port, secret, targetAuth.ClientID))
 	respCh := doMuxRequestAsync(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, create)
+	waitForPendingPreflight(t, s, ingressAuth.ClientID)
 	preflightReq := acceptPreflight(t, ingressConn)
 	if preflightReq.Ingress.Type != protocol.IngressTypeSOCKS5Listen {
 		t.Fatalf("SOCKS5 preflight type mismatch: %+v", preflightReq.Ingress)
@@ -4882,7 +4907,7 @@ func TestUnifiedRuntimeReportIgnoresNonServerRelayTransport(t *testing.T) {
 	caps := protocol.DefaultClientCapabilities()
 	s.clients.Store(target.ID, &ClientConn{ID: target.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: targetSession})
 	s.clients.Store(ingress.ID, &ClientConn{ID: ingress.ID, Info: protocol.ClientInfo{Capabilities: &caps}, state: clientStateLive, dataSession: ingressSession})
-	s.unifiedRuntime.clearServerIssues(stored.ID)
+	s.unifiedRuntime.clearServerIssues(stored.ID, stored.Revision)
 	s.unifiedRuntime.recordReport(ingress.ID, protocol.TunnelRuntimeReport{
 		TunnelID: stored.ID,
 		Revision: stored.Revision,

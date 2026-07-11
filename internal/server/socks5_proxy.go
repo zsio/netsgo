@@ -54,15 +54,15 @@ func decodeSOCKS5ServerListenRuntimeConfigFromSpec(raw []byte, targetRaw []byte)
 	return socks5ServerListenRuntimeConfig{config: cfg, sourceCIDRs: cidrs, dialTimeoutSeconds: dialTimeoutSeconds}, nil
 }
 
-func (s *Server) activatePreparedSOCKS5ServerExposeTunnel(client *ClientConn, tunnel *ProxyTunnel) error {
-	if tunnel.Config.Ingress == nil {
-		return fmt.Errorf("SOCKS5 tunnel %q missing ingress endpoint config", tunnel.Config.Name)
+func (s *Server) activatePreparedSOCKS5ServerExposeTunnel(client *ClientConn, tunnel *ProxyTunnel, config protocol.ProxyConfig) error {
+	if config.Ingress == nil {
+		return fmt.Errorf("SOCKS5 tunnel %q missing ingress endpoint config", config.Name)
 	}
 	var targetConfig []byte
-	if tunnel.Config.Target != nil {
-		targetConfig = tunnel.Config.Target.Config
+	if config.Target != nil {
+		targetConfig = config.Target.Config
 	}
-	listenCfg, err := decodeSOCKS5ServerListenRuntimeConfigFromSpec(tunnel.Config.Ingress.Config, targetConfig)
+	listenCfg, err := decodeSOCKS5ServerListenRuntimeConfigFromSpec(config.Ingress.Config, targetConfig)
 	if err != nil {
 		return fmt.Errorf("decode SOCKS5 ingress config: %w", err)
 	}
@@ -74,29 +74,35 @@ func (s *Server) activatePreparedSOCKS5ServerExposeTunnel(client *ClientConn, tu
 	actualPort := ln.Addr().(*net.TCPAddr).Port
 
 	client.proxyMu.Lock()
-	current, exists := client.proxies[tunnel.Config.Name]
+	current, exists := client.proxies[config.Name]
 	if !exists || current != tunnel {
 		client.proxyMu.Unlock()
 		_ = ln.Close()
-		return fmt.Errorf("proxy tunnel %q not found", tunnel.Config.Name)
+		return fmt.Errorf("proxy tunnel %q not found", config.Name)
 	}
-	tunnel.Listener = ln
-	tunnel.done = make(chan struct{})
-	tunnel.once = sync.Once{}
-	tunnel.Config.RemotePort = actualPort
-	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
-	markTunnelServerRelayActive(tunnel, client.ID, time.Now())
-	listener := tunnel.Listener
-	done := tunnel.done
-	proxyName := tunnel.Config.Name
+	if !s.proxyActivationClientCurrent(client) {
+		client.proxyMu.Unlock()
+		_ = ln.Close()
+		return fmt.Errorf("client [%s] session changed before proxy activation", client.ID)
+	}
+	current.Listener = ln
+	current.done = make(chan struct{})
+	current.once = sync.Once{}
+	current.sourceCIDRs = listenCfg.sourceCIDRs
+	current.Config.RemotePort = actualPort
+	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+	markTunnelServerRelayActive(current, client.ID, time.Now())
+	listener := current.Listener
+	done := current.done
+	activation := proxyActivationSnapshotLocked(current)
 	client.proxyMu.Unlock()
 
-	log.Printf("🚇 SOCKS5 proxy tunnel created: %s [%s] Client [%s]", proxyName, listener.Addr().String(), client.ID)
-	go s.socks5ProxyAcceptLoop(client, tunnel, listener, done, listenCfg)
+	log.Printf("🚇 SOCKS5 proxy tunnel created: %s [%s] Client [%s]", activation.config.Name, listener.Addr().String(), client.ID)
+	go s.socks5ProxyAcceptLoop(client, tunnel, listener, done, listenCfg, activation)
 	return nil
 }
 
-func (s *Server) socks5ProxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, done <-chan struct{}, listenCfg socks5ServerListenRuntimeConfig) {
+func (s *Server) socks5ProxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, done <-chan struct{}, listenCfg socks5ServerListenRuntimeConfig, activation proxyActivationSnapshot) {
 	defer func() { _ = listener.Close() }()
 
 	for {
@@ -106,20 +112,20 @@ func (s *Server) socks5ProxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, 
 			case <-done:
 				return
 			default:
-				log.Printf("⚠️ SOCKS5 proxy [%s] Accept failed: %v", tunnel.Config.Name, err)
-				s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("SOCKS5 proxy listener failed: %v", err))
+				log.Printf("⚠️ SOCKS5 proxy [%s] Accept failed: %v", activation.config.Name, err)
+				s.markTCPProxyRuntimeErrorIfCurrent(client, activation.config.Name, tunnel, listener, fmt.Sprintf("SOCKS5 proxy listener failed: %v", err))
 				return
 			}
 		}
 
-		go s.handleSOCKS5ProxyConn(client, tunnel, listener, extConn, listenCfg)
+		go s.handleSOCKS5ProxyConn(client, tunnel, listener, extConn, listenCfg, activation)
 	}
 }
 
-func (s *Server) handleSOCKS5ProxyConn(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, extConn net.Conn, listenCfg socks5ServerListenRuntimeConfig) {
+func (s *Server) handleSOCKS5ProxyConn(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, extConn net.Conn, listenCfg socks5ServerListenRuntimeConfig, activation proxyActivationSnapshot) {
 	defer func() { _ = extConn.Close() }()
 
-	if !sourceAddressAllowed(extConn.RemoteAddr(), listenCfg.sourceCIDRs) {
+	if !sourceAddressAllowed(extConn.RemoteAddr(), activation.sourceCIDRs) {
 		return
 	}
 	_ = extConn.SetDeadline(time.Now().Add(socks5HandshakeTimeout))
@@ -128,11 +134,11 @@ func (s *Server) handleSOCKS5ProxyConn(client *ClientConn, tunnel *ProxyTunnel, 
 		return
 	}
 	_ = extConn.SetDeadline(time.Time{})
-	stream, err := s.openSOCKS5StreamToClient(client, tunnel, request)
+	stream, err := s.openSOCKS5StreamToClient(client, tunnel, activation, request)
 	if err != nil {
-		log.Printf("⚠️ SOCKS5 proxy [%s] open stream failed: %v", tunnel.Config.Name, err)
+		log.Printf("⚠️ SOCKS5 proxy [%s] open stream failed: %v", activation.config.Name, err)
 		_ = socks5wire.WriteReply(extConn, socks5wire.RepGeneralFailure, "", 0)
-		s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("SOCKS5 proxy forwarding channel failed: %v", err))
+		s.markTCPProxyRuntimeErrorIfCurrent(client, activation.config.Name, tunnel, listener, fmt.Sprintf("SOCKS5 proxy forwarding channel failed: %v", err))
 		return
 	}
 	defer func() { _ = stream.Close() }()
@@ -155,10 +161,10 @@ func (s *Server) handleSOCKS5ProxyConn(client *ClientConn, tunnel *ProxyTunnel, 
 	var recordTraffic tunnelTrafficObserver
 	if s.trafficStore != nil {
 		recordTraffic = func(ingressBytes, egressBytes uint64) {
-			s.recordTunnelTraffic(client.ID, tunnel.Config, ingressBytes, egressBytes)
+			s.recordTunnelTraffic(client.ID, activation.config, ingressBytes, egressBytes)
 		}
 	}
-	_, _ = relayTunnelPayload(stream, extConn, client.BandwidthRuntime(), tunnel.limits, recordTraffic)
+	_, _ = relayTunnelPayload(stream, extConn, client.BandwidthRuntime(), activation.limits, recordTraffic)
 }
 
 func socks5DialResultWaitTimeout(dialTimeoutSeconds int) time.Duration {
@@ -168,8 +174,8 @@ func socks5DialResultWaitTimeout(dialTimeoutSeconds int) time.Duration {
 	return time.Duration(dialTimeoutSeconds+socks5DialResultGraceSeconds) * time.Second
 }
 
-func (s *Server) openSOCKS5StreamToClient(client *ClientConn, tunnel *ProxyTunnel, request socks5wire.ConnectRequest) (net.Conn, error) {
-	return s.openStreamToClientWithHeader(client, tunnel.Config.Name, func(header *protocol.DataStreamHeader) {
+func (s *Server) openSOCKS5StreamToClient(client *ClientConn, tunnel *ProxyTunnel, activation proxyActivationSnapshot, request socks5wire.ConnectRequest) (net.Conn, error) {
+	return s.openStreamToClientWithHeaderForActivation(client, tunnel, activation, func(header *protocol.DataStreamHeader) {
 		header.TargetHost = request.Host
 		header.TargetPort = request.Port
 		header.TargetAddrType = request.AddrType

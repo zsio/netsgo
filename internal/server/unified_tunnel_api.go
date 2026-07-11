@@ -554,8 +554,13 @@ func (s *Server) emitMigratedTunnelOwnerEvents(before, after StoredTunnel) {
 	}
 	oldConfig := storedTunnelToProxyConfig(before)
 	setProxyConfigStates(&oldConfig, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
-	s.emitTunnelChanged(oldOwnerID, oldConfig, "migrated_out")
-	s.emitTunnelChanged(newOwnerID, storedTunnelToProxyConfig(after), "migrated_in")
+	newConfig := storedTunnelToProxyConfig(after)
+	s.tunnelEventMu.Lock()
+	defer s.tunnelEventMu.Unlock()
+	s.emitTunnelChangedLocked(oldOwnerID, oldConfig, "migrated_out")
+	if s.hasStoredTunnelForEvent(newOwnerID, newConfig) {
+		s.emitTunnelChangedLocked(newOwnerID, newConfig, "migrated_in")
+	}
 }
 
 func revisionConflictPayload(message string, currentRevision int64) map[string]any {
@@ -597,7 +602,7 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusInternalServerError, "tunnel_delete_failed", err.Error())
 		return
 	}
-	s.unifiedRuntime.clearTunnelIssues(stored.ID)
+	s.unifiedRuntime.purgeTunnelIssues(stored.ID, stored.Revision)
 	if err := s.unprovisionStoredUnifiedTunnel(stored, "deleted", true); err != nil {
 		logUnifiedRuntimeCleanupFailure("delete", stored, err)
 	}
@@ -885,11 +890,11 @@ func (s *Server) createUnifiedStoredTunnel(req tunnelCreateRequestAPI) (StoredTu
 	if err := s.store.AddTunnel(stored); err != nil {
 		return StoredTunnel{}, err
 	}
+	s.emitTunnelChangedIfStored(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "created")
 	s.scheduleUnifiedTunnelReconcile(stored, "created")
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
 		stored = reloaded
 	}
-	s.emitTunnelChanged(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "created")
 	return stored, nil
 }
 
@@ -935,11 +940,11 @@ func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevisi
 	if err := s.unprovisionStoredUnifiedTunnel(existing, "updated", true); err != nil {
 		logUnifiedRuntimeCleanupFailure("update", existing, err)
 	}
+	s.emitTunnelChangedIfStored(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "updated")
 	s.scheduleUnifiedTunnelReconcile(stored, "updated")
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
 		stored = reloaded
 	}
-	s.emitTunnelChanged(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "updated")
 	return stored, nil
 }
 
@@ -1059,10 +1064,10 @@ func (s *Server) storedTunnelFromUnifiedRequest(req tunnelCreateRequestAPI, exis
 	if err := s.validateUnifiedClientsAndCapabilities(req); err != nil {
 		return StoredTunnel{}, err
 	}
-	if err := s.validateUnifiedIngressResourceAvailable(req, existingID); err != nil {
+	if err := s.validateUnifiedIngressResourceAvailable(req, ingressConfig, existingID); err != nil {
 		return StoredTunnel{}, err
 	}
-	if err := s.preflightClientIngress(req, existingID); err != nil {
+	if err := s.preflightClientIngress(req, ingressConfig, existingID); err != nil {
 		return StoredTunnel{}, err
 	}
 
@@ -1166,11 +1171,7 @@ func normalizedIngressConfigRaw(endpointType string, cfg ingressEndpointConfigAP
 	return mustRawJSON(tcpListenConfigAPI{BindIP: cfg.BindIP, Port: cfg.Port, AllowedSourceCIDRs: cfg.AllowedSourceCIDRs})
 }
 
-func ingressResourceCandidateFromUnifiedRequest(req tunnelCreateRequestAPI, id string) (StoredTunnel, error) {
-	cfg, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
-	if err != nil {
-		return StoredTunnel{}, err
-	}
+func ingressResourceCandidateFromUnifiedRequest(req tunnelCreateRequestAPI, cfg ingressEndpointConfigAPI, id string) StoredTunnel {
 	return StoredTunnel{
 		ProxyNewRequest: protocol.ProxyNewRequest{ID: id},
 		Topology:        req.Topology,
@@ -1180,7 +1181,7 @@ func ingressResourceCandidateFromUnifiedRequest(req tunnelCreateRequestAPI, id s
 			Type:     req.Ingress.Type,
 			Config:   normalizedIngressConfigRaw(req.Ingress.Type, cfg),
 		},
-	}, nil
+	}
 }
 
 func (s *Server) validateUnifiedClientsAndCapabilities(req tunnelCreateRequestAPI) error {
@@ -1203,7 +1204,7 @@ func (s *Server) validateUnifiedClientsAndCapabilities(req tunnelCreateRequestAP
 	return nil
 }
 
-func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequestAPI, excludeID string) error {
+func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequestAPI, ingressConfig ingressEndpointConfigAPI, excludeID string) error {
 	if s.store == nil {
 		return nil
 	}
@@ -1224,10 +1225,7 @@ func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequest
 		hasCurrent = ok
 	}
 
-	candidate, err := ingressResourceCandidateFromUnifiedRequest(req, excludeID)
-	if err != nil {
-		return err
-	}
+	candidate := ingressResourceCandidateFromUnifiedRequest(req, ingressConfig, excludeID)
 	conflict, ok, err := s.store.findIngressResourceConflict(candidate, excludeID)
 	if err != nil {
 		return fmt.Errorf("failed to check ingress resource conflicts: %w", err)
@@ -1240,23 +1238,19 @@ func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequest
 		return nil
 	}
 	if req.Ingress.Type == tunnelIngressTypeHTTPHost {
-		cfg, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
-		if err != nil {
-			return err
-		}
 		excludeName := ""
 		excludeClientID := ""
 		if hasCurrent {
 			excludeName = current.Name
 			excludeClientID = current.OwnerClientID
 		}
-		return checkDomainConflict(cfg.Domain, excludeName, excludeClientID, s)
+		return checkDomainConflict(ingressConfig.Domain, excludeName, excludeClientID, s)
 	}
-	if hasCurrent && sameUnifiedIngressResource(current.Ingress, req.Ingress, current.Topology, req.Topology) {
+	if hasCurrent && sameUnifiedIngressResource(current.Ingress, req.Ingress, current.Topology, ingressConfig) {
 		return nil
 	}
 
-	return s.preflightServerIngressResource(req)
+	return s.preflightServerIngressResource(req, ingressConfig)
 }
 
 func ingressResourceConflictField(ingressType string) string {
@@ -1270,47 +1264,31 @@ func ingressResourceConflictField(ingressType string) string {
 	}
 }
 
-func sameUnifiedIngressResource(current EndpointSpec, next endpointSpecAPI, currentTopology, nextTopology string) bool {
+func sameUnifiedIngressResource(current EndpointSpec, next endpointSpecAPI, currentTopology string, nextConfig ingressEndpointConfigAPI) bool {
 	if current.Location != next.Location || current.ClientID != next.ClientID || current.Type != next.Type {
+		return false
+	}
+	currentConfig, err := decodeListenEndpointConfig(endpointSpecAPI(current), currentTopology)
+	if err != nil {
 		return false
 	}
 	switch current.Type {
 	case tunnelIngressTypeHTTPHost:
-		currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI(current), currentTopology)
-		if err != nil {
-			return false
-		}
-		nextCfg, err := decodeListenEndpointConfig(next, nextTopology)
-		if err != nil {
-			return false
-		}
-		return canonicalHost(currentCfg.Domain) == canonicalHost(nextCfg.Domain)
+		return canonicalHost(currentConfig.Domain) == canonicalHost(nextConfig.Domain)
 	case tunnelIngressTypeTCPListen, tunnelIngressTypeUDPListen, tunnelIngressTypeSOCKS5Listen:
-		currentCfg, err := decodeListenEndpointConfig(endpointSpecAPI(current), currentTopology)
-		if err != nil {
-			return false
-		}
-		nextCfg, err := decodeListenEndpointConfig(next, nextTopology)
-		if err != nil {
-			return false
-		}
-		return currentCfg.BindIP == nextCfg.BindIP && currentCfg.Port == nextCfg.Port
+		return currentConfig.BindIP == nextConfig.BindIP && currentConfig.Port == nextConfig.Port
 	default:
 		return false
 	}
 }
 
-func (s *Server) preflightServerIngressResource(req tunnelCreateRequestAPI) error {
+func (s *Server) preflightServerIngressResource(req tunnelCreateRequestAPI, cfg ingressEndpointConfigAPI) error {
 	switch req.Ingress.Type {
 	case tunnelIngressTypeHTTPHost:
 		return nil
 	case tunnelIngressTypeTCPListen, tunnelIngressTypeUDPListen, tunnelIngressTypeSOCKS5Listen:
 	default:
 		return nil
-	}
-	cfg, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
-	if err != nil {
-		return err
 	}
 	if cfg.Port <= 0 {
 		return nil

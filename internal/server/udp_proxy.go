@@ -193,13 +193,13 @@ type udpProxyRuntime struct {
 }
 
 // bindUDPProxyRuntime opens the UDP listener and prepares detached runtime state.
-func (s *Server) bindUDPProxyRuntime(tunnel *ProxyTunnel) (*udpProxyRuntime, error) {
-	addr := serverListenAddress(tunnel.Config.BindIP, tunnel.Config.RemotePort)
+func (s *Server) bindUDPProxyRuntime(config protocol.ProxyConfig) (*udpProxyRuntime, error) {
+	addr := serverListenAddress(config.BindIP, config.RemotePort)
 	packetConn, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on UDP %s: %w", addr, err)
 	}
-	policy, err := decodeIngressAccessPolicyFromProxyConfig(tunnel.Config)
+	policy, err := decodeIngressAccessPolicyFromProxyConfig(config)
 	if err != nil {
 		_ = packetConn.Close()
 		return nil, fmt.Errorf("decode UDP ingress policy: %w", err)
@@ -220,67 +220,101 @@ func (s *Server) bindUDPProxyRuntime(tunnel *ProxyTunnel) (*udpProxyRuntime, err
 	}, nil
 }
 
-func (s *Server) publishUDPProxyRuntime(client *ClientConn, tunnel *ProxyTunnel, runtime *udpProxyRuntime) (protocol.ProxyConfig, *UDPProxyState, error) {
+func (s *Server) publishUDPProxyRuntime(client *ClientConn, tunnel *ProxyTunnel, proxyName string, runtime *udpProxyRuntime) (proxyActivationSnapshot, *UDPProxyState, error) {
 	client.proxyMu.Lock()
-	current, exists := client.proxies[tunnel.Config.Name]
+	current, exists := client.proxies[proxyName]
 	if !exists || current != tunnel {
 		client.proxyMu.Unlock()
 		if runtime != nil && runtime.state != nil {
 			runtime.state.Close()
 		}
-		return protocol.ProxyConfig{}, nil, fmt.Errorf("proxy tunnel %q not found", tunnel.Config.Name)
+		return proxyActivationSnapshot{}, nil, fmt.Errorf("proxy tunnel %q not found", proxyName)
+	}
+	if !s.proxyActivationClientCurrent(client) {
+		client.proxyMu.Unlock()
+		if runtime != nil && runtime.state != nil {
+			runtime.state.Close()
+		}
+		return proxyActivationSnapshot{}, nil, fmt.Errorf("client [%s] session changed before proxy activation", client.ID)
 	}
 
 	current.done = make(chan struct{})
 	current.once = sync.Once{}
 	current.Config.RemotePort = runtime.actualPort
 	current.UDPState = runtime.state
+	current.sourceCIDRs = runtime.state.sourceCIDRs
 	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 	markTunnelServerRelayActive(current, client.ID, time.Now())
-	config := current.Config
+	activation := proxyActivationSnapshotLocked(current)
 	state := current.UDPState
 	client.proxyMu.Unlock()
 
-	return config, state, nil
+	return activation, state, nil
 }
 
 func (s *Server) markUDPProxyRuntimeErrorIfCurrent(
 	client *ClientConn,
+	proxyName string,
 	tunnel *ProxyTunnel,
 	state *UDPProxyState,
 	message string,
 ) {
-	if state != nil {
-		state.Close()
+	client.proxyMu.RLock()
+	current, exists := client.proxies[proxyName]
+	if !exists ||
+		current != tunnel ||
+		current.UDPState != state ||
+		!isTunnelExposed(current.Config) {
+		client.proxyMu.RUnlock()
+		if state != nil {
+			state.Close()
+		}
+		return
 	}
+	operationConfig := current.Config
+	client.proxyMu.RUnlock()
+
+	releaseRuntimeOperation := s.tunnelRuntimeOps.lock(tunnelRuntimeOperationKey(operationConfig.ID, client.ID, proxyName))
+	defer releaseRuntimeOperation()
 
 	client.proxyMu.Lock()
-	current, exists := client.proxies[tunnel.Config.Name]
+	current, exists = client.proxies[proxyName]
 	if !exists ||
 		current != tunnel ||
 		current.UDPState != state ||
 		!isTunnelExposed(current.Config) {
 		client.proxyMu.Unlock()
+		if state != nil {
+			state.Close()
+		}
 		return
 	}
+	closeTunnelRuntimeResources(current)
 	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
 	markTunnelRuntimeError(current, client.ID, message, time.Now())
 	config := current.Config
 	client.proxyMu.Unlock()
 
-	if err := s.persistTunnelStates(client.ID, tunnel.Config.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message); err != nil {
-		log.Printf("⚠️ UDP proxy [%s] failed to persist error state: %v", tunnel.Config.Name, err)
+	updated, err := s.updateProxyConfigRuntimeIfCurrent(client.ID, config, protocol.ProxyRuntimeStateError, message)
+	if err != nil {
+		log.Printf("⚠️ UDP proxy [%s] failed to persist error state: %v", proxyName, err)
 	}
-	s.recordServerExposeIngressIssue(tunnel.Config.ID, tunnel.Config.Type, message)
+	if s.runtimeErrorCleanupHook != nil {
+		s.runtimeErrorCleanupHook(config)
+	}
+	if notifyErr := s.notifyRuntimeErrorUnprovision(client, tunnel, config); notifyErr != nil {
+		log.Printf("⚠️ UDP proxy [%s] failed to notify client of close: %v", proxyName, notifyErr)
+	}
+	if err != nil || !updated {
+		return
+	}
+	s.recordServerExposeIngressIssue(config.ID, config.Revision, config.Type, message)
 	s.emitTunnelChangedIfStored(client.ID, config, "error")
-	if err := s.notifyServerExposeTargetUnprovision(client, config, "runtime_error"); err != nil {
-		log.Printf("⚠️ UDP proxy [%s] failed to notify client of close: %v", tunnel.Config.Name, err)
-	}
 }
 
 // udpReadLoop reads incoming UDP packets from packetConn and dispatches them
 // to the appropriate yamux stream by srcAddr.
-func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDPProxyState) {
+func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDPProxyState, activation proxyActivationSnapshot) {
 	buf := make([]byte, mux.MaxUDPPayload)
 
 	for {
@@ -296,9 +330,10 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			case <-state.done:
 				return // normal shutdown
 			default:
-				log.Printf("⚠️ UDP proxy [%s] ReadFrom failed: %v", tunnel.Config.Name, err)
+				log.Printf("⚠️ UDP proxy [%s] ReadFrom failed: %v", activation.config.Name, err)
 				s.markUDPProxyRuntimeErrorIfCurrent(
 					client,
+					activation.config.Name,
 					tunnel,
 					state,
 					fmt.Sprintf("UDP proxy read failed: %v", err),
@@ -308,8 +343,8 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 		}
 
 		key := srcAddr.String()
-		if !sourceAddressAllowed(srcAddr, state.sourceCIDRs) {
-			log.Printf("⚠️ UDP proxy [%s] rejected source: %s", tunnel.Config.Name, rejectSourceAddressMessage(srcAddr))
+		if !sourceAddressAllowed(srcAddr, activation.sourceCIDRs) {
+			log.Printf("⚠️ UDP proxy [%s] rejected source: %s", activation.config.Name, rejectSourceAddressMessage(srcAddr))
 			continue
 		}
 		ipKey := udpSourceIPKey(srcAddr)
@@ -323,22 +358,23 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			if state.sessionCount.Load() >= int64(MaxUDPSessions) {
 				if !state.removeOldestSession() || state.sessionCount.Load() >= int64(MaxUDPSessions) {
 					log.Printf("⚠️ UDP proxy [%s] session limit reached (%d), dropping packet from %s",
-						tunnel.Config.Name, MaxUDPSessions, key)
+						activation.config.Name, MaxUDPSessions, key)
 					continue
 				}
 			}
 			if !state.canCreateSessionForIP(ipKey) {
 				log.Printf("⚠️ UDP proxy [%s] per-IP session limit reached (%d), dropping packet from %s",
-					tunnel.Config.Name, MaxUDPSessionsPerIP, key)
+					activation.config.Name, MaxUDPSessionsPerIP, key)
 				continue
 			}
 
 			// Open a new yamux stream.
-			stream, err := s.openStreamToClient(client, tunnel.Config.Name)
+			stream, err := s.openStreamToClientForActivation(client, tunnel, activation)
 			if err != nil {
-				log.Printf("⚠️ UDP proxy [%s] failed to open stream: %v", tunnel.Config.Name, err)
+				log.Printf("⚠️ UDP proxy [%s] failed to open stream: %v", activation.config.Name, err)
 				s.markUDPProxyRuntimeErrorIfCurrent(
 					client,
+					activation.config.Name,
 					tunnel,
 					state,
 					fmt.Sprintf("UDP proxy forwarding channel failed: %v", err),
@@ -364,26 +400,26 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			} else {
 				val = sess
 				// Start the reverse read loop: stream → reply to srcAddr.
-				go s.udpSessionReverse(state, sess, client.ID, tunnel.Config, client.BandwidthRuntime(), tunnel.limits)
+				go s.udpSessionReverse(state, sess, client.ID, activation.config, client.BandwidthRuntime(), activation.limits)
 			}
 		}
 
 		sess := val.(*UDPSession)
 		sess.Touch()
 
-		reserveFullPayloadBandwidth(n, payloadBudgetSlots(payloadDirectionIngress, client.BandwidthRuntime(), tunnel.limits)...)
+		reserveFullPayloadBandwidth(n, payloadBudgetSlots(payloadDirectionIngress, client.BandwidthRuntime(), activation.limits)...)
 
 		// Frame and write the UDP packet into the yamux stream.
 		if err := mux.WriteUDPFrame(sess.stream, buf[:n]); err != nil {
 			log.Printf("⚠️ UDP proxy [%s] failed to write to stream [%s]: %v",
-				tunnel.Config.Name, key, err)
+				activation.config.Name, key, err)
 			// Close the failed session; removeSession uses LoadAndDelete for atomicity —
 			// even if udpReaper or Close() already cleaned it up, we will just get loaded=false
 			// and avoid a double-decrement.
 			sess.Close()
 			state.removeSession(key)
 		} else {
-			s.recordTunnelTraffic(client.ID, tunnel.Config, uint64(n), 0)
+			s.recordTunnelTraffic(client.ID, activation.config, uint64(n), 0)
 		}
 	}
 }

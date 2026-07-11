@@ -17,42 +17,48 @@ import (
 
 // Server is the core server struct.
 type Server struct {
-	Port                        int
-	DataDir                     string
-	AllowLoopbackManagementHost bool
-	TLS                         *TLSConfig
-	TLSFingerprint              string
-	clients                     sync.Map            // stable clientID -> *ClientConn
-	events                      *EventBus           // SSE event bus
-	store                       *TunnelStore        // tunnel persistent store
-	trafficStore                *TrafficStore       // traffic history store
-	trafficAccumulator          *trafficAccumulator // batched traffic observations waiting to be applied to trafficStore
-	serverDB                    *sql.DB             // owned shared SQLite handle for borrowed server stores; close only via closeServerDB
-	serverDBCloseOnce           sync.Once
-	serverDBCloseErr            error
-	clientTunnelMutationMu      sync.Mutex        // serializes registered-client deletion with tunnel target migration
-	startTime                   time.Time         // server start time
-	auth                        *AuthService      // auth and access control (adminStore, rate limiting)
-	webFS                       fs.FS             // embedded frontend static assets (nil in dev mode)
-	webHandler                  http.Handler      // cached FileServer (nil in dev mode)
-	devMode                     bool              // built with the dev tag; unknown non-tunnel hosts may enter the admin console
-	cachedStatus                *serverStatusView // latest server status collected in background
-	cachedStatusMu              sync.RWMutex      // protects cachedStatus
-	sessions                    *SessionManager   // connection lifecycle (managedConns, longLivedHandlers, generations, data timeout)
-	httpServer                  *http.Server
-	listener                    net.Listener
-	done                        chan struct{}
-	doneCloseOnce               sync.Once
-	tlsEnabled                  bool
-	publicIPv4                  string          // cached public IPv4
-	publicIPv6                  string          // cached public IPv6
-	publicIPMu                  sync.RWMutex    // protects public IP cache
-	tunnels                     *TunnelRegistry // tunnel provision wait and timeout
-	unifiedRuntime              *unifiedTunnelRuntimeRegistry
-	unifiedReconcile            *unifiedTunnelReconcileRegistry
-	c2c                         *clientRelayRegistry
-	releaseIndexCache           *releaseIndexCache
-	updateCapabilityCache       *updateCapabilityCache // cached server install capability for status API
+	Port                                int
+	DataDir                             string
+	AllowLoopbackManagementHost         bool
+	TLS                                 *TLSConfig
+	TLSFingerprint                      string
+	clients                             sync.Map            // stable clientID -> *ClientConn
+	events                              *EventBus           // SSE event bus
+	store                               *TunnelStore        // tunnel persistent store
+	trafficStore                        *TrafficStore       // traffic history store
+	trafficAccumulator                  *trafficAccumulator // batched traffic observations waiting to be applied to trafficStore
+	serverDB                            *sql.DB             // owned shared SQLite handle for borrowed server stores; close only via closeServerDB
+	serverDBCloseOnce                   sync.Once
+	serverDBCloseErr                    error
+	clientTunnelMutationMu              sync.Mutex        // serializes registered-client deletion with tunnel target migration
+	tunnelEventMu                       sync.Mutex        // preserves tunnel_changed ordering across state checks and publication
+	startTime                           time.Time         // server start time
+	auth                                *AuthService      // auth and access control (adminStore, rate limiting)
+	webFS                               fs.FS             // embedded frontend static assets (nil in dev mode)
+	webHandler                          http.Handler      // cached FileServer (nil in dev mode)
+	devMode                             bool              // built with the dev tag; unknown non-tunnel hosts may enter the admin console
+	cachedStatus                        *serverStatusView // latest server status collected in background
+	cachedStatusMu                      sync.RWMutex      // protects cachedStatus
+	sessions                            *SessionManager   // connection lifecycle (managedConns, longLivedHandlers, generations, data timeout)
+	httpServer                          *http.Server
+	listener                            net.Listener
+	done                                chan struct{}
+	doneCloseOnce                       sync.Once
+	tlsEnabled                          bool
+	publicIPv4                          string          // cached public IPv4
+	publicIPv6                          string          // cached public IPv6
+	publicIPMu                          sync.RWMutex    // protects public IP cache
+	tunnels                             *TunnelRegistry // tunnel provision wait and timeout
+	unifiedRuntime                      *unifiedTunnelRuntimeRegistry
+	unifiedReconcile                    *unifiedTunnelReconcileRegistry
+	tunnelRuntimeOps                    *tunnelRuntimeOperationRegistry
+	c2c                                 *clientRelayRegistry
+	releaseIndexCache                   *releaseIndexCache
+	updateCapabilityCache               *updateCapabilityCache // cached server install capability for status API
+	serverExposeActivatedHook           func(StoredTunnel, *ProxyTunnel)
+	runtimeErrorCleanupHook             func(protocol.ProxyConfig)
+	portPolicyAfterRuntimeCleanupHook   func(affectedTunnel)
+	restorePlaceholderBeforeInstallHook func(StoredTunnel, string)
 }
 
 // ClientConn represents a connected client.
@@ -94,6 +100,7 @@ func New(port int) *Server {
 		tunnels:                     newTunnelRegistry(),
 		unifiedRuntime:              newUnifiedTunnelRuntimeRegistry(),
 		unifiedReconcile:            newUnifiedTunnelReconcileRegistry(),
+		tunnelRuntimeOps:            newTunnelRuntimeOperationRegistry(),
 		c2c:                         newClientRelayRegistry(),
 		startTime:                   time.Now(),
 		done:                        make(chan struct{}),

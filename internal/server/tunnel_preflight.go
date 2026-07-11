@@ -69,7 +69,7 @@ func validateTunnelPreflightResponse(req protocol.TunnelPreflightRequest, resp p
 	return nil
 }
 
-func (s *Server) preflightClientIngress(req tunnelCreateRequestAPI, existingID string) error {
+func (s *Server) preflightClientIngress(req tunnelCreateRequestAPI, ingressConfig ingressEndpointConfigAPI, existingID string) error {
 	if req.Topology != tunnelTopologyClientToClient || req.Ingress.Location != tunnelEndpointLocationClient {
 		return nil
 	}
@@ -85,7 +85,7 @@ func (s *Server) preflightClientIngress(req tunnelCreateRequestAPI, existingID s
 	if existingID != "" && s.store != nil {
 		if current, ok, findErr := s.findStoredTunnelByID(existingID); findErr == nil && ok {
 			revision = current.Revision + 1
-			if sameClientIngressResource(current.Ingress, req.Ingress, current.Topology, req.Topology) {
+			if sameClientIngressResource(current.Ingress, req.Ingress, current.Topology, ingressConfig) {
 				return nil
 			}
 		}
@@ -101,7 +101,7 @@ func (s *Server) preflightClientIngress(req tunnelCreateRequestAPI, existingID s
 		TunnelID:  existingID,
 		Revision:  revision,
 		Role:      protocol.DataStreamRoleIngress,
-		Ingress:   preflightIngressEndpointSpec(req),
+		Ingress:   preflightIngressEndpointSpec(req, ingressConfig),
 	})
 	if err != nil {
 		code := protocol.TunnelMutationErrorCodeIngressPreflightRejected
@@ -130,16 +130,7 @@ func (s *Server) preflightClientIngress(req tunnelCreateRequestAPI, existingID s
 	return nil
 }
 
-func preflightIngressEndpointSpec(req tunnelCreateRequestAPI) protocol.EndpointSpec {
-	cfg, err := decodeListenEndpointConfig(req.Ingress, req.Topology)
-	if err != nil {
-		return protocol.EndpointSpec{
-			Location: req.Ingress.Location,
-			ClientID: req.Ingress.ClientID,
-			Type:     req.Ingress.Type,
-			Config:   req.Ingress.Config,
-		}
-	}
+func preflightIngressEndpointSpec(req tunnelCreateRequestAPI, cfg ingressEndpointConfigAPI) protocol.EndpointSpec {
 	return protocol.EndpointSpec{
 		Location: req.Ingress.Location,
 		ClientID: req.Ingress.ClientID,
@@ -159,7 +150,7 @@ func preflightIngressConfigRaw(endpointType string, cfg ingressEndpointConfigAPI
 	return normalizedIngressConfigRaw(endpointType, cfg)
 }
 
-func sameClientIngressResource(current EndpointSpec, next endpointSpecAPI, currentTopology, nextTopology string) bool {
+func sameClientIngressResource(current EndpointSpec, next endpointSpecAPI, currentTopology string, nextConfig ingressEndpointConfigAPI) bool {
 	if current.Location != protocol.EndpointLocationClient || next.Location != protocol.EndpointLocationClient {
 		return false
 	}
@@ -173,9 +164,5 @@ func sameClientIngressResource(current EndpointSpec, next endpointSpecAPI, curre
 	if err != nil {
 		return false
 	}
-	nextCfg, err := decodeListenEndpointConfig(next, nextTopology)
-	if err != nil {
-		return false
-	}
-	return currentCfg.BindIP == nextCfg.BindIP && currentCfg.Port == nextCfg.Port
+	return currentCfg.BindIP == nextConfig.BindIP && currentCfg.Port == nextConfig.Port
 }

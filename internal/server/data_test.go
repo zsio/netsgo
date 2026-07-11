@@ -459,6 +459,94 @@ func TestOpenStreamToClient_DirectOnlyRejectsServerRelay(t *testing.T) {
 	_ = serverSession.Close()
 }
 
+func TestOpenStreamToClientForActivationRejectsReplacedRevision(t *testing.T) {
+	s := New(0)
+	clientSession, serverSession := newDataTestYamuxSessionPair(t)
+	cc := &ClientConn{
+		ID:          "activation-client",
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  1,
+		state:       clientStateLive,
+	}
+	s.clients.Store(cc.ID, cc)
+
+	oldTunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:              "activation-id",
+			Name:            "activation-tunnel",
+			Revision:        4,
+			DesiredState:    protocol.ProxyDesiredStateRunning,
+			RuntimeState:    protocol.ProxyRuntimeStateExposed,
+			ActualTransport: protocol.ActualTransportServerRelay,
+		},
+		done: make(chan struct{}),
+	}
+	oldTunnel.runtime.Revision = 4
+	cc.proxies[oldTunnel.Config.Name] = oldTunnel
+	activation := proxyActivationSnapshotLocked(oldTunnel)
+
+	newTunnel := &ProxyTunnel{
+		Config: oldTunnel.Config,
+		done:   make(chan struct{}),
+	}
+	newTunnel.Config.Revision = 5
+	newTunnel.runtime.Revision = 5
+	cc.proxies[oldTunnel.Config.Name] = newTunnel
+
+	stream, err := s.openStreamToClientForActivation(cc, oldTunnel, activation)
+	if stream != nil {
+		_ = stream.Close()
+		t.Fatal("stale activation must not return a stream")
+	}
+	if err == nil {
+		t.Fatal("stale activation should be rejected after revision replacement")
+	}
+
+	_ = clientSession.Close()
+}
+
+func TestOpenStreamToClientForActivationRejectsClosedHTTPRuntime(t *testing.T) {
+	s := New(0)
+	clientSession, serverSession := newDataTestYamuxSessionPair(t)
+	cc := &ClientConn{
+		ID:          "closed-http-client",
+		proxies:     make(map[string]*ProxyTunnel),
+		dataSession: serverSession,
+		generation:  0,
+		state:       clientStateLive,
+	}
+	tunnel := &ProxyTunnel{
+		Config: protocol.ProxyConfig{
+			ID:              "closed-http-id",
+			Name:            "closed-http",
+			Revision:        2,
+			Type:            protocol.ProxyTypeHTTP,
+			DesiredState:    protocol.ProxyDesiredStateRunning,
+			RuntimeState:    protocol.ProxyRuntimeStateExposed,
+			ActualTransport: protocol.ActualTransportServerRelay,
+		},
+		done: make(chan struct{}),
+	}
+	tunnel.runtime.Revision = 2
+	cc.proxies[tunnel.Config.Name] = tunnel
+	activation := proxyActivationSnapshotLocked(tunnel)
+
+	if err := s.CloseProxyRuntime(cc, tunnel.Config.Name); err != nil {
+		t.Fatalf("close HTTP runtime: %v", err)
+	}
+	stream, err := s.openStreamToClientForActivation(cc, tunnel, activation)
+	if stream != nil {
+		_ = stream.Close()
+		t.Fatal("closed HTTP activation must not return a stream")
+	}
+	if err == nil {
+		t.Fatal("closed HTTP activation should be rejected even while config is still exposed")
+	}
+
+	_ = clientSession.Close()
+}
+
 func TestAcceptClientOpenedDataStreams_WaitsForDecodeFailureHandler(t *testing.T) {
 	s := New(0)
 	clientSession, serverSession := newDataTestYamuxSessionPair(t)

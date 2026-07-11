@@ -25,6 +25,60 @@ type ProxyTunnel struct {
 	once        sync.Once
 }
 
+// proxyActivationSnapshot contains the immutable inputs used by one listener
+// activation. Callers must build it while holding ClientConn.proxyMu so runtime
+// goroutines never have to read mutable ProxyTunnel fields.
+type proxyActivationSnapshot struct {
+	config          protocol.ProxyConfig
+	runtimeRevision uint64
+	listener        net.Listener
+	udpState        *UDPProxyState
+	done            <-chan struct{}
+	sourceCIDRs     []*net.IPNet
+	limits          *directionalBandwidthRuntime
+}
+
+func proxyActivationSnapshotLocked(tunnel *ProxyTunnel) proxyActivationSnapshot {
+	activation := proxyActivationSnapshotReadLocked(tunnel)
+	if tunnel != nil {
+		activation.runtimeRevision = ensureTunnelRuntimeRevision(tunnel)
+	}
+	return activation
+}
+
+func proxyActivationSnapshotReadLocked(tunnel *ProxyTunnel) proxyActivationSnapshot {
+	if tunnel == nil {
+		return proxyActivationSnapshot{}
+	}
+	sourceCIDRs := append([]*net.IPNet(nil), tunnel.sourceCIDRs...)
+	if len(sourceCIDRs) == 0 {
+		if policy, err := decodeIngressAccessPolicyFromProxyConfig(tunnel.Config); err == nil {
+			sourceCIDRs = policy.sourceCIDRs
+		}
+	}
+	return proxyActivationSnapshot{
+		config:          tunnel.Config,
+		runtimeRevision: tunnel.runtime.Revision,
+		listener:        tunnel.Listener,
+		udpState:        tunnel.UDPState,
+		done:            tunnel.done,
+		sourceCIDRs:     sourceCIDRs,
+		limits:          tunnel.limits,
+	}
+}
+
+func proxyActivationDoneOpen(done <-chan struct{}) bool {
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return false
+	default:
+		return true
+	}
+}
+
 type proxyRequestValidationError struct {
 	err    error
 	code   string
@@ -293,8 +347,16 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 }
 
 func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel) error {
-	req := tunnel.Config.ToProxyNewRequest()
-	name := tunnel.Config.Name
+	client.proxyMu.RLock()
+	config := tunnel.Config
+	current, exists := client.proxies[config.Name]
+	client.proxyMu.RUnlock()
+	if !exists || current != tunnel {
+		return fmt.Errorf("proxy tunnel %q not found", config.Name)
+	}
+
+	req := config.ToProxyNewRequest()
+	name := config.Name
 	if err := s.validateProxyRequestWithExclusions(client, req, name, client.ID); err != nil {
 		return err
 	}
@@ -302,12 +364,12 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 		return err
 	}
 
-	if isSOCKS5ServerExpose(tunnel.Config) {
-		return s.activatePreparedSOCKS5ServerExposeTunnel(client, tunnel)
+	if isSOCKS5ServerExpose(config) {
+		return s.activatePreparedSOCKS5ServerExposeTunnel(client, tunnel, config)
 	}
 
-	if tunnel.Config.Type == protocol.ProxyTypeHTTP {
-		policy, err := decodeIngressAccessPolicyFromProxyConfig(tunnel.Config)
+	if config.Type == protocol.ProxyTypeHTTP {
+		policy, err := decodeIngressAccessPolicyFromProxyConfig(config)
 		if err != nil {
 			return fmt.Errorf("decode HTTP ingress policy: %w", err)
 		}
@@ -317,6 +379,12 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 			client.proxyMu.Unlock()
 			return fmt.Errorf("proxy tunnel %q not found", name)
 		}
+		if !s.proxyActivationClientCurrent(client) {
+			client.proxyMu.Unlock()
+			return fmt.Errorf("client [%s] session changed before proxy activation", client.ID)
+		}
+		current.done = make(chan struct{})
+		current.once = sync.Once{}
 		current.sourceCIDRs = policy.sourceCIDRs
 		setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
 		markTunnelServerRelayActive(current, client.ID, time.Now())
@@ -324,29 +392,29 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 		return nil
 	}
 
-	if tunnel.Config.Type == protocol.ProxyTypeUDP {
-		runtime, err := s.bindUDPProxyRuntime(tunnel)
+	if config.Type == protocol.ProxyTypeUDP {
+		runtime, err := s.bindUDPProxyRuntime(config)
 		if err != nil {
 			return err
 		}
-		config, state, err := s.publishUDPProxyRuntime(client, tunnel, runtime)
+		activation, state, err := s.publishUDPProxyRuntime(client, tunnel, name, runtime)
 		if err != nil {
 			return err
 		}
 		log.Printf("🚇 UDP proxy tunnel created: %s [:%d → %s:%d] Client [%s]",
-			config.Name, config.RemotePort, config.LocalIP, config.LocalPort, client.ID)
+			activation.config.Name, activation.config.RemotePort, activation.config.LocalIP, activation.config.LocalPort, client.ID)
 
-		go s.udpReadLoop(client, tunnel, state)
+		go s.udpReadLoop(client, tunnel, state, activation)
 		go s.udpReaper(state)
 		return nil
 	}
 
-	addr := serverListenAddress(tunnel.Config.BindIP, tunnel.Config.RemotePort)
+	addr := serverListenAddress(config.BindIP, config.RemotePort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
-	policy, err := decodeIngressAccessPolicyFromProxyConfig(tunnel.Config)
+	policy, err := decodeIngressAccessPolicyFromProxyConfig(config)
 	if err != nil {
 		_ = ln.Close()
 		return fmt.Errorf("decode TCP ingress policy: %w", err)
@@ -355,32 +423,48 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 	actualPort := ln.Addr().(*net.TCPAddr).Port
 
 	client.proxyMu.Lock()
-	current, exists := client.proxies[tunnel.Config.Name]
+	current, exists = client.proxies[name]
 	if !exists || current != tunnel {
 		client.proxyMu.Unlock()
 		_ = ln.Close()
-		return fmt.Errorf("proxy tunnel %q not found", tunnel.Config.Name)
+		return fmt.Errorf("proxy tunnel %q not found", name)
 	}
-	tunnel.Listener = ln
-	tunnel.done = make(chan struct{})
-	tunnel.once = sync.Once{}
-	tunnel.sourceCIDRs = policy.sourceCIDRs
-	tunnel.Config.RemotePort = actualPort
-	bindIP := normalizeServerBindIP(tunnel.Config.BindIP)
-	setProxyConfigStates(&tunnel.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
-	markTunnelServerRelayActive(tunnel, client.ID, time.Now())
-	listener := tunnel.Listener
-	done := tunnel.done
-	proxyName := tunnel.Config.Name
-	localIP := tunnel.Config.LocalIP
-	localPort := tunnel.Config.LocalPort
+	if !s.proxyActivationClientCurrent(client) {
+		client.proxyMu.Unlock()
+		_ = ln.Close()
+		return fmt.Errorf("client [%s] session changed before proxy activation", client.ID)
+	}
+	current.Listener = ln
+	current.done = make(chan struct{})
+	current.once = sync.Once{}
+	current.sourceCIDRs = policy.sourceCIDRs
+	current.Config.RemotePort = actualPort
+	setProxyConfigStates(&current.Config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, "")
+	markTunnelServerRelayActive(current, client.ID, time.Now())
+	listener := current.Listener
+	done := current.done
+	activation := proxyActivationSnapshotLocked(current)
 	client.proxyMu.Unlock()
 
 	log.Printf("🚇 proxy tunnel created: %s [%s:%d → %s:%d] Client [%s]",
-		proxyName, bindIP, actualPort, localIP, localPort, client.ID)
+		activation.config.Name, normalizeServerBindIP(activation.config.BindIP), actualPort, activation.config.LocalIP, activation.config.LocalPort, client.ID)
 
-	go s.proxyAcceptLoop(client, tunnel, listener, done)
+	go s.proxyAcceptLoop(client, tunnel, listener, done, activation)
 	return nil
+}
+
+func (s *Server) proxyActivationClientCurrent(client *ClientConn) bool {
+	if client == nil {
+		return false
+	}
+	if client.generation == 0 {
+		return true
+	}
+	value, ok := s.clients.Load(client.ID)
+	if !ok || value.(*ClientConn) != client {
+		return false
+	}
+	return client.isLive()
 }
 
 func closeTunnelRuntimeResources(tunnel *ProxyTunnel) {
@@ -393,13 +477,13 @@ func closeTunnelRuntimeResources(tunnel *ProxyTunnel) {
 		}
 		if tunnel.UDPState != nil {
 			tunnel.UDPState.Close()
+			tunnel.UDPState = nil
 		}
 		if tunnel.Listener != nil {
 			_ = tunnel.Listener.Close()
+			tunnel.Listener = nil
 		}
 	})
-	tunnel.Listener = nil
-	tunnel.UDPState = nil
 }
 
 func (s *Server) removeTunnelRuntime(client *ClientConn, name string) {
@@ -414,6 +498,28 @@ func (s *Server) removeTunnelRuntime(client *ClientConn, name string) {
 	}
 
 	closeTunnelRuntimeResources(tunnel)
+}
+
+// discardTunnelRuntimeIfCurrent always closes expected, but removes the map
+// entry only when it still points at that exact activation. This prevents a
+// late restore from deleting a newer runtime that reused the tunnel name.
+func (s *Server) discardTunnelRuntimeIfCurrent(client *ClientConn, name string, expected *ProxyTunnel, expectedID string, expectedRevision int64) bool {
+	if client == nil || expected == nil {
+		return false
+	}
+	client.proxyMu.Lock()
+	current, exists := client.proxies[name]
+	matches := exists && current == expected && current.Config.ID == expectedID && current.Config.Revision == expectedRevision
+	detached := !exists || current != expected
+	if matches {
+		delete(client.proxies, name)
+	}
+	client.proxyMu.Unlock()
+
+	if matches || detached {
+		closeTunnelRuntimeResources(expected)
+	}
+	return matches
 }
 
 func (s *Server) stageTunnelPending(client *ClientConn, name string) (protocol.ProxyConfig, error) {
@@ -449,12 +555,28 @@ func (s *Server) StartProxy(client *ClientConn, req protocol.ProxyNewRequest) er
 
 func (s *Server) markTCPProxyRuntimeErrorIfCurrent(
 	client *ClientConn,
+	proxyName string,
 	tunnel *ProxyTunnel,
 	listener net.Listener,
 	message string,
 ) {
+	client.proxyMu.RLock()
+	current, exists := client.proxies[proxyName]
+	if !exists ||
+		current != tunnel ||
+		current.Listener != listener ||
+		!isTunnelExposed(current.Config) {
+		client.proxyMu.RUnlock()
+		return
+	}
+	operationConfig := current.Config
+	client.proxyMu.RUnlock()
+
+	releaseRuntimeOperation := s.tunnelRuntimeOps.lock(tunnelRuntimeOperationKey(operationConfig.ID, client.ID, proxyName))
+	defer releaseRuntimeOperation()
+
 	client.proxyMu.Lock()
-	current, exists := client.proxies[tunnel.Config.Name]
+	current, exists = client.proxies[proxyName]
 	if !exists ||
 		current != tunnel ||
 		current.Listener != listener ||
@@ -468,19 +590,26 @@ func (s *Server) markTCPProxyRuntimeErrorIfCurrent(
 	config := current.Config
 	client.proxyMu.Unlock()
 
-	if err := s.persistTunnelStates(client.ID, tunnel.Config.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message); err != nil {
-		log.Printf("⚠️ TCP proxy [%s] failed to persist error state: %v", tunnel.Config.Name, err)
+	updated, err := s.updateProxyConfigRuntimeIfCurrent(client.ID, config, protocol.ProxyRuntimeStateError, message)
+	if err != nil {
+		log.Printf("⚠️ TCP proxy [%s] failed to persist error state: %v", proxyName, err)
 	}
-	s.recordServerExposeIngressIssue(tunnel.Config.ID, tunnel.Config.Type, message)
+	if s.runtimeErrorCleanupHook != nil {
+		s.runtimeErrorCleanupHook(config)
+	}
+	if notifyErr := s.notifyRuntimeErrorUnprovision(client, tunnel, config); notifyErr != nil {
+		log.Printf("⚠️ TCP proxy [%s] failed to notify client of close: %v", proxyName, notifyErr)
+	}
+	if err != nil || !updated {
+		return
+	}
+	s.recordServerExposeIngressIssue(config.ID, config.Revision, config.Type, message)
 	s.emitTunnelChangedIfStored(client.ID, config, "error")
-	if err := s.notifyServerExposeTargetUnprovision(client, config, "runtime_error"); err != nil {
-		log.Printf("⚠️ TCP proxy [%s] failed to notify client of close: %v", tunnel.Config.Name, err)
-	}
 }
 
 // proxyAcceptLoop continuously accepts external connections and forwards them via yamux.
 // It holds a snapshot of the listener/done for this activation to prevent stale loops from interfering with newer runtimes.
-func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, done <-chan struct{}) {
+func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, done <-chan struct{}, activation proxyActivationSnapshot) {
 	defer func() { _ = listener.Close() }()
 
 	for {
@@ -490,40 +619,40 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listen
 			case <-done:
 				return // normal shutdown
 			default:
-				log.Printf("⚠️ proxy [%s] Accept failed: %v", tunnel.Config.Name, err)
-				s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("TCP proxy listener failed: %v", err))
+				log.Printf("⚠️ proxy [%s] Accept failed: %v", activation.config.Name, err)
+				s.markTCPProxyRuntimeErrorIfCurrent(client, activation.config.Name, tunnel, listener, fmt.Sprintf("TCP proxy listener failed: %v", err))
 				return
 			}
 		}
 
-		go s.handleProxyConn(client, tunnel, listener, extConn)
+		go s.handleProxyConn(client, tunnel, listener, extConn, activation)
 	}
 }
 
 // handleProxyConn handles a single external connection: opens a stream on the yamux session,
 // writes the DataStreamHeader with tunnel/revision metadata, then relays data bidirectionally.
-func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, extConn net.Conn) {
+func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listener net.Listener, extConn net.Conn, activation proxyActivationSnapshot) {
 	defer func() { _ = extConn.Close() }()
 
-	if !sourceAddressAllowed(extConn.RemoteAddr(), sourceCIDRsForTunnel(tunnel)) {
-		log.Printf("⚠️ proxy [%s] rejected source: %s", tunnel.Config.Name, rejectSourceAddressMessage(extConn.RemoteAddr()))
+	if !sourceAddressAllowed(extConn.RemoteAddr(), activation.sourceCIDRs) {
+		log.Printf("⚠️ proxy [%s] rejected source: %s", activation.config.Name, rejectSourceAddressMessage(extConn.RemoteAddr()))
 		return
 	}
 
-	stream, err := s.openStreamToClient(client, tunnel.Config.Name)
+	stream, err := s.openStreamToClientForActivation(client, tunnel, activation)
 	if err != nil {
-		log.Printf("⚠️ proxy [%s] open stream failed: %v", tunnel.Config.Name, err)
-		s.markTCPProxyRuntimeErrorIfCurrent(client, tunnel, listener, fmt.Sprintf("TCP proxy forwarding channel failed: %v", err))
+		log.Printf("⚠️ proxy [%s] open stream failed: %v", activation.config.Name, err)
+		s.markTCPProxyRuntimeErrorIfCurrent(client, activation.config.Name, tunnel, listener, fmt.Sprintf("TCP proxy forwarding channel failed: %v", err))
 		return
 	}
 
 	var recordTraffic tunnelTrafficObserver
 	if s.trafficStore != nil {
 		recordTraffic = func(ingressBytes, egressBytes uint64) {
-			s.recordTunnelTraffic(client.ID, tunnel.Config, ingressBytes, egressBytes)
+			s.recordTunnelTraffic(client.ID, activation.config, ingressBytes, egressBytes)
 		}
 	}
-	_, _ = relayTunnelPayload(stream, extConn, client.BandwidthRuntime(), tunnel.limits, recordTraffic)
+	_, _ = relayTunnelPayload(stream, extConn, client.BandwidthRuntime(), activation.limits, recordTraffic)
 }
 
 func decodeIngressAccessPolicyFromProxyConfig(config protocol.ProxyConfig) (ingressAccessPolicy, error) {
@@ -531,34 +660,6 @@ func decodeIngressAccessPolicyFromProxyConfig(config protocol.ProxyConfig) (ingr
 		return parseIngressAccessPolicy(nil, true)
 	}
 	return decodeIngressAccessPolicy(config.Ingress.Config, true)
-}
-
-func sourceCIDRsForTunnel(tunnel *ProxyTunnel) []*net.IPNet {
-	if tunnel != nil && len(tunnel.sourceCIDRs) > 0 {
-		return tunnel.sourceCIDRs
-	}
-	if tunnel != nil {
-		if policy, err := decodeIngressAccessPolicyFromProxyConfig(tunnel.Config); err == nil {
-			return policy.sourceCIDRs
-		}
-	}
-	policy, _ := parseIngressAccessPolicy(nil, true)
-	return policy.sourceCIDRs
-}
-
-func (s *Server) tunnelBandwidthRuntime(client *ClientConn, name string) *directionalBandwidthRuntime {
-	if client == nil {
-		return nil
-	}
-
-	client.proxyMu.RLock()
-	defer client.proxyMu.RUnlock()
-
-	tunnel, ok := client.proxies[name]
-	if !ok {
-		return nil
-	}
-	return tunnel.limits
 }
 
 // StopProxy stops a proxy tunnel.
@@ -610,15 +711,16 @@ func (s *Server) ReopenProxyRuntime(client *ClientConn, name string) error {
 		client.proxyMu.RUnlock()
 		return fmt.Errorf("proxy tunnel %q not found", name)
 	}
+	config := tunnel.Config
 	client.proxyMu.RUnlock()
 
-	if tunnel.Config.RemotePort != 0 && s.auth.adminStore != nil {
+	if config.RemotePort != 0 && s.auth.adminStore != nil {
 		initialized, err := s.auth.adminStore.IsInitializedE()
 		if err != nil {
 			return fmt.Errorf("failed to read initialization state: %w", err)
 		}
-		if initialized && !s.auth.adminStore.IsPortAllowed(tunnel.Config.RemotePort) {
-			return fmt.Errorf("port %d is no longer in the allowed range, cannot resume", tunnel.Config.RemotePort)
+		if initialized && !s.auth.adminStore.IsPortAllowed(config.RemotePort) {
+			return fmt.Errorf("port %d is no longer in the allowed range, cannot resume", config.RemotePort)
 		}
 	}
 
@@ -626,7 +728,12 @@ func (s *Server) ReopenProxyRuntime(client *ClientConn, name string) error {
 		return err
 	}
 
-	log.Printf("▶️ proxy tunnel runtime reopened: %s [:%d]", name, tunnel.Config.RemotePort)
+	client.proxyMu.RLock()
+	if current := client.proxies[name]; current == tunnel {
+		config = current.Config
+	}
+	client.proxyMu.RUnlock()
+	log.Printf("▶️ proxy tunnel runtime reopened: %s [:%d]", name, config.RemotePort)
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"netsgo/pkg/protocol"
@@ -27,11 +28,20 @@ func (s *Server) restoreUnifiedServerExposeTunnel(client *ClientConn, stored Sto
 		return err
 	}
 	config := s.applyStoredServerExposeConfig(client, tunnel, stored, protocol.ProxyRuntimeStatePending, "")
-	if err := s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStatePending, ""); err != nil {
-		s.removeTunnelRuntime(client, stored.Name)
+	if config.ID == "" {
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
+		return errTunnelProvisionAckCancelled
+	}
+	updated, err := s.updateStoredTunnelRuntimeIfCurrent(stored, protocol.ProxyRuntimeStatePending, "")
+	if err != nil {
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
 		return err
 	}
-	s.emitTunnelChanged(client.ID, config, "pending")
+	if !updated {
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
+		return errTunnelProvisionAckCancelled
+	}
+	s.emitTunnelChangedIfStored(client.ID, config, "pending")
 
 	req := protocol.TunnelProvisionRequest{
 		TunnelID: stored.ID,
@@ -41,50 +51,94 @@ func (s *Server) restoreUnifiedServerExposeTunnel(client *ClientConn, stored Sto
 	}
 	if err := s.waitForClientTunnelProvisionAck(client, req); err != nil {
 		if errors.Is(err, errTunnelProvisionAckCancelled) {
-			s.removeTunnelRuntime(client, stored.Name)
+			s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
+			_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "provision_cancelled")
 			return err
 		}
-		s.recordServerExposeReconcileIssue(stored, err)
-		s.failUnifiedServerExposeAfterProvision(client, stored, tunnelProvisionErrorMessage(err))
+		applied, transitionErr := s.failUnifiedServerExposeAfterProvision(client, tunnel, stored, tunnelProvisionErrorMessage(err))
+		if transitionErr != nil {
+			return errors.Join(err, transitionErr)
+		}
+		if !applied {
+			return errTunnelProvisionAckCancelled
+		}
 		return err
 	}
 
 	current, ok, err := s.findStoredTunnelByID(stored.ID)
 	if err != nil {
-		s.failUnifiedServerExposeAfterProvision(client, stored, err.Error())
+		applied, transitionErr := s.failUnifiedServerExposeAfterProvision(client, tunnel, stored, err.Error())
+		if transitionErr != nil {
+			return errors.Join(err, transitionErr)
+		}
+		if !applied {
+			return errTunnelProvisionAckCancelled
+		}
 		return err
 	}
 	if !ok || current.Revision != stored.Revision {
-		s.removeTunnelRuntime(client, stored.Name)
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
 		_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "stale_revision")
-		err := errTunnelProvisionAckCancelled
-		if ok {
-			s.recordServerExposeReconcileIssue(current, err)
-			_ = s.updateStoredTunnelRuntime(current, protocol.ProxyRuntimeStateError, tunnelProvisionErrorMessage(err))
-		}
 		return errTunnelProvisionAckCancelled
 	}
 
 	if !s.isCurrentGeneration(client.ID, client.generation) {
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
+		_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "generation_changed")
 		return errTunnelProvisionAckCancelled
 	}
 
 	if err := s.activatePreparedTunnel(client, tunnel); err != nil {
-		s.failUnifiedServerExposeAfterProvision(client, stored, err.Error())
+		applied, transitionErr := s.failUnifiedServerExposeAfterProvision(client, tunnel, stored, err.Error())
+		if transitionErr != nil {
+			return errors.Join(err, transitionErr)
+		}
+		if !applied {
+			return errTunnelProvisionAckCancelled
+		}
 		return err
 	}
-	if err := s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateExposed, ""); err != nil {
-		s.failUnifiedServerExposeAfterProvision(client, stored, err.Error())
+	if !s.proxyActivationClientCurrent(client) {
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
+		_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "generation_changed")
+		return errTunnelProvisionAckCancelled
+	}
+	if s.serverExposeActivatedHook != nil {
+		s.serverExposeActivatedHook(stored, tunnel)
+	}
+	updated, err = s.transitionStoredTunnelRuntimeIfCurrent(
+		stored,
+		protocol.ProxyRuntimeStatePending,
+		protocol.ProxyRuntimeStateExposed,
+		"",
+	)
+	if err != nil {
+		applied, transitionErr := s.failUnifiedServerExposeAfterProvision(client, tunnel, stored, err.Error())
+		if transitionErr != nil {
+			return errors.Join(err, transitionErr)
+		}
+		if !applied {
+			return errTunnelProvisionAckCancelled
+		}
 		return err
+	}
+	if !updated {
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
+		_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "stale_revision")
+		return errTunnelProvisionAckCancelled
 	}
 
-	updated, err := s.mustGetTunnel(client, stored.Name)
-	if err != nil {
-		s.failUnifiedServerExposeAfterProvision(client, stored, err.Error())
-		return err
+	config, runtimeHeld, stillExists := serverExposeTunnelSnapshot(client, stored.Name, tunnel)
+	if !stillExists ||
+		config.ID != stored.ID ||
+		config.Revision != stored.Revision ||
+		!isTunnelExposed(config) ||
+		!runtimeHeld {
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
+		_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "activation_not_current")
+		return errTunnelProvisionAckCancelled
 	}
-	config = s.applyStoredServerExposeConfig(client, updated, stored, protocol.ProxyRuntimeStateExposed, "")
-	s.emitTunnelChanged(client.ID, config, "restored")
+	s.emitTunnelChangedIfStored(client.ID, config, "restored")
 	return nil
 }
 
@@ -96,36 +150,50 @@ func (s *Server) applyStoredServerExposeConfig(client *ClientConn, tunnel *Proxy
 	setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, runtimeState, message)
 
 	client.proxyMu.Lock()
-	tunnel.Config = config
-	if tunnel.limits == nil {
-		tunnel.limits = newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{})
-	} else {
-		tunnel.limits.Update(config.BandwidthSettings)
+	current, exists := client.proxies[stored.Name]
+	if !exists || current != tunnel {
+		client.proxyMu.Unlock()
+		return protocol.ProxyConfig{}
 	}
-	tunnel.runtime.Revision = uint64(stored.Revision)
-	updateTunnelRuntimeFromConfig(tunnel, client.ID, message, time.Now())
+	current.Config = config
+	if current.limits == nil {
+		current.limits = newDirectionalBandwidthRuntime(config.BandwidthSettings, realBandwidthClock{})
+	} else {
+		current.limits.Update(config.BandwidthSettings)
+	}
+	current.runtime.Revision = uint64(stored.Revision)
+	updateTunnelRuntimeFromConfig(current, client.ID, message, time.Now())
 	client.proxyMu.Unlock()
 	return config
 }
 
-func (s *Server) failUnifiedServerExposeAfterProvision(client *ClientConn, stored StoredTunnel, message string) {
-	s.removeTunnelRuntime(client, stored.Name)
-	_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "provision_failed")
-	runtimeConfig, err := serverExposeRuntimeProxyRequest(stored)
-	if err != nil {
-		runtimeConfig = protocol.ProxyNewRequest{ID: stored.ID, Name: stored.Name}
-	}
-	config := s.upsertTunnelPlaceholderWithRevision(client, runtimeConfig, stored.Revision, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message, stored.CreatedAt)
-	mergeStoredMetadataIntoProxyConfig(&config, stored)
+func (s *Server) failUnifiedServerExposeAfterProvision(client *ClientConn, tunnel *ProxyTunnel, stored StoredTunnel, message string) (bool, error) {
+	config := storedTunnelToProxyConfig(stored)
+	setProxyConfigStates(&config, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
 	client.proxyMu.Lock()
-	if tunnel := client.proxies[stored.Name]; tunnel != nil {
-		mergeStoredMetadataIntoProxyConfig(&tunnel.Config, stored)
-		tunnel.runtime.Revision = uint64(stored.Revision)
-		updateTunnelRuntimeFromConfig(tunnel, client.ID, message, time.Now())
+	current := client.proxies[stored.Name]
+	if current == tunnel && current.Config.ID == stored.ID && current.Config.Revision == stored.Revision {
+		closeTunnelRuntimeResources(current)
+		current.Config = config
+		current.runtime.Revision = uint64(stored.Revision)
+		updateTunnelRuntimeFromConfig(current, client.ID, message, time.Now())
 	}
 	client.proxyMu.Unlock()
-	_ = s.persistTunnelStates(client.ID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateError, message)
-	s.emitTunnelChanged(client.ID, config, "error")
+	if current != tunnel {
+		closeTunnelRuntimeResources(tunnel)
+	}
+	_ = s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), "provision_failed")
+	updated, err := s.updateStoredTunnelRuntimeIfCurrent(stored, protocol.ProxyRuntimeStateError, message)
+	if err != nil {
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
+		return false, err
+	}
+	if !updated {
+		s.discardTunnelRuntimeIfCurrent(client, stored.Name, tunnel, stored.ID, stored.Revision)
+		return false, nil
+	}
+	s.emitTunnelChangedIfStored(client.ID, config, "error")
+	return true, nil
 }
 
 func serverExposeRuntimeProxyRequest(stored StoredTunnel) (protocol.ProxyNewRequest, error) {
@@ -194,31 +262,6 @@ func serverExposeRuntimeProxyRequest(stored StoredTunnel) (protocol.ProxyNewRequ
 	return config, nil
 }
 
-func mergeStoredMetadataIntoProxyConfig(config *protocol.ProxyConfig, stored StoredTunnel) {
-	if config == nil {
-		return
-	}
-	config.Topology = stored.Topology
-	config.OwnerClientID = stored.OwnerClientID
-	if stored.Ingress.Location != "" || stored.Ingress.Type != "" {
-		ingress := endpointSpecProtocolFromStored(stored.Ingress)
-		config.Ingress = &ingress
-	}
-	if stored.Target.Location != "" || stored.Target.Type != "" || stored.Target.ClientID != "" {
-		target := endpointSpecProtocolFromStored(stored.Target)
-		config.Target = &target
-	}
-	config.TransportPolicy = stored.TransportPolicy
-	config.ActualTransport = stored.ActualTransport
-	if stored.P2P.State != "" || stored.P2P.Error != "" || stored.P2P.SessionID != "" {
-		config.P2P = &protocol.P2PState{
-			State:     stored.P2P.State,
-			Error:     stored.P2P.Error,
-			SessionID: stored.P2P.SessionID,
-		}
-	}
-}
-
 func (s *Server) notifyServerExposeTargetUnprovision(client *ClientConn, config protocol.ProxyConfig, reason string) error {
 	if config.Topology == TunnelTopologyServerExpose && config.ID != "" && config.Revision > 0 {
 		return s.notifyClientTunnelUnprovision(client, config.ID, config.Revision, protocol.DataStreamRoleTarget, reason)
@@ -227,6 +270,23 @@ func (s *Server) notifyServerExposeTargetUnprovision(client *ClientConn, config 
 		return fmt.Errorf("server-expose target unprovision missing tunnel identity")
 	}
 	return s.notifyClientProxyClose(client, config.Name, reason)
+}
+
+func (s *Server) notifyRuntimeErrorUnprovision(client *ClientConn, tunnel *ProxyTunnel, config protocol.ProxyConfig) error {
+	if config.Topology == TunnelTopologyServerExpose && config.ID != "" && config.Revision > 0 {
+		return s.notifyServerExposeTargetUnprovision(client, config, "runtime_error")
+	}
+
+	// Legacy cleanup is name-scoped. Avoid sending a late ProxyClose after the
+	// map entry has already been replaced by a newer same-name runtime.
+	client.proxyMu.RLock()
+	current := client.proxies[config.Name]
+	stillCurrent := current == tunnel && current != nil && current.Config.ID == config.ID
+	client.proxyMu.RUnlock()
+	if !stillCurrent {
+		return nil
+	}
+	return s.notifyServerExposeTargetUnprovision(client, config, "runtime_error")
 }
 
 func (s *Server) unprovisionServerExposeTunnel(stored StoredTunnel, reason string, removeRuntime bool) error {
@@ -243,12 +303,22 @@ func (s *Server) unprovisionServerExposeTunnel(stored StoredTunnel, reason strin
 	}
 
 	var errs []error
-	if name, _, exists := findTunnelBySelector(client, stored.ID); exists {
-		if removeRuntime {
-			s.removeTunnelRuntime(client, name)
-		} else if err := s.CloseProxyRuntime(client, name); err != nil {
-			errs = append(errs, fmt.Errorf("close server runtime: %w", err))
+	closedRuntimeName := ""
+	client.proxyMu.Lock()
+	for name, tunnel := range client.proxies {
+		if tunnel.Config.ID != stored.ID || tunnel.Config.Revision != stored.Revision {
+			continue
 		}
+		closeTunnelRuntimeResources(tunnel)
+		if removeRuntime {
+			delete(client.proxies, name)
+		}
+		closedRuntimeName = name
+		break
+	}
+	client.proxyMu.Unlock()
+	if closedRuntimeName != "" {
+		log.Printf("🛑 proxy tunnel runtime closed: %s", closedRuntimeName)
 	}
 	if err := s.notifyServerExposeTargetUnprovision(client, storedTunnelToProxyConfig(stored), reason); err != nil {
 		errs = append(errs, fmt.Errorf("notify target client %s: %w", clientID, err))
