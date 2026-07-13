@@ -142,6 +142,12 @@ func (s *Server) Start() error {
 	if s.Port == 0 {
 		s.Port = addr.Port
 	}
+	if stunConn, listenErr := net.ListenPacket("udp", fmt.Sprintf(":%d", s.Port)); listenErr != nil {
+		log.Printf("⚠️ P2P STUN listener unavailable on UDP :%d: %v", s.Port, listenErr)
+	} else {
+		s.stunConn = stunConn
+		go s.serveSTUN(stunConn)
+	}
 
 	serveLn := ln
 	if s.TLS != nil && s.TLS.IsEnabled() {
@@ -177,6 +183,7 @@ func (s *Server) Start() error {
 	go s.trafficPersistLoop()
 	go s.trafficRealtimeLoop()
 	go s.unifiedTunnelReconcileLoop()
+	go s.p2pLeaseLoop()
 
 	serving = true
 	return s.httpServer.Serve(serveLn)
@@ -211,6 +218,10 @@ func (s *Server) cleanupFailedStartup() {
 	if s.listener != nil {
 		_ = s.listener.Close()
 		s.listener = nil
+	}
+	if s.stunConn != nil {
+		_ = s.stunConn.Close()
+		s.stunConn = nil
 	}
 	if s.auth != nil && s.auth.adminStore != nil {
 		if err := s.auth.adminStore.Close(); err != nil {
@@ -277,6 +288,10 @@ func (s *Server) Shutdown(ctx context.Context) (err error) {
 	}()
 
 	s.closeDone()
+	if s.stunConn != nil {
+		_ = s.stunConn.Close()
+		s.stunConn = nil
+	}
 
 	if s.events != nil {
 		s.events.Close()

@@ -132,6 +132,20 @@ func (s *TunnelStore) attachTrafficStore(trafficStore *TrafficStore, accumulator
 	}
 }
 
+func (s *TunnelStore) UpdateP2PStateIfCurrent(tunnelID string, revision int64, state, message, sessionID, actualTransport string) (bool, error) {
+	if s == nil || s.db == nil || tunnelID == "" || revision <= 0 {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.db.Exec(`UPDATE tunnels SET p2p_state = ?, p2p_error = ?, p2p_session_id = ?, actual_transport = ?, updated_at = ? WHERE id = ? AND revision = ?`, state, message, sessionID, actualTransport, formatTime(time.Now().UTC()), tunnelID, revision)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
 // NewTunnelStore creates or opens a standalone tunnel store that owns its DB.
 func NewTunnelStore(path string) (*TunnelStore, error) {
 	db, err := openServerDB(path)
@@ -187,7 +201,7 @@ func (s *TunnelStore) maybeFailSave() error {
 	return nil
 }
 
-const tunnelSelectColumns = `id, client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, created_at, desired_state, runtime_state, error, hostname, binding, revision, topology, owner_client_id, ingress_location, ingress_client_id, ingress_type, ingress_config, target_location, target_client_id, target_type, target_config, transport_policy, actual_transport, p2p_state, p2p_error, p2p_session_id, created_by_user_id, updated_at`
+const tunnelSelectColumns = `id, client_id, name, type, local_ip, local_port, remote_port, domain, ingress_bps, egress_bps, total_bps, created_at, desired_state, runtime_state, error, hostname, binding, revision, topology, owner_client_id, ingress_location, ingress_client_id, ingress_type, ingress_config, target_location, target_client_id, target_type, target_config, transport_policy, actual_transport, p2p_state, p2p_error, p2p_session_id, created_by_user_id, updated_at`
 
 func prefixedTunnelSelectColumns(prefix string) string {
 	columns := strings.Split(tunnelSelectColumns, ", ")
@@ -214,6 +228,7 @@ func scanStoredTunnel(row dbScanner) (StoredTunnel, error) {
 		&tunnel.Domain,
 		&tunnel.IngressBPS,
 		&tunnel.EgressBPS,
+		&tunnel.TotalBPS,
 		&createdAt,
 		&tunnel.DesiredState,
 		&tunnel.RuntimeState,
@@ -889,7 +904,7 @@ func (s *TunnelStore) ReplaceTunnelByID(clientID, id string, expectedRevision in
 		ingress_location = ?, ingress_client_id = ?, ingress_type = ?, ingress_config = ?, ingress_bind_ip = ?, ingress_port = ?, ingress_domain = ?,
 		target_location = ?, target_client_id = ?, target_type = ?, target_config = ?, target_host = ?, target_port = ?, target_resource_key = ?,
 		transport_policy = ?, actual_transport = ?, p2p_state = ?, p2p_error = ?, p2p_session_id = ?,
-		ingress_bps = ?, egress_bps = ?, desired_state = ?, runtime_state = ?, error = ?, updated_at = ?
+		ingress_bps = ?, egress_bps = ?, total_bps = ?, desired_state = ?, runtime_state = ?, error = ?, updated_at = ?
 		WHERE client_id = ? AND id = ? AND revision = ?`,
 		replacement.Name,
 		replacement.Type,
@@ -921,6 +936,7 @@ func (s *TunnelStore) ReplaceTunnelByID(clientID, id string, expectedRevision in
 		replacement.P2P.SessionID,
 		replacement.IngressBPS,
 		replacement.EgressBPS,
+		replacement.TotalBPS,
 		replacement.DesiredState,
 		storageRuntimeStateFromProtocol(replacement.RuntimeState),
 		replacement.Error,
@@ -1017,7 +1033,7 @@ func (s *TunnelStore) MigrateTunnelTargetByID(id string, expectedRevision int64,
 		ingress_location = ?, ingress_client_id = ?, ingress_type = ?, ingress_config = ?, ingress_bind_ip = ?, ingress_port = ?, ingress_domain = ?,
 		target_location = ?, target_client_id = ?, target_type = ?, target_config = ?, target_host = ?, target_port = ?, target_resource_key = ?,
 		transport_policy = ?, actual_transport = ?, p2p_state = ?, p2p_error = ?, p2p_session_id = ?,
-		ingress_bps = ?, egress_bps = ?, desired_state = ?, runtime_state = ?, error = ?, updated_at = ?
+		ingress_bps = ?, egress_bps = ?, total_bps = ?, desired_state = ?, runtime_state = ?, error = ?, updated_at = ?
 		WHERE id = ? AND revision = ?`,
 		replacement.ClientID,
 		replacement.Name,
@@ -1050,6 +1066,7 @@ func (s *TunnelStore) MigrateTunnelTargetByID(id string, expectedRevision int64,
 		replacement.P2P.SessionID,
 		replacement.IngressBPS,
 		replacement.EgressBPS,
+		replacement.TotalBPS,
 		replacement.DesiredState,
 		storageRuntimeStateFromProtocol(replacement.RuntimeState),
 		replacement.Error,
@@ -1405,8 +1422,8 @@ func insertTunnelTx(tx *sql.Tx, tunnel StoredTunnel) error {
 		ingress_location, ingress_client_id, ingress_type, ingress_config, ingress_bind_ip, ingress_port, ingress_domain, ingress_path,
 		target_location, target_client_id, target_type, target_config, target_host, target_port, target_path, target_resource_key,
 		transport_policy, actual_transport, p2p_state, p2p_error, p2p_session_id,
-		ingress_bps, egress_bps, desired_state, runtime_state, error, created_by_user_id, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ingress_bps, egress_bps, total_bps, desired_state, runtime_state, error, created_by_user_id, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		tunnel.ID,
 		tunnel.ClientID,
 		tunnel.Name,
@@ -1443,6 +1460,7 @@ func insertTunnelTx(tx *sql.Tx, tunnel StoredTunnel) error {
 		tunnel.P2P.SessionID,
 		tunnel.IngressBPS,
 		tunnel.EgressBPS,
+		tunnel.TotalBPS,
 		tunnel.DesiredState,
 		storageRuntimeStateFromProtocol(tunnel.RuntimeState),
 		tunnel.Error,

@@ -59,6 +59,12 @@ func NewClientSession(conn io.ReadWriteCloser, cfg *Config) (*yamux.Session, err
 // 任一方向的 io.Copy 结束后，立即关闭两端连接以让另一方向也结束。
 // 返回 a→b 方向和 b→a 方向分别传输的字节数。
 func Relay(a, b io.ReadWriteCloser) (atob, btoa int64) {
+	return RelayWithTraffic(a, b, nil)
+}
+
+// RelayWithTraffic is Relay with per-write payload observations. The callback
+// runs concurrently for the two directions and must not block or retain data.
+func RelayWithTraffic(a, b io.ReadWriteCloser, observe func(atob, btoa uint64)) (atob, btoa int64) {
 	var once sync.Once
 	closeAll := func() {
 		_ = a.Close()
@@ -71,17 +77,38 @@ func Relay(a, b io.ReadWriteCloser) (atob, btoa int64) {
 	// a → b
 	go func() {
 		defer wg.Done()
-		atob, _ = io.Copy(b, a)
+		atob, _ = io.Copy(observedWriter{Writer: b, observe: func(n uint64) {
+			if observe != nil {
+				observe(n, 0)
+			}
+		}}, a)
 		once.Do(closeAll)
 	}()
 
 	// b → a
 	go func() {
 		defer wg.Done()
-		btoa, _ = io.Copy(a, b)
+		btoa, _ = io.Copy(observedWriter{Writer: a, observe: func(n uint64) {
+			if observe != nil {
+				observe(0, n)
+			}
+		}}, b)
 		once.Do(closeAll)
 	}()
 
 	wg.Wait()
 	return atob, btoa
+}
+
+type observedWriter struct {
+	io.Writer
+	observe func(uint64)
+}
+
+func (w observedWriter) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if n > 0 && w.observe != nil {
+		w.observe(uint64(n))
+	}
+	return n, err
 }

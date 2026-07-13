@@ -6,7 +6,7 @@
 
 | Issue | Severity | 状态 | 说明 |
 |---|---|---|---|
-| [`p2p-data-transport-policy`](./issue/p2p-data-transport-policy.md) | High | Open | P2P 数据通道策略、direct/P2P future-only 占位和 UI/API 边界一起处理 |
+| [`p2p-data-transport-policy`](./issue/p2p-data-transport-policy.md) | High | Open | Pion WebRTC/ICE 直连、Client-pair 共享 PeerConnection、自有信令、60 秒授权租约、归属方统计、双向公平限速及 UI/API 门禁 |
 | [`endpoint-type-extensibility`](./issue/endpoint-type-extensibility.md) | Medium | Open for CHECK relaxation | CHECK 已扩展至 `socks5_listen` / `socks5_connect_handler`；剩余是是否移除 DB enum CHECK |
 | [`runtime-state-active-exposed`](./issue/runtime-state-active-exposed.md) | Low | Open | `active` / `exposed` 是同一运行态的双命名；可作为低风险命名收口 |
 | [`tunnel-resource-locks-hardening`](./issue/tunnel-resource-locks-hardening.md) | Low | Open for optional DB constraints | 运行时互斥已完成；剩余是可选 DB FK/CHECK 硬化 |

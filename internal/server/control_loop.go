@@ -47,6 +47,16 @@ func (s *Server) handleControlMessage(client *ClientConn, msg protocol.Message) 
 		s.handleTunnelPreflightResponseMessage(client, msg)
 	case protocol.MsgTypeProxyClose:
 		s.handleProxyCloseMessage(client, msg)
+	case protocol.MsgTypeP2PSignal:
+		s.handleP2PSignalMessage(client, msg)
+	case protocol.MsgTypeP2PSessionReady, protocol.MsgTypeP2PFailed, protocol.MsgTypeP2PClosed:
+		s.handleP2PStatusMessage(client, msg)
+	case protocol.MsgTypeP2PStatsReport:
+		s.handleP2PStatsMessage(client, msg)
+	case protocol.MsgTypeP2PCreditDemand:
+		s.handleP2PCreditDemandMessage(client, msg)
+	case protocol.MsgTypeP2PCreditGrant:
+		s.handleP2PCreditGrantMessage(client, msg)
 	default:
 		log.Printf("⚠️ Unknown message type [%s]: %s", client.ID, msg.Type)
 	}

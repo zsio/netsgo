@@ -240,6 +240,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "created_by_user_id", typ: "TEXT", notNull: true, defaultValue: "''"},
 			{name: "created_at", typ: "TEXT", notNull: true},
 			{name: "updated_at", typ: "TEXT", notNull: true},
+			{name: "total_bps", typ: "INTEGER", notNull: true, defaultValue: "0"},
 		},
 		"traffic_buckets": {
 			{name: "tunnel_id", typ: "TEXT", notNull: true, primaryKey: true},
@@ -346,6 +347,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"006_admin_security",
 		"007_api_key_lookup_digest",
 		"008_socks5_endpoint_types",
+		"009_tunnel_total_bandwidth",
 	}
 	if got := appliedMigrationNames(t, db); !reflect.DeepEqual(got, wantMigrationNames) {
 		t.Fatalf("applied migrations = %#v, want %#v", got, wantMigrationNames)
@@ -383,6 +385,7 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"006_admin_security",
 		"007_api_key_lookup_digest",
 		"008_socks5_endpoint_types",
+		"009_tunnel_total_bandwidth",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -539,8 +542,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations failed: %v", err)
 	}
-	if count != 8 {
-		t.Fatalf("schema_migrations count = %d, want 8", count)
+	if count != 9 {
+		t.Fatalf("schema_migrations count = %d, want 9", count)
 	}
 }
 

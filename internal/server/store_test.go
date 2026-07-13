@@ -342,6 +342,7 @@ func TestTunnelStore_BandwidthSettingsRoundTripAndUpdate(t *testing.T) {
 			BandwidthSettings: protocol.BandwidthSettings{
 				IngressBPS: 1000,
 				EgressBPS:  2000,
+				TotalBPS:   2500,
 			},
 		},
 		ClientID: "client-1",
@@ -353,7 +354,7 @@ func TestTunnelStore_BandwidthSettingsRoundTripAndUpdate(t *testing.T) {
 	if !ok {
 		t.Fatal("should find reloaded tunnel")
 	}
-	if loaded.IngressBPS != 1000 || loaded.EgressBPS != 2000 {
+	if loaded.IngressBPS != 1000 || loaded.EgressBPS != 2000 || loaded.TotalBPS != 2500 {
 		t.Fatalf("stored bandwidth settings did not round-trip: %+v", loaded.BandwidthSettings)
 	}
 
@@ -367,6 +368,9 @@ func TestTunnelStore_BandwidthSettingsRoundTripAndUpdate(t *testing.T) {
 	}
 	if updated.IngressBPS != 0 || updated.EgressBPS != 0 {
 		t.Fatalf("explicit zero bandwidth settings should persist as unlimited: %+v", updated.BandwidthSettings)
+	}
+	if updated.TotalBPS != 2500 {
+		t.Fatalf("legacy directional update unexpectedly changed total_bps: %+v", updated.BandwidthSettings)
 	}
 }
 

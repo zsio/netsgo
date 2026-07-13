@@ -1,5 +1,5 @@
 import { bpsToMbpsInput } from '@/lib/format';
-import type { Client, ProxyConfig, TunnelFormType, TunnelTopology } from '@/types';
+import type { Client, ProxyConfig, TransportPolicy, TunnelFormType, TunnelTopology } from '@/types';
 
 /** 编辑模式下传入的隧道数据 */
 export interface TunnelDialogEditData extends ProxyConfig {
@@ -19,6 +19,8 @@ export interface TunnelFormState {
   domain: string;
   ingressBps: string;
   egressBps: string;
+  totalBps: string;
+  transportPolicy: TransportPolicy;
   sourceCidrs: string;
   socks5AuthEnabled: boolean;
   socks5Username: string;
@@ -62,6 +64,8 @@ export function getInitialTunnelFormState(props: TunnelInitialFormProps): Tunnel
       domain: props.tunnel.domain || '',
       ingressBps: bpsToMbpsInput(props.tunnel.ingress_bps),
       egressBps: bpsToMbpsInput(props.tunnel.egress_bps),
+      totalBps: bpsToMbpsInput(props.tunnel.total_bps ?? props.tunnel.bandwidth_settings?.total_bps ?? 0),
+      transportPolicy: props.tunnel.transport_policy ?? 'server_relay_only',
       sourceCidrs: getInitialSourceCIDRs(props.tunnel),
       socks5AuthEnabled: props.tunnel.ingress?.type === 'socks5_listen'
         ? props.tunnel.ingress.config.auth.type === 'username_password'
@@ -106,6 +110,8 @@ export function getInitialTunnelFormState(props: TunnelInitialFormProps): Tunnel
     domain: '',
     ingressBps: '',
     egressBps: '',
+    totalBps: '',
+    transportPolicy: 'server_relay_only',
     sourceCidrs: '0.0.0.0/0, ::/0',
     socks5AuthEnabled: false,
     socks5Username: '',

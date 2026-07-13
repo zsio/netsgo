@@ -74,9 +74,8 @@ type Client struct {
 	// ProxyConfigs are delivered by the server and may also be set manually in benchmarks.
 	ProxyConfigs []protocol.ProxyNewRequest
 	// DisableReconnect disables automatic reconnect (used in tests and similar scenarios).
-	DisableReconnect bool
-	Logger           *EventLogger
-
+	DisableReconnect     bool
+	Logger               *EventLogger
 	dataHandshakeTimeout time.Duration
 	currentRuntime       *sessionRuntime
 	nextRuntimeEpoch     atomic.Uint64
@@ -100,6 +99,7 @@ type sessionRuntime struct {
 	connMu      sync.Mutex
 	dataSession *yamux.Session
 	dataMu      sync.RWMutex
+	peerManager *clientPeerManager
 }
 
 func (rt *sessionRuntime) writeJSON(v any) error {
@@ -445,6 +445,12 @@ func (c *Client) Shutdown() {
 	c.logger().Info("client.shutdown_started", "Starting graceful client shutdown", nil)
 
 	if rt := c.getCurrentRuntime(); rt != nil {
+		// Flush direct payload counters while the authenticated control channel is
+		// still writable. Sending the WebSocket close frame first would make the
+		// final report race with, or follow, Server session teardown.
+		if rt.peerManager != nil {
+			rt.peerManager.reportAllTraffic()
+		}
 		_ = rt.writeControl(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "client shutting down"),
@@ -463,6 +469,9 @@ func (c *Client) stopRuntime(rt *sessionRuntime, reason string) {
 	}
 
 	rt.closeDone()
+	if rt.peerManager != nil {
+		rt.peerManager.Close()
+	}
 
 	rt.dataMu.Lock()
 	session := rt.dataSession
@@ -581,6 +590,7 @@ func (c *Client) connectAndRun() error {
 		return fmt.Errorf("failed to establish data channel: %w", err)
 	}
 	c.logger().Info("client.data_channel_established", "Data channel established", nil)
+	rt.peerManager = newClientPeerManager(c, rt)
 	c.refreshPublicIPsAsync(true)
 
 	rt.wg.Add(1)
@@ -960,7 +970,7 @@ func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
 // 2. Look up the local proxy configuration by tunnel id or legacy name
 // 3. Dial the local service
 // 4. Relay(stream, localConn)
-func (c *Client) handleStream(stream *yamux.Stream) {
+func (c *Client) handleStream(stream net.Conn) {
 	defer func() { _ = stream.Close() }()
 
 	header, err := protocol.DecodeDataStreamHeader(stream)
@@ -968,12 +978,43 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 		log.Printf("⚠️ Failed to read DataStreamHeader: %v", err)
 		return
 	}
+	c.dispatchDataStream(stream, header, nil)
+}
+
+func (c *Client) handleDirectStream(manager *clientPeerManager, sessionID string, stream net.Conn) {
+	defer func() { _ = stream.Close() }()
+	header, err := protocol.DecodeDataStreamHeader(stream)
+	if err != nil {
+		log.Printf("⚠️ Failed to read direct DataStreamHeader: %v", err)
+		return
+	}
+	if manager == nil || !manager.authorizeIncoming(sessionID, header) {
+		log.Printf("⚠️ Unauthorized direct stream rejected: tunnel=%s revision=%d session=%s", header.TunnelID, header.Revision, sessionID)
+		return
+	}
+	stream = manager.trackStream(header.OpenToken, stream)
+	stream = manager.limitConn(header.OpenToken, stream, c.dataStreamIsUDP(header), true)
+	header.ServerAuthorized = true
+	c.dispatchDataStream(stream, header, manager.observeTraffic(header.OpenToken))
+}
+
+func (c *Client) dataStreamIsUDP(header protocol.DataStreamHeader) bool {
+	if target, ok := c.fixedTargetForDataStreamHeader(header); ok {
+		return target.targetType == protocol.TargetTypeUDPService
+	}
+	if _, cfg, ok := c.proxyForDataStreamHeader(header); ok {
+		return cfg.Type == protocol.ProxyTypeUDP
+	}
+	return false
+}
+
+func (c *Client) dispatchDataStream(stream net.Conn, header protocol.DataStreamHeader, observe func(uint64, uint64)) {
 	if target, ok := c.socks5TargetForDataStreamHeader(header); ok {
 		if !dataStreamHeaderMatchesSOCKS5Target(header, target) {
 			log.Printf("⚠️ SOCKS5 DataStreamHeader rejected: tunnel=%s revision=%d source=%s target=%s direction=%s transport=%s", header.TunnelID, header.Revision, header.SourceRole, header.TargetRole, header.Direction, header.Transport)
 			return
 		}
-		c.handleSOCKS5TargetStream(stream, header, target)
+		c.handleSOCKS5TargetStream(stream, header, target, observe)
 		return
 	}
 	if target, ok := c.fixedTargetForDataStreamHeader(header); ok {
@@ -981,7 +1022,7 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 			log.Printf("⚠️ fixed target DataStreamHeader rejected: tunnel=%s revision=%d source=%s target=%s direction=%s transport=%s", header.TunnelID, header.Revision, header.SourceRole, header.TargetRole, header.Direction, header.Transport)
 			return
 		}
-		c.handleFixedTargetStream(stream, header, target)
+		c.handleFixedTargetStream(stream, header, target, observe)
 		return
 	}
 	proxyName, cfg, ok := c.proxyForDataStreamHeader(header)
@@ -996,7 +1037,7 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 
 	// Dispatch by proxy type.
 	if cfg.Type == protocol.ProxyTypeUDP {
-		c.handleUDPStream(stream, cfg)
+		c.handleUDPStream(stream, cfg, observe)
 		return
 	}
 
@@ -1009,7 +1050,7 @@ func (c *Client) handleStream(stream *yamux.Stream) {
 	}
 
 	// Relay traffic in both directions.
-	mux.Relay(stream, localConn)
+	mux.RelayWithTraffic(stream, localConn, observe)
 }
 
 func (c *Client) socks5TargetForDataStreamHeader(header protocol.DataStreamHeader) (clientSOCKS5TargetRuntime, bool) {
@@ -1049,16 +1090,16 @@ func dataStreamHeaderMatchesFixedTarget(header protocol.DataStreamHeader, target
 	if header.Direction != protocol.DataStreamDirectionIngressToTarget {
 		return false
 	}
-	if header.Transport != protocol.ActualTransportServerRelay {
+	if !targetAcceptsDataTransport(header) {
 		return false
 	}
-	if target.transportPolicy == protocol.TransportPolicyDirectOnly {
+	if target.transportPolicy == protocol.TransportPolicyDirectOnly && header.Transport != protocol.ActualTransportPeerDirect {
 		return false
 	}
 	return true
 }
 
-func (c *Client) handleFixedTargetStream(stream *yamux.Stream, header protocol.DataStreamHeader, target fixedServiceTargetRuntime) {
+func (c *Client) handleFixedTargetStream(stream net.Conn, header protocol.DataStreamHeader, target fixedServiceTargetRuntime, observe func(uint64, uint64)) {
 	switch target.targetType {
 	case protocol.TargetTypeUDPService:
 		conn, err := net.DialTimeout("udp", target.address(), 5*time.Second)
@@ -1066,14 +1107,14 @@ func (c *Client) handleFixedTargetStream(stream *yamux.Stream, header protocol.D
 			log.Printf("⚠️ Failed to connect to fixed UDP target [%s → %s]: %v", header.TunnelID, target.address(), err)
 			return
 		}
-		mux.UDPRelay(stream, conn)
+		mux.UDPRelayWithTraffic(stream, conn, observe)
 	default:
 		conn, err := net.DialTimeout("tcp", target.address(), 5*time.Second)
 		if err != nil {
 			log.Printf("⚠️ Failed to connect to fixed TCP target [%s → %s]: %v", header.TunnelID, target.address(), err)
 			return
 		}
-		mux.Relay(stream, conn)
+		mux.RelayWithTraffic(stream, conn, observe)
 	}
 }
 
@@ -1090,16 +1131,21 @@ func dataStreamHeaderMatchesProxyConfig(header protocol.DataStreamHeader, cfg pr
 	if header.Direction != protocol.DataStreamDirectionIngressToTarget {
 		return false
 	}
-	if header.Transport != protocol.ActualTransportServerRelay {
+	if !targetAcceptsDataTransport(header) {
 		return false
 	}
-	if cfg.TransportPolicy == protocol.TransportPolicyDirectOnly {
+	if cfg.TransportPolicy == protocol.TransportPolicyDirectOnly && header.Transport != protocol.ActualTransportPeerDirect {
 		return false
 	}
 	if cfg.ActualTransport != "" && cfg.ActualTransport != protocol.ActualTransportUnknown && header.Transport != cfg.ActualTransport {
 		return false
 	}
 	return true
+}
+
+func targetAcceptsDataTransport(header protocol.DataStreamHeader) bool {
+	return header.Transport == protocol.ActualTransportServerRelay ||
+		(header.Transport == protocol.ActualTransportPeerDirect && header.ServerAuthorized)
 }
 
 func (c *Client) proxyForDataStreamHeader(header protocol.DataStreamHeader) (string, protocol.ProxyNewRequest, bool) {
@@ -1332,6 +1378,72 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				log.Printf("⚠️ Failed to send tunnel preflight response [%s]: %v", req.RequestID, err)
 				c.failRuntime(rt, "tunnel_preflight_resp_write_failed")
 				return
+			}
+
+		case protocol.MsgTypeP2PSessionPrepare:
+			var prepare protocol.P2PSessionPrepare
+			if err := msg.ParsePayload(&prepare); err != nil || rt.peerManager == nil {
+				log.Printf("⚠️ Failed to parse P2P session prepare: %v", err)
+				continue
+			}
+			if err := rt.peerManager.handlePrepare(prepare); err != nil {
+				log.Printf("⚠️ P2P session prepare rejected: %v", err)
+			}
+
+		case protocol.MsgTypeP2PSignal:
+			var signal protocol.P2PSignal
+			if err := msg.ParsePayload(&signal); err != nil || rt.peerManager == nil {
+				continue
+			}
+			if err := rt.peerManager.handleSignal(signal); err != nil {
+				log.Printf("⚠️ P2P signal rejected: %v", err)
+			}
+
+		case protocol.MsgTypeP2PLease:
+			var lease protocol.P2PLease
+			if err := msg.ParsePayload(&lease); err != nil || rt.peerManager == nil {
+				continue
+			}
+			if err := rt.peerManager.handleLease(lease); err != nil {
+				log.Printf("⚠️ P2P lease rejected: %v", err)
+			}
+
+		case protocol.MsgTypeP2PTunnelGrant:
+			var grant protocol.P2PTunnelGrant
+			if err := msg.ParsePayload(&grant); err != nil || rt.peerManager == nil {
+				continue
+			}
+			if err := rt.peerManager.handleGrant(grant); err != nil {
+				log.Printf("⚠️ P2P grant rejected: %v", err)
+			}
+
+		case protocol.MsgTypeP2PTunnelRevoke:
+			var revoke protocol.P2PTunnelRevoke
+			if err := msg.ParsePayload(&revoke); err != nil || rt.peerManager == nil {
+				continue
+			}
+			rt.peerManager.handleRevoke(revoke)
+
+		case protocol.MsgTypeP2PClosed:
+			var status protocol.P2PSessionStatus
+			if err := msg.ParsePayload(&status); err == nil && rt.peerManager != nil {
+				rt.peerManager.removeAndClose(status.SessionID)
+			}
+
+		case protocol.MsgTypeP2PCreditDemand:
+			var demand protocol.P2PCreditDemand
+			if err := msg.ParsePayload(&demand); err == nil && rt.peerManager != nil {
+				if err := rt.peerManager.handleCreditDemand(demand); err != nil {
+					log.Printf("⚠️ P2P credit demand rejected: %v", err)
+				}
+			}
+
+		case protocol.MsgTypeP2PCreditGrant:
+			var grant protocol.P2PCreditGrant
+			if err := msg.ParsePayload(&grant); err == nil && rt.peerManager != nil {
+				if err := rt.peerManager.handleCreditGrant(grant); err != nil {
+					log.Printf("⚠️ P2P credit grant rejected: %v", err)
+				}
 			}
 
 		case protocol.MsgTypeProxyCreateResp:

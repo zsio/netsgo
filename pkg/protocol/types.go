@@ -213,8 +213,8 @@ func productionDefaultClientCapabilities() ClientCapabilities {
 		TunnelSpecVersion:   TunnelSpecVersion,
 		IngressTypes:        []string{IngressTypeTCPListen, IngressTypeUDPListen, IngressTypeSOCKS5Listen},
 		TargetTypes:         []string{TargetTypeTCPService, TargetTypeUDPService, TargetTypeSOCKS5ConnectHandler},
-		TransportPolicies:   []string{TransportPolicyServerRelayOnly},
-		P2P:                 P2PCapabilities{Supported: false},
+		TransportPolicies:   []string{TransportPolicyServerRelayOnly, TransportPolicyDirectPreferred, TransportPolicyDirectOnly},
+		P2P:                 P2PCapabilities{Supported: true, Impl: P2PImplWebRTCICE, SupportsIPv6: true},
 	}
 }
 
@@ -223,7 +223,10 @@ func productionDefaultClientCapabilities() ClientCapabilities {
 type BandwidthSettings struct {
 	IngressBPS int64 `json:"ingress_bps"`
 	EgressBPS  int64 `json:"egress_bps"`
+	TotalBPS   int64 `json:"total_bps,omitempty"`
 }
+
+const TunnelMutationFieldTotalBPS = "total_bps"
 
 // UpdateCapability describes what kind of local update guidance can be shown.
 type UpdateCapability struct {

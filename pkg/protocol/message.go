@@ -32,6 +32,12 @@ const (
 	MsgTypeP2PFailed            = "p2p_failed"
 	MsgTypeP2PClosed            = "p2p_closed"
 	MsgTypeP2PStatsReport       = "p2p_stats_report"
+	MsgTypeP2PSignal            = "p2p_signal"
+	MsgTypeP2PLease             = "p2p_lease"
+	MsgTypeP2PTunnelGrant       = "p2p_tunnel_grant"
+	MsgTypeP2PTunnelRevoke      = "p2p_tunnel_revoke"
+	MsgTypeP2PCreditDemand      = "p2p_credit_demand"
+	MsgTypeP2PCreditGrant       = "p2p_credit_grant"
 	MsgTypeTrafficReport        = "traffic_report"
 
 	MsgTypeProxyCreate       = MsgTypeTunnelCreate

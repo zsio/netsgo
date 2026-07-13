@@ -21,14 +21,35 @@ func WriteUDPFrame(w io.Writer, payload []byte) error {
 	if len(payload) > MaxUDPPayload {
 		return fmt.Errorf("UDP payload too large: %d > %d", len(payload), MaxUDPPayload)
 	}
+	if reserver, ok := w.(interface{ ReservePayload(int) error }); ok {
+		if err := reserver.ReservePayload(len(payload)); err != nil {
+			return err
+		}
+	}
 
 	var lenBuf [2]byte
 	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(payload)))
-	if _, err := w.Write(lenBuf[:]); err != nil {
+	if err := writeUDPFrameBytes(w, lenBuf[:]); err != nil {
 		return err
 	}
-	_, err := w.Write(payload)
-	return err
+	return writeUDPFrameBytes(w, payload)
+}
+
+func writeUDPFrameBytes(w io.Writer, payload []byte) error {
+	for len(payload) > 0 {
+		n, err := w.Write(payload)
+		if n < 0 || n > len(payload) {
+			return fmt.Errorf("invalid UDP frame write count %d", n)
+		}
+		payload = payload[n:]
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrNoProgress
+		}
+	}
+	return nil
 }
 
 // ReadUDPFrame 从 reader 读取一个 UDP 帧并返回 payload。
@@ -69,6 +90,12 @@ const udpReplyGracePeriod = 5 * time.Second
 //     方向有机会读完在途回包。grace period 到期后 Read 返回 timeout 错误，
 //     触发 closeAll 关闭两端。
 func UDPRelay(stream io.ReadWriteCloser, udpConn net.Conn) {
+	UDPRelayWithTraffic(stream, udpConn, nil)
+}
+
+// UDPRelayWithTraffic observes original datagram payload bytes, excluding the
+// two-byte frame length and all lower transport overhead.
+func UDPRelayWithTraffic(stream io.ReadWriteCloser, udpConn net.Conn, observe func(streamToUDP, udpToStream uint64)) {
 	var once sync.Once
 	closeAll := func() {
 		_ = stream.Close()
@@ -98,6 +125,9 @@ func UDPRelay(stream io.ReadWriteCloser, udpConn net.Conn) {
 				_ = stream.Close()
 				return
 			}
+			if observe != nil {
+				observe(uint64(len(payload)), 0)
+			}
 		}
 	}()
 
@@ -115,6 +145,9 @@ func UDPRelay(stream io.ReadWriteCloser, udpConn net.Conn) {
 			if err := WriteUDPFrame(stream, buf[:n]); err != nil {
 				once.Do(closeAll)
 				return
+			}
+			if observe != nil {
+				observe(0, uint64(n))
 			}
 		}
 	}()

@@ -39,7 +39,7 @@ import { parseMbpsInputToBps } from '@/lib/format';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { cn } from '@/lib/utils';
-import type { Client, PortRange, TunnelFormType, TunnelTopology } from '@/types';
+import type { Client, PortRange, TransportPolicy, TunnelFormType, TunnelTopology } from '@/types';
 import { i18n } from '@/i18n';
 import { useTranslation } from 'react-i18next';
 import { getInitialTunnelFormState, type TunnelDialogEditData } from './tunnel-dialog-form';
@@ -179,6 +179,8 @@ const ADVANCED_FIELD_NAMES = new Set<string>([
   'bandwidth_settings.ingress_bps',
   'egress_bps',
   'bandwidth_settings.egress_bps',
+  'total_bps',
+  'bandwidth_settings.total_bps',
 ]);
 
 function isAdvancedFieldError(field: string | undefined) {
@@ -351,6 +353,8 @@ function TunnelDialogForm({
   const [domain, setDomain] = useState(initialForm.domain);
   const [ingressBps, setIngressBps] = useState(initialForm.ingressBps);
   const [egressBps, setEgressBps] = useState(initialForm.egressBps);
+  const [totalBps, setTotalBps] = useState(initialForm.totalBps);
+  const [transportPolicy, setTransportPolicy] = useState<TransportPolicy>(initialForm.transportPolicy);
   const [fieldError, setFieldError] = useState<LocalFieldError | null>(null);
   const [sourceCidrs, setSourceCidrs] = useState(initialForm.sourceCidrs);
   const [socks5AuthEnabled, setSocks5AuthEnabled] = useState(initialForm.socks5AuthEnabled);
@@ -415,6 +419,7 @@ function TunnelDialogForm({
     setFieldError(null);
     const parsedIngressBps = parseMbpsInputToBps(ingressBps);
     const parsedEgressBps = parseMbpsInputToBps(egressBps);
+    const parsedTotalBps = parseMbpsInputToBps(totalBps);
 
     if (!name.trim()) {
       failField(localFieldError('name', t('tunnels.nameRequired')));
@@ -446,8 +451,8 @@ function TunnelDialogForm({
       return;
     }
 
-    if (parsedIngressBps == null || parsedEgressBps == null) {
-      failField(localFieldError(parsedIngressBps == null ? 'ingress_bps' : 'egress_bps', t('tunnels.bandwidthNonNegative')));
+    if (parsedIngressBps == null || parsedEgressBps == null || parsedTotalBps == null) {
+      failField(localFieldError(parsedIngressBps == null ? 'ingress_bps' : parsedEgressBps == null ? 'egress_bps' : 'total_bps', t('tunnels.bandwidthNonNegative')));
       return;
     }
 
@@ -508,6 +513,8 @@ function TunnelDialogForm({
           allowed_source_cidrs: allowedSourceCIDRs,
           ingress_bps: parsedIngressBps,
           egress_bps: parsedEgressBps,
+          total_bps: parsedTotalBps,
+          transport_policy: isClientToClient ? transportPolicy : 'server_relay_only',
           http_auth: isHttp ? {
             enabled: httpAuthEnabled,
             username: httpUsername,
@@ -554,6 +561,8 @@ function TunnelDialogForm({
         allowed_source_cidrs: allowedSourceCIDRs,
         ingress_bps: parsedIngressBps,
         egress_bps: parsedEgressBps,
+        total_bps: parsedTotalBps,
+        transport_policy: isClientToClient ? transportPolicy : 'server_relay_only',
         http_auth: isHttp ? {
           enabled: httpAuthEnabled,
           username: httpUsername,
@@ -697,6 +706,22 @@ function TunnelDialogForm({
             </div>
             <FieldErrorText error={fieldError} fields={['topology', 'transport_policy']} />
           </div>
+
+          {isClientToClient && (
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{t('tunnels.transportPolicy')}</label>
+              <Select value={transportPolicy} onValueChange={(value) => { clearMutationFeedback(); setTransportPolicy(value as TransportPolicy); }}>
+                <SelectTrigger aria-label={t('tunnels.transportPolicy')} className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="server_relay_only">{t('tunnels.serverRelay')}</SelectItem>
+                  <SelectItem value="direct_preferred">{t('tunnels.directPreferred')}</SelectItem>
+                  <SelectItem value="direct_only">{t('tunnels.directOnly')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{t('tunnels.transportPolicyHint')}</p>
+              <FieldErrorText error={fieldError} fields={['transport_policy']} />
+            </div>
+          )}
 
           {(isClientToClient || clients.length > 1) && (
             <div className={cn('grid gap-3', isClientToClient ? 'grid-cols-2' : 'grid-cols-1')}>
@@ -1195,6 +1220,17 @@ function TunnelDialogForm({
                   {t('tunnels.advancedPerformance')}
                 </p>
                 <div className="grid grid-cols-2 gap-3">
+                  {isClientToClient && (
+                    <div className="col-span-2 space-y-1.5">
+                      <label className="text-sm font-medium">{t('tunnels.totalLimit')}</label>
+                      <InputGroup>
+                        <InputGroupInput aria-label={t('tunnels.totalLimit')} type="number" step="any" placeholder="0" value={totalBps} onChange={(e) => { clearMutationFeedback(); setTotalBps(e.target.value); }} min={0} />
+                        <InputGroupAddon align="inline-end"><InputGroupText>MiB/s</InputGroupText></InputGroupAddon>
+                      </InputGroup>
+                      <p className="text-xs text-muted-foreground">{t('tunnels.totalLimitHint')}</p>
+                      <FieldErrorText error={fieldError} fields={['total_bps', 'bandwidth_settings.total_bps']} />
+                    </div>
+                  )}
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">{t('tunnels.ingressLimit')}</label>
                     <InputGroup>

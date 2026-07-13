@@ -195,6 +195,7 @@ func (s *budgetSlot) refillLocked(now time.Time) {
 type directionalBandwidthRuntime struct {
 	ingress *budgetSlot
 	egress  *budgetSlot
+	shared  *sharedFairBudget
 }
 
 func newDirectionalBandwidthRuntime(settings protocol.BandwidthSettings, clock bandwidthClock) *directionalBandwidthRuntime {
@@ -204,6 +205,7 @@ func newDirectionalBandwidthRuntime(settings protocol.BandwidthSettings, clock b
 	return &directionalBandwidthRuntime{
 		ingress: newBudgetSlot(settings.IngressBPS, clock),
 		egress:  newBudgetSlot(settings.EgressBPS, clock),
+		shared:  newSharedFairBudget(settings.TotalBPS, clock),
 	}
 }
 
@@ -213,6 +215,127 @@ func (r *directionalBandwidthRuntime) Update(settings protocol.BandwidthSettings
 	}
 	r.ingress.UpdateLimit(settings.IngressBPS)
 	r.egress.UpdateLimit(settings.EgressBPS)
+	r.shared.UpdateLimit(settings.TotalBPS)
+}
+
+const sharedBandwidthMaxBlock = 256 * 1024
+
+type sharedFairBudget struct {
+	mu               sync.Mutex
+	clock            bandwidthClock
+	limit            int64
+	tokens, capacity float64
+	last             time.Time
+	waiting          [2]uint64
+	prefer           payloadDirection
+}
+
+func newSharedFairBudget(limit int64, clock bandwidthClock) *sharedFairBudget {
+	if clock == nil {
+		clock = realBandwidthClock{}
+	}
+	b := &sharedFairBudget{clock: clock, prefer: payloadDirectionIngress}
+	b.UpdateLimit(limit)
+	return b
+}
+
+func (b *sharedFairBudget) UpdateLimit(limit int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refillLocked(b.clock.Now())
+	b.limit = limit
+	b.last = b.clock.Now()
+	if limit <= 0 {
+		b.tokens, b.capacity = 0, 0
+		return
+	}
+	b.capacity = math.Min(float64(sharedBandwidthMaxBlock), math.Max(1, float64(limit)/10))
+	if b.tokens <= 0 || b.tokens > b.capacity {
+		b.tokens = b.capacity
+	}
+}
+
+func (b *sharedFairBudget) Reserve(direction payloadDirection, bytes int) {
+	if b == nil || bytes <= 0 {
+		return
+	}
+	index, other := 0, 1
+	if direction == payloadDirectionEgress {
+		index, other = 1, 0
+	}
+	b.mu.Lock()
+	if b.limit <= 0 {
+		b.mu.Unlock()
+		return
+	}
+	b.waiting[index] += uint64(bytes)
+	b.mu.Unlock()
+	remaining := bytes
+	for remaining > 0 {
+		b.mu.Lock()
+		if b.limit <= 0 { b.waiting[index] -= uint64(remaining); b.mu.Unlock(); return }
+		now := b.clock.Now()
+		b.refillLocked(now)
+		allowed := int(math.Min(float64(remaining), math.Min(float64(sharedBandwidthMaxBlock), b.tokens)))
+		if b.waiting[other] > 0 && allowed > 0 {
+			share := int(b.tokens / 2)
+			if share == 0 && b.prefer == direction {
+				share = 1
+			}
+			if share < allowed {
+				allowed = share
+			}
+		}
+		if allowed > 0 {
+			b.tokens -= float64(allowed)
+			b.waiting[index] -= uint64(allowed)
+			remaining -= allowed
+			if b.waiting[other] > 0 {
+				if direction == payloadDirectionIngress {
+					b.prefer = payloadDirectionEgress
+				} else {
+					b.prefer = payloadDirectionIngress
+				}
+			}
+			b.mu.Unlock()
+			continue
+		}
+		wait := time.Second / time.Duration(b.limit)
+		if wait < time.Microsecond {
+			wait = time.Microsecond
+		}
+		b.mu.Unlock()
+		b.clock.Sleep(wait)
+	}
+}
+
+func (b *sharedFairBudget) refillLocked(now time.Time) {
+	if b.limit <= 0 || b.last.IsZero() {
+		b.last = now
+		return
+	}
+	elapsed := now.Sub(b.last).Seconds()
+	if elapsed > 0 {
+		b.tokens = math.Min(b.capacity, b.tokens+elapsed*float64(b.limit))
+		b.last = now
+	}
+}
+
+func (r *directionalBandwidthRuntime) reserveShared(direction payloadDirection, bytes int) {
+	if r != nil && r.shared != nil {
+		r.shared.Reserve(direction, bytes)
+	}
+}
+
+type sharedBandwidthWriter struct {
+	io.Writer
+	runtime   *directionalBandwidthRuntime
+	direction payloadDirection
+}
+
+func (w sharedBandwidthWriter) Write(p []byte) (int, error) {
+	w.runtime.reserveShared(w.direction, len(p))
+	return w.Writer.Write(p)
 }
 
 func (r *directionalBandwidthRuntime) slot(direction payloadDirection) *budgetSlot {
@@ -452,7 +575,7 @@ func relayTunnelPayload(stream io.ReadWriteCloser, extConn io.ReadWriteCloser, c
 
 	go func() {
 		defer wg.Done()
-		egressBytes, _ = copyWithBandwidthObserved(extConn, stream, func(n int) {
+		egressBytes, _ = copyWithBandwidthObserved(sharedBandwidthWriter{Writer: extConn, runtime: tunnelRuntime, direction: payloadDirectionEgress}, stream, func(n int) {
 			if observe != nil {
 				observe(0, uint64(n))
 			}
@@ -462,7 +585,7 @@ func relayTunnelPayload(stream io.ReadWriteCloser, extConn io.ReadWriteCloser, c
 
 	go func() {
 		defer wg.Done()
-		ingressBytes, _ = copyWithBandwidthObserved(stream, extConn, func(n int) {
+		ingressBytes, _ = copyWithBandwidthObserved(sharedBandwidthWriter{Writer: stream, runtime: tunnelRuntime, direction: payloadDirectionIngress}, extConn, func(n int) {
 			if observe != nil {
 				observe(uint64(n), 0)
 			}

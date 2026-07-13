@@ -68,6 +68,8 @@ interface TunnelMutationPayloadInput {
   allowed_source_cidrs?: string[];
   ingress_bps?: number;
   egress_bps?: number;
+  total_bps?: number;
+  transport_policy?: TransportPolicy;
   socks5?: Socks5MutationInput;
   http_auth?: HTTPAuthMutationInput;
   confirm_no_auth_risk?: boolean;
@@ -105,27 +107,27 @@ export const currentIngressTypes = ['tcp_listen', 'udp_listen', 'http_host', 'so
 export const currentTargetTypes = ['tcp_service', 'udp_service', 'socks5_connect_handler'] as const satisfies readonly TargetEndpointType[];
 export const futureOnlyTargetTypes = ['unix_socket', 'static_file', 'serial_device'] as const;
 
-const transportPolicyLabels = {
-  server_relay_only: 'Server relay',
-  direct_preferred: 'P2P preferred (unavailable)',
-  direct_only: 'P2P only (unavailable)',
+const transportPolicyLabelKeys = {
+  server_relay_only: 'tunnels.serverRelay',
+  direct_preferred: 'tunnels.directPreferred',
+  direct_only: 'tunnels.directOnly',
 } as const satisfies Record<TransportPolicy, string>;
 
-const actualTransportLabels = {
-  unknown: 'Not established',
-  server_relay: 'Server relay',
-  peer_direct: 'P2P direct (unavailable)',
-  turn_relay: 'TURN relay',
+const actualTransportLabelKeys = {
+  unknown: 'tunnels.transportNotEstablished',
+  server_relay: 'tunnels.serverRelay',
+  peer_direct: 'tunnels.peerDirect',
+  turn_relay: 'tunnels.turnRelay',
 } as const satisfies Record<ActualTransport, string>;
 
-const p2pStateLabels = {
-  idle: 'Disabled',
-  gathering: 'Gathering candidates',
-  checking: 'Checking connectivity',
-  connected: 'Direct connected',
-  failed: 'Direct failed',
-  fallback: 'Fell back to relay',
-  closed: 'Closed',
+const p2pStateLabelKeys = {
+  idle: 'tunnels.p2pDisabled',
+  gathering: 'tunnels.p2pGathering',
+  checking: 'tunnels.p2pChecking',
+  connected: 'tunnels.p2pConnected',
+  failed: 'tunnels.p2pFailed',
+  fallback: 'tunnels.p2pFallback',
+  closed: 'tunnels.p2pClosed',
 } as const satisfies Record<P2PStateValue, string>;
 
 export function buildTunnelMutationPayload(input: TunnelMutationPayloadInput) {
@@ -144,6 +146,7 @@ export function buildTunnelMutationPayload(input: TunnelMutationPayloadInput) {
     domain: input.type === 'http' ? domain : '',
     ingress_bps: normalizeBandwidthLimit(input.ingress_bps),
     egress_bps: normalizeBandwidthLimit(input.egress_bps),
+    ...(input.total_bps == null ? {} : { total_bps: normalizeBandwidthLimit(input.total_bps) }),
   };
 }
 
@@ -170,6 +173,7 @@ export function buildTunnelSpecCreateRequest(input: TunnelSpecMutationInput): Tu
       bandwidth_settings: {
         ingress_bps: payload.ingress_bps,
         egress_bps: payload.egress_bps,
+        ...(input.total_bps == null ? {} : { total_bps: payload.total_bps }),
       },
       confirm_no_auth_risk: input.confirm_no_auth_risk,
     };
@@ -204,6 +208,7 @@ export function buildTunnelSpecCreateRequest(input: TunnelSpecMutationInput): Tu
     bandwidth_settings: {
       ingress_bps: payload.ingress_bps,
       egress_bps: payload.egress_bps,
+      ...(input.total_bps == null ? {} : { total_bps: payload.total_bps }),
     },
   };
 }
@@ -240,10 +245,11 @@ export function buildClientToClientTunnelSpecCreateRequest(
         type: 'socks5_connect_handler',
         config: socks5.target,
       },
-      transport_policy: 'server_relay_only',
+      transport_policy: input.transport_policy ?? 'server_relay_only',
       bandwidth_settings: {
         ingress_bps: payload.ingress_bps,
         egress_bps: payload.egress_bps,
+        ...(input.total_bps == null ? {} : { total_bps: payload.total_bps }),
       },
     };
   }
@@ -293,10 +299,11 @@ export function buildClientToClientTunnelSpecCreateRequest(
     topology: 'client_to_client',
     ingress,
     target,
-    transport_policy: 'server_relay_only',
+    transport_policy: input.transport_policy ?? 'server_relay_only',
     bandwidth_settings: {
       ingress_bps: payload.ingress_bps,
       egress_bps: payload.egress_bps,
+      ...(input.total_bps == null ? {} : { total_bps: payload.total_bps }),
     },
   };
 }
@@ -554,14 +561,14 @@ function getParticipantLabel(tunnel: ProxyConfig) {
 function getTransportLabel(tunnel: ProxyConfig) {
   const policy = tunnel.transport?.policy ?? tunnel.transport_policy ?? 'server_relay_only';
   const actual = tunnel.transport?.actual ?? tunnel.actual_transport ?? 'unknown';
-  const policyLabel = transportPolicyLabels[policy] ?? policy;
-  const actualLabel = actualTransportLabels[actual] ?? actual;
+  const policyLabel = i18n.t(transportPolicyLabelKeys[policy] ?? policy);
+  const actualLabel = i18n.t(actualTransportLabelKeys[actual] ?? actual);
   return `${policyLabel} · ${actualLabel}`;
 }
 
 function getP2PLabel(tunnel: ProxyConfig) {
   const state = tunnel.transport?.p2p_state ?? tunnel.p2p?.state ?? 'idle';
-  return p2pStateLabels[state] ?? state;
+  return i18n.t(p2pStateLabelKeys[state] ?? state);
 }
 
 function getTunnelIngressLabel(tunnel: ProxyConfig) {
@@ -648,5 +655,6 @@ export function getTunnelBandwidthSettings(tunnel: ProxyConfig): BandwidthSettin
   return tunnel.bandwidth_settings ?? {
     ingress_bps: tunnel.ingress_bps,
     egress_bps: tunnel.egress_bps,
+    total_bps: tunnel.total_bps ?? 0,
   };
 }

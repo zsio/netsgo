@@ -89,6 +89,7 @@ export type ProxyRuntimeState = "pending" | "exposed" | "active" | "offline" | "
 export interface BandwidthSettings {
   ingress_bps: number;
   egress_bps: number;
+  total_bps?: number;
 }
 
 export interface TcpListenConfig {
@@ -288,6 +289,7 @@ export interface ProxyConfig {
   client_id: string;
   ingress_bps: number;
   egress_bps: number;
+  total_bps?: number;
   created_at: string;
   desired_state: ProxyDesiredState;
   runtime_state: ProxyRuntimeState;
@@ -311,6 +313,8 @@ export interface CreateTunnelInput {
   allowed_source_cidrs?: string[];
   ingress_bps?: number;
   egress_bps?: number;
+  total_bps?: number;
+  transport_policy?: TransportPolicy;
   socks5?: {
     auth_type: Socks5AuthConfig["type"];
     username?: string;
@@ -344,6 +348,8 @@ export interface UpdateTunnelInput {
   allowed_source_cidrs?: string[];
   ingress_bps?: number;
   egress_bps?: number;
+  total_bps?: number;
+  transport_policy?: TransportPolicy;
   socks5?: CreateTunnelInput["socks5"];
   http_auth?: CreateTunnelInput["http_auth"];
   confirm_no_auth_risk?: boolean;

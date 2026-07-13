@@ -43,6 +43,7 @@ type Server struct {
 	sessions                            *SessionManager   // connection lifecycle (managedConns, longLivedHandlers, generations, data timeout)
 	httpServer                          *http.Server
 	listener                            net.Listener
+	stunConn                            net.PacketConn
 	done                                chan struct{}
 	doneCloseOnce                       sync.Once
 	tlsEnabled                          bool
@@ -54,12 +55,16 @@ type Server struct {
 	unifiedReconcile                    *unifiedTunnelReconcileRegistry
 	tunnelRuntimeOps                    *tunnelRuntimeOperationRegistry
 	c2c                                 *clientRelayRegistry
+	p2p                                 *p2pCoordinator
+	p2pRetryMu                          sync.Mutex
+	p2pRetries                          map[string]p2pRetryState
 	releaseIndexCache                   *releaseIndexCache
 	updateCapabilityCache               *updateCapabilityCache // cached server install capability for status API
 	serverExposeActivatedHook           func(StoredTunnel, *ProxyTunnel)
 	runtimeErrorCleanupHook             func(protocol.ProxyConfig)
 	portPolicyAfterConfigSaveHook       func()
 	portPolicyAfterRuntimeCleanupHook   func(affectedTunnel)
+	p2pSignalDropHook                   func(string, string, protocol.P2PSignal) bool
 	restorePlaceholderBeforeInstallHook func(StoredTunnel, string)
 }
 
@@ -104,6 +109,8 @@ func New(port int) *Server {
 		unifiedReconcile:            newUnifiedTunnelReconcileRegistry(),
 		tunnelRuntimeOps:            newTunnelRuntimeOperationRegistry(),
 		c2c:                         newClientRelayRegistry(),
+		p2p:                         newP2PCoordinator(time.Now),
+		p2pRetries:                  make(map[string]p2pRetryState),
 		startTime:                   time.Now(),
 		done:                        make(chan struct{}),
 	}

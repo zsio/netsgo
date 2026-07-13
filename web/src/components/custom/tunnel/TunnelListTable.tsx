@@ -390,6 +390,11 @@ function TunnelTableRow({
           <span className="inline-flex w-fit max-w-full items-center rounded border border-border/50 bg-muted/30 px-1 py-0 text-[9px] leading-3 font-medium text-muted-foreground">
             {getTunnelTypeLabel(tunnel)}
           </span>
+          {tunnel.topology === 'client_to_client' && (
+            <span className="block max-w-52 truncate text-[10px] text-muted-foreground" title={`${view.transportLabel} · ${view.p2pLabel}`}>
+              {view.transportLabel} · {view.p2pLabel}
+            </span>
+          )}
         </div>
       </td>
 
@@ -503,6 +508,10 @@ function TunnelSpeedLimit({ tunnel }: { tunnel: TunnelEntry }) {
   const { t } = useTranslation();
   const hasIngressLimit = tunnel.ingress_bps > 0;
   const hasEgressLimit = tunnel.egress_bps > 0;
+	const totalLimit = tunnel.total_bps ?? tunnel.bandwidth_settings?.total_bps ?? 0;
+	if (totalLimit > 0) {
+		return <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">Σ {formatNetSpeed(totalLimit)}</span>;
+	}
 
   if (!hasIngressLimit && !hasEgressLimit) {
     return (

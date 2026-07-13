@@ -59,7 +59,7 @@ describe('DashboardClientTableContent', () => {
       }),
     );
 
-    expect(markup).toContain('Online endpoints (Clients)');
+    expect(markup).toContain('Clients');
     expect(markup).toContain('Add client');
   });
 });

@@ -123,6 +123,9 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 	if active, ok := s.c2c.get(stored.ID); ok && active.Revision == stored.Revision &&
 		isActiveRuntimeState(stored.RuntimeState) &&
 		!s.unifiedRuntime.hasIssuesForStoredTunnel(stored, true) {
+		if err := s.ensureP2PForTunnel(stored, ingressClient, targetClient); err != nil {
+			log.Printf("⚠️ failed to reconcile P2P session for tunnel %s: %v", stored.ID, err)
+		}
 		return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
 	}
 
@@ -159,6 +162,9 @@ func (s *Server) reconcileClientRelayTunnel(stored StoredTunnel) error {
 	}
 	s.unifiedRuntime.clearTunnelIssues(stored.ID, stored.Revision)
 	s.c2c.set(stored)
+	if err := s.ensureP2PForTunnel(stored, ingressClient, targetClient); err != nil {
+		log.Printf("⚠️ failed to prepare P2P session for tunnel %s: %v", stored.ID, err)
+	}
 	return s.updateStoredTunnelRuntime(stored, protocol.ProxyRuntimeStateExposed, "")
 }
 
@@ -191,6 +197,10 @@ func (s *Server) unprovisionClientRelayTunnel(stored StoredTunnel, reason string
 		return nil
 	}
 	s.c2c.delete(stored.ID)
+	if s.p2p != nil {
+		_, revokes := s.p2p.revokeTunnel(stored.ID, stored.Revision, reason)
+		s.sendP2POutbounds(revokes)
+	}
 	var errs []error
 	if ingressClient, ok := s.loadLiveClient(stored.Ingress.ClientID); ok {
 		if err := s.notifyClientTunnelUnprovision(ingressClient, stored.ID, stored.Revision, protocol.DataStreamRoleIngress, reason); err != nil {
@@ -337,6 +347,7 @@ func tunnelSpecProtocolForRole(stored StoredTunnel, runtimeState, role string) p
 		BandwidthSettings: protocol.BandwidthSettings{
 			IngressBPS: stored.IngressBPS,
 			EgressBPS:  stored.EgressBPS,
+			TotalBPS:   stored.TotalBPS,
 		},
 		CreatedAt: stored.CreatedAt,
 		UpdatedAt: stored.UpdatedAt,
@@ -461,6 +472,7 @@ func (s *Server) relayClientUDPFrames(stored StoredTunnel, targetStream, ingress
 				return
 			}
 			reserveFullPayloadBandwidth(len(payload), ingressSlots...)
+			tunnelRuntime.reserveShared(payloadDirectionIngress, len(payload))
 			if err := mux.WriteUDPFrame(targetStream, payload); err != nil {
 				log.Printf("⚠️ client relay UDP write target frame failed [%s]: %v", stored.ID, err)
 				once.Do(closeAll)
@@ -481,6 +493,7 @@ func (s *Server) relayClientUDPFrames(stored StoredTunnel, targetStream, ingress
 				return
 			}
 			reserveFullPayloadBandwidth(len(payload), egressSlots...)
+			tunnelRuntime.reserveShared(payloadDirectionEgress, len(payload))
 			if err := mux.WriteUDPFrame(ingressStream, payload); err != nil {
 				log.Printf("⚠️ client relay UDP write ingress frame failed [%s]: %v", stored.ID, err)
 				once.Do(closeAll)

@@ -1256,7 +1256,7 @@ func TestAPI_UnifiedTunnelRejectsFutureTargetsAndDirectPolicies(t *testing.T) {
 	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
 		t.Fatalf("failed to decode direct policy error: %v", err)
 	}
-	if body.ErrorCode != "direct_transport_unavailable" || body.Field != "transport_policy" {
+	if body.ErrorCode != protocol.TunnelMutationErrorCodeSameIngressAndTargetClient || body.Field != "ingress.client_id" {
 		t.Fatalf("direct policy error mismatch: %+v", body)
 	}
 	if _, ok := s.store.GetTunnel(record.ID, "direct-policy"); ok {
@@ -1273,15 +1273,11 @@ func TestAPI_UnifiedTunnelRejectsFutureTargetsAndDirectPolicies(t *testing.T) {
 		"transport_policy":"direct_only"
 	}`)
 	resp = doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", token, clientRelayBody)
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("client_to_client direct create: want 400 for unavailable direct transport, got %d body=%s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("client_to_client direct create: want 201, got %d body=%s", resp.Code, resp.Body.String())
 	}
-	body = tunnelMutationErrorResponse{}
-	if err := mustDecodeJSON(t, resp.Body, &body); err != nil {
-		t.Fatalf("failed to decode client_to_client direct error: %v", err)
-	}
-	if body.ErrorCode != "direct_transport_unavailable" || body.Field != "transport_policy" {
-		t.Fatalf("client_to_client direct error mismatch: %+v", body)
+	if _, ok := s.store.GetTunnel(source.ID, "client-relay-direct"); !ok {
+		t.Fatal("supported direct policy was not persisted")
 	}
 }
 

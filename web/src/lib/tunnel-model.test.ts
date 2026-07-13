@@ -291,6 +291,16 @@ describe('tunnel-model', () => {
     });
   });
 
+  test('client_to_client 可提交点对点策略和共享总限速', () => {
+    const request = buildClientToClientTunnelSpecCreateRequest({
+      ingressClientId: 'ingress-client', targetClientId: 'target-client', name: 'direct',
+      type: 'tcp', local_ip: '127.0.0.1', local_port: 8080, remote_port: 18080,
+      bind_ip: '0.0.0.0', transport_policy: 'direct_preferred', total_bps: 1024,
+    });
+    expect(request.transport_policy).toBe('direct_preferred');
+    expect(request.bandwidth_settings.total_bps).toBe(1024);
+  });
+
   test('创建请求可转换为统一 TunnelSpec client_to_client UDP 结构', () => {
     expect(
       buildClientToClientTunnelSpecCreateRequest({
@@ -457,8 +467,8 @@ describe('tunnel-model', () => {
     expect(view.destinationLabel).toBe('127.0.0.1:22');
     expect(view.topologyLabel).toBe('Client ↔ Client');
     expect(view.participantLabel).toBe('Ingress client-a / Target client-b');
-    expect(view.transportLabel).toBe('P2P preferred (unavailable) · P2P direct (unavailable)');
-    expect(view.p2pLabel).toBe('Direct connected');
+    expect(view.transportLabel).toBe('Prefer peer-to-peer · P2P direct');
+    expect(view.p2pLabel).toBe('P2P connected');
     expect(view.ingressWarning).toBe('Ingress binds to a wildcard address and is exposed to the ingress client network.');
   });
 

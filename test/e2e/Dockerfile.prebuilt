@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1.7
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates curl iproute2 iptables jq nftables socat
+
+WORKDIR /app
+
+COPY test/e2e/.artifacts/netsgo /usr/local/bin/netsgo
+COPY test/e2e/scripts /opt/netsgo-e2e
+
+RUN chmod +x /usr/local/bin/netsgo /opt/netsgo-e2e/*.sh
+
+ENV NETSGO_PORT=9527
+
+ENTRYPOINT ["/usr/local/bin/netsgo"]
+CMD ["server"]

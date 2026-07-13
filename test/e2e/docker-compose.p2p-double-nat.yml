@@ -1,0 +1,78 @@
+services:
+  server:
+    image: ${NETSGO_E2E_IMAGE:-netsgo-e2e:prebuilt}
+    hostname: p2p-double-nat-server
+    command:
+      - server
+      - --data-dir
+      - /var/lib/netsgo
+      - --port
+      - "8080"
+      - --init-admin-username
+      - ${NETSGO_ADMIN_USER:-admin}
+      - --init-admin-password
+      - ${NETSGO_ADMIN_PASS:?NETSGO_ADMIN_PASS is required}
+      - --init-server-addr
+      - http://172.31.0.10:8080
+      - --tls-mode
+      - off
+      - --allow-loopback-management-host
+    ports:
+      - "${DOUBLE_NAT_SERVER_PORT:-19281}:8080"
+    volumes:
+      - double-nat-server-data:/var/lib/netsgo
+    networks:
+      wan:
+        ipv4_address: 172.31.0.10
+
+  target-router:
+    image: ${NETSGO_E2E_IMAGE:-netsgo-e2e:prebuilt}
+    hostname: p2p-double-nat-target
+    privileged: true
+    entrypoint: ["/bin/sh", "/opt/netsgo-e2e/run-client-in-nat.sh"]
+    environment:
+      NETSGO_SERVER: http://172.31.0.10:8080
+      NETSGO_CLIENT_KEY: ${NETSGO_CLIENT_KEY:-}
+      NETSGO_DATA_DIR: /var/lib/netsgo
+      NETSGO_NAT_WAN_IP: 172.31.0.2
+      NETSGO_NAT_LAN_IP: 10.31.1.2
+      NETSGO_NAT_CLIENT_IP: 10.31.1.10
+      NETSGO_NAT_BACKEND_PORT: "18083"
+    volumes:
+      - double-nat-target-data:/var/lib/netsgo
+    depends_on: [server]
+    networks:
+      wan:
+        ipv4_address: 172.31.0.2
+
+  ingress-router:
+    image: ${NETSGO_E2E_IMAGE:-netsgo-e2e:prebuilt}
+    hostname: p2p-double-nat-ingress
+    privileged: true
+    entrypoint: ["/bin/sh", "/opt/netsgo-e2e/run-client-in-nat.sh"]
+    environment:
+      NETSGO_SERVER: http://172.31.0.10:8080
+      NETSGO_CLIENT_KEY: ${NETSGO_CLIENT_KEY:-}
+      NETSGO_DATA_DIR: /var/lib/netsgo
+      NETSGO_NAT_WAN_IP: 172.31.0.3
+      NETSGO_NAT_LAN_IP: 10.31.2.2
+      NETSGO_NAT_CLIENT_IP: 10.31.2.10
+      NETSGO_NAT_EXPOSE_PORT: "19098"
+    ports:
+      - "${DOUBLE_NAT_INGRESS_PORT:-19298}:19098"
+    volumes:
+      - double-nat-ingress-data:/var/lib/netsgo
+    depends_on: [server]
+    networks:
+      wan:
+        ipv4_address: 172.31.0.3
+
+networks:
+  wan:
+    ipam:
+      config: [{subnet: 172.31.0.0/24}]
+
+volumes:
+  double-nat-server-data:
+  double-nat-target-data:
+  double-nat-ingress-data:

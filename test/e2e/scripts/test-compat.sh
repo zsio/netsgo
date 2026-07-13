@@ -61,6 +61,11 @@ SMOKE_PROXY_COMPOSE="${E2E_PROXY_COMPOSE}"
 SMOKE_PROXY_PORT="${PROXY_PORT}"
 export SMOKE_BASE_COMPOSE SMOKE_PROXY_COMPOSE SMOKE_PROXY_PORT
 export NETSGO_E2E_TOOLS_IMAGE
+# Cross-version rows intentionally exercise the common relay contract. Client
+# capabilities alone cannot prove that an older Server understands the new
+# direct policy, so the current-only P2P assertions remain in the normal system
+# E2E targets while this matrix forces the compatible relay policy.
+export NETSGO_E2E_DISABLE_P2P=1
 
 run_smoke() {
 	local project="$1"

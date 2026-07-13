@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"netsgo/internal/socks5wire"
+	"netsgo/pkg/protocol"
 )
 
 const (
@@ -71,13 +72,16 @@ type systemHarness struct {
 	adminToken              string
 	targetClientID          string
 	ingressClientID         string
+	c2cTransportPolicy      string
+	expectP2P               bool
 }
 
 type apiClient struct {
 	ID     string `json:"id"`
 	Online bool   `json:"online"`
 	Info   struct {
-		Hostname string `json:"hostname"`
+		Hostname     string                       `json:"hostname"`
+		Capabilities *protocol.ClientCapabilities `json:"capabilities,omitempty"`
 	} `json:"info"`
 }
 
@@ -86,10 +90,14 @@ type apiKeyResponse struct {
 }
 
 type tunnelResponse struct {
-	ID           string          `json:"id"`
-	Name         string          `json:"name"`
-	RuntimeState string          `json:"runtime_state"`
-	Issues       json.RawMessage `json:"issues,omitempty"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	RuntimeState    string `json:"runtime_state"`
+	ActualTransport string `json:"actual_transport"`
+	P2P             struct {
+		State string `json:"state"`
+	} `json:"p2p"`
+	Issues json.RawMessage `json:"issues,omitempty"`
 }
 
 type tunnelIssueResponse struct {
@@ -176,6 +184,7 @@ func TestSystemE2E(t *testing.T) {
 		c2cUDP = h.createUDPClientToClientTunnel(t, "system-c2c-udp", h.c2cUDPPort, udpBackendHost, udpBackendPort)
 		for _, tunnel := range []tunnelResponse{c2cTCP, c2cTCPAlt, c2cTCPSlow, c2cUDP} {
 			h.waitTunnelState(t, tunnel.ID, "active", 90*time.Second)
+			h.waitTunnelP2PConnected(t, tunnel.ID, 90*time.Second)
 			h.expectTunnelNoIssues(t, tunnel.ID)
 		}
 
@@ -200,6 +209,8 @@ func TestSystemE2E(t *testing.T) {
 		h.targetClientID, h.ingressClientID = h.waitForClientPair(t, 90*time.Second)
 		h.waitTunnelState(t, c2cTCP.ID, "active", 90*time.Second)
 		h.waitTunnelState(t, c2cUDP.ID, "active", 90*time.Second)
+		h.waitTunnelP2PConnected(t, c2cTCP.ID, 90*time.Second)
+		h.waitTunnelP2PConnected(t, c2cUDP.ID, 90*time.Second)
 		h.expectTunnelNoIssues(t, c2cTCP.ID)
 		h.expectTunnelNoIssues(t, c2cUDP.ID)
 		h.expectTCPHTTPContains(t, h.c2cTCPPort, backendHost, backendResponse)
@@ -209,6 +220,7 @@ func TestSystemE2E(t *testing.T) {
 	t.Run("SOCKS5 client_to_client auth policy and target restart recovery", func(t *testing.T) {
 		c2cSOCKS5 = h.createSOCKS5ClientToClientTunnel(t, "system-socks5-c2c", h.c2cSOCKS5Port, backendHost, backendPort, `{"type":"none"}`, []string{"0.0.0.0/0", "::/0"}, []string{backendHost}, []int{backendPort})
 		h.waitTunnelState(t, c2cSOCKS5.ID, "active", 90*time.Second)
+		h.waitTunnelP2PConnected(t, c2cSOCKS5.ID, 90*time.Second)
 		h.expectTunnelNoIssues(t, c2cSOCKS5.ID)
 		h.expectSOCKS5HTTPContains(t, h.c2cSOCKS5Port, backendHost, backendPort, nil, backendResponse)
 		h.expectConcurrent(t, "same SOCKS5 tunnel concurrent CONNECT streams", 12, func(_ int) error {
@@ -217,6 +229,7 @@ func TestSystemE2E(t *testing.T) {
 
 		authTunnel := h.createSOCKS5ClientToClientTunnel(t, "system-socks5-auth", h.c2cSOCKS5AuthPort, backendHost, backendPort, `{"type":"username_password","username":"alice","password":"secret"}`, []string{"0.0.0.0/0", "::/0"}, []string{backendHost}, []int{backendPort})
 		h.waitTunnelState(t, authTunnel.ID, "active", 90*time.Second)
+		h.waitTunnelP2PConnected(t, authTunnel.ID, 90*time.Second)
 		h.expectTunnelNoIssues(t, authTunnel.ID)
 		h.expectSOCKS5NoAcceptableMethod(t, h.c2cSOCKS5AuthPort)
 		h.expectSOCKS5AuthFailure(t, h.c2cSOCKS5AuthPort, "alice", "wrong")
@@ -224,6 +237,7 @@ func TestSystemE2E(t *testing.T) {
 
 		targetDeny := h.createSOCKS5ClientToClientTunnel(t, "system-socks5-target-deny", h.c2cDenyPort, backendHost, backendPort, `{"type":"none"}`, []string{"0.0.0.0/0", "::/0"}, []string{"blocked.example"}, []int{backendPort})
 		h.waitTunnelState(t, targetDeny.ID, "active", 90*time.Second)
+		h.waitTunnelP2PConnected(t, targetDeny.ID, 90*time.Second)
 		h.expectTunnelNoIssues(t, targetDeny.ID)
 		rep := h.socks5ConnectReply(t, h.c2cDenyPort, backendHost, backendPort, nil)
 		if rep != socks5wire.RepNotAllowed {
@@ -232,12 +246,14 @@ func TestSystemE2E(t *testing.T) {
 
 		sourceDeny := h.createSOCKS5ClientToClientTunnel(t, "system-socks5-source-deny", h.c2cSOCKS5SourceDenyPort, backendHost, backendPort, `{"type":"none"}`, []string{"192.0.2.0/24"}, []string{backendHost}, []int{backendPort})
 		h.waitTunnelState(t, sourceDeny.ID, "active", 90*time.Second)
+		h.waitTunnelP2PConnected(t, sourceDeny.ID, 90*time.Second)
 		h.expectTunnelNoIssues(t, sourceDeny.ID)
 		h.expectSOCKS5SourceRejected(t, h.c2cSOCKS5SourceDenyPort)
 
 		h.compose(t, h.composeEnv, "restart", "target-client")
 		h.targetClientID, h.ingressClientID = h.waitForClientPair(t, 90*time.Second)
 		h.waitTunnelState(t, c2cSOCKS5.ID, "active", 90*time.Second)
+		h.waitTunnelP2PConnected(t, c2cSOCKS5.ID, 90*time.Second)
 		h.expectTunnelNoIssues(t, c2cSOCKS5.ID)
 		h.expectSOCKS5HTTPContains(t, h.c2cSOCKS5Port, backendHost, backendPort, nil, backendResponse)
 	})
@@ -256,6 +272,9 @@ func TestSystemE2E(t *testing.T) {
 		for _, tunnel := range requiredTunnels {
 			h.waitTunnelState(t, tunnel.ID, "active", 120*time.Second)
 			h.expectTunnelNoIssues(t, tunnel.ID)
+		}
+		for _, tunnel := range []tunnelResponse{c2cSOCKS5, c2cTCP, c2cUDP} {
+			h.waitTunnelP2PConnected(t, tunnel.ID, 120*time.Second)
 		}
 		h.expectHTTPContainsAt(t, h.baseURL, h.tunnelHost, backendResponse, 90*time.Second)
 		h.expectHTTPContainsAt(t, h.directBaseURL, h.directTunnelHost, backendResponse, 90*time.Second)
@@ -639,6 +658,7 @@ func (h *systemHarness) waitForClientPair(t *testing.T, timeout time.Duration) (
 	t.Helper()
 	h.poll(t, timeout, func() (bool, string) {
 		clients := h.listClients(t)
+		targetP2P, ingressP2P := false, false
 		for _, client := range clients {
 			if !client.Online {
 				continue
@@ -646,16 +666,34 @@ func (h *systemHarness) waitForClientPair(t *testing.T, timeout time.Duration) (
 			switch client.Info.Hostname {
 			case h.targetHostname:
 				targetID = client.ID
+				targetP2P = apiClientSupportsP2P(client)
 			case h.ingressHostname:
 				ingressID = client.ID
+				ingressP2P = apiClientSupportsP2P(client)
 			}
 		}
 		if targetID != "" && ingressID != "" {
+			h.expectP2P = targetP2P && ingressP2P
+			if disabled := os.Getenv("NETSGO_E2E_DISABLE_P2P"); disabled == "1" || strings.EqualFold(disabled, "true") {
+				h.expectP2P = false
+			}
+			h.c2cTransportPolicy = protocol.TransportPolicyServerRelayOnly
+			if h.expectP2P {
+				h.c2cTransportPolicy = protocol.TransportPolicyDirectPreferred
+			}
+			if require := os.Getenv("NETSGO_E2E_REQUIRE_P2P"); (require == "1" || strings.EqualFold(require, "true")) && !h.expectP2P {
+				return false, "both current clients are online but did not advertise the required P2P capability"
+			}
 			return true, ""
 		}
 		return false, fmt.Sprintf("target=%q ingress=%q", targetID, ingressID)
 	})
 	return targetID, ingressID
+}
+
+func apiClientSupportsP2P(client apiClient) bool {
+	caps := client.Info.Capabilities
+	return caps != nil && caps.P2P.Supported && caps.P2P.Impl == protocol.P2PImplWebRTCICE
 }
 
 func (h *systemHarness) waitForClientOnline(t *testing.T, hostname string, timeout time.Duration) string {
@@ -782,6 +820,32 @@ func (h *systemHarness) waitTunnelState(t *testing.T, id, state string, timeout 
 			return true, ""
 		}
 		return false, fmt.Sprintf("runtime_state=%q issues=%s", last.RuntimeState, last.Issues)
+	})
+}
+
+func (h *systemHarness) waitTunnelP2PConnected(t *testing.T, id string, timeout time.Duration) {
+	t.Helper()
+	if !h.expectP2P {
+		return
+	}
+	var last tunnelResponse
+	h.poll(t, timeout, func() (bool, string) {
+		resp, err := h.apiRequest(http.MethodGet, "/api/tunnels/"+id, h.adminToken, nil)
+		if err != nil {
+			return false, err.Error()
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			payload, _ := io.ReadAll(resp.Body)
+			return false, fmt.Sprintf("GET tunnel P2P status %d body=%s", resp.StatusCode, payload)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&last); err != nil {
+			return false, err.Error()
+		}
+		if last.P2P.State == "connected" && last.ActualTransport == "peer_direct" {
+			return true, ""
+		}
+		return false, fmt.Sprintf("p2p.state=%q actual_transport=%q runtime_state=%q issues=%s", last.P2P.State, last.ActualTransport, last.RuntimeState, last.Issues)
 	})
 }
 
@@ -958,8 +1022,8 @@ func (h *systemHarness) createTCPClientToClientTunnel(t *testing.T, name string,
 			"allowed_source_cidrs":["0.0.0.0/0","::/0"]
 		}},
 		"target":{"location":"client","client_id":%q,"type":"tcp_service","config":{"host":%q,"port":%d}},
-		"transport_policy":"server_relay_only"
-	}`, name, h.ingressClientID, ingressPort, h.targetClientID, targetHost, targetPort))
+		"transport_policy":%q
+	}`, name, h.ingressClientID, ingressPort, h.targetClientID, targetHost, targetPort, h.c2cTransportPolicy))
 }
 
 func (h *systemHarness) createUDPClientToClientTunnel(t *testing.T, name string, ingressPort int, targetHost string, targetPort int) tunnelResponse {
@@ -973,8 +1037,8 @@ func (h *systemHarness) createUDPClientToClientTunnel(t *testing.T, name string,
 			"allowed_source_cidrs":["0.0.0.0/0","::/0"]
 		}},
 		"target":{"location":"client","client_id":%q,"type":"udp_service","config":{"host":%q,"port":%d}},
-		"transport_policy":"server_relay_only"
-	}`, name, h.ingressClientID, ingressPort, h.targetClientID, targetHost, targetPort))
+		"transport_policy":%q
+	}`, name, h.ingressClientID, ingressPort, h.targetClientID, targetHost, targetPort, h.c2cTransportPolicy))
 }
 
 func (h *systemHarness) createSOCKS5ClientToClientTunnel(t *testing.T, name string, ingressPort int, targetHost string, targetPort int, authJSON string, sourceCIDRs []string, allowedHosts []string, allowedPorts []int) tunnelResponse {
@@ -994,8 +1058,8 @@ func (h *systemHarness) createSOCKS5ClientToClientTunnel(t *testing.T, name stri
 			"allowed_target_ports":%s,
 			"dial_timeout_seconds":5
 		}},
-		"transport_policy":"server_relay_only"
-	}`, name, h.ingressClientID, ingressPort, mustJSON(t, sourceCIDRs), authJSON, h.targetClientID, mustJSON(t, allowedHosts), mustJSON(t, allowedPorts)))
+		"transport_policy":%q
+	}`, name, h.ingressClientID, ingressPort, mustJSON(t, sourceCIDRs), authJSON, h.targetClientID, mustJSON(t, allowedHosts), mustJSON(t, allowedPorts), h.c2cTransportPolicy))
 }
 
 func (h *systemHarness) expectHTTPContains(t *testing.T, host, expected string, timeout time.Duration) {

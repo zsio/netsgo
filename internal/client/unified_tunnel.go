@@ -622,36 +622,13 @@ func (c *Client) getOrCreateIngressUDPAssociation(rt *sessionRuntime, req protoc
 		}
 	}
 
-	rt.dataMu.RLock()
-	session := rt.dataSession
-	rt.dataMu.RUnlock()
-	if session == nil || session.IsClosed() {
-		message := fmt.Sprintf("data session unavailable for UDP tunnel ingress [%s]", req.TunnelID)
-		log.Printf("⚠️ %s", message)
-		c.reportTunnelRuntimeError(rt, req, message)
-		return nil, false
-	}
-	stream, err := session.Open()
+	stream, _, err := c.ingressTransportSelector(rt, req).Open(req, c.CurrentClientID(), nil)
 	if err != nil {
 		message := fmt.Sprintf("open UDP tunnel ingress stream failed [%s]: %v", req.TunnelID, err)
 		log.Printf("⚠️ %s", message)
-		c.reportTunnelRuntimeError(rt, req, message)
-		return nil, false
-	}
-
-	header, err := ingressDataStreamHeader(req, c.CurrentClientID())
-	if err != nil {
-		_ = stream.Close()
-		message := fmt.Sprintf("build UDP tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
-		log.Printf("⚠️ %s", message)
-		c.reportTunnelRuntimeError(rt, req, message)
-		return nil, false
-	}
-	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
-		_ = stream.Close()
-		message := fmt.Sprintf("write UDP tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
-		log.Printf("⚠️ %s", message)
-		c.reportTunnelRuntimeError(rt, req, message)
+		if shouldReportIngressOpenError(err) {
+			c.reportTunnelRuntimeError(rt, req, message)
+		}
 		return nil, false
 	}
 
@@ -711,7 +688,7 @@ func (c *Client) readIngressUDPAssociationReplies(runtime *clientTunnelRuntime, 
 	}
 }
 
-func ingressDataStreamHeader(req protocol.TunnelProvisionRequest, openClientID string) (protocol.DataStreamHeader, error) {
+func ingressDataStreamHeader(req protocol.TunnelProvisionRequest, openClientID, transport string) (protocol.DataStreamHeader, error) {
 	streamID, err := protocol.NewDataStreamID()
 	if err != nil {
 		return protocol.DataStreamHeader{}, err
@@ -725,8 +702,10 @@ func ingressDataStreamHeader(req protocol.TunnelProvisionRequest, openClientID s
 		SourceRole:   protocol.DataStreamRoleIngress,
 		TargetRole:   protocol.DataStreamRoleTarget,
 		Direction:    protocol.DataStreamDirectionIngressToTarget,
-		Transport:    protocol.ActualTransportServerRelay,
-		OpenToken:    "server-relay",
+		Transport:    transport,
+	}
+	if transport == protocol.ActualTransportServerRelay {
+		header.OpenToken = "server-relay"
 	}
 	return header, nil
 }
@@ -740,38 +719,22 @@ func (c *Client) handleIngressTCPConn(rt *sessionRuntime, req protocol.TunnelPro
 		return
 	}
 
-	rt.dataMu.RLock()
-	session := rt.dataSession
-	rt.dataMu.RUnlock()
-	if session == nil || session.IsClosed() {
-		message := fmt.Sprintf("data session unavailable for tunnel ingress [%s]", req.TunnelID)
-		log.Printf("⚠️ %s", message)
-		c.reportTunnelRuntimeError(rt, req, message)
-		return
-	}
-	stream, err := session.Open()
+	stream, _, err := c.ingressTransportSelector(rt, req).Open(req, c.CurrentClientID(), nil)
 	if err != nil {
 		message := fmt.Sprintf("open tunnel ingress stream failed [%s]: %v", req.TunnelID, err)
 		log.Printf("⚠️ %s", message)
-		c.reportTunnelRuntimeError(rt, req, message)
+		if shouldReportIngressOpenError(err) {
+			c.reportTunnelRuntimeError(rt, req, message)
+		}
 		return
 	}
 	defer func() { _ = stream.Close() }()
 
-	header, err := ingressDataStreamHeader(req, c.CurrentClientID())
-	if err != nil {
-		message := fmt.Sprintf("build tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
-		log.Printf("⚠️ %s", message)
-		c.reportTunnelRuntimeError(rt, req, message)
-		return
-	}
-	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
-		message := fmt.Sprintf("write tunnel ingress stream header failed [%s]: %v", req.TunnelID, err)
-		log.Printf("⚠️ %s", message)
-		c.reportTunnelRuntimeError(rt, req, message)
-		return
-	}
 	mux.Relay(stream, conn)
+}
+
+func shouldReportIngressOpenError(err error) bool {
+	return !errors.Is(err, errPeerDirectUnavailable) && !errors.Is(err, errPeerDirectOpenFailed)
 }
 
 func (c *Client) reportTunnelRuntimeError(rt *sessionRuntime, req protocol.TunnelProvisionRequest, message string) {
@@ -779,6 +742,10 @@ func (c *Client) reportTunnelRuntimeError(rt *sessionRuntime, req protocol.Tunne
 		return
 	}
 	clientID := c.CurrentClientID()
+	actualTransport := protocol.ActualTransportUnknown
+	if req.Spec.TransportPolicy != protocol.TransportPolicyDirectOnly {
+		actualTransport = protocol.ActualTransportServerRelay
+	}
 	report := protocol.TunnelRuntimeReport{
 		TunnelID: req.TunnelID,
 		Revision: req.Revision,
@@ -792,7 +759,7 @@ func (c *Client) reportTunnelRuntimeError(rt *sessionRuntime, req protocol.Tunne
 		},
 		Transport: protocol.TransportRuntime{
 			Policy: req.Spec.TransportPolicy,
-			Actual: protocol.ActualTransportServerRelay,
+			Actual: actualTransport,
 		},
 		Message: message,
 	}

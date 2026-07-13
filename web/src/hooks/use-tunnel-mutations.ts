@@ -4,7 +4,7 @@ import {
   buildClientToClientTunnelSpecCreateRequest,
   buildTunnelSpecCreateRequest,
 } from '@/lib/tunnel-model';
-import type { CreateTunnelInput, MigrateTunnelInput, TunnelClientRole, TunnelTopology, UpdateTunnelInput } from '@/types';
+import type { CreateTunnelInput, MigrateTunnelInput, TransportPolicy, TunnelClientRole, TunnelTopology, UpdateTunnelInput } from '@/types';
 
 export function invalidateTunnelQueries(queryClient: QueryClient) {
   queryClient.invalidateQueries({ queryKey: ['clients'] });
@@ -46,6 +46,8 @@ function buildTunnelSpec(data: {
   allowed_source_cidrs?: string[];
   ingress_bps?: number;
   egress_bps?: number;
+  total_bps?: number;
+  transport_policy?: TransportPolicy;
   socks5?: CreateTunnelInput['socks5'];
   http_auth?: CreateTunnelInput['http_auth'];
   confirm_no_auth_risk?: boolean;
@@ -64,6 +66,8 @@ function buildTunnelSpec(data: {
       bind_ip: data.bind_ip ?? '',
       ingress_bps: data.ingress_bps,
       egress_bps: data.egress_bps,
+      total_bps: data.total_bps,
+      transport_policy: data.transport_policy,
       socks5: data.socks5,
       http_auth: data.http_auth,
       confirm_no_auth_risk: data.confirm_no_auth_risk,

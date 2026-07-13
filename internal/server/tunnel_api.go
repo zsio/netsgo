@@ -46,6 +46,9 @@ func validateBandwidthSettings(settings protocol.BandwidthSettings) error {
 	if settings.EgressBPS < 0 {
 		return fmt.Errorf("egress_bps must be non-negative")
 	}
+	if settings.TotalBPS < 0 {
+		return fmt.Errorf("total_bps must be non-negative")
+	}
 	return nil
 }
 

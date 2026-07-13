@@ -28,6 +28,7 @@ type trafficAccumulatorKey struct {
 	clientID    string
 	tunnelName  string
 	tunnelType  string
+	transport   string
 	secondStart int64
 	minuteStart int64
 }
@@ -73,6 +74,7 @@ func (a *trafficAccumulator) AddDelta(now time.Time, delta TrafficDelta) error {
 		clientID:    delta.ClientID,
 		tunnelName:  delta.TunnelName,
 		tunnelType:  delta.TunnelType,
+		transport:   delta.Transport,
 		secondStart: delta.SecondStart,
 		minuteStart: delta.MinuteStart,
 	}
@@ -212,6 +214,7 @@ func trafficAccumulatorShardIndex(key trafficAccumulatorKey) int {
 	hash = trafficAccumulatorHashString(hash, key.clientID)
 	hash = trafficAccumulatorHashString(hash, key.tunnelName)
 	hash = trafficAccumulatorHashString(hash, key.tunnelType)
+	hash = trafficAccumulatorHashString(hash, key.transport)
 	return int(hash % trafficAccumulatorShardCount)
 }
 
@@ -254,7 +257,12 @@ func (s *Server) recordTrafficObservationAt(now time.Time, tunnelID, clientID, t
 }
 
 func (s *Server) recordStoredTunnelTrafficAt(now time.Time, stored StoredTunnel, ingressBytes, egressBytes uint64) {
-	s.recordTrafficDeltaAt(now, trafficDeltaFromStoredTunnel(stored, ingressBytes, egressBytes))
+	delta := trafficDeltaFromStoredTunnel(stored, ingressBytes, egressBytes)
+	// This helper is called only by the Server relay data path. Stored
+	// ActualTransport describes the selector for new connections and may already
+	// be peer_direct while an older relay stream is still draining.
+	delta.Transport = protocol.ActualTransportServerRelay
+	s.recordTrafficDeltaAt(now, delta)
 }
 
 func (s *Server) recordTrafficDeltaAt(now time.Time, delta TrafficDelta) {

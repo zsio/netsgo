@@ -99,12 +99,10 @@ func dataStreamHeaderMatchesSOCKS5Target(header protocol.DataStreamHeader, targe
 	if header.SourceRole != protocol.DataStreamRoleServer && header.SourceRole != protocol.DataStreamRoleIngress {
 		return false
 	}
-	if header.Direction != protocol.DataStreamDirectionIngressToTarget || header.Transport != protocol.ActualTransportServerRelay {
+	if header.Direction != protocol.DataStreamDirectionIngressToTarget || !targetAcceptsDataTransport(header) {
 		return false
 	}
-	// Target runtimes only accept server-relay streams; direct-only tunnels must
-	// not be matched through the server data channel.
-	if target.spec.TransportPolicy == protocol.TransportPolicyDirectOnly {
+	if target.spec.TransportPolicy == protocol.TransportPolicyDirectOnly && header.Transport != protocol.ActualTransportPeerDirect {
 		return false
 	}
 	if header.TargetHost == "" || header.TargetPort < 1 || header.TargetPort > 65535 {
@@ -113,7 +111,7 @@ func dataStreamHeaderMatchesSOCKS5Target(header protocol.DataStreamHeader, targe
 	return true
 }
 
-func (c *Client) handleSOCKS5TargetStream(stream net.Conn, header protocol.DataStreamHeader, target clientSOCKS5TargetRuntime) {
+func (c *Client) handleSOCKS5TargetStream(stream net.Conn, header protocol.DataStreamHeader, target clientSOCKS5TargetRuntime, observe func(uint64, uint64)) {
 	localConn, result := dialSOCKS5Target(header, target)
 	if err := socks5wire.WriteDialResult(stream, result); err != nil {
 		log.Printf("⚠️ write SOCKS5 dial result failed [%s]: %v", header.TunnelID, err)
@@ -126,7 +124,7 @@ func (c *Client) handleSOCKS5TargetStream(stream net.Conn, header protocol.DataS
 		return
 	}
 	defer func() { _ = localConn.Close() }()
-	mux.Relay(stream, localConn)
+	mux.RelayWithTraffic(stream, localConn, observe)
 }
 
 func dialSOCKS5Target(header protocol.DataStreamHeader, target clientSOCKS5TargetRuntime) (net.Conn, protocol.SOCKS5DialResult) {
@@ -299,10 +297,12 @@ func (c *Client) handleIngressSOCKS5Conn(rt *sessionRuntime, req protocol.Tunnel
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	stream, err := openIngressSOCKS5Stream(rt, req, c.CurrentClientID(), request)
+	stream, err := c.openIngressSOCKS5Stream(rt, req, c.CurrentClientID(), request)
 	if err != nil {
 		_ = socks5wire.WriteReply(conn, socks5wire.RepGeneralFailure, "", 0)
-		c.reportTunnelRuntimeError(rt, req, fmt.Sprintf("open SOCKS5 ingress stream failed [%s]: %v", req.TunnelID, err))
+		if shouldReportIngressOpenError(err) {
+			c.reportTunnelRuntimeError(rt, req, fmt.Sprintf("open SOCKS5 ingress stream failed [%s]: %v", req.TunnelID, err))
+		}
 		return
 	}
 	defer func() { _ = stream.Close() }()
@@ -330,29 +330,12 @@ func socks5DialResultWaitTimeout(dialTimeoutSeconds int) time.Duration {
 	return time.Duration(dialTimeoutSeconds+socks5DialResultGraceSeconds) * time.Second
 }
 
-func openIngressSOCKS5Stream(rt *sessionRuntime, req protocol.TunnelProvisionRequest, openClientID string, request socks5wire.ConnectRequest) (net.Conn, error) {
-	rt.dataMu.RLock()
-	session := rt.dataSession
-	rt.dataMu.RUnlock()
-	if session == nil || session.IsClosed() {
-		return nil, fmt.Errorf("data session unavailable")
-	}
-	stream, err := session.Open()
-	if err != nil {
-		return nil, err
-	}
-	header, err := ingressDataStreamHeader(req, openClientID)
-	if err != nil {
-		_ = stream.Close()
-		return nil, err
-	}
-	header.TargetHost = request.Host
-	header.TargetPort = request.Port
-	header.TargetAddrType = request.AddrType
-	header.OriginalHost = request.OriginalHost
-	if err := protocol.EncodeDataStreamHeader(stream, header); err != nil {
-		_ = stream.Close()
-		return nil, err
-	}
-	return stream, nil
+func (c *Client) openIngressSOCKS5Stream(rt *sessionRuntime, req protocol.TunnelProvisionRequest, openClientID string, request socks5wire.ConnectRequest) (net.Conn, error) {
+	stream, _, err := c.ingressTransportSelector(rt, req).Open(req, openClientID, func(header *protocol.DataStreamHeader) {
+		header.TargetHost = request.Host
+		header.TargetPort = request.Port
+		header.TargetAddrType = request.AddrType
+		header.OriginalHost = request.OriginalHost
+	})
+	return stream, err
 }

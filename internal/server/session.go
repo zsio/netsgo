@@ -154,6 +154,9 @@ func (s *Server) invalidateLogicalSessionIfCurrent(clientID string, generation u
 
 	s.clients.CompareAndDelete(clientID, client)
 	s.cancelTunnelProvisionAckWaiters(clientID, generation)
+	if s.p2p != nil {
+		s.sendP2POutbounds(s.p2p.closeClient(clientID, generation, reason))
+	}
 
 	controlConn := client.detachControlConn()
 	if controlConn != nil {

@@ -1322,6 +1322,7 @@ func TestAdminStore_Token_ExchangeWithDifferentKeyForSameInstallCreatesNewToken(
 	active := store.GetClientTokenByInstallID("install-rotate")
 	if active == nil {
 		t.Fatal("expected an active token for install-rotate")
+		return
 	}
 	if active.ID != newToken.ID || active.KeyID != newKey.ID {
 		t.Fatalf("active token = %+v, want id %q key %q", active, newToken.ID, newKey.ID)

@@ -89,6 +89,50 @@ func TestTrafficAccumulatorKeepsTunnelRevisionsSeparate(t *testing.T) {
 	}
 }
 
+func TestTrafficAccumulatorKeepsRelayAndDirectTransportSeparate(t *testing.T) {
+	acc := newTrafficAccumulator()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	base := TrafficDelta{TunnelID: "t1", Revision: 1, ClientID: "owner", TunnelName: "tcp", TunnelType: "tcp", Transport: protocol.ActualTransportServerRelay, IngressBytes: 10}
+	if err := acc.AddDelta(now, base); err != nil {
+		t.Fatal(err)
+	}
+	direct := base
+	direct.Transport = protocol.ActualTransportPeerDirect
+	direct.IngressBytes = 20
+	if err := acc.AddDelta(now, direct); err != nil {
+		t.Fatal(err)
+	}
+	deltas := acc.Drain()
+	if len(deltas) != 2 {
+		t.Fatalf("transport buckets merged: %+v", deltas)
+	}
+	seen := map[string]uint64{}
+	for _, delta := range deltas {
+		seen[delta.Transport] = delta.IngressBytes
+	}
+	if seen[protocol.ActualTransportServerRelay] != 10 || seen[protocol.ActualTransportPeerDirect] != 20 {
+		t.Fatalf("transport deltas=%+v", deltas)
+	}
+}
+
+func TestRecordStoredTunnelTrafficKeepsOldRelayStreamInRelayBucketAfterSelectorTurnsDirect(t *testing.T) {
+	s := New(0)
+	ts, cleanup := newTestTrafficStore(t)
+	defer cleanup()
+	s.trafficStore = ts
+	stored := StoredTunnel{
+		ProxyNewRequest: protocol.ProxyNewRequest{ID: "mixed", Name: "mixed", Type: protocol.ProxyTypeTCP},
+		OwnerClientID:   "owner",
+		Revision:        1,
+		ActualTransport: protocol.ActualTransportPeerDirect,
+	}
+	s.recordStoredTunnelTrafficAt(time.Now(), stored, 17, 19)
+	deltas := s.trafficAccumulator.Drain()
+	if len(deltas) != 1 || deltas[0].Transport != protocol.ActualTransportServerRelay || deltas[0].IngressBytes != 17 || deltas[0].EgressBytes != 19 {
+		t.Fatalf("old relay stream was attributed to selector transport: %+v", deltas)
+	}
+}
+
 func TestTrafficAccumulatorResetTunnelClearsQueuedAndRejectsLateOldRevision(t *testing.T) {
 	acc := newTrafficAccumulator()
 	now := time.Unix(1_700_000_000, 0).UTC()

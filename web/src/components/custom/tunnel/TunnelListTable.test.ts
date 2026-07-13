@@ -327,7 +327,7 @@ describe('TunnelListTable', () => {
     expect(markup).toContain('0.0.0.0:10022');
     expect(markup).toContain('127.0.0.1:22');
     expect(markup).not.toContain('P2P preferred (not open) · Server relay');
-    expect(markup).not.toContain('Fell back to relay');
+    expect(markup).toContain('Prefer peer-to-peer · Server relay · Using relay fallback');
     expect(markup).not.toContain('Ingress binds to a wildcard address and is exposed to the ingress client network.');
   });
 

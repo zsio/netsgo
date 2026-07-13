@@ -75,6 +75,32 @@ func TestDirectionalBandwidthRuntime_UpdateSwapsUnlimitedAndLimitedModes(t *test
 	}
 }
 
+func TestSharedBandwidthRuntimeSingleDirectionBorrowsFullCapacity(t *testing.T) {
+	clock := &fakeBandwidthClock{now: time.Unix(250, 0)}
+	runtime := newDirectionalBandwidthRuntime(protocol.BandwidthSettings{TotalBPS: 1000}, clock)
+	runtime.reserveShared(payloadDirectionIngress, 200)
+	if elapsed := clock.Now().Sub(time.Unix(250, 0)); elapsed < 90*time.Millisecond || elapsed > 150*time.Millisecond {
+		t.Fatalf("unexpected virtual delay: %v", elapsed)
+	}
+}
+
+func TestSharedBandwidthRuntimeReverseDirectionDoesNotWaitForBacklog(t *testing.T) {
+	runtime := newDirectionalBandwidthRuntime(protocol.BandwidthSettings{TotalBPS: 100_000}, realBandwidthClock{})
+	ingressDone := make(chan struct{})
+	go func() { runtime.reserveShared(payloadDirectionIngress, 100_000); close(ingressDone) }()
+	time.Sleep(20 * time.Millisecond)
+	start := time.Now()
+	runtime.reserveShared(payloadDirectionEgress, 1000)
+	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+		t.Fatalf("reverse direction blocked behind ingress backlog: %v", elapsed)
+	}
+	select {
+	case <-ingressDone:
+		t.Fatal("test backlog drained before reverse direction assertion")
+	default:
+	}
+}
+
 func TestComposeDirectionalBudget_StricterBottleneckWins(t *testing.T) {
 	clock := &fakeBandwidthClock{now: time.Unix(300, 0)}
 	clientRuntime := newDirectionalBandwidthRuntime(protocol.BandwidthSettings{

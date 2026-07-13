@@ -1025,15 +1025,14 @@ func (s *Server) storedTunnelFromUnifiedRequest(req tunnelCreateRequestAPI, exis
 			return StoredTunnel{}, newProxyRequestValidationError(err, "bandwidth_settings."+protocol.TunnelMutationFieldIngressBPS, "", http.StatusBadRequest)
 		case req.BandwidthSettings.EgressBPS < 0:
 			return StoredTunnel{}, newProxyRequestValidationError(err, "bandwidth_settings."+protocol.TunnelMutationFieldEgressBPS, "", http.StatusBadRequest)
+		case req.BandwidthSettings.TotalBPS < 0:
+			return StoredTunnel{}, newProxyRequestValidationError(err, "bandwidth_settings."+protocol.TunnelMutationFieldTotalBPS, "", http.StatusBadRequest)
 		default:
 			return StoredTunnel{}, newProxyRequestValidationError(err, "bandwidth_settings", "", http.StatusBadRequest)
 		}
 	}
 	if req.TransportPolicy == "" {
 		req.TransportPolicy = tunnelTransportPolicyServerRelayOnly
-	}
-	if req.TransportPolicy != tunnelTransportPolicyServerRelayOnly {
-		return StoredTunnel{}, newProxyRequestValidationError(fmt.Errorf("transport policy %q requires direct transport support, which is not available in this build", req.TransportPolicy), "transport_policy", protocol.TunnelMutationErrorCodeDirectTransportUnavailable, http.StatusBadRequest)
 	}
 	if err := validateBandwidthSettings(req.BandwidthSettings); err != nil {
 		field := ""
@@ -1042,6 +1041,8 @@ func (s *Server) storedTunnelFromUnifiedRequest(req tunnelCreateRequestAPI, exis
 			field = protocol.TunnelMutationFieldIngressBPS
 		case req.BandwidthSettings.EgressBPS < 0:
 			field = protocol.TunnelMutationFieldEgressBPS
+		case req.BandwidthSettings.TotalBPS < 0:
+			field = protocol.TunnelMutationFieldTotalBPS
 		}
 		return StoredTunnel{}, newProxyRequestValidationError(err, field, "", http.StatusBadRequest)
 	}
@@ -1150,7 +1151,38 @@ func (s *Server) storedTunnelFromUnifiedRequest(req tunnelCreateRequestAPI, exis
 	if err := stored.normalize(); err != nil {
 		return StoredTunnel{}, err
 	}
+	if err := s.validateDirectPolicyParticipants(stored); err != nil {
+		return StoredTunnel{}, err
+	}
 	return stored, nil
+}
+
+func (s *Server) validateDirectPolicyParticipants(stored StoredTunnel) error {
+	if stored.TransportPolicy == protocol.TransportPolicyServerRelayOnly {
+		return nil
+	}
+	if stored.Topology != protocol.TunnelTopologyClientToClient {
+		return newProxyRequestValidationError(fmt.Errorf("direct transport is only supported for client_to_client tunnels"), "transport_policy", protocol.TunnelMutationErrorCodeDirectTransportUnavailable, http.StatusBadRequest)
+	}
+	for _, participant := range []struct{ id, field string }{{stored.Ingress.ClientID, "ingress.client_id"}, {stored.Target.ClientID, "target.client_id"}} {
+		registered, ok := s.registeredClientInfo(participant.id)
+		if !ok || !clientCapabilitiesSupportDirect(registered.Info.Capabilities, stored.TransportPolicy) {
+			return newProxyRequestValidationError(fmt.Errorf("client %q does not support transport policy %q", participant.id, stored.TransportPolicy), participant.field, protocol.TunnelMutationErrorCodeDirectTransportUnavailable, http.StatusBadRequest)
+		}
+	}
+	return nil
+}
+
+func clientCapabilitiesSupportDirect(caps *protocol.ClientCapabilities, policy string) bool {
+	if caps == nil || !caps.P2P.Supported || caps.P2P.Impl != protocol.P2PImplWebRTCICE {
+		return false
+	}
+	for _, supported := range caps.TransportPolicies {
+		if supported == policy {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizedIngressConfigRaw(endpointType string, cfg ingressEndpointConfigAPI) json.RawMessage {
@@ -1492,7 +1524,14 @@ func specFromStoredTunnel(stored StoredTunnel, s *Server) tunnelSpecAPI {
 	spec.TransportPolicy = stored.TransportPolicy
 	spec.ActualTransport = tunnelActualTransportUnknown
 	if computedRuntime == tunnelRuntimeStateActive {
-		spec.ActualTransport = protocol.ActualTransportServerRelay
+		switch {
+		case stored.TransportPolicy == protocol.TransportPolicyServerRelayOnly:
+			spec.ActualTransport = protocol.ActualTransportServerRelay
+		case stored.P2P.State == protocol.P2PStateConnected:
+			spec.ActualTransport = protocol.ActualTransportPeerDirect
+		case stored.TransportPolicy == protocol.TransportPolicyDirectPreferred:
+			spec.ActualTransport = protocol.ActualTransportServerRelay
+		}
 	}
 	spec.P2P = p2pStateAPI{State: stored.P2P.State, Error: stored.P2P.Error, SessionID: stored.P2P.SessionID}
 	if spec.P2P.State == "" {
@@ -1594,6 +1633,14 @@ func (s *Server) capabilityIssuesForStoredTunnel(stored StoredTunnel) []protocol
 		ingress, ok := s.registeredClientInfo(stored.Ingress.ClientID)
 		if !ok || !clientSupportsIngressType(ingress.Info.Capabilities, stored.Ingress.Type) {
 			issues = append(issues, capabilityIssue("ingress_client", stored.Ingress.ClientID, stored.Ingress.Type, "Ingress client does not support this ingress type"))
+		}
+	}
+	if stored.TransportPolicy != protocol.TransportPolicyServerRelayOnly {
+		for _, participant := range []struct{ scope, id string }{{"ingress_client", stored.Ingress.ClientID}, {"target_client", stored.Target.ClientID}} {
+			registered, ok := s.registeredClientInfo(participant.id)
+			if !ok || !clientCapabilitiesSupportDirect(registered.Info.Capabilities, stored.TransportPolicy) {
+				issues = append(issues, capabilityIssue(participant.scope, participant.id, stored.TransportPolicy, "Client does not support the selected direct transport policy"))
+			}
 		}
 	}
 	return issues

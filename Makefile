@@ -1,4 +1,4 @@
-.PHONY: build build-web build-go build-desktop-sidecar build-desktop build-desktop-macos-local sign-desktop-macos-app package-desktop-macos-local clean docs dev-server dev-client dev-bench dev-web test test-race lint test-tdd-red test-tdd-red-client test-tdd-red-server test-system-e2e test-system-e2e-nginx test-system-e2e-caddy test-system-e2e-capability-loss test-playwright-e2e test-playwright-e2e-smoke test-playwright-e2e-full test-playwright-e2e-cdp test-playwright-e2e-cdp-smoke test-playwright-e2e-cdp-full test-playwright-e2e-cdp-run test-playwright-e2e-cdp-check test-playwright-e2e-run bench-data system-e2e-up system-e2e-logs system-e2e-down system-e2e-clean docker-build-e2e-current docker-build-e2e-capability-loss docker-build-e2e-stable test-baseline-e2e test-compat-e2e test-upgrade-e2e
+.PHONY: build build-web build-go build-desktop-sidecar build-desktop build-desktop-macos-local sign-desktop-macos-app package-desktop-macos-local clean docs dev-server dev-client dev-bench dev-web test test-race lint test-tdd-red test-tdd-red-client test-tdd-red-server test-system-e2e test-system-e2e-nginx test-system-e2e-caddy test-system-e2e-capability-loss test-p2p-double-nat-e2e test-playwright-e2e test-playwright-e2e-smoke test-playwright-e2e-full test-playwright-e2e-cdp test-playwright-e2e-cdp-smoke test-playwright-e2e-cdp-full test-playwright-e2e-cdp-run test-playwright-e2e-cdp-check test-playwright-e2e-run bench-data system-e2e-up system-e2e-logs system-e2e-down system-e2e-clean docker-build-e2e-current docker-build-e2e-capability-loss docker-build-e2e-prebuilt docker-build-e2e-stable test-baseline-e2e test-compat-e2e test-upgrade-e2e
 
 # 编译输出目录
 BIN_DIR=bin
@@ -201,6 +201,33 @@ test-system-e2e-nginx:
 test-system-e2e-caddy:
 	$(MAKE) test-system-e2e-run E2E_PROXY=caddy E2E_PROJECT=netsgo-system-caddy
 
+DOUBLE_NAT_E2E_IMAGE ?= netsgo-e2e:prebuilt
+DOUBLE_NAT_PROJECT ?= netsgo-p2p-double-nat
+DOUBLE_NAT_SERVER_PORT ?= 19281
+DOUBLE_NAT_INGRESS_PORT ?= 19298
+
+docker-build-e2e-prebuilt: build-web
+	@mkdir -p test/e2e/.artifacts
+	@arch="$$(docker info --format '{{.Architecture}}')"; \
+	case "$${arch}" in \
+		aarch64|arm64) goarch=arm64 ;; \
+		x86_64|amd64) goarch=amd64 ;; \
+		*) echo "unsupported Docker architecture: $${arch}" >&2; exit 1 ;; \
+	esac; \
+	CGO_ENABLED=0 GOOS=linux GOARCH="$${goarch}" go build -trimpath -o test/e2e/.artifacts/netsgo ./cmd/netsgo
+	docker build --load -f test/e2e/Dockerfile.prebuilt -t $(DOUBLE_NAT_E2E_IMAGE) .
+
+test-p2p-double-nat-e2e: docker-build-e2e-prebuilt
+	@admin_pass="$${NETSGO_ADMIN_PASS:-NetsGo1-$$(openssl rand -hex 12 2>/dev/null || uuidgen)}"; \
+	NETSGO_ADMIN_PASS="$${admin_pass}" \
+	NETSGO_E2E_IMAGE="$(DOUBLE_NAT_E2E_IMAGE)" \
+	NETSGO_DOUBLE_NAT_COMPOSE_FILE="$(CURDIR)/test/e2e/docker-compose.p2p-double-nat.yml" \
+	NETSGO_E2E_COMPOSE_PROJECT="$(DOUBLE_NAT_PROJECT)" \
+	DOUBLE_NAT_SERVER_PORT="$(DOUBLE_NAT_SERVER_PORT)" \
+	DOUBLE_NAT_INGRESS_PORT="$(DOUBLE_NAT_INGRESS_PORT)" \
+	NETSGO_E2E_REQUIRE_P2P=1 \
+	go test -tags=e2e ./test/e2e -run '^TestP2PDoubleNATSystemE2E$$' -count=1 -timeout 10m
+
 test-system-e2e-capability-loss: docker-build-e2e-current docker-build-e2e-capability-loss
 	@admin_pass="$${NETSGO_ADMIN_PASS:-NetsGo1-$$(openssl rand -hex 12 2>/dev/null || uuidgen)}"; \
 	$(E2E_PORT_ENV) \
@@ -221,6 +248,7 @@ test-system-e2e-run:
 	NETSGO_ADMIN_PASS="$${admin_pass}" \
 	NETSGO_E2E_COMPOSE_PROJECT=$(E2E_PROJECT) \
 	NETSGO_E2E_COMPOSE_FILES=$(E2E_BASE_COMPOSE),$(E2E_PROXY_COMPOSE) \
+	NETSGO_E2E_REQUIRE_P2P=1 \
 	go test -tags=e2e ./test/e2e -run 'TestSystem.*E2E' -count=1 -timeout 20m
 
 test-playwright-e2e: test-playwright-e2e-smoke

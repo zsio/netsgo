@@ -309,3 +309,37 @@ func TestUDPRelay_StreamCloseEndsRelay(t *testing.T) {
 		t.Error("stream 关闭后 UDPRelay 超时未结束")
 	}
 }
+
+type shortUDPFrameWriter struct {
+	buf   bytes.Buffer
+	limit int
+	zero  bool
+}
+
+func (w *shortUDPFrameWriter) Write(p []byte) (int, error) {
+	if w.zero {
+		return 0, nil
+	}
+	if len(p) > w.limit {
+		p = p[:w.limit]
+	}
+	return w.buf.Write(p)
+}
+
+func TestWriteUDPFrameCompletesShortWrites(t *testing.T) {
+	w := &shortUDPFrameWriter{limit: 1}
+	payload := []byte("partial-writer-payload")
+	if err := WriteUDPFrame(w, payload); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := ReadUDPFrame(bytes.NewReader(w.buf.Bytes()))
+	if err != nil || !bytes.Equal(decoded, payload) {
+		t.Fatalf("decoded=%q err=%v", decoded, err)
+	}
+}
+
+func TestWriteUDPFrameRejectsZeroProgressWriter(t *testing.T) {
+	if err := WriteUDPFrame(&shortUDPFrameWriter{limit: 1, zero: true}, []byte("x")); err != io.ErrNoProgress {
+		t.Fatalf("error=%v want=%v", err, io.ErrNoProgress)
+	}
+}
