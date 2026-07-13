@@ -107,9 +107,9 @@ func TestClientPeerManagerRevokeClosesOnlyGrantStreams(t *testing.T) {
 		"t2": {SessionID: "session", GrantID: "g2", TunnelID: "t2", Revision: 1, LocalRole: protocol.DataStreamRoleTarget, PeerRole: protocol.DataStreamRoleIngress, ExpiresAt: now.Add(time.Minute)},
 	}}
 	a1, b1 := net.Pipe()
-	defer b1.Close()
+	defer func() { _ = b1.Close() }()
 	a2, b2 := net.Pipe()
-	defer b2.Close()
+	defer func() { _ = b2.Close() }()
 	stream1 := m.trackStream("g1", a1)
 	stream2 := m.trackStream("g2", a2)
 	m.handleRevoke(protocol.P2PTunnelRevoke{SessionID: "session", GrantID: "g1", TunnelID: "t1", Revision: 1})
@@ -133,7 +133,7 @@ func TestClientPeerManagerExpiredGrantClosesStreams(t *testing.T) {
 	m := testPeerManager(&now)
 	m.sessions["session"] = &clientPeerSession{id: "session", expiresAt: now.Add(time.Minute), grants: map[string]protocol.P2PTunnelGrant{"t1": {GrantID: "g1", TunnelID: "t1", ExpiresAt: now.Add(time.Second)}}}
 	a, b := net.Pipe()
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 	stream := m.trackStream("g1", a)
 	now = now.Add(time.Second)
 	m.expireNow()
@@ -162,9 +162,9 @@ func TestClientPeerManagerExpiredPairClosesPeerAndEveryGrantStream(t *testing.T)
 		"t2": {GrantID: "g2", TunnelID: "t2", ExpiresAt: now.Add(time.Minute)},
 	}}
 	a1, b1 := net.Pipe()
-	defer b1.Close()
+	defer func() { _ = b1.Close() }()
 	a2, b2 := net.Pipe()
-	defer b2.Close()
+	defer func() { _ = b2.Close() }()
 	stream1 := m.trackStream("g1", a1)
 	stream2 := m.trackStream("g2", a2)
 	now = now.Add(time.Second)

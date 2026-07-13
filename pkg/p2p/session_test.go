@@ -20,12 +20,12 @@ func TestSessionOpensYamuxStreamOverDetachedDataChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new offerer: %v", err)
 	}
-	defer offerer.Close()
+	defer func() { _ = offerer.Close() }()
 	answerer, err = NewSession(protocol.P2PRoleAnswerer, nil, func(signal protocol.P2PSignal) { answererCandidates <- signal })
 	if err != nil {
 		t.Fatalf("new answerer: %v", err)
 	}
-	defer answerer.Close()
+	defer func() { _ = answerer.Close() }()
 
 	done := make(chan struct{})
 	stopCandidates := make(chan struct{})
@@ -63,7 +63,7 @@ func TestSessionOpensYamuxStreamOverDetachedDataChannel(t *testing.T) {
 			accepted <- err
 			return
 		}
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 		buf := make([]byte, 5)
 		if _, err := io.ReadFull(stream, buf); err != nil {
 			accepted <- err
@@ -76,7 +76,7 @@ func TestSessionOpensYamuxStreamOverDetachedDataChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	if _, err := stream.Write([]byte("hello")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestSessionOpensYamuxStreamOverDetachedDataChannel(t *testing.T) {
 			largeAccepted <- err
 			return
 		}
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 		got := make([]byte, len(largePayload))
 		if _, err := io.ReadFull(stream, got); err != nil {
 			largeAccepted <- err
@@ -141,7 +141,7 @@ func TestSessionOpensYamuxStreamOverDetachedDataChannel(t *testing.T) {
 				continue
 			}
 			go func(conn io.ReadWriteCloser) {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				payload := make([]byte, 32)
 				_, err := io.ReadFull(conn, payload)
 				if err == nil {
@@ -163,7 +163,7 @@ func TestSessionOpensYamuxStreamOverDetachedDataChannel(t *testing.T) {
 				openErrors <- err
 				return
 			}
-			defer stream.Close()
+			defer func() { _ = stream.Close() }()
 			payload := []byte(fmt.Sprintf("stream-%025d", i))
 			if _, err := stream.Write(payload); err != nil {
 				openErrors <- err
@@ -213,7 +213,7 @@ func TestSessionBoundsCandidatesBeforeRemoteDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	for i := 0; i < protocol.P2PMaxCandidates; i++ {
 		if err := session.AddCandidate(protocol.P2PSignal{Kind: protocol.P2PSignalCandidate, Candidate: "candidate:1"}); err != nil {
 			t.Fatalf("candidate %d rejected: %v", i, err)

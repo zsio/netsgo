@@ -13,14 +13,14 @@ func TestSTUNBindingReturnsObservedAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 	s := New(0)
 	go s.serveSTUN(serverConn)
 	client, err := net.Dial("udp", serverConn.LocalAddr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, stun.Fingerprint)
 	if _, err := client.Write(request.Raw); err != nil {
 		t.Fatal(err)

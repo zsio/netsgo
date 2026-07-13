@@ -293,7 +293,7 @@ func (c *p2pCoordinator) recordReady(clientID string, generation uint64, status 
 	if s == nil || !s.expiresAt.After(c.now()) {
 		return false, fmt.Errorf("unknown or expired p2p session")
 	}
-	if !((clientID == s.clientA && generation == s.generationA) || (clientID == s.clientB && generation == s.generationB)) {
+	if (clientID != s.clientA || generation != s.generationA) && (clientID != s.clientB || generation != s.generationB) {
 		return false, fmt.Errorf("p2p status sender mismatch")
 	}
 	if status.Sequence <= s.lastStatus[clientID] {
