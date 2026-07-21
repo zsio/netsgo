@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { createRoute } from '@tanstack/react-router';
-import { RotateCcw, ShieldOff, Trash2 } from 'lucide-react';
+import { RotateCcw, Save, ShieldOff, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import { adminRoute } from '../admin';
@@ -8,8 +8,10 @@ import { useClientAuthRateLimitMutations, useClientAuthRateLimits } from '@/hook
 import { formatTimestamp, formatUptime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
-import type { RateLimitEntry } from '@/types';
+import type { ClientAuthRateLimitSettings, RateLimitEntry } from '@/types';
 
 export const adminAccessControlRoute = createRoute({
   getParentRoute: () => adminRoute,
@@ -22,6 +24,18 @@ function AdminAccessControlPage() {
   const { data, isLoading } = useClientAuthRateLimits();
   const mutations = useClientAuthRateLimitMutations();
   const [resettingIP, setResettingIP] = useState<string | null>(null);
+  const [settings, setSettings] = useState<ClientAuthRateLimitSettings | null>(null);
+  const displayedSettings = settings ?? {
+    enabled: data?.enabled ?? false,
+    requests_per_minute: data?.requests_per_minute ?? 20,
+  };
+  const settingsDirty = data != null && (
+    displayedSettings.enabled !== data.enabled
+    || displayedSettings.requests_per_minute !== data.requests_per_minute
+  );
+  const settingsValid = Number.isInteger(displayedSettings.requests_per_minute)
+    && displayedSettings.requests_per_minute >= 1
+    && displayedSettings.requests_per_minute <= 1000;
 
   const resetClientAuthRateLimit = async (ip: string) => {
     setResettingIP(ip);
@@ -35,8 +49,31 @@ function AdminAccessControlPage() {
     }
   };
 
+  const saveSettings = async () => {
+    if (!settingsValid) {
+      toast.error(t('admin.clientAuthRateLimitInvalid'));
+      return;
+    }
+    try {
+      const saved = await mutations.updateSettings.mutateAsync(displayedSettings);
+      setSettings(saved);
+      toast.success(t('admin.clientAuthRateLimitSettingsSaved'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('errors.generic'));
+    }
+  };
+
   return (
-    <div className="pb-10">
+    <div className="flex flex-col gap-6 pb-10">
+      <ClientAuthRateLimitSettingsCard
+        settings={displayedSettings}
+        isLoading={isLoading}
+        isDirty={settingsDirty}
+        isValid={settingsValid}
+        isSaving={mutations.updateSettings.isPending}
+        onChange={setSettings}
+        onSave={saveSettings}
+      />
       <ClientAuthRateLimitsSection
         entries={data?.entries ?? []}
         isLoading={isLoading}
@@ -44,6 +81,96 @@ function AdminAccessControlPage() {
         onReset={resetClientAuthRateLimit}
       />
     </div>
+  );
+}
+
+function ClientAuthRateLimitSettingsCard({
+  settings,
+  isLoading,
+  isDirty,
+  isValid,
+  isSaving,
+  onChange,
+  onSave,
+}: {
+  settings: ClientAuthRateLimitSettings;
+  isLoading: boolean;
+  isDirty: boolean;
+  isValid: boolean;
+  isSaving: boolean;
+  onChange: (settings: ClientAuthRateLimitSettings) => void;
+  onSave: () => void;
+}) {
+  const { t } = useTranslation();
+
+  if (isLoading) {
+    return <Skeleton className="h-44 w-full rounded-xl" />;
+  }
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-border/50 bg-background/90">
+      <div className="grid gap-5 px-5 py-5 md:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] md:items-start">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="font-medium text-foreground">{t('admin.clientAuthRateLimitSettings')}</h3>
+            <Badge variant={settings.enabled ? 'default' : 'outline'}>
+              {settings.enabled ? t('common.enabled') : t('common.disabled')}
+            </Badge>
+          </div>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            {t('admin.clientAuthRateLimitSettingsDescription')}
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-4 rounded-lg border border-border/50 bg-muted/20 p-4">
+          <label className="flex cursor-pointer items-center justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium text-foreground">{t('admin.enableClientAuthRateLimit')}</span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">{t('admin.enableClientAuthRateLimitHelp')}</span>
+            </span>
+            <Switch
+              checked={settings.enabled}
+              onCheckedChange={(enabled) => onChange({ ...settings, enabled })}
+              aria-label={t('admin.enableClientAuthRateLimit')}
+            />
+          </label>
+
+          <div>
+            <label htmlFor="client-auth-rate-limit-per-minute" className="text-sm font-medium text-foreground">
+              {t('admin.clientAuthRequestsPerMinute')}
+            </label>
+            <Input
+              id="client-auth-rate-limit-per-minute"
+              type="number"
+              min={1}
+              max={1000}
+              step={1}
+              value={settings.requests_per_minute}
+              onChange={(event) => onChange({
+                ...settings,
+                requests_per_minute: Number(event.target.value),
+              })}
+              aria-invalid={!isValid}
+              className="mt-2"
+            />
+            <p className={`mt-1.5 text-xs ${isValid ? 'text-muted-foreground' : 'text-destructive'}`}>
+              {isValid ? t('admin.clientAuthRequestsPerMinuteHelp') : t('admin.clientAuthRateLimitInvalid')}
+            </p>
+          </div>
+
+          <Button
+            type="button"
+            size="sm"
+            disabled={!isDirty || !isValid || isSaving}
+            onClick={onSave}
+            className="self-end gap-2"
+          >
+            {isSaving ? <RotateCcw className="animate-spin" /> : <Save />}
+            {isSaving ? t('common.saving') : t('common.save')}
+          </Button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -101,7 +228,6 @@ function ClientAuthRateLimitsSection({
                 <th className="px-4 py-2.5 font-medium">{t('admin.ipAddress')}</th>
                 <th className="px-4 py-2.5 font-medium">{t('admin.limitStatus')}</th>
                 <th className="px-4 py-2.5 font-medium">{t('admin.windowRequests')}</th>
-                <th className="px-4 py-2.5 font-medium">{t('admin.failureCounter')}</th>
                 <th className="px-4 py-2.5 font-medium">{t('admin.retryAfter')}</th>
                 <th className="px-4 py-2.5 font-medium">{t('admin.lastActivity')}</th>
                 <th className="px-4 py-2.5 text-right font-medium">{t('admin.actions')}</th>
@@ -120,9 +246,6 @@ function ClientAuthRateLimitsSection({
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
                       {entry.request_count} / {entry.max_requests}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                      {entry.failure_count} / {entry.max_failures}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {entry.limited ? formatUptime(entry.retry_after_seconds) : '-'}

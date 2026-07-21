@@ -1046,6 +1046,53 @@ func TestAdminStore_GetServerConfig(t *testing.T) {
 	}
 }
 
+func TestAdminStore_ClientAuthRateLimitSettingsDefaultAndUpdate(t *testing.T) {
+	store := newInitializedAdminStore(t)
+
+	initial, err := store.GetClientAuthRateLimitSettings()
+	if err != nil {
+		t.Fatalf("GetClientAuthRateLimitSettings failed: %v", err)
+	}
+	if initial.Enabled || initial.RequestsPerMinute != defaultClientAuthRateLimitPerMinute {
+		t.Fatalf("initial settings = %+v", initial)
+	}
+
+	want := ClientAuthRateLimitSettings{Enabled: true, RequestsPerMinute: 45}
+	if err := store.UpdateClientAuthRateLimitSettings(want); err != nil {
+		t.Fatalf("UpdateClientAuthRateLimitSettings failed: %v", err)
+	}
+	got, err := store.GetClientAuthRateLimitSettings()
+	if err != nil {
+		t.Fatalf("GetClientAuthRateLimitSettings after update failed: %v", err)
+	}
+	if got != want {
+		t.Fatalf("settings = %+v, want %+v", got, want)
+	}
+}
+
+func TestAdminStore_ClientAuthRateLimitSettingsRejectsInvalidAndRollsBack(t *testing.T) {
+	store := newInitializedAdminStore(t)
+	for _, value := range []int{0, maxClientAuthRateLimitPerMinute + 1} {
+		if err := store.UpdateClientAuthRateLimitSettings(ClientAuthRateLimitSettings{Enabled: true, RequestsPerMinute: value}); err == nil {
+			t.Fatalf("requests_per_minute=%d should fail", value)
+		}
+	}
+
+	saveErr := errors.New("save failed")
+	store.failSaveErr = saveErr
+	store.failSaveCount = 1
+	if err := store.UpdateClientAuthRateLimitSettings(ClientAuthRateLimitSettings{Enabled: true, RequestsPerMinute: 30}); !errors.Is(err, saveErr) {
+		t.Fatalf("UpdateClientAuthRateLimitSettings error = %v, want %v", err, saveErr)
+	}
+	got, err := store.GetClientAuthRateLimitSettings()
+	if err != nil {
+		t.Fatalf("GetClientAuthRateLimitSettings after rollback failed: %v", err)
+	}
+	if got.Enabled || got.RequestsPerMinute != defaultClientAuthRateLimitPerMinute {
+		t.Fatalf("settings after rollback = %+v", got)
+	}
+}
+
 func TestAdminStore_GetServerConfigE_ReturnsStorageError(t *testing.T) {
 	store := newInitializedAdminStore(t)
 	if err := store.Close(); err != nil {
@@ -1094,6 +1141,37 @@ func TestAdminStore_Token_ExchangeAndValidate(t *testing.T) {
 	}
 	if result.ID != clientToken.ID {
 		t.Errorf("token ID mismatch: %s != %s", result.ID, clientToken.ID)
+	}
+}
+func TestAdminStore_Token_TouchRefreshesActivityAndIP(t *testing.T) {
+	store := newTestAdminStore(t)
+	rawKey := "sk-touch-key"
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
+	_, token, err := store.ExchangeToken(rawKey, "install-touch", "client-touch", "192.0.2.10:4321")
+	if err != nil {
+		t.Fatalf("ExchangeToken failed: %v", err)
+	}
+	oldActivity := time.Now().Add(-6 * 24 * time.Hour)
+	if _, err := store.db.Exec(`UPDATE client_tokens SET last_active_at = ?, last_ip = ? WHERE id = ?`, formatTime(oldActivity), "192.0.2.10", token.ID); err != nil {
+		t.Fatalf("age token: %v", err)
+	}
+
+	before := time.Now()
+	if err := store.TouchToken(token.ID, "198.51.100.25:9000"); err != nil {
+		t.Fatalf("TouchToken failed: %v", err)
+	}
+	tokens, err := loadClientTokens(store.db, `WHERE id = ?`, token.ID)
+	if err != nil || len(tokens) != 1 {
+		t.Fatalf("load touched token: tokens=%d, err=%v", len(tokens), err)
+	}
+	touched := tokens[0]
+	if touched.LastActiveAt.Before(before) {
+		t.Fatalf("LastActiveAt = %s, want >= %s", touched.LastActiveAt, before)
+	}
+	if touched.LastIP != "198.51.100.25" {
+		t.Fatalf("LastIP = %q, want 198.51.100.25", touched.LastIP)
 	}
 }
 
@@ -1437,5 +1515,26 @@ func TestAdminStore_Token_CleanExpired(t *testing.T) {
 
 	if count != 0 {
 		t.Errorf("should have no tokens after cleanup, got %d", count)
+	}
+}
+func TestAdminStore_Token_CleanExpiredPreservesRecentlyTouched(t *testing.T) {
+	store := newTestAdminStore(t)
+	rawKey := "sk-clean-active-key"
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
+	_, token, err := store.ExchangeToken(rawKey, "install-active", "client-active", "192.0.2.10:4321")
+	if err != nil {
+		t.Fatalf("ExchangeToken failed: %v", err)
+	}
+	expireAllClientTokens(t, store)
+	if err := store.TouchToken(token.ID, "192.0.2.11:4321"); err != nil {
+		t.Fatalf("TouchToken failed: %v", err)
+	}
+	if err := store.CleanExpiredTokens(); err != nil {
+		t.Fatalf("CleanExpiredTokens failed: %v", err)
+	}
+	if got := countClientTokens(t, store); got != 1 {
+		t.Fatalf("recently touched token count = %d, want 1", got)
 	}
 }

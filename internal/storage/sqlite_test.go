@@ -112,6 +112,49 @@ func TestOpenWithNoMigrationsAllowsUnknownAppliedMigrations(t *testing.T) {
 	}
 }
 
+func TestApplyCompatibleMigrationsToleratesUnknownLedgerRows(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "netsgo.db"), nil)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	migrations := []Migration{{
+		Name: "001_add_compatible_value",
+		Up:   `CREATE TABLE compatible_value (id INTEGER PRIMARY KEY);`,
+	}}
+	if err := ApplyCompatibleMigrations(db, "compatible_migrations", migrations); err != nil {
+		t.Fatalf("first ApplyCompatibleMigrations() error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO compatible_migrations (name, applied_at) VALUES ('999_future_compatible', '2026-07-21T00:00:00Z')`); err != nil {
+		t.Fatalf("insert future compatible migration: %v", err)
+	}
+	if err := ApplyCompatibleMigrations(db, "compatible_migrations", migrations); err != nil {
+		t.Fatalf("future compatible ledger row should be tolerated: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM compatible_value`).Scan(&count); err != nil {
+		t.Fatalf("query compatible table: %v", err)
+	}
+}
+
+func TestApplyCompatibleMigrationsRejectsInvalidLedgerName(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "netsgo.db"), nil)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	err = ApplyCompatibleMigrations(db, "schema_migrations; DROP TABLE schema_migrations", []Migration{{
+		Name: "001_invalid_table",
+		Up:   `SELECT 1;`,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "invalid sqlite migration table name") {
+		t.Fatalf("ApplyCompatibleMigrations() error = %v", err)
+	}
+}
+
 func TestOpenRejectsDuplicateMigrationNames(t *testing.T) {
 	_, err := Open(filepath.Join(t.TempDir(), "netsgo.db"), []Migration{
 		{Name: "001_create_counter", Up: `CREATE TABLE counter (id INTEGER PRIMARY KEY);`},

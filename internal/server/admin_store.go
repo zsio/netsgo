@@ -502,6 +502,67 @@ func (s *AdminStore) UpdateServerConfig(config ServerConfig) error {
 	return commitTx(tx, &committed)
 }
 
+func (s *AdminStore) GetClientAuthRateLimitSettings() (ClientAuthRateLimitSettings, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	settings := ClientAuthRateLimitSettings{RequestsPerMinute: defaultClientAuthRateLimitPerMinute}
+	var enabled int
+	err := s.db.QueryRow(`SELECT client_auth_rate_limit_enabled, client_auth_rate_limit_per_minute FROM server_config WHERE id = 1`).Scan(
+		&enabled,
+		&settings.RequestsPerMinute,
+	)
+	if err == sql.ErrNoRows {
+		return settings, nil
+	}
+	if err != nil {
+		return ClientAuthRateLimitSettings{}, err
+	}
+	settings.Enabled = intToBool(enabled)
+	return settings, nil
+}
+
+func validateClientAuthRateLimitSettings(settings ClientAuthRateLimitSettings) error {
+	if settings.RequestsPerMinute < 1 || settings.RequestsPerMinute > maxClientAuthRateLimitPerMinute {
+		return fmt.Errorf("requests_per_minute must be between 1 and %d", maxClientAuthRateLimitPerMinute)
+	}
+	return nil
+}
+
+func (s *AdminStore) UpdateClientAuthRateLimitSettings(settings ClientAuthRateLimitSettings) error {
+	if err := validateClientAuthRateLimitSettings(settings); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	result, err := tx.Exec(`UPDATE server_config
+		SET client_auth_rate_limit_enabled = ?, client_auth_rate_limit_per_minute = ?
+		WHERE id = 1`, boolToInt(settings.Enabled), settings.RequestsPerMinute)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("server config not initialized")
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
+}
+
 // ========== Port Whitelist ==========
 
 func loadAllowedPorts(q dbQuerier) (ports []PortRange, err error) {

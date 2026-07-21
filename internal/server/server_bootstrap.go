@@ -121,6 +121,7 @@ func (s *Server) Start() error {
 			return fmt.Errorf("server is not initialized; use install or init flags to complete setup")
 		}
 	}
+	clientRateLimitSettings := ClientAuthRateLimitSettings{RequestsPerMinute: defaultClientAuthRateLimitPerMinute}
 	var serverConfig *ServerConfig
 	if s.auth.adminStore != nil {
 		cfg, err := s.auth.adminStore.GetServerConfigE()
@@ -128,9 +129,13 @@ func (s *Server) Start() error {
 			return fmt.Errorf("failed to read server config: %w", err)
 		}
 		serverConfig = &cfg
+		clientRateLimitSettings, err = s.auth.adminStore.GetClientAuthRateLimitSettings()
+		if err != nil {
+			return fmt.Errorf("failed to read client auth rate-limit settings: %w", err)
+		}
 	}
 
-	s.auth.initRateLimiters()
+	s.auth.initRateLimiters(clientRateLimitSettings)
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Port))
 	if err != nil {
@@ -214,6 +219,9 @@ func logServerEndpoints(port int, tlsEnabled bool, hasWebUI bool, cfg *ServerCon
 }
 
 func (s *Server) cleanupFailedStartup() {
+	if s.auth != nil {
+		s.auth.stopRateLimiters()
+	}
 	s.closeDone()
 	if s.listener != nil {
 		_ = s.listener.Close()
@@ -288,6 +296,9 @@ func (s *Server) Shutdown(ctx context.Context) (err error) {
 	}()
 
 	s.closeDone()
+	if s.auth != nil {
+		s.auth.stopRateLimiters()
+	}
 	if s.stunConn != nil {
 		_ = s.stunConn.Close()
 		s.stunConn = nil

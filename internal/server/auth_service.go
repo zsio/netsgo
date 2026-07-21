@@ -12,20 +12,24 @@ import (
 //
 // Other files in the same package access it via s.auth.*; no interface is exposed externally.
 type AuthService struct {
-	adminStore    *AdminStore
-	loginLimiter  *RateLimiter
-	clientLimiter *RateLimiter
-	mfaLimiter    *mfaAttemptLimiter
-	authTimeout   time.Duration
+	adminStore       *AdminStore
+	loginLimiter     *RateLimiter
+	clientLimiterMu  sync.RWMutex
+	clientLimiter    *RateLimiter
+	clientRateLimits ClientAuthRateLimitSettings
+	mfaLimiter       *mfaAttemptLimiter
+	authTimeout      time.Duration
 }
 
 // newAuthService creates an empty AuthService (fields are populated during Start()).
 func newAuthService() *AuthService {
-	return &AuthService{}
+	return &AuthService{
+		clientRateLimits: ClientAuthRateLimitSettings{RequestsPerMinute: defaultClientAuthRateLimitPerMinute},
+	}
 }
 
 // initRateLimiters initializes the server's rate limiters.
-func (a *AuthService) initRateLimiters() {
+func (a *AuthService) initRateLimiters(clientSettings ClientAuthRateLimitSettings) {
 	a.loginLimiter = NewRateLimiter(RateLimiterConfig{
 		WindowSize:      time.Minute,
 		MaxRequests:     10,
@@ -34,15 +38,69 @@ func (a *AuthService) initRateLimiters() {
 		CleanupInterval: 10 * time.Minute,
 	})
 
-	a.clientLimiter = NewRateLimiter(RateLimiterConfig{
+	a.replaceClientRateLimiter(clientSettings)
+	a.mfaLimiter = newMFAAttemptLimiter(time.Minute, 10, 5*time.Minute)
+}
+
+func newClientAuthRateLimiter(settings ClientAuthRateLimitSettings) *RateLimiter {
+	if !settings.Enabled {
+		return nil
+	}
+	return NewRateLimiter(RateLimiterConfig{
 		WindowSize:      time.Minute,
-		MaxRequests:     20,
-		MaxFailures:     10,
-		LockoutPeriod:   15 * time.Minute,
+		MaxRequests:     settings.RequestsPerMinute,
 		CleanupInterval: 10 * time.Minute,
 	})
+}
 
-	a.mfaLimiter = newMFAAttemptLimiter(time.Minute, 10, 5*time.Minute)
+func (a *AuthService) replaceClientRateLimiter(settings ClientAuthRateLimitSettings) {
+	next := newClientAuthRateLimiter(settings)
+	a.clientLimiterMu.Lock()
+	previous := a.clientLimiter
+	a.clientLimiter = next
+	a.clientRateLimits = settings
+	a.clientLimiterMu.Unlock()
+	if previous != nil {
+		previous.Stop()
+	}
+}
+
+func (a *AuthService) clientRateLimitSnapshot(now time.Time) (ClientAuthRateLimitSettings, []RateLimitSnapshot) {
+	a.clientLimiterMu.RLock()
+	defer a.clientLimiterMu.RUnlock()
+	settings := a.clientRateLimits
+	if a.clientLimiter == nil {
+		return settings, []RateLimitSnapshot{}
+	}
+	return settings, a.clientLimiter.Snapshot(now)
+}
+
+func (a *AuthService) allowClientAuthentication(ip string) (bool, time.Duration) {
+	a.clientLimiterMu.RLock()
+	defer a.clientLimiterMu.RUnlock()
+	if a.clientLimiter == nil {
+		return true, 0
+	}
+	return a.clientLimiter.Allow(ip)
+}
+
+func (a *AuthService) deleteClientRateLimit(ip string) bool {
+	a.clientLimiterMu.RLock()
+	defer a.clientLimiterMu.RUnlock()
+	return a.clientLimiter != nil && a.clientLimiter.Delete(ip)
+}
+
+func (a *AuthService) stopRateLimiters() {
+	if a.loginLimiter != nil {
+		a.loginLimiter.Stop()
+	}
+	a.clientLimiterMu.Lock()
+	clientLimiter := a.clientLimiter
+	a.clientLimiter = nil
+	a.clientLimiterMu.Unlock()
+	if clientLimiter != nil {
+		clientLimiter.Stop()
+	}
 }
 
 type mfaAttemptLimiter struct {

@@ -197,11 +197,34 @@ func configureReadOnly(db *sql.DB) error {
 }
 
 func applyMigrations(db *sql.DB, migrations []Migration) error {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+	return ApplyMigrations(db, migrations)
+}
+
+// ApplyMigrations applies strict migrations using the primary schema_migrations ledger.
+func ApplyMigrations(db *sql.DB, migrations []Migration) error {
+	return applyMigrationsToTable(db, "schema_migrations", migrations, true)
+}
+
+// ApplyCompatibleMigrations applies additive, backward-compatible migrations in
+// a separate ledger. Unknown rows are intentionally tolerated so an older
+// binary can open a database previously used by a newer binary.
+func ApplyCompatibleMigrations(db *sql.DB, table string, migrations []Migration) error {
+	return applyMigrationsToTable(db, table, migrations, false)
+}
+
+func applyMigrationsToTable(db *sql.DB, table string, migrations []Migration, rejectUnknown bool) error {
+	if db == nil {
+		return fmt.Errorf("sqlite database must not be nil")
+	}
+	tableName, err := sqliteIdentifier(table)
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 		name TEXT PRIMARY KEY,
 		applied_at TEXT NOT NULL
-	);`); err != nil {
-		return fmt.Errorf("create schema_migrations: %w", err)
+	);`, tableName)); err != nil {
+		return fmt.Errorf("create migration table %q: %w", table, err)
 	}
 
 	knownMigrations := make(map[string]struct{}, len(migrations))
@@ -217,8 +240,8 @@ func applyMigrations(db *sql.DB, migrations []Migration) error {
 		}
 		knownMigrations[migration.Name] = struct{}{}
 	}
-	if len(migrations) > 0 {
-		if err := rejectUnknownAppliedMigrations(db, knownMigrations); err != nil {
+	if rejectUnknown && len(migrations) > 0 {
+		if err := rejectUnknownAppliedMigrations(db, tableName, knownMigrations); err != nil {
 			return err
 		}
 	}
@@ -228,7 +251,7 @@ func applyMigrations(db *sql.DB, migrations []Migration) error {
 		if err != nil {
 			return fmt.Errorf("begin migration %q: %w", migration.Name, err)
 		}
-		applied, err := migrationApplied(tx, migration.Name)
+		applied, err := migrationApplied(tx, tableName, migration.Name)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
@@ -243,7 +266,7 @@ func applyMigrations(db *sql.DB, migrations []Migration) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %q: %w", migration.Name, err)
 		}
-		if _, err := tx.Exec(`INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)`, migration.Name, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err := tx.Exec(fmt.Sprintf(`INSERT INTO %s (name, applied_at) VALUES (?, ?)`, tableName), migration.Name, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("record migration %q: %w", migration.Name, err)
 		}
@@ -254,8 +277,22 @@ func applyMigrations(db *sql.DB, migrations []Migration) error {
 	return nil
 }
 
-func rejectUnknownAppliedMigrations(db *sql.DB, knownMigrations map[string]struct{}) error {
-	rows, err := db.Query(`SELECT name FROM schema_migrations ORDER BY name`)
+func sqliteIdentifier(name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("sqlite migration table name must not be empty")
+	}
+	for i := range len(name) {
+		char := name[i]
+		if (char >= 'a' && char <= 'z') || char == '_' || (i > 0 && char >= '0' && char <= '9') {
+			continue
+		}
+		return "", fmt.Errorf("invalid sqlite migration table name %q", name)
+	}
+	return `"` + name + `"`, nil
+}
+
+func rejectUnknownAppliedMigrations(db *sql.DB, tableName string, knownMigrations map[string]struct{}) error {
+	rows, err := db.Query(fmt.Sprintf(`SELECT name FROM %s ORDER BY name`, tableName))
 	if err != nil {
 		return fmt.Errorf("query applied migrations: %w", err)
 	}
@@ -276,9 +313,9 @@ func rejectUnknownAppliedMigrations(db *sql.DB, knownMigrations map[string]struc
 	return nil
 }
 
-func migrationApplied(tx *sql.Tx, name string) (bool, error) {
+func migrationApplied(tx *sql.Tx, tableName, name string) (bool, error) {
 	var existing string
-	err := tx.QueryRow(`SELECT name FROM schema_migrations WHERE name = ?`, name).Scan(&existing)
+	err := tx.QueryRow(fmt.Sprintf(`SELECT name FROM %s WHERE name = ?`, tableName), name).Scan(&existing)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}

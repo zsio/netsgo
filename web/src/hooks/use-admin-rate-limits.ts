@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type {
+  ClientAuthRateLimitSettings,
   ClientAuthRateLimitsResponse,
   ResetRateLimitResponse,
 } from '@/types';
@@ -20,6 +21,11 @@ export function useClientAuthRateLimitMutations() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: clientAuthRateLimitsQueryKey });
 
   return {
+    updateSettings: useMutation({
+      mutationFn: (settings: ClientAuthRateLimitSettings) =>
+        api.put<ClientAuthRateLimitSettings>('/api/admin/rate-limits/client-auth', settings),
+      onSuccess: invalidate,
+    }),
     resetIP: useMutation({
       mutationFn: (ip: string) =>
         api.delete<ResetRateLimitResponse>('/api/admin/rate-limits/client-auth', { ip }),

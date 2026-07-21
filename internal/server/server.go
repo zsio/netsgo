@@ -70,29 +70,32 @@ type Server struct {
 
 // ClientConn represents a connected client.
 type ClientConn struct {
-	ID           string
-	InstallID    string
-	Info         protocol.ClientInfo
-	infoMu       sync.RWMutex
-	RemoteAddr   string
-	bandwidthMu  sync.RWMutex
-	bandwidth    protocol.BandwidthSettings
-	bandwidthRT  *directionalBandwidthRuntime
-	stats        *protocol.SystemStats
-	prevStats    *protocol.SystemStats // previous probe snapshot (used to compute rates)
-	prevStatsAt  time.Time             // time of previous snapshot
-	statsMu      sync.RWMutex          // protects stats / prevStats
-	conn         *websocket.Conn
-	mu           sync.Mutex
-	dataSession  *yamux.Session // data channel yamux session
-	dataMu       sync.RWMutex   // protects dataSession
-	dataToken    string
-	generation   uint64
-	state        clientState
-	stateMu      sync.RWMutex
-	pendingTimer *time.Timer
-	proxies      map[string]*ProxyTunnel // proxy tunnels: name -> tunnel
-	proxyMu      sync.RWMutex            // protects proxies
+	ID             string
+	InstallID      string
+	Info           protocol.ClientInfo
+	infoMu         sync.RWMutex
+	RemoteAddr     string
+	bandwidthMu    sync.RWMutex
+	bandwidth      protocol.BandwidthSettings
+	bandwidthRT    *directionalBandwidthRuntime
+	stats          *protocol.SystemStats
+	prevStats      *protocol.SystemStats // previous probe snapshot (used to compute rates)
+	prevStatsAt    time.Time             // time of previous snapshot
+	statsMu        sync.RWMutex          // protects stats / prevStats
+	conn           *websocket.Conn
+	mu             sync.Mutex
+	dataSession    *yamux.Session // data channel yamux session
+	dataMu         sync.RWMutex   // protects dataSession
+	dataToken      string
+	clientTokenID  string
+	tokenTouchMu   sync.Mutex
+	nextTokenTouch time.Time
+	generation     uint64
+	state          clientState
+	stateMu        sync.RWMutex
+	pendingTimer   *time.Timer
+	proxies        map[string]*ProxyTunnel // proxy tunnels: name -> tunnel
+	proxyMu        sync.RWMutex            // protects proxies
 }
 
 // New creates a new Server instance.
