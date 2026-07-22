@@ -55,8 +55,8 @@ function AdminAccessControlPage() {
       return;
     }
     try {
-      const saved = await mutations.updateSettings.mutateAsync(displayedSettings);
-      setSettings(saved);
+      await mutations.updateSettings.mutateAsync(displayedSettings);
+      setSettings(null);
       toast.success(t('admin.clientAuthRateLimitSettingsSaved'));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('errors.generic'));
