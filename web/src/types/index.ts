@@ -599,18 +599,20 @@ export interface RateLimitEntry {
   ip: string;
   request_count: number;
   max_requests: number;
-  failure_count: number;
-  max_failures: number;
   limited: boolean;
   reason?: string;
   retry_after_seconds: number;
   locked_until?: string;
   last_activity: string;
   window_seconds: number;
-  lockout_seconds: number;
 }
 
-export interface ClientAuthRateLimitsResponse {
+export interface ClientAuthRateLimitSettings {
+  enabled: boolean;
+  requests_per_minute: number;
+}
+
+export interface ClientAuthRateLimitsResponse extends ClientAuthRateLimitSettings {
   entries: RateLimitEntry[];
   generated_at: string;
 }

@@ -94,8 +94,7 @@ func (rl *RateLimiter) Allow(ip string) (bool, time.Duration) {
 	}
 	entry.timestamps = entry.timestamps[:validIdx]
 
-	// Check request count within the window.
-	if len(entry.timestamps) >= rl.config.MaxRequests {
+	if rl.config.MaxRequests > 0 && len(entry.timestamps) >= rl.config.MaxRequests {
 		// Calculate when the earliest entry expires.
 		retryAfter := entry.timestamps[0].Add(rl.config.WindowSize).Sub(now)
 		if retryAfter < 0 {

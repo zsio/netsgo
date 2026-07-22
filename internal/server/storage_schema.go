@@ -19,6 +19,8 @@ const ServerDBFileName = serverDBFileName
 
 const serverMigrationDir = "migrations"
 
+const serverCompatibleMigrationTable = "schema_compatible_migrations"
+
 var migrationFileNamePattern = regexp.MustCompile(`^\d{3}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
 
 func openServerDB(path string) (*sql.DB, error) {
@@ -26,7 +28,27 @@ func openServerDB(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return storage.Open(path, migrations)
+	compatible, strict := partitionServerMigrations(migrations)
+	db, err := storage.Open(path, strict)
+	if err != nil {
+		return nil, err
+	}
+	if err := storage.ApplyCompatibleMigrations(db, serverCompatibleMigrationTable, compatible); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func partitionServerMigrations(migrations []storage.Migration) (compatible, strict []storage.Migration) {
+	for _, migration := range migrations {
+		if migration.Name == "010_client_auth_control" {
+			compatible = append(compatible, migration)
+			continue
+		}
+		strict = append(strict, migration)
+	}
+	return compatible, strict
 }
 
 func serverMigrations() ([]storage.Migration, error) {

@@ -244,8 +244,21 @@ func TestClientControlLoopLegacyProxyCloseFixtureDeletesLegacyProxyStore(t *test
 		Type: protocol.ProxyTypeTCP,
 	})
 
-	go func() { _ = c.Start() }()
+	errCh := make(chan error, 1)
+	go func() { errCh <- c.Start() }()
+	t.Cleanup(func() {
+		c.Shutdown()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+			t.Error("client did not stop within 2s")
+		}
+	})
 	conn := ms.waitForConn(t, 2*time.Second)
+	ms.waitForMessage(t, 2*time.Second, protocol.MsgTypeAuth)
+	waitForClientCondition(t, 2*time.Second, func() bool {
+		return c.CurrentClientID() == "mock_client_1"
+	})
 
 	payload, err := os.ReadFile("testdata/legacy_v0.1.8_proxy_close.json")
 	if err != nil {

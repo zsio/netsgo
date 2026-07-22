@@ -20,8 +20,10 @@ type apiKeyResponse struct {
 }
 
 type clientAuthRateLimitResponse struct {
-	Entries     []RateLimitSnapshot `json:"entries"`
-	GeneratedAt time.Time           `json:"generated_at"`
+	Enabled           bool                `json:"enabled"`
+	RequestsPerMinute int                 `json:"requests_per_minute"`
+	Entries           []RateLimitSnapshot `json:"entries"`
+	GeneratedAt       time.Time           `json:"generated_at"`
 }
 
 func sanitizeAPIKey(key APIKey) apiKeyResponse {
@@ -130,18 +132,37 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 // ========= Rate Limits =========
 
 func (s *Server) handleAPIAdminClientAuthRateLimits(w http.ResponseWriter, r *http.Request) {
-	if s.auth.clientLimiter == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "client_auth_limiter_unavailable", "client auth limiter unavailable")
+	if s.auth.adminStore == nil {
+		writeAPIError(w, http.StatusInternalServerError, "admin_store_unavailable", "admin store not initialized")
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
 		now := time.Now()
+		settings, entries := s.auth.clientRateLimitSnapshot(now)
 		encodeJSON(w, http.StatusOK, clientAuthRateLimitResponse{
-			Entries:     s.auth.clientLimiter.Snapshot(now),
-			GeneratedAt: now,
+			Enabled:           settings.Enabled,
+			RequestsPerMinute: settings.RequestsPerMinute,
+			Entries:           entries,
+			GeneratedAt:       now,
 		})
+
+	case http.MethodPut:
+		var settings ClientAuthRateLimitSettings
+		if err := decodeJSONRequestBody(r, &settings); err != nil {
+			writeJSONRequestDecodeError(w, err)
+			return
+		}
+		if err := validateClientAuthRateLimitSettings(settings); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_client_auth_rate_limit", err.Error())
+			return
+		}
+		if err := s.auth.updateClientRateLimitSettings(settings); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "client_auth_rate_limit_update_failed", "failed to update client auth rate limit")
+			return
+		}
+		encodeJSON(w, http.StatusOK, settings)
 
 	case http.MethodDelete:
 		var req struct {
@@ -156,7 +177,7 @@ func (s *Server) handleAPIAdminClientAuthRateLimits(w http.ResponseWriter, r *ht
 			writeAPIError(w, http.StatusBadRequest, "missing_ip", "ip is required")
 			return
 		}
-		deleted := s.auth.clientLimiter.Delete(ip)
+		deleted := s.auth.deleteClientRateLimit(ip)
 		encodeJSON(w, http.StatusOK, map[string]any{
 			"success": true,
 			"deleted": deleted,

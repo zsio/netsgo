@@ -958,8 +958,14 @@ func TestClient_ControlLoop_ProxyCreateResp_Success(t *testing.T) {
 		t.Fatalf("server failed to send proxy_create_resp: %v", err)
 	}
 
-	// Wait for the client to handle it.
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the control loop to apply the server response. The race detector can
+	// legitimately delay this beyond a fixed sleep.
+	waitForClientCondition(t, 2*time.Second, func() bool {
+		_, cfg, ok := c.proxyForDataStreamHeader(protocol.DataStreamHeader{
+			TunnelID: "stable-client-created",
+		})
+		return ok && cfg.ID == "stable-client-created"
+	})
 
 	name, cfg, ok := c.proxyForDataStreamHeader(protocol.DataStreamHeader{
 		TunnelID: "stable-client-created",

@@ -107,6 +107,17 @@ type ServerConfig struct {
 	AllowedPorts []PortRange `json:"allowed_ports"` // allowlist of ports available for tunneling
 }
 
+const (
+	defaultClientAuthRateLimitPerMinute = 20
+	maxClientAuthRateLimitPerMinute     = 1000
+)
+
+// ClientAuthRateLimitSettings controls optional per-IP client authentication throttling.
+type ClientAuthRateLimitSettings struct {
+	Enabled           bool `json:"enabled"`
+	RequestsPerMinute int  `json:"requests_per_minute"`
+}
+
 // PortRange represents a port range (Start==End means a single port)
 type PortRange struct {
 	Start int `json:"start"`

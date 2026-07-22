@@ -3,9 +3,11 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,203 +208,241 @@ func TestLogin_RateLimitResetOnSuccess(t *testing.T) {
 // Client authentication rate limiting integration tests
 // ============================================================
 
-func TestClient_RateLimitBlocksAfterFailures(t *testing.T) {
+func TestClient_RateLimitBlocksAfterWindowExceeded(t *testing.T) {
 	s := New(0)
 	initTestAdminStore(t, s)
-
-	s.auth.clientLimiter = NewRateLimiter(RateLimiterConfig{
-		WindowSize:    time.Minute,
-		MaxRequests:   100,
-		MaxFailures:   3, // 3 failures trigger lockout
-		LockoutPeriod: 200 * time.Millisecond,
-	})
-	defer s.auth.clientLimiter.Stop()
+	s.auth.replaceClientRateLimiter(ClientAuthRateLimitSettings{Enabled: true, RequestsPerMinute: 3})
+	defer s.auth.stopRateLimiters()
 
 	ts := httptest.NewServer(s.newHTTPMux())
 	defer ts.Close()
-
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
 
-	// Authenticate three times in a row with the wrong key
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
 			t.Fatalf("WebSocket connection #%d failed: %v", i+1, err)
 		}
-
 		authReq := protocol.AuthRequest{
 			Key:       "wrong-key",
 			InstallID: "install-rate-test",
-			Client: protocol.ClientInfo{
-				Hostname: "rate-test-host",
-				OS:       "linux",
-				Arch:     "amd64",
-				Version:  "0.1.0",
-			},
+			Client:    protocol.ClientInfo{Hostname: "rate-test-host", OS: "linux", Arch: "amd64", Version: "0.1.0"},
 		}
 		msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 		if err := conn.WriteJSON(msg); err != nil {
 			t.Fatalf("WriteJSON failed: %v", err)
 		}
-
 		mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 		var resp protocol.Message
 		if err := conn.ReadJSON(&resp); err != nil {
-			t.Fatalf("failed to read auth response for wrong-key attempt #%d: %v", i+1, err)
-		}
-		if resp.Type != protocol.MsgTypeAuthResp {
-			t.Fatalf("wrong-key attempt #%d: want auth_resp, got %s", i+1, resp.Type)
+			t.Fatalf("failed to read auth response for attempt #%d: %v", i+1, err)
 		}
 		var authResp protocol.AuthResponse
 		if err := resp.ParsePayload(&authResp); err != nil {
-			t.Fatalf("failed to parse auth_resp for wrong-key attempt #%d: %v", i+1, err)
-		}
-		if authResp.Success {
-			t.Fatalf("wrong-key attempt #%d should not authenticate successfully", i+1)
+			t.Fatalf("failed to parse auth response for attempt #%d: %v", i+1, err)
 		}
 		if authResp.Code != protocol.AuthCodeInvalidKey {
-			t.Fatalf("wrong-key attempt #%d: error code should be invalid_key, got %s", i+1, authResp.Code)
-		}
-		if authResp.Retryable {
-			t.Fatalf("wrong-key attempt #%d should not be marked retryable", i+1)
-		}
-		if authResp.ClearToken {
-			t.Fatalf("wrong-key attempt #%d should not request token clearing", i+1)
+			t.Fatalf("attempt #%d code = %q, want %q", i+1, authResp.Code, protocol.AuthCodeInvalidKey)
 		}
 		_ = conn.Close()
 	}
 
-	// 4th connection: even with the correct key, it should be rejected due to rate limiting
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	defer mustClose(t, conn)
-
 	authReq := protocol.AuthRequest{
 		Key:       "test-key",
 		InstallID: "install-rate-test",
-		Client: protocol.ClientInfo{
-			Hostname: "rate-test-host",
-			OS:       "linux",
-			Arch:     "amd64",
-			Version:  "0.1.0",
-		},
+		Client:    protocol.ClientInfo{Hostname: "rate-test-host", OS: "linux", Arch: "amd64", Version: "0.1.0"},
 	}
 	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
 	if err := conn.WriteJSON(msg); err != nil {
 		t.Fatalf("WriteJSON failed: %v", err)
 	}
-
 	mustSetReadDeadline(t, conn, time.Now().Add(2*time.Second))
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
 		t.Fatalf("failed to read rate-limited auth response: %v", err)
 	}
-	if resp.Type != protocol.MsgTypeAuthResp {
-		t.Fatalf("when rate limited, want auth_resp, got %s", resp.Type)
-	}
 	var authResp protocol.AuthResponse
 	if err := resp.ParsePayload(&authResp); err != nil {
 		t.Fatalf("failed to parse rate-limited auth response: %v", err)
 	}
-	if authResp.Success {
-		t.Fatal("a locked IP should not authenticate successfully")
-	}
-	if authResp.Code != protocol.AuthCodeRateLimited {
-		t.Fatalf("when rate limited, error code should be rate_limited, got %s", authResp.Code)
-	}
-	if !authResp.Retryable {
-		t.Fatal("rate_limited should be marked retryable")
-	}
-	if authResp.ClearToken {
-		t.Fatal("rate_limited should not require token clearing")
-	}
-
-	// Wait for the lockout to expire and recover
-	time.Sleep(250 * time.Millisecond)
-
-	conn2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("WebSocket connection failed after lockout expiry: %v", err)
-	}
-	defer mustClose(t, conn2)
-
-	authReq2 := protocol.AuthRequest{
-		Key:       "test-key",
-		InstallID: "install-rate-test-recovery",
-		Client: protocol.ClientInfo{
-			Hostname: "rate-test-host-2",
-			OS:       "linux",
-			Arch:     "amd64",
-			Version:  "0.1.0",
-		},
-	}
-	msg2, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq2)
-	if err := conn2.WriteJSON(msg2); err != nil {
-		t.Fatalf("WriteJSON failed: %v", err)
-	}
-
-	mustSetReadDeadline(t, conn2, time.Now().Add(2*time.Second))
-	var recoveryResp protocol.Message
-	if err := conn2.ReadJSON(&recoveryResp); err != nil {
-		t.Fatalf("authentication should succeed after lockout expiry: %v", err)
-	}
-	if recoveryResp.Type != protocol.MsgTypeAuthResp {
-		t.Fatalf("want auth_resp, got %s", recoveryResp.Type)
-	}
-	var recoveredAuth protocol.AuthResponse
-	if err := recoveryResp.ParsePayload(&recoveredAuth); err != nil {
-		t.Fatalf("failed to parse recovered auth_resp: %v", err)
-	}
-	if !recoveredAuth.Success {
-		t.Fatalf("authentication should succeed after lockout expiry, got code=%s message=%s", recoveredAuth.Code, recoveredAuth.Message)
+	if authResp.Success || authResp.Code != protocol.AuthCodeRateLimited || !authResp.Retryable || authResp.ClearToken {
+		t.Fatalf("unexpected rate-limited auth response: %+v", authResp)
 	}
 }
 
-func TestAdminClientAuthRateLimits_ListAndDelete(t *testing.T) {
+func TestClient_RateLimitDisabledByDefault(t *testing.T) {
+	s := New(0)
+	for i := range defaultClientAuthRateLimitPerMinute + 1 {
+		if allowed, _ := s.auth.allowClientAuthentication("203.0.113.50"); !allowed {
+			t.Fatalf("disabled client auth limiter rejected request #%d", i+1)
+		}
+	}
+	settings, entries := s.auth.clientRateLimitSnapshot(time.Now())
+	if settings.Enabled || settings.RequestsPerMinute != defaultClientAuthRateLimitPerMinute {
+		t.Fatalf("default settings = %+v", settings)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("disabled limiter recorded %d entries", len(entries))
+	}
+}
+
+func TestAdminClientAuthRateLimits_UpdateListAndDelete(t *testing.T) {
 	s, cleanup := setupTestServerWithDB(t, true)
 	defer cleanup()
 
-	s.auth.clientLimiter = NewRateLimiter(RateLimiterConfig{
-		WindowSize:    time.Minute,
-		MaxRequests:   100,
-		MaxFailures:   2,
-		LockoutPeriod: time.Hour,
-	})
-	defer s.auth.clientLimiter.Stop()
-
 	handler := s.StartHTTPOnly()
 	token := loginAdminTokenLocal(t, handler, "admin", "password123")
-	ip := "203.0.113.44"
 
-	s.auth.clientLimiter.RecordFailure(ip)
-	s.auth.clientLimiter.RecordFailure(ip)
-	if allowed, _ := s.auth.clientLimiter.Allow(ip); allowed {
-		t.Fatal("test setup should lock the IP before listing rate limits")
+	initialResp := doMuxRequest(t, handler, http.MethodGet, "/api/admin/rate-limits/client-auth", token, nil)
+	if initialResp.Code != http.StatusOK {
+		t.Fatalf("initial GET status = %d: %s", initialResp.Code, initialResp.Body.String())
+	}
+	var initial clientAuthRateLimitResponse
+	if err := json.Unmarshal(initialResp.Body.Bytes(), &initial); err != nil {
+		t.Fatalf("decode initial response: %v", err)
+	}
+	if initial.Enabled || initial.RequestsPerMinute != defaultClientAuthRateLimitPerMinute || len(initial.Entries) != 0 {
+		t.Fatalf("unexpected initial response: %+v", initial)
+	}
+
+	updateResp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/rate-limits/client-auth", token, []byte(`{"enabled":true,"requests_per_minute":2}`))
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d: %s", updateResp.Code, updateResp.Body.String())
+	}
+	stored, err := s.auth.adminStore.GetClientAuthRateLimitSettings()
+	if err != nil {
+		t.Fatalf("load stored settings: %v", err)
+	}
+	if !stored.Enabled || stored.RequestsPerMinute != 2 {
+		t.Fatalf("stored settings = %+v", stored)
+	}
+
+	ip := "203.0.113.44"
+	if allowed, _ := s.auth.allowClientAuthentication(ip); !allowed {
+		t.Fatal("first request should be allowed")
+	}
+	if allowed, _ := s.auth.allowClientAuthentication(ip); !allowed {
+		t.Fatal("second request should be allowed")
+	}
+	if allowed, _ := s.auth.allowClientAuthentication(ip); allowed {
+		t.Fatal("third request should be limited")
 	}
 
 	listResp := doMuxRequest(t, handler, http.MethodGet, "/api/admin/rate-limits/client-auth", token, nil)
 	if listResp.Code != http.StatusOK {
-		t.Fatalf("GET /api/admin/rate-limits/client-auth: want 200, got %d: %s", listResp.Code, listResp.Body.String())
+		t.Fatalf("GET status = %d: %s", listResp.Code, listResp.Body.String())
 	}
 	var list clientAuthRateLimitResponse
 	if err := json.Unmarshal(listResp.Body.Bytes(), &list); err != nil {
 		t.Fatalf("decode rate-limit list response: %v", err)
 	}
-	if len(list.Entries) != 1 {
-		t.Fatalf("rate-limit list should contain 1 entry, got %d", len(list.Entries))
-	}
-	if list.Entries[0].IP != ip || !list.Entries[0].Limited || list.Entries[0].Reason != "lockout" {
-		t.Fatalf("unexpected rate-limit entry: %+v", list.Entries[0])
+	if !list.Enabled || list.RequestsPerMinute != 2 || len(list.Entries) != 1 || !list.Entries[0].Limited || list.Entries[0].Reason != "window" {
+		t.Fatalf("unexpected rate-limit response: %+v", list)
 	}
 
 	deleteResp := doMuxRequest(t, handler, http.MethodDelete, "/api/admin/rate-limits/client-auth", token, []byte(`{"ip":"203.0.113.44"}`))
 	if deleteResp.Code != http.StatusOK {
-		t.Fatalf("DELETE /api/admin/rate-limits/client-auth: want 200, got %d: %s", deleteResp.Code, deleteResp.Body.String())
+		t.Fatalf("DELETE status = %d: %s", deleteResp.Code, deleteResp.Body.String())
 	}
-	if allowed, _ := s.auth.clientLimiter.Allow(ip); !allowed {
-		t.Fatal("deleted IP should be allowed with a fresh client auth counter")
+	if allowed, _ := s.auth.allowClientAuthentication(ip); !allowed {
+		t.Fatal("deleted IP should be allowed with a fresh counter")
+	}
+
+	disableResp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/rate-limits/client-auth", token, []byte(`{"enabled":false,"requests_per_minute":2}`))
+	if disableResp.Code != http.StatusOK {
+		t.Fatalf("disable PUT status = %d: %s", disableResp.Code, disableResp.Body.String())
+	}
+	for i := range 3 {
+		if allowed, _ := s.auth.allowClientAuthentication(ip); !allowed {
+			t.Fatalf("disabled limiter rejected request #%d", i+1)
+		}
+	}
+}
+
+func TestAdminClientAuthRateLimits_ConcurrentUpdatesKeepRuntimeAndStorageConsistent(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+	handler := s.StartHTTPOnly()
+	token := loginAdminTokenLocal(t, handler, "admin", "password123")
+
+	firstSaved := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var hookOnce sync.Once
+	s.auth.clientRateLimitAfterSaveHook = func() {
+		hookOnce.Do(func() {
+			close(firstSaved)
+			<-releaseFirst
+		})
+	}
+
+	type result struct {
+		code int
+		body string
+	}
+	results := make(chan result, 2)
+	update := func(requestsPerMinute int) {
+		body := []byte(fmt.Sprintf(`{"enabled":true,"requests_per_minute":%d}`, requestsPerMinute))
+		resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/rate-limits/client-auth", token, body)
+		results <- result{code: resp.Code, body: resp.Body.String()}
+	}
+
+	go update(11)
+	select {
+	case <-firstSaved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first update did not reach post-save hook")
+	}
+	go update(22)
+	time.Sleep(50 * time.Millisecond)
+	close(releaseFirst)
+
+	for range 2 {
+		got := <-results
+		if got.code != http.StatusOK {
+			t.Fatalf("concurrent PUT status = %d: %s", got.code, got.body)
+		}
+	}
+	stored, err := s.auth.adminStore.GetClientAuthRateLimitSettings()
+	if err != nil {
+		t.Fatalf("load stored settings: %v", err)
+	}
+	runtimeSettings, _ := s.auth.clientRateLimitSnapshot(time.Now())
+	if stored != runtimeSettings || stored.RequestsPerMinute != 22 {
+		t.Fatalf("settings diverged: stored=%+v runtime=%+v", stored, runtimeSettings)
+	}
+}
+
+func TestAdminClientAuthRateLimits_RejectsInvalidSettingsWithoutReplacingLimiter(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+	handler := s.StartHTTPOnly()
+	token := loginAdminTokenLocal(t, handler, "admin", "password123")
+
+	for _, body := range []string{
+		`{"enabled":true,"requests_per_minute":0}`,
+		`{"enabled":true,"requests_per_minute":1001}`,
+	} {
+		resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/rate-limits/client-auth", token, []byte(body))
+		if resp.Code != http.StatusBadRequest {
+			t.Fatalf("PUT %s: status = %d, want 400: %s", body, resp.Code, resp.Body.String())
+		}
+	}
+
+	settings, entries := s.auth.clientRateLimitSnapshot(time.Now())
+	if settings.Enabled || settings.RequestsPerMinute != defaultClientAuthRateLimitPerMinute || len(entries) != 0 {
+		t.Fatalf("runtime limiter changed after invalid update: settings=%+v entries=%+v", settings, entries)
+	}
+	stored, err := s.auth.adminStore.GetClientAuthRateLimitSettings()
+	if err != nil {
+		t.Fatalf("load stored settings: %v", err)
+	}
+	if stored != settings {
+		t.Fatalf("stored settings = %+v, runtime settings = %+v", stored, settings)
 	}
 }
 

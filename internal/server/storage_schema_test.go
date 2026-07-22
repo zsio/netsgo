@@ -42,7 +42,7 @@ func TestOpenServerDBCreatesExpectedTables(t *testing.T) {
 		}
 	}
 
-	for _, column := range []string{"initialized", "jwt_secret"} {
+	for _, column := range []string{"initialized", "jwt_secret", "client_auth_rate_limit_enabled", "client_auth_rate_limit_per_minute"} {
 		if !sqliteTableColumnExists(t, db, "server_config", column) {
 			t.Fatalf("expected server_config.%s to exist", column)
 		}
@@ -65,11 +65,17 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "name", typ: "TEXT", notNull: false, primaryKey: true},
 			{name: "applied_at", typ: "TEXT", notNull: true},
 		},
+		serverCompatibleMigrationTable: {
+			{name: "name", typ: "TEXT", notNull: false, primaryKey: true},
+			{name: "applied_at", typ: "TEXT", notNull: true},
+		},
 		"server_config": {
 			{name: "id", typ: "INTEGER", primaryKey: true},
 			{name: "initialized", typ: "INTEGER", notNull: true, defaultValue: "0"},
 			{name: "jwt_secret", typ: "TEXT", notNull: true, defaultValue: "''"},
 			{name: "server_addr", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "client_auth_rate_limit_enabled", typ: "INTEGER", notNull: true, defaultValue: "0"},
+			{name: "client_auth_rate_limit_per_minute", typ: "INTEGER", notNull: true, defaultValue: "20"},
 		},
 		"allowed_ports": {
 			{name: "id", typ: "INTEGER", primaryKey: true},
@@ -338,7 +344,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 	}
 	assertSQLiteIndexes(t, db, wantIndexes)
 
-	wantMigrationNames := []string{
+	wantStrictMigrationNames := []string{
 		"001_server_runtime_schema",
 		"002_rebuild_tunnels_without_registered_client_fk",
 		"003_tunnel_stable_id",
@@ -349,8 +355,11 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"008_socks5_endpoint_types",
 		"009_tunnel_total_bandwidth",
 	}
-	if got := appliedMigrationNames(t, db); !reflect.DeepEqual(got, wantMigrationNames) {
-		t.Fatalf("applied migrations = %#v, want %#v", got, wantMigrationNames)
+	if got := appliedMigrationNames(t, db, "schema_migrations"); !reflect.DeepEqual(got, wantStrictMigrationNames) {
+		t.Fatalf("strict applied migrations = %#v, want %#v", got, wantStrictMigrationNames)
+	}
+	if got := appliedMigrationNames(t, db, serverCompatibleMigrationTable); !reflect.DeepEqual(got, []string{"010_client_auth_control"}) {
+		t.Fatalf("compatible applied migrations = %#v", got)
 	}
 	if got := countTunnelRegisteredClientFKs(t, db); got != 0 {
 		t.Fatalf("tunnels.client_id should not reference registered_clients, got %d FK(s)", got)
@@ -386,6 +395,7 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"007_api_key_lookup_digest",
 		"008_socks5_endpoint_types",
 		"009_tunnel_total_bandwidth",
+		"010_client_auth_control",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -538,12 +548,103 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
+	var strictCount, compatibleCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&strictCount); err != nil {
 		t.Fatalf("count schema_migrations failed: %v", err)
 	}
-	if count != 9 {
-		t.Fatalf("schema_migrations count = %d, want 9", count)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + serverCompatibleMigrationTable).Scan(&compatibleCount); err != nil {
+		t.Fatalf("count compatible migrations failed: %v", err)
+	}
+	if strictCount != 9 || compatibleCount != 1 {
+		t.Fatalf("migration counts = strict %d, compatible %d; want 9 and 1", strictCount, compatibleCount)
+	}
+}
+
+func TestOpenServerDBKeepsClientAuthMigrationOutOfLegacyLedger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server", "netsgo.db")
+	db, err := openServerDB(path)
+	if err != nil {
+		t.Fatalf("openServerDB() error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+
+	migrations, err := serverMigrations()
+	if err != nil {
+		t.Fatalf("serverMigrations() error = %v", err)
+	}
+	_, strict := partitionServerMigrations(migrations)
+	legacyDB, err := storage.Open(path, strict)
+	if err != nil {
+		t.Fatalf("legacy strict migration ledger should remain readable: %v", err)
+	}
+	defer func() { _ = legacyDB.Close() }()
+
+	if !sqliteTableColumnExists(t, legacyDB, "server_config", "client_auth_rate_limit_enabled") {
+		t.Fatal("compatible client auth column should remain available")
+	}
+}
+
+func TestOpenServerDBAcceptsExisting009StrictMigrationLedger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server", "netsgo.db")
+	migrations, err := serverMigrations()
+	if err != nil {
+		t.Fatalf("serverMigrations() error = %v", err)
+	}
+	_, strict := partitionServerMigrations(migrations)
+	legacyDB, err := storage.Open(path, strict)
+	if err != nil {
+		t.Fatalf("open database through migration 009: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("close database through migration 009: %v", err)
+	}
+
+	db, err := openServerDB(path)
+	if err != nil {
+		t.Fatalf("upgrade database with 009 in strict ledger: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if got := appliedMigrationNames(t, db, "schema_migrations"); !slices.Contains(got, "009_tunnel_total_bandwidth") {
+		t.Fatalf("strict migration ledger lost 009: %#v", got)
+	}
+}
+
+func TestOpenServerDBDoesNotRenewExpiredTokensDuringClientAuthMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server", "netsgo.db")
+	migrations, err := serverMigrations()
+	if err != nil {
+		t.Fatalf("serverMigrations() error = %v", err)
+	}
+	_, strict := partitionServerMigrations(migrations)
+	legacyDB, err := storage.Open(path, strict)
+	if err != nil {
+		t.Fatalf("open legacy schema: %v", err)
+	}
+	oldActivity := "2020-01-02T03:04:05Z"
+	if _, err := legacyDB.Exec(`INSERT INTO client_tokens
+		(id, token_hash, install_id, key_id, client_id, created_at, last_active_at, last_ip, is_revoked)
+		VALUES ('expired-token', 'expired-hash', 'expired-install', 'key', 'expired-client', ?, ?, '', 0)`,
+		oldActivity, oldActivity); err != nil {
+		t.Fatalf("seed expired token: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("close legacy DB: %v", err)
+	}
+
+	db, err := openServerDB(path)
+	if err != nil {
+		t.Fatalf("openServerDB() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var lastActivity string
+	if err := db.QueryRow(`SELECT last_active_at FROM client_tokens WHERE id = 'expired-token'`).Scan(&lastActivity); err != nil {
+		t.Fatalf("load expired token: %v", err)
+	}
+	if lastActivity != oldActivity {
+		t.Fatalf("expired token activity = %q, want unchanged %q", lastActivity, oldActivity)
 	}
 }
 
@@ -552,6 +653,23 @@ func TestOpenServerDBRebuildsOldTunnelsFKSchema(t *testing.T) {
 	oldDB, err := storage.Open(path, []storage.Migration{{
 		Name: "001_server_runtime_schema",
 		Up: `
+CREATE TABLE server_config (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	initialized INTEGER NOT NULL DEFAULT 0,
+	jwt_secret TEXT NOT NULL DEFAULT '',
+	server_addr TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE client_tokens (
+	id TEXT PRIMARY KEY,
+	token_hash TEXT NOT NULL,
+	install_id TEXT NOT NULL,
+	key_id TEXT NOT NULL DEFAULT '',
+	client_id TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL,
+	last_active_at TEXT NOT NULL,
+	last_ip TEXT NOT NULL DEFAULT '',
+	is_revoked INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE registered_clients (
 	id TEXT PRIMARY KEY
 );
@@ -624,6 +742,23 @@ func TestOpenServerDBPreservesLegacyTrafficWithoutTunnelMetadata(t *testing.T) {
 	oldDB, err := storage.Open(path, []storage.Migration{{
 		Name: "001_server_runtime_schema",
 		Up: `
+CREATE TABLE server_config (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	initialized INTEGER NOT NULL DEFAULT 0,
+	jwt_secret TEXT NOT NULL DEFAULT '',
+	server_addr TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE client_tokens (
+	id TEXT PRIMARY KEY,
+	token_hash TEXT NOT NULL,
+	install_id TEXT NOT NULL,
+	key_id TEXT NOT NULL DEFAULT '',
+	client_id TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL,
+	last_active_at TEXT NOT NULL,
+	last_ip TEXT NOT NULL DEFAULT '',
+	is_revoked INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE registered_clients (
 	id TEXT PRIMARY KEY,
 	install_id TEXT NOT NULL DEFAULT ''
@@ -896,11 +1031,11 @@ func sqliteIndexColumns(t *testing.T, db *sql.DB, indexName string) []string {
 	return columns
 }
 
-func appliedMigrationNames(t *testing.T, db *sql.DB) []string {
+func appliedMigrationNames(t *testing.T, db *sql.DB, table string) []string {
 	t.Helper()
-	rows, err := db.Query(`SELECT name FROM schema_migrations ORDER BY name`)
+	rows, err := db.Query(`SELECT name FROM ` + table + ` ORDER BY name`)
 	if err != nil {
-		t.Fatalf("query applied migrations: %v", err)
+		t.Fatalf("query applied migrations from %s: %v", table, err)
 	}
 	defer func() { _ = rows.Close() }()
 

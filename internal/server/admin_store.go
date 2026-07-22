@@ -51,7 +51,7 @@ type AdminStore struct {
 	failSaveCount int
 }
 
-const tokenExpiryDuration = 7 * 24 * time.Hour // token inactivity expiry duration
+const clientTokenInactivityTTL = 100 * 24 * time.Hour
 const sessionDefaultTTL = 24 * time.Hour
 
 var (
@@ -495,6 +495,67 @@ func (s *AdminStore) UpdateServerConfig(config ServerConfig) error {
 	}
 	if err := replaceAllowedPorts(tx, config.AllowedPorts); err != nil {
 		return err
+	}
+	if err := s.maybeFailSave(); err != nil {
+		return err
+	}
+	return commitTx(tx, &committed)
+}
+
+func (s *AdminStore) GetClientAuthRateLimitSettings() (ClientAuthRateLimitSettings, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	settings := ClientAuthRateLimitSettings{RequestsPerMinute: defaultClientAuthRateLimitPerMinute}
+	var enabled int
+	err := s.db.QueryRow(`SELECT client_auth_rate_limit_enabled, client_auth_rate_limit_per_minute FROM server_config WHERE id = 1`).Scan(
+		&enabled,
+		&settings.RequestsPerMinute,
+	)
+	if err == sql.ErrNoRows {
+		return settings, nil
+	}
+	if err != nil {
+		return ClientAuthRateLimitSettings{}, err
+	}
+	settings.Enabled = intToBool(enabled)
+	return settings, nil
+}
+
+func validateClientAuthRateLimitSettings(settings ClientAuthRateLimitSettings) error {
+	if settings.RequestsPerMinute < 1 || settings.RequestsPerMinute > maxClientAuthRateLimitPerMinute {
+		return fmt.Errorf("requests_per_minute must be between 1 and %d", maxClientAuthRateLimitPerMinute)
+	}
+	return nil
+}
+
+func (s *AdminStore) UpdateClientAuthRateLimitSettings(settings ClientAuthRateLimitSettings) error {
+	if err := validateClientAuthRateLimitSettings(settings); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer rollbackUnlessCommitted(tx, &committed)
+
+	result, err := tx.Exec(`UPDATE server_config
+		SET client_auth_rate_limit_enabled = ?, client_auth_rate_limit_per_minute = ?
+		WHERE id = 1`, boolToInt(settings.Enabled), settings.RequestsPerMinute)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("server config not initialized")
 	}
 	if err := s.maybeFailSave(); err != nil {
 		return err
@@ -1936,7 +1997,7 @@ func exchangeTokenInTx(tx *sql.Tx, key, installID, clientID, ip string, now time
 		return "", nil, err
 	}
 	for _, t := range tokens {
-		if now.Sub(t.LastActiveAt) < tokenExpiryDuration && t.KeyID == keyID {
+		if now.Sub(t.LastActiveAt) < clientTokenInactivityTTL && t.KeyID == keyID {
 			newToken, err := generateToken()
 			if err != nil {
 				return "", nil, err
@@ -2027,7 +2088,7 @@ func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken,
 				log.Printf("⚠️ Token install_id mismatch: token_install=%s, req_install=%s", t.InstallID, installID)
 				return nil, ErrClientTokenInstallMismatch
 			}
-			if now.Sub(t.LastActiveAt) >= tokenExpiryDuration {
+			if now.Sub(t.LastActiveAt) >= clientTokenInactivityTTL {
 				return nil, ErrClientTokenExpired
 			}
 			t.LastActiveAt = now
@@ -2150,12 +2211,12 @@ func (s *AdminStore) RevokeTokensByKeyID(keyID string) (int, error) {
 	return int(count64), nil
 }
 
-// CleanExpiredTokens removes tokens that have been inactive for more than 7 days and revoked tokens.
+// CleanExpiredTokens removes tokens that have exceeded the inactivity window and revoked tokens.
 func (s *AdminStore) CleanExpiredTokens() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cutoff := formatTime(time.Now().Add(-tokenExpiryDuration))
+	cutoff := formatTime(time.Now().Add(-clientTokenInactivityTTL))
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -2210,7 +2271,7 @@ func (s *AdminStore) GetClientTokenByInstallID(installID string) *ClientToken {
 	}
 	now := time.Now()
 	for _, token := range tokens {
-		if now.Sub(token.LastActiveAt) < tokenExpiryDuration {
+		if now.Sub(token.LastActiveAt) < clientTokenInactivityTTL {
 			copy := token
 			return &copy
 		}

@@ -96,18 +96,16 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 	if ip == "" {
 		ip = remoteIP(remoteAddr)
 	}
-	if s.auth.clientLimiter != nil {
-		if allowed, retryAfter := s.auth.clientLimiter.Allow(ip); !allowed {
-			log.Printf("🚫 Client authentication rate limited [%s, client_ip=%s]: wait %v", remoteAddr, ip, retryAfter)
-			slog.Warn("Client authentication rate limited", "ip", ip, "module", "security")
-			_ = writeAuthResult(conn, protocol.AuthResponse{
-				Success:   false,
-				Message:   "authentication failed",
-				Code:      protocol.AuthCodeRateLimited,
-				Retryable: true,
-			})
-			return nil, fmt.Errorf("authentication failed")
-		}
+	if allowed, retryAfter := s.auth.allowClientAuthentication(ip); !allowed {
+		log.Printf("🚫 Client authentication rate limited [%s, client_ip=%s]: wait %v", remoteAddr, ip, retryAfter)
+		slog.Warn("Client authentication rate limited", "ip", ip, "module", "security")
+		_ = writeAuthResult(conn, protocol.AuthResponse{
+			Success:   false,
+			Message:   "authentication failed",
+			Code:      protocol.AuthCodeRateLimited,
+			Retryable: true,
+		})
+		return nil, fmt.Errorf("authentication failed")
 	}
 
 	authTimeout := s.auth.authTimeout
@@ -141,15 +139,13 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 	var newToken string
 	var clientID string
 	var bandwidthSettings protocol.BandwidthSettings
+	var clientTokenID string
 
 	if s.auth.adminStore != nil {
 		initialized, err := s.auth.adminStore.IsInitializedE()
 		if err != nil {
 			log.Printf("⚠️ Server initialization state unavailable, rejecting client connection [%s]: %v", remoteAddr, err)
 			slog.Warn("Rejected client connection because initialization state could not be read", "ip", ip, "module", "security")
-			if s.auth.clientLimiter != nil {
-				s.auth.clientLimiter.RecordFailure(ip)
-			}
 			_ = writeAuthResult(conn, protocol.AuthResponse{
 				Success:   false,
 				Message:   "authentication temporarily unavailable",
@@ -161,9 +157,6 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 		if !initialized {
 			log.Printf("⚠️ Server not initialized, rejecting client connection [%s]", remoteAddr)
 			slog.Warn("Rejected client connection because server is not initialized", "ip", ip, "module", "security")
-			if s.auth.clientLimiter != nil {
-				s.auth.clientLimiter.RecordFailure(ip)
-			}
 			_ = writeAuthResult(conn, protocol.AuthResponse{
 				Success:   false,
 				Message:   "authentication failed",
@@ -177,9 +170,6 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 			clientToken, err := s.auth.adminStore.ValidateClientToken(authReq.Token, authReq.InstallID)
 			if err != nil {
 				log.Printf("⚠️ Client token validation failed [%s]: %v", remoteAddr, err)
-				if s.auth.clientLimiter != nil {
-					s.auth.clientLimiter.RecordFailure(ip)
-				}
 				code := protocol.AuthCodeInvalidToken
 				if errors.Is(err, ErrClientTokenRevoked) {
 					code = protocol.AuthCodeRevokedToken
@@ -194,6 +184,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 			}
 
 			clientID = clientToken.ClientID
+			clientTokenID = clientToken.ID
 			if registered, ok := s.auth.adminStore.GetRegisteredClient(clientID); ok {
 				bandwidthSettings = registeredClientBandwidthSettings(registered)
 			}
@@ -212,9 +203,6 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 			}
 
 			log.Printf("🔑 Client token authenticated [install_id=%s]", authReq.InstallID)
-			if s.auth.clientLimiter != nil {
-				s.auth.clientLimiter.ResetFailures(ip)
-			}
 		} else {
 			if registered, ok := s.auth.adminStore.GetRegisteredClientByInstallID(authReq.InstallID); ok {
 				if current, loaded := s.clients.Load(registered.ID); loaded {
@@ -234,9 +222,6 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 			exchange, err := s.auth.adminStore.RegisterClientAndExchangeToken(authReq.Key, authReq.InstallID, authReq.Client, ip)
 			if err != nil {
 				log.Printf("❌ Failed to exchange client key for token [%s]: %v", remoteAddr, err)
-				if s.auth.clientLimiter != nil {
-					s.auth.clientLimiter.RecordFailure(ip)
-				}
 				_ = writeAuthResult(conn, protocol.AuthResponse{
 					Success: false,
 					Message: "authentication failed",
@@ -248,10 +233,8 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 			bandwidthSettings = registeredClientBandwidthSettings(exchange.Client)
 
 			newToken = exchange.Token
+			clientTokenID = exchange.TokenRow.ID
 			log.Printf("🔑 Client key exchanged for token successfully [install_id=%s]", authReq.InstallID)
-			if s.auth.clientLimiter != nil {
-				s.auth.clientLimiter.ResetFailures(ip)
-			}
 		}
 	}
 
@@ -265,15 +248,17 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 	}
 
 	client := &ClientConn{
-		ID:         clientID,
-		InstallID:  authReq.InstallID,
-		Info:       authReq.Client,
-		RemoteAddr: ip,
-		conn:       conn,
-		proxies:    make(map[string]*ProxyTunnel),
-		dataToken:  dataToken,
-		generation: s.nextClientGeneration(),
-		state:      clientStatePendingData,
+		ID:             clientID,
+		InstallID:      authReq.InstallID,
+		Info:           authReq.Client,
+		RemoteAddr:     ip,
+		conn:           conn,
+		proxies:        make(map[string]*ProxyTunnel),
+		dataToken:      dataToken,
+		clientTokenID:  clientTokenID,
+		nextTokenTouch: time.Now().Add(clientTokenTouchInterval),
+		generation:     s.nextClientGeneration(),
+		state:          clientStatePendingData,
 	}
 	if err := client.SetBandwidthSettings(bandwidthSettings); err != nil {
 		return nil, fmt.Errorf("invalid persisted bandwidth settings for client %s: %w", clientID, err)

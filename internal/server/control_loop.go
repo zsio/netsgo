@@ -9,6 +9,11 @@ import (
 	"netsgo/pkg/protocol"
 )
 
+const (
+	clientTokenTouchInterval = time.Hour
+	clientTokenTouchRetry    = time.Minute
+)
+
 // controlLoop 持续处理控制通道上的消息。
 func (s *Server) controlLoop(client *ClientConn) {
 	client.mu.Lock()
@@ -32,6 +37,7 @@ func (s *Server) controlLoop(client *ClientConn) {
 }
 
 func (s *Server) handleControlMessage(client *ClientConn, msg protocol.Message) {
+	s.touchClientTokenIfDue(client, time.Now())
 	switch msg.Type {
 	case protocol.MsgTypePing:
 		s.handlePingMessage(client)
@@ -61,6 +67,25 @@ func (s *Server) handleControlMessage(client *ClientConn, msg protocol.Message) 
 		log.Printf("⚠️ Unknown message type [%s]: %s", client.ID, msg.Type)
 	}
 }
+
+func (s *Server) touchClientTokenIfDue(client *ClientConn, now time.Time) {
+	if s.auth == nil || s.auth.adminStore == nil || client.clientTokenID == "" {
+		return
+	}
+
+	client.tokenTouchMu.Lock()
+	defer client.tokenTouchMu.Unlock()
+	if now.Before(client.nextTokenTouch) {
+		return
+	}
+	if err := s.auth.adminStore.TouchToken(client.clientTokenID, client.RemoteAddr); err != nil {
+		client.nextTokenTouch = now.Add(clientTokenTouchRetry)
+		log.Printf("⚠️ Failed to refresh client token activity [%s]: %v", client.ID, err)
+		return
+	}
+	client.nextTokenTouch = now.Add(clientTokenTouchInterval)
+}
+
 
 func (s *Server) handlePingMessage(client *ClientConn) {
 	// Ping/Pong 是纯心跳消息，不依赖数据通道状态。
