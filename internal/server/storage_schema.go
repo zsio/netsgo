@@ -42,7 +42,7 @@ func openServerDB(path string) (*sql.DB, error) {
 
 func partitionServerMigrations(migrations []storage.Migration) (compatible, strict []storage.Migration) {
 	for _, migration := range migrations {
-		if migration.Name == "009_tunnel_total_bandwidth" || migration.Name == "010_client_auth_control" {
+		if migration.Name == "010_client_auth_control" {
 			compatible = append(compatible, migration)
 			continue
 		}

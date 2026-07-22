@@ -3,9 +3,11 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -359,6 +361,59 @@ func TestAdminClientAuthRateLimits_UpdateListAndDelete(t *testing.T) {
 		if allowed, _ := s.auth.allowClientAuthentication(ip); !allowed {
 			t.Fatalf("disabled limiter rejected request #%d", i+1)
 		}
+	}
+}
+
+func TestAdminClientAuthRateLimits_ConcurrentUpdatesKeepRuntimeAndStorageConsistent(t *testing.T) {
+	s, cleanup := setupTestServerWithDB(t, true)
+	defer cleanup()
+	handler := s.StartHTTPOnly()
+	token := loginAdminTokenLocal(t, handler, "admin", "password123")
+
+	firstSaved := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var hookOnce sync.Once
+	s.auth.clientRateLimitAfterSaveHook = func() {
+		hookOnce.Do(func() {
+			close(firstSaved)
+			<-releaseFirst
+		})
+	}
+
+	type result struct {
+		code int
+		body string
+	}
+	results := make(chan result, 2)
+	update := func(requestsPerMinute int) {
+		body := []byte(fmt.Sprintf(`{"enabled":true,"requests_per_minute":%d}`, requestsPerMinute))
+		resp := doMuxRequest(t, handler, http.MethodPut, "/api/admin/rate-limits/client-auth", token, body)
+		results <- result{code: resp.Code, body: resp.Body.String()}
+	}
+
+	go update(11)
+	select {
+	case <-firstSaved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first update did not reach post-save hook")
+	}
+	go update(22)
+	time.Sleep(50 * time.Millisecond)
+	close(releaseFirst)
+
+	for range 2 {
+		got := <-results
+		if got.code != http.StatusOK {
+			t.Fatalf("concurrent PUT status = %d: %s", got.code, got.body)
+		}
+	}
+	stored, err := s.auth.adminStore.GetClientAuthRateLimitSettings()
+	if err != nil {
+		t.Fatalf("load stored settings: %v", err)
+	}
+	runtimeSettings, _ := s.auth.clientRateLimitSnapshot(time.Now())
+	if stored != runtimeSettings || stored.RequestsPerMinute != 22 {
+		t.Fatalf("settings diverged: stored=%+v runtime=%+v", stored, runtimeSettings)
 	}
 }
 

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
-	"time"
 
 	"netsgo/internal/storage"
 	"netsgo/pkg/protocol"
@@ -354,11 +353,12 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"006_admin_security",
 		"007_api_key_lookup_digest",
 		"008_socks5_endpoint_types",
+		"009_tunnel_total_bandwidth",
 	}
 	if got := appliedMigrationNames(t, db, "schema_migrations"); !reflect.DeepEqual(got, wantStrictMigrationNames) {
 		t.Fatalf("strict applied migrations = %#v, want %#v", got, wantStrictMigrationNames)
 	}
-	if got := appliedMigrationNames(t, db, serverCompatibleMigrationTable); !reflect.DeepEqual(got, []string{"009_tunnel_total_bandwidth", "010_client_auth_control"}) {
+	if got := appliedMigrationNames(t, db, serverCompatibleMigrationTable); !reflect.DeepEqual(got, []string{"010_client_auth_control"}) {
 		t.Fatalf("compatible applied migrations = %#v", got)
 	}
 	if got := countTunnelRegisteredClientFKs(t, db); got != 0 {
@@ -555,8 +555,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + serverCompatibleMigrationTable).Scan(&compatibleCount); err != nil {
 		t.Fatalf("count compatible migrations failed: %v", err)
 	}
-	if strictCount != 8 || compatibleCount != 2 {
-		t.Fatalf("migration counts = strict %d, compatible %d; want 8 and 2", strictCount, compatibleCount)
+	if strictCount != 9 || compatibleCount != 1 {
+		t.Fatalf("migration counts = strict %d, compatible %d; want 9 and 1", strictCount, compatibleCount)
 	}
 }
 
@@ -581,20 +581,37 @@ func TestOpenServerDBKeepsClientAuthMigrationOutOfLegacyLedger(t *testing.T) {
 	}
 	defer func() { _ = legacyDB.Close() }()
 
-	for _, column := range []struct {
-		table string
-		name  string
-	}{
-		{table: "tunnels", name: "total_bps"},
-		{table: "server_config", name: "client_auth_rate_limit_enabled"},
-	} {
-		if !sqliteTableColumnExists(t, legacyDB, column.table, column.name) {
-			t.Fatalf("compatible column %s.%s should remain available", column.table, column.name)
-		}
+	if !sqliteTableColumnExists(t, legacyDB, "server_config", "client_auth_rate_limit_enabled") {
+		t.Fatal("compatible client auth column should remain available")
 	}
 }
 
-func TestOpenServerDBRenewsOnlyActiveTokensDuringClientAuthMigration(t *testing.T) {
+func TestOpenServerDBAcceptsExisting009StrictMigrationLedger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server", "netsgo.db")
+	migrations, err := serverMigrations()
+	if err != nil {
+		t.Fatalf("serverMigrations() error = %v", err)
+	}
+	_, strict := partitionServerMigrations(migrations)
+	legacyDB, err := storage.Open(path, strict)
+	if err != nil {
+		t.Fatalf("open database through migration 009: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("close database through migration 009: %v", err)
+	}
+
+	db, err := openServerDB(path)
+	if err != nil {
+		t.Fatalf("upgrade database with 009 in strict ledger: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if got := appliedMigrationNames(t, db, "schema_migrations"); !slices.Contains(got, "009_tunnel_total_bandwidth") {
+		t.Fatalf("strict migration ledger lost 009: %#v", got)
+	}
+}
+
+func TestOpenServerDBDoesNotRenewExpiredTokensDuringClientAuthMigration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server", "netsgo.db")
 	migrations, err := serverMigrations()
 	if err != nil {
@@ -605,51 +622,29 @@ func TestOpenServerDBRenewsOnlyActiveTokensDuringClientAuthMigration(t *testing.
 	if err != nil {
 		t.Fatalf("open legacy schema: %v", err)
 	}
-	if _, err := legacyDB.Exec(`ALTER TABLE tunnels ADD COLUMN total_bps INTEGER NOT NULL DEFAULT 0 CHECK (total_bps >= 0)`); err != nil {
-		t.Fatalf("apply prior compatible migration: %v", err)
-	}
-	if _, err := legacyDB.Exec(`CREATE TABLE ` + serverCompatibleMigrationTable + ` (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
-		t.Fatalf("create compatible migration ledger: %v", err)
-	}
-	if _, err := legacyDB.Exec(`INSERT INTO ` + serverCompatibleMigrationTable + ` (name, applied_at) VALUES ('009_tunnel_total_bandwidth', '2026-07-11T00:00:00Z')`); err != nil {
-		t.Fatalf("record prior compatible migration: %v", err)
-	}
 	oldActivity := "2020-01-02T03:04:05Z"
 	if _, err := legacyDB.Exec(`INSERT INTO client_tokens
 		(id, token_hash, install_id, key_id, client_id, created_at, last_active_at, last_ip, is_revoked)
-		VALUES
-		('active-token', 'active-hash', 'active-install', 'key', 'active-client', ?, ?, '', 0),
-		('revoked-token', 'revoked-hash', 'revoked-install', 'key', 'revoked-client', ?, ?, '', 1)`,
-		oldActivity, oldActivity, oldActivity, oldActivity); err != nil {
-		t.Fatalf("seed legacy tokens: %v", err)
+		VALUES ('expired-token', 'expired-hash', 'expired-install', 'key', 'expired-client', ?, ?, '', 0)`,
+		oldActivity, oldActivity); err != nil {
+		t.Fatalf("seed expired token: %v", err)
 	}
 	if err := legacyDB.Close(); err != nil {
 		t.Fatalf("close legacy DB: %v", err)
 	}
 
-	before := time.Now().UTC()
 	db, err := openServerDB(path)
 	if err != nil {
 		t.Fatalf("openServerDB() error = %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	var activeActivity, revokedActivity string
-	if err := db.QueryRow(`SELECT last_active_at FROM client_tokens WHERE id = 'active-token'`).Scan(&activeActivity); err != nil {
-		t.Fatalf("load active token: %v", err)
+	var lastActivity string
+	if err := db.QueryRow(`SELECT last_active_at FROM client_tokens WHERE id = 'expired-token'`).Scan(&lastActivity); err != nil {
+		t.Fatalf("load expired token: %v", err)
 	}
-	if err := db.QueryRow(`SELECT last_active_at FROM client_tokens WHERE id = 'revoked-token'`).Scan(&revokedActivity); err != nil {
-		t.Fatalf("load revoked token: %v", err)
-	}
-	activeTime, err := parseTime(activeActivity)
-	if err != nil {
-		t.Fatalf("parse active token time %q: %v", activeActivity, err)
-	}
-	if activeTime.Before(before.Add(-time.Second)) {
-		t.Fatalf("active token activity = %s, want renewed near %s", activeTime, before)
-	}
-	if revokedActivity != oldActivity {
-		t.Fatalf("revoked token activity = %q, want unchanged %q", revokedActivity, oldActivity)
+	if lastActivity != oldActivity {
+		t.Fatalf("expired token activity = %q, want unchanged %q", lastActivity, oldActivity)
 	}
 }
 

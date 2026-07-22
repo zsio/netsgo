@@ -12,13 +12,15 @@ import (
 //
 // Other files in the same package access it via s.auth.*; no interface is exposed externally.
 type AuthService struct {
-	adminStore       *AdminStore
-	loginLimiter     *RateLimiter
-	clientLimiterMu  sync.RWMutex
-	clientLimiter    *RateLimiter
-	clientRateLimits ClientAuthRateLimitSettings
-	mfaLimiter       *mfaAttemptLimiter
-	authTimeout      time.Duration
+	adminStore                   *AdminStore
+	loginLimiter                 *RateLimiter
+	clientLimiterMu              sync.RWMutex
+	clientLimiter                *RateLimiter
+	clientRateLimits             ClientAuthRateLimitSettings
+	clientRateLimitUpdateMu      sync.Mutex
+	clientRateLimitAfterSaveHook func()
+	mfaLimiter                   *mfaAttemptLimiter
+	authTimeout                  time.Duration
 }
 
 // newAuthService creates an empty AuthService (fields are populated during Start()).
@@ -63,6 +65,20 @@ func (a *AuthService) replaceClientRateLimiter(settings ClientAuthRateLimitSetti
 	if previous != nil {
 		previous.Stop()
 	}
+}
+
+func (a *AuthService) updateClientRateLimitSettings(settings ClientAuthRateLimitSettings) error {
+	a.clientRateLimitUpdateMu.Lock()
+	defer a.clientRateLimitUpdateMu.Unlock()
+
+	if err := a.adminStore.UpdateClientAuthRateLimitSettings(settings); err != nil {
+		return err
+	}
+	if a.clientRateLimitAfterSaveHook != nil {
+		a.clientRateLimitAfterSaveHook()
+	}
+	a.replaceClientRateLimiter(settings)
+	return nil
 }
 
 func (a *AuthService) clientRateLimitSnapshot(now time.Time) (ClientAuthRateLimitSettings, []RateLimitSnapshot) {

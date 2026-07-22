@@ -158,11 +158,10 @@ func (s *Server) handleAPIAdminClientAuthRateLimits(w http.ResponseWriter, r *ht
 			writeAPIError(w, http.StatusBadRequest, "invalid_client_auth_rate_limit", err.Error())
 			return
 		}
-		if err := s.auth.adminStore.UpdateClientAuthRateLimitSettings(settings); err != nil {
+		if err := s.auth.updateClientRateLimitSettings(settings); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "client_auth_rate_limit_update_failed", "failed to update client auth rate limit")
 			return
 		}
-		s.auth.replaceClientRateLimiter(settings)
 		encodeJSON(w, http.StatusOK, settings)
 
 	case http.MethodDelete:
