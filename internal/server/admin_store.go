@@ -51,7 +51,7 @@ type AdminStore struct {
 	failSaveCount int
 }
 
-const tokenExpiryDuration = 7 * 24 * time.Hour // token inactivity expiry duration
+const clientTokenInactivityTTL = 100 * 24 * time.Hour
 const sessionDefaultTTL = 24 * time.Hour
 
 var (
@@ -1997,7 +1997,7 @@ func exchangeTokenInTx(tx *sql.Tx, key, installID, clientID, ip string, now time
 		return "", nil, err
 	}
 	for _, t := range tokens {
-		if now.Sub(t.LastActiveAt) < tokenExpiryDuration && t.KeyID == keyID {
+		if now.Sub(t.LastActiveAt) < clientTokenInactivityTTL && t.KeyID == keyID {
 			newToken, err := generateToken()
 			if err != nil {
 				return "", nil, err
@@ -2088,7 +2088,7 @@ func (s *AdminStore) ValidateClientToken(token, installID string) (*ClientToken,
 				log.Printf("⚠️ Token install_id mismatch: token_install=%s, req_install=%s", t.InstallID, installID)
 				return nil, ErrClientTokenInstallMismatch
 			}
-			if now.Sub(t.LastActiveAt) >= tokenExpiryDuration {
+			if now.Sub(t.LastActiveAt) >= clientTokenInactivityTTL {
 				return nil, ErrClientTokenExpired
 			}
 			t.LastActiveAt = now
@@ -2211,12 +2211,12 @@ func (s *AdminStore) RevokeTokensByKeyID(keyID string) (int, error) {
 	return int(count64), nil
 }
 
-// CleanExpiredTokens removes tokens that have been inactive for more than 7 days and revoked tokens.
+// CleanExpiredTokens removes tokens that have exceeded the inactivity window and revoked tokens.
 func (s *AdminStore) CleanExpiredTokens() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cutoff := formatTime(time.Now().Add(-tokenExpiryDuration))
+	cutoff := formatTime(time.Now().Add(-clientTokenInactivityTTL))
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -2271,7 +2271,7 @@ func (s *AdminStore) GetClientTokenByInstallID(installID string) *ClientToken {
 	}
 	now := time.Now()
 	for _, token := range tokens {
-		if now.Sub(token.LastActiveAt) < tokenExpiryDuration {
+		if now.Sub(token.LastActiveAt) < clientTokenInactivityTTL {
 			copy := token
 			return &copy
 		}

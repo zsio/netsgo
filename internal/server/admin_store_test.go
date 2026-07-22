@@ -96,18 +96,36 @@ func firstClientToken(t *testing.T, store *AdminStore) ClientToken {
 	return token
 }
 
+func ageClientTokenByInstallID(t *testing.T, store *AdminStore, installID string, age time.Duration) {
+	t.Helper()
+	if _, err := store.db.Exec(`UPDATE client_tokens SET last_active_at = ? WHERE install_id = ?`, formatTime(time.Now().Add(-age)), installID); err != nil {
+		t.Fatalf("age client token by install_id: %v", err)
+	}
+}
+
 func expireClientTokenByInstallID(t *testing.T, store *AdminStore, installID string) {
 	t.Helper()
-	if _, err := store.db.Exec(`UPDATE client_tokens SET last_active_at = ? WHERE install_id = ?`, formatTime(time.Now().Add(-8*24*time.Hour)), installID); err != nil {
-		t.Fatalf("expire client token by install_id: %v", err)
-	}
+	ageClientTokenByInstallID(t, store, installID, clientTokenInactivityTTL+time.Hour)
 }
 
 func expireAllClientTokens(t *testing.T, store *AdminStore) {
 	t.Helper()
-	if _, err := store.db.Exec(`UPDATE client_tokens SET last_active_at = ?`, formatTime(time.Now().Add(-8*24*time.Hour))); err != nil {
+	if _, err := store.db.Exec(`UPDATE client_tokens SET last_active_at = ?`, formatTime(time.Now().Add(-clientTokenInactivityTTL-time.Hour))); err != nil {
 		t.Fatalf("expire client tokens: %v", err)
 	}
+}
+
+func tokenLastActiveAtByInstallID(t *testing.T, store *AdminStore, installID string) time.Time {
+	t.Helper()
+	var raw string
+	if err := store.db.QueryRow(`SELECT last_active_at FROM client_tokens WHERE install_id = ? AND is_revoked = 0`, installID).Scan(&raw); err != nil {
+		t.Fatalf("load client token activity: %v", err)
+	}
+	parsed, err := parseTime(raw)
+	if err != nil {
+		t.Fatalf("parse client token activity %q: %v", raw, err)
+	}
+	return parsed
 }
 
 // --- 初始化 ---
@@ -1246,7 +1264,7 @@ func TestAdminStore_Token_ValidateExpired(t *testing.T) {
 		t.Fatalf("ExchangeToken failed: %v", err)
 	}
 
-	// 手动设置 Token 为过期（超过 7 天不活跃）
+	// 手动设置 Token 超过当前不活跃窗口。
 	expireClientTokenByInstallID(t, store, "install-1")
 
 	_, err = store.ValidateClientToken(tokenStr, "install-1")
@@ -1255,6 +1273,58 @@ func TestAdminStore_Token_ValidateExpired(t *testing.T) {
 	}
 	if !errors.Is(err, ErrClientTokenExpired) {
 		t.Fatalf("expired token should return ErrClientTokenExpired, got %v", err)
+	}
+}
+
+func TestAdminStore_Token_ValidateNinetyDayInactiveTokenAndRefreshesActivity(t *testing.T) {
+	store := newTestAdminStore(t)
+	rawKey := "sk-upgrade-window-key"
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
+	const installID = "install-upgrade-window"
+	token, _, err := store.ExchangeToken(rawKey, installID, "client-upgrade-window", "192.0.2.10:4321")
+	if err != nil {
+		t.Fatalf("ExchangeToken failed: %v", err)
+	}
+	ageClientTokenByInstallID(t, store, installID, 90*24*time.Hour)
+
+	before := time.Now()
+	validated, err := store.ValidateClientToken(token, installID)
+	if err != nil {
+		t.Fatalf("90-day inactive token should remain valid: %v", err)
+	}
+	if validated.ClientID != "client-upgrade-window" {
+		t.Fatalf("validated client ID = %q", validated.ClientID)
+	}
+	if refreshed := tokenLastActiveAtByInstallID(t, store, installID); refreshed.Before(before) {
+		t.Fatalf("refreshed activity = %s, want >= %s", refreshed, before)
+	}
+}
+
+func TestAdminStore_Token_CleanupPreservesNinetyDayInactiveTokenAndDeletesExpiredBoundary(t *testing.T) {
+	store := newTestAdminStore(t)
+	rawKey := "sk-upgrade-cleanup-key"
+	if _, err := store.AddAPIKey("test", rawKey, []string{"connect"}, nil); err != nil {
+		t.Fatalf("AddAPIKey failed: %v", err)
+	}
+	if _, _, err := store.ExchangeToken(rawKey, "install-90-day", "client-90-day", "192.0.2.10:4321"); err != nil {
+		t.Fatalf("ExchangeToken 90-day token failed: %v", err)
+	}
+	if _, _, err := store.ExchangeToken(rawKey, "install-expired", "client-expired", "192.0.2.11:4321"); err != nil {
+		t.Fatalf("ExchangeToken expired token failed: %v", err)
+	}
+	ageClientTokenByInstallID(t, store, "install-90-day", 90*24*time.Hour)
+	ageClientTokenByInstallID(t, store, "install-expired", clientTokenInactivityTTL+time.Hour)
+
+	if err := store.CleanExpiredTokens(); err != nil {
+		t.Fatalf("CleanExpiredTokens failed: %v", err)
+	}
+	if token := store.GetClientTokenByInstallID("install-90-day"); token == nil {
+		t.Fatal("90-day inactive token should survive cleanup")
+	}
+	if token := store.GetClientTokenByInstallID("install-expired"); token != nil {
+		t.Fatalf("expired token should be deleted, got %+v", token)
 	}
 }
 

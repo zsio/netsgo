@@ -108,9 +108,20 @@ func doAuthWithInfo(t *testing.T, conn *websocket.Conn, hostname, key string) pr
 
 func doAuthWithInstallID(t *testing.T, conn *websocket.Conn, hostname, installID, key string) protocol.AuthResponse {
 	t.Helper()
+	return doAuthRequest(t, conn, hostname, installID, key, "")
+}
+
+func doTokenAuthWithInstallID(t *testing.T, conn *websocket.Conn, hostname, installID, token string) protocol.AuthResponse {
+	t.Helper()
+	return doAuthRequest(t, conn, hostname, installID, "", token)
+}
+
+func doAuthRequest(t *testing.T, conn *websocket.Conn, hostname, installID, key, token string) protocol.AuthResponse {
+	t.Helper()
 	caps := protocol.DefaultClientCapabilities()
 	authReq := protocol.AuthRequest{
 		Key:       key,
+		Token:     token,
 		InstallID: installID,
 		Client: protocol.ClientInfo{
 			Hostname:     hostname,
@@ -120,24 +131,63 @@ func doAuthWithInstallID(t *testing.T, conn *websocket.Conn, hostname, installID
 			Capabilities: &caps,
 		},
 	}
-	msg, _ := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
+	msg, err := protocol.NewMessage(protocol.MsgTypeAuth, authReq)
+	if err != nil {
+		t.Fatalf("create auth message: %v", err)
+	}
 	if err := conn.WriteJSON(msg); err != nil {
-		t.Fatalf("failed to send auth message: %v", err)
+		t.Fatalf("send auth message: %v", err)
 	}
 
 	var resp protocol.Message
 	if err := conn.ReadJSON(&resp); err != nil {
-		t.Fatalf("failed to read auth response: %v", err)
+		t.Fatalf("read auth response: %v", err)
 	}
 	if resp.Type != protocol.MsgTypeAuthResp {
 		t.Fatalf("want auth_resp, got %s", resp.Type)
 	}
-
 	var authResp protocol.AuthResponse
 	if err := resp.ParsePayload(&authResp); err != nil {
-		t.Fatalf("failed to parse auth response: %v", err)
+		t.Fatalf("parse auth response: %v", err)
 	}
 	return authResp
+}
+
+func TestControlAuthAcceptsNinetyDayInactiveTokenAfterUpgrade(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+
+	const installID = "install-upgrade-token"
+	token, _, err := s.auth.adminStore.ExchangeToken("test-key", installID, "client-upgrade-token", "192.0.2.10:4321")
+	if err != nil {
+		t.Fatalf("exchange token: %v", err)
+	}
+	ageClientTokenByInstallID(t, s.auth.adminStore, installID, 90*24*time.Hour)
+	if err := s.auth.adminStore.CleanExpiredTokens(); err != nil {
+		t.Fatalf("startup token cleanup: %v", err)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("open control channel: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	before := time.Now()
+	authResp := doTokenAuthWithInstallID(t, conn, "upgrade-host", installID, token)
+	if !authResp.Success || authResp.Code != protocol.AuthCodeOK {
+		t.Fatalf("90-day token auth response = %+v", authResp)
+	}
+	if authResp.ClientID != "client-upgrade-token" {
+		t.Fatalf("authenticated client ID = %q", authResp.ClientID)
+	}
+	if authResp.Token != "" {
+		t.Fatalf("token reconnect should not rotate token, got %q", authResp.Token)
+	}
+	if refreshed := tokenLastActiveAtByInstallID(t, s.auth.adminStore, installID); refreshed.Before(before) {
+		t.Fatalf("refreshed activity = %s, want >= %s", refreshed, before)
+	}
 }
 
 // connectAndAuth establishes a new WS connection and completes authentication
