@@ -604,6 +604,8 @@ export const zhCN = {
     navLabel: '活动',
     pageTitle: '活动时间线',
     pageDescription: '持久记录管理变更，以及客户端、隧道和 P2P 生命周期中实际发生的事件。',
+    filterReset: '重置筛选',
+    endOfRecord: '记录终点',
     clientRecentTitle: '近期活动',
     viewAll: '查看全部',
     viewTunnelTimeline: '查看隧道时间线',

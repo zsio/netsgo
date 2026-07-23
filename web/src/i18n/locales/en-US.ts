@@ -602,6 +602,8 @@ export const enUS = {
     navLabel: 'Activity',
     pageTitle: 'Activity timeline',
     pageDescription: 'A durable timeline of administrative changes and observed client, tunnel, and P2P lifecycle facts.',
+    filterReset: 'Reset filters',
+    endOfRecord: 'End of record',
     clientRecentTitle: 'Recent activity',
     viewAll: 'View all',
     viewTunnelTimeline: 'View tunnel timeline',

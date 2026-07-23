@@ -1,5 +1,5 @@
 import { createRoute, useNavigate } from '@tanstack/react-router';
-import { Activity } from 'lucide-react';
+import { motion } from 'motion/react';
 import { useTranslation } from 'react-i18next';
 
 import { ActivityFilters, type ActivityFilterValue } from '@/components/custom/activity/ActivityFilters';
@@ -65,6 +65,15 @@ function ActivityPage() {
   const search = dashboardActivityRoute.useSearch();
   const navigate = useNavigate({ from: dashboardActivityRoute.fullPath });
   const scopeId = search.scope === 'client' ? search.client_id : search.scope === 'tunnel' ? search.tunnel_id : undefined;
+  const query = {
+    scope: search.scope,
+    scopeId,
+    limit: 50,
+    severities: search.severity,
+    categories: search.category,
+    from: dateBoundary(search.from),
+    to: dateBoundary(search.to, true),
+  };
   const filters: ActivityFilterValue = {
     severities: search.severity,
     categories: search.category,
@@ -85,27 +94,30 @@ function ActivityPage() {
   };
 
   return (
-    <div className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
-      <header className="flex items-start gap-4 border-b border-border/60 pb-6">
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary"><Activity className="size-5" /></span>
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">{t('activity.pageTitle')}</h1>
-          <p className="mt-2 max-w-2xl text-sm font-medium text-muted-foreground">{t('activity.pageDescription')}</p>
-        </div>
-      </header>
-      <ActivityFilters value={filters} onChange={updateFilters} />
-      <ActivityTimeline query={{
-        scope: search.scope,
-        scopeId,
-        limit: 50,
-        severities: search.severity,
-        categories: search.category,
-        from: dateBoundary(search.from),
-        to: dateBoundary(search.to, true),
-      }} />
-    </div>
+    <motion.div
+      variants={{ hidden: {}, show: { transition: { staggerChildren: 0.08 } } }}
+      initial="hidden"
+      animate="show"
+      className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8"
+    >
+      <motion.div variants={fadeUp}>
+        <h3 className="text-xl font-semibold tracking-tight">{t('activity.pageTitle')}</h3>
+        <p className="mt-1 text-sm text-muted-foreground">{t('activity.pageDescription')}</p>
+      </motion.div>
+      <motion.div variants={fadeUp}>
+        <ActivityFilters value={filters} onChange={updateFilters} />
+      </motion.div>
+      <motion.div variants={fadeUp}>
+        <ActivityTimeline query={query} />
+      </motion.div>
+    </motion.div>
   );
 }
+
+const fadeUp = {
+  hidden: { opacity: 0, y: 12 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: 'easeOut' as const } },
+};
 
 export const dashboardActivityRoute = createRoute({
   getParentRoute: () => dashboardRoute,

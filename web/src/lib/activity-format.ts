@@ -14,3 +14,15 @@ export function formatActivityAbsoluteTime(value: string) {
   if (Number.isNaN(date.getTime())) return i18n.t('format.unknownTime');
   return new Intl.DateTimeFormat(locale(), { dateStyle: 'full', timeStyle: 'long' }).format(date);
 }
+
+export function formatActivityDay(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return i18n.t('format.unknownTime');
+  return new Intl.DateTimeFormat(locale(), { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }).format(date);
+}
+
+export function activityDayKey(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'unknown';
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
