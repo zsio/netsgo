@@ -228,9 +228,9 @@ func (s *Server) scheduleP2PRetry(tunnelIDs []string) {
 }
 
 func (s *Server) handleP2PStatsMessage(client *ClientConn, msg protocol.Message) {
-	if !s.isCurrentLive(client.ID, client.generation) {
-		return
-	}
+	// A graceful disconnect can mark the logical session Closing before this
+	// queued final report is read. acceptStats still authorizes the archived
+	// grant against the authenticated connection's exact client generation.
 	var report protocol.P2PStatsReport
 	if err := msg.ParsePayload(&report); err != nil {
 		return

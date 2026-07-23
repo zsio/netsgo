@@ -352,3 +352,34 @@ func TestP2PCoordinatorAcceptsOneFinalOwnerStatsReportAfterSessionClose(t *testi
 		t.Fatal("expired final stats grace accepted")
 	}
 }
+
+func TestHandleP2PStatsAcceptsFinalReportFromClosingOwner(t *testing.T) {
+	s := New(0)
+	grant, _, err := s.p2p.ensureGrant(p2pGrantSpec{
+		tunnelID: "t1", revision: 1,
+		ingressClientID: "a", targetClientID: "b",
+		ingressGeneration: 10, targetGeneration: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.p2p.closeSession(grant.sessionID, "participant offline")
+
+	report := protocol.P2PStatsReport{
+		SessionID: grant.sessionID, GrantID: grant.grantID,
+		TunnelID: "t1", Revision: 1, Epoch: "epoch", Sequence: 1,
+		IngressBytes: 17, EgressBytes: 9,
+	}
+	msg, err := protocol.NewMessage(protocol.MsgTypeP2PStatsReport, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.handleP2PStatsMessage(&ClientConn{ID: "b", generation: 20, state: clientStateClosing}, *msg)
+
+	s.p2p.mu.Lock()
+	cursor := s.p2p.closedStats[grant.grantID].cursor
+	s.p2p.mu.Unlock()
+	if cursor.sequence != report.Sequence || cursor.ingress != report.IngressBytes || cursor.egress != report.EgressBytes {
+		t.Fatalf("final stats cursor=%+v want sequence=%d ingress=%d egress=%d", cursor, report.Sequence, report.IngressBytes, report.EgressBytes)
+	}
+}
