@@ -11,6 +11,8 @@ import { i18n } from '@/i18n';
 import type {
   ProxyConfig,
   TunnelClientRole,
+  ActivityPage,
+  ActivityQuery,
   TunnelCreateRequest,
   TunnelMigrateRequest,
   TunnelMutationResponse,
@@ -193,4 +195,32 @@ export const tunnelApi = {
   },
 };
 
+
+export function buildActivityURL(query: ActivityQuery = {}) {
+  const params = new URLSearchParams();
+  const scope = query.scope ?? 'global';
+  params.set('scope', scope);
+  if (scope === 'client' && query.scopeId) params.set('client_id', query.scopeId);
+  if (scope === 'tunnel' && query.scopeId) params.set('tunnel_id', query.scopeId);
+  if (query.before) params.set('before', String(query.before));
+  if (query.after) params.set('after', String(query.after));
+  if (query.limit) params.set('limit', String(query.limit));
+  for (const severity of query.severities ?? []) params.append('severity', severity);
+  for (const category of query.categories ?? []) params.append('category', category);
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  return `/api/activity?${params.toString()}`;
+}
+
+export const activityApi = {
+  list(query: ActivityQuery = {}) {
+    return api.get<ActivityPage>(buildActivityURL(query));
+  },
+  recovery(after: number, limit = 200) {
+    return api.get<ActivityPage>(buildActivityURL({
+      scope: 'global', after, limit,
+      severities: ['debug', 'info', 'warning', 'error'],
+    }));
+  },
+};
 export { ApiError };

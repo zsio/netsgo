@@ -198,8 +198,7 @@ func (s *Server) unprovisionClientRelayTunnel(stored StoredTunnel, reason string
 	}
 	s.c2c.delete(stored.ID)
 	if s.p2p != nil {
-		_, revokes := s.p2p.revokeTunnel(stored.ID, stored.Revision, reason)
-		s.sendP2POutbounds(revokes)
+		s.sendP2PLifecycleResult(s.p2p.revokeTunnel(stored.ID, stored.Revision, reason))
 	}
 	var errs []error
 	if ingressClient, ok := s.loadLiveClient(stored.Ingress.ClientID); ok {
@@ -221,41 +220,11 @@ func (s *Server) updateStoredTunnelRuntime(stored StoredTunnel, runtimeState, me
 }
 
 func (s *Server) updateStoredTunnelRuntimeIfCurrent(stored StoredTunnel, runtimeState, message string) (bool, error) {
-	if s.store == nil {
-		return true, nil
-	}
-	desired := stored.DesiredState
-	if desired == "" {
-		desired = protocol.ProxyDesiredStateRunning
-	}
-	ownerClientID := stored.OwnerClientID
-	if ownerClientID == "" {
-		ownerClientID = stored.ClientID
-	}
-	return s.store.UpdateStatesIfCurrent(ownerClientID, stored.ID, stored.Revision, desired, runtimeState, message)
+	return s.updateStoredTunnelRuntimeObserved(stored, runtimeState, message)
 }
 
 func (s *Server) transitionStoredTunnelRuntimeIfCurrent(stored StoredTunnel, expectedRuntimeState, runtimeState, message string) (bool, error) {
-	if s.store == nil {
-		return true, nil
-	}
-	desired := stored.DesiredState
-	if desired == "" {
-		desired = protocol.ProxyDesiredStateRunning
-	}
-	ownerClientID := stored.OwnerClientID
-	if ownerClientID == "" {
-		ownerClientID = stored.ClientID
-	}
-	return s.store.TransitionRuntimeStateIfCurrent(
-		ownerClientID,
-		stored.ID,
-		stored.Revision,
-		desired,
-		expectedRuntimeState,
-		runtimeState,
-		message,
-	)
+	return s.transitionStoredTunnelRuntimeObserved(stored, expectedRuntimeState, runtimeState, message)
 }
 
 func (s *Server) notifyClientTunnelProvision(client *ClientConn, req protocol.TunnelProvisionRequest) error {

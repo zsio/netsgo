@@ -76,6 +76,14 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "server_addr", typ: "TEXT", notNull: true, defaultValue: "''"},
 			{name: "client_auth_rate_limit_enabled", typ: "INTEGER", notNull: true, defaultValue: "0"},
 			{name: "client_auth_rate_limit_per_minute", typ: "INTEGER", notNull: true, defaultValue: "20"},
+			{name: "activity_debug_retention_days", typ: "INTEGER", notNull: true, defaultValue: "1"},
+			{name: "activity_debug_min_count", typ: "INTEGER", notNull: true, defaultValue: "200"},
+			{name: "activity_info_retention_days", typ: "INTEGER", notNull: true, defaultValue: "7"},
+			{name: "activity_info_min_count", typ: "INTEGER", notNull: true, defaultValue: "100"},
+			{name: "activity_warning_retention_days", typ: "INTEGER", notNull: true, defaultValue: "30"},
+			{name: "activity_warning_min_count", typ: "INTEGER", notNull: true, defaultValue: "100"},
+			{name: "activity_error_retention_days", typ: "INTEGER", notNull: true, defaultValue: "180"},
+			{name: "activity_error_min_count", typ: "INTEGER", notNull: true, defaultValue: "100"},
 		},
 		"allowed_ports": {
 			{name: "id", typ: "INTEGER", primaryKey: true},
@@ -248,6 +256,40 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "updated_at", typ: "TEXT", notNull: true},
 			{name: "total_bps", typ: "INTEGER", notNull: true, defaultValue: "0"},
 		},
+		"activity_events": {
+			{name: "id", typ: "INTEGER", primaryKey: true},
+			{name: "occurred_at_ns", typ: "INTEGER", notNull: true},
+			{name: "recorded_at_ns", typ: "INTEGER", notNull: true},
+			{name: "severity", typ: "TEXT", notNull: true},
+			{name: "category", typ: "TEXT", notNull: true},
+			{name: "action", typ: "TEXT", notNull: true},
+			{name: "source", typ: "TEXT", notNull: true},
+			{name: "actor_type", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "actor_id", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "actor_name", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "actor_ip_hash", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "actor_ip_prefix", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "dedupe_key", typ: "TEXT"},
+			{name: "payload_version", typ: "INTEGER", notNull: true, defaultValue: "1"},
+			{name: "payload_json", typ: "TEXT", notNull: true, defaultValue: "'{}'"},
+		},
+		"activity_event_clients": {
+			{name: "event_id", typ: "INTEGER", notNull: true, primaryKey: true},
+			{name: "client_id", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "relation", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "display_name", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "hostname", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "is_truncated", typ: "INTEGER", notNull: true, defaultValue: "0"},
+		},
+		"activity_event_tunnels": {
+			{name: "event_id", typ: "INTEGER", notNull: true, primaryKey: true},
+			{name: "tunnel_id", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "relation", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "name", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "tunnel_type", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "topology", typ: "TEXT", notNull: true, defaultValue: "''"},
+			{name: "is_truncated", typ: "INTEGER", notNull: true, defaultValue: "0"},
+		},
 		"traffic_buckets": {
 			{name: "tunnel_id", typ: "TEXT", notNull: true, primaryKey: true},
 			{name: "owner_client_id", typ: "TEXT", notNull: true},
@@ -315,6 +357,22 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "idx_admin_sessions_user", unique: false, columns: []string{"user_id"}},
 			{name: "sqlite_autoindex_admin_sessions_1", unique: true, columns: []string{"id"}},
 		},
+		"activity_events": {
+			{name: "idx_activity_events_category_id", unique: false, columns: []string{"category", "id"}},
+			{name: "idx_activity_events_category_occurred", unique: false, columns: []string{"category", "occurred_at_ns", "id"}},
+			{name: "idx_activity_events_dedupe_key", unique: true, columns: []string{"dedupe_key"}},
+			{name: "idx_activity_events_occurred", unique: false, columns: []string{"occurred_at_ns", "id"}},
+			{name: "idx_activity_events_severity_id", unique: false, columns: []string{"severity", "id"}},
+			{name: "idx_activity_events_severity_occurred", unique: false, columns: []string{"severity", "occurred_at_ns", "id"}},
+		},
+		"activity_event_clients": {
+			{name: "idx_activity_event_clients_client", unique: false, columns: []string{"client_id", "event_id"}},
+			{name: "sqlite_autoindex_activity_event_clients_1", unique: true, columns: []string{"event_id", "client_id", "relation"}},
+		},
+		"activity_event_tunnels": {
+			{name: "idx_activity_event_tunnels_tunnel", unique: false, columns: []string{"tunnel_id", "event_id"}},
+			{name: "sqlite_autoindex_activity_event_tunnels_1", unique: true, columns: []string{"event_id", "tunnel_id", "relation"}},
+		},
 		"tunnels": {
 			{name: "idx_tunnels_hostname", unique: false, columns: []string{"hostname"}},
 			{name: "idx_tunnels_ingress_client", unique: false, columns: []string{"ingress_client_id"}},
@@ -358,7 +416,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 	if got := appliedMigrationNames(t, db, "schema_migrations"); !reflect.DeepEqual(got, wantStrictMigrationNames) {
 		t.Fatalf("strict applied migrations = %#v, want %#v", got, wantStrictMigrationNames)
 	}
-	if got := appliedMigrationNames(t, db, serverCompatibleMigrationTable); !reflect.DeepEqual(got, []string{"010_client_auth_control"}) {
+	if got := appliedMigrationNames(t, db, serverCompatibleMigrationTable); !reflect.DeepEqual(got, []string{"010_client_auth_control", "011_activity_events"}) {
 		t.Fatalf("compatible applied migrations = %#v", got)
 	}
 	if got := countTunnelRegisteredClientFKs(t, db); got != 0 {
@@ -396,6 +454,7 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"008_socks5_endpoint_types",
 		"009_tunnel_total_bandwidth",
 		"010_client_auth_control",
+		"011_activity_events",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -555,8 +614,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + serverCompatibleMigrationTable).Scan(&compatibleCount); err != nil {
 		t.Fatalf("count compatible migrations failed: %v", err)
 	}
-	if strictCount != 9 || compatibleCount != 1 {
-		t.Fatalf("migration counts = strict %d, compatible %d; want 9 and 1", strictCount, compatibleCount)
+	if strictCount != 9 || compatibleCount != 2 {
+		t.Fatalf("migration counts = strict %d, compatible %d; want 9 and 2", strictCount, compatibleCount)
 	}
 }
 

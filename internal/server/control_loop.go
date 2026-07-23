@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"time"
 
@@ -14,26 +15,40 @@ const (
 	clientTokenTouchRetry    = time.Minute
 )
 
-// controlLoop 持续处理控制通道上的消息。
-func (s *Server) controlLoop(client *ClientConn) {
+// controlLoop continuously processes control-channel messages and returns a
+// stable, redacted disconnect cause for lifecycle activity.
+func (s *Server) controlLoop(client *ClientConn) clientDisconnectCause {
 	client.mu.Lock()
 	conn := client.conn
 	client.mu.Unlock()
 	if conn == nil {
-		return
+		return clientDisconnectCause{ReasonCode: "transport_error"}
 	}
 
 	for {
 		var msg protocol.Message
 		if err := conn.ReadJSON(&msg); err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+			cause := clientDisconnectCauseFromError(err)
+			if !cause.Expected {
 				log.Printf("⚠️ Client [%s] connection closed unexpectedly: %v", client.ID, err)
 			}
-			return
+			return cause
 		}
 
 		s.handleControlMessage(client, msg)
 	}
+}
+func clientDisconnectCauseFromError(err error) clientDisconnectCause {
+	cause := clientDisconnectCause{ReasonCode: "transport_error"}
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		cause.CloseCode = closeErr.Code
+		if closeErr.Code == websocket.CloseNormalClosure {
+			cause.ReasonCode = "normal_closure"
+			cause.Expected = true
+		}
+	}
+	return cause
 }
 
 func (s *Server) handleControlMessage(client *ClientConn, msg protocol.Message) {
@@ -86,12 +101,7 @@ func (s *Server) touchClientTokenIfDue(client *ClientConn, now time.Time) {
 	client.nextTokenTouch = now.Add(clientTokenTouchInterval)
 }
 
-
 func (s *Server) handlePingMessage(client *ClientConn) {
-	// Ping/Pong 是纯心跳消息，不依赖数据通道状态。
-	// 只要会话尚未进入 Closing 就应当回复 Pong，
-	// 避免数据通道握手完成（DataHandshakeOK 已发出）但 promotePendingToLive
-	// 尚未执行的窗口期内丢失 Pong 响应。
 	if client.getState() == clientStateClosing {
 		return
 	}
@@ -179,9 +189,7 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 		if err := s.waitForCurrentDataReady(client, s.sessions.pendingDataTimeout); err != nil {
 			log.Printf("⚠️ Failed while waiting for data channel readiness before proxy creation [%s]: %v", client.ID, err)
 			resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
-				Name:    req.Name,
-				Success: false,
-				Message: err.Error(),
+				Name: req.Name, Success: false, Message: err.Error(),
 			})
 			if writeErr := client.writeJSON(resp); writeErr != nil {
 				log.Printf("⚠️ Failed to send proxy response [%s]: %v", client.ID, writeErr)
@@ -195,9 +203,7 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 	if err != nil {
 		log.Printf("❌ Failed to create proxy [%s]: %v", client.ID, err)
 		resp, _ = protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
-			Name:    req.Name,
-			Success: false,
-			Message: err.Error(),
+			Name: req.Name, Success: false, Message: err.Error(),
 		})
 	} else {
 		client.proxyMu.RLock()
@@ -207,13 +213,9 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 		client.proxyMu.RUnlock()
 
 		resp, _ = protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
-			ID:              config.ID,
-			Name:            config.Name,
-			Success:         true,
-			Message:         "proxy tunnel created successfully",
-			RemotePort:      actualPort,
-			TransportPolicy: config.TransportPolicy,
-			ActualTransport: config.ActualTransport,
+			ID: config.ID, Name: config.Name, Success: true,
+			Message: "proxy tunnel created successfully", RemotePort: actualPort,
+			TransportPolicy: config.TransportPolicy, ActualTransport: config.ActualTransport,
 		})
 	}
 
@@ -225,13 +227,7 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 func (s *Server) handleProxyProvisionAckMessage(client *ClientConn, msg protocol.Message) {
 	var unifiedAck protocol.TunnelProvisionAck
 	if err := msg.ParsePayload(&unifiedAck); err == nil && unifiedAck.TunnelID != "" {
-		resp := provisionAckResult{
-			name:     unifiedAck.TunnelID,
-			accepted: unifiedAck.Accepted,
-			message:  unifiedAck.Message,
-			revision: uint64(unifiedAck.Revision),
-			role:     unifiedAck.Role,
-		}
+		resp := provisionAckResult{name: unifiedAck.TunnelID, accepted: unifiedAck.Accepted, message: unifiedAck.Message, revision: uint64(unifiedAck.Revision), role: unifiedAck.Role}
 		if s.resolveTunnelProvisionAckWaiter(client.ID, client.generation, resp) {
 			return
 		}
@@ -244,13 +240,7 @@ func (s *Server) handleProxyProvisionAckMessage(client *ClientConn, msg protocol
 		log.Printf("⚠️ Failed to parse provisioning ack [%s]: %v", client.ID, err)
 		return
 	}
-
-	resp := provisionAckResult{
-		name:     ack.Name,
-		accepted: ack.Accepted,
-		message:  ack.Message,
-		revision: ack.ProvisionRevision,
-	}
+	resp := provisionAckResult{name: ack.Name, accepted: ack.Accepted, message: ack.Message, revision: ack.ProvisionRevision}
 	if s.resolveTunnelProvisionAckWaiter(client.ID, client.generation, resp) {
 		return
 	}
@@ -261,7 +251,6 @@ func (s *Server) handleTunnelRuntimeReportMessage(client *ClientConn, msg protoc
 	if !s.isCurrentLive(client.ID, client.generation) {
 		return
 	}
-
 	var report protocol.TunnelRuntimeReport
 	if err := msg.ParsePayload(&report); err != nil {
 		log.Printf("⚠️ Failed to parse tunnel runtime report [%s]: %v", client.ID, err)
@@ -271,7 +260,6 @@ func (s *Server) handleTunnelRuntimeReportMessage(client *ClientConn, msg protoc
 		log.Printf("⚠️ Ignoring incomplete tunnel runtime report [%s]: tunnel_id=%q role=%q revision=%d", client.ID, report.TunnelID, report.Role, report.Revision)
 		return
 	}
-
 	stored, ok, err := s.findStoredTunnelByID(report.TunnelID)
 	if err != nil {
 		log.Printf("⚠️ Ignoring tunnel runtime report [%s]: failed to load tunnel %q: %v", client.ID, report.TunnelID, err)
@@ -301,9 +289,7 @@ func runtimeReportMatchesStoredTunnel(clientID string, stored StoredTunnel, repo
 	case protocol.DataStreamRoleTarget:
 		return clientID != "" && clientID == stored.Target.ClientID
 	case protocol.DataStreamRoleIngress:
-		return stored.Ingress.Location == tunnelEndpointLocationClient &&
-			clientID != "" &&
-			clientID == stored.Ingress.ClientID
+		return stored.Ingress.Location == tunnelEndpointLocationClient && clientID != "" && clientID == stored.Ingress.ClientID
 	default:
 		return false
 	}
@@ -343,6 +329,5 @@ func (s *Server) handleProxyCloseMessage(client *ClientConn, msg protocol.Messag
 
 	if err := s.StopProxy(client, req.Name); err != nil {
 		log.Printf("⚠️ Failed to close proxy [%s]: %v", client.ID, err)
-		return
 	}
 }

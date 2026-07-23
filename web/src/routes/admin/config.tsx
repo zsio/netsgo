@@ -30,6 +30,8 @@ import type {
   AdminConfigUpdateResponse,
   AffectedTunnel,
   PortRange,
+  ActivityRetentionPolicy,
+  ActivitySeverity,
 } from '@/types';
 
 export const adminConfigRoute = createRoute({
@@ -78,6 +80,18 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
     const ports = initialConfig.allowed_ports || [];
     return ports.map(p => ({ ...p, _id: createLocalId('port-range') }));
   });
+  const [activityRetention, setActivityRetention] = useState<ActivityRetentionPolicy>(initialConfig.activity_retention);
+
+  const updateRetentionRule = (
+    severity: ActivitySeverity,
+    field: 'days' | 'min_count',
+    value: number,
+  ) => {
+    setActivityRetention((current) => ({
+      ...current,
+      [severity]: { ...current[severity], [field]: value },
+    }));
+  };
   
   // 单行编辑状态管理
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -187,12 +201,22 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
     }
   };
 
+  const activityRetentionIsValid = (Object.keys(activityRetention) as ActivitySeverity[]).every((severity) => {
+    const rule = activityRetention[severity];
+    return Number.isInteger(rule.days) && rule.days >= 1 && rule.days <= 3650
+      && Number.isInteger(rule.min_count) && rule.min_count >= 0 && rule.min_count <= 100000;
+  });
+
   // --- 提交接口逻辑 ---
   const checkAndSave = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const resolvedServerAddr = resolveServerAddrForSubmit();
     if (!resolvedServerAddr) {
+      return;
+    }
+    if (!activityRetentionIsValid) {
+      toast.error(t('admin.activityRetentionInvalid'));
       return;
     }
     if (resolvedServerAddr.shouldUpdateInput) {
@@ -214,7 +238,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
       setPendingServerAddr(resolvedServerAddr.value);
       const result = await api.put<AdminConfigUpdateResponse>(
         '/api/admin/config?dry_run=true',
-        { server_addr: resolvedServerAddr.value, allowed_ports: cleanPorts },
+		{ server_addr: resolvedServerAddr.value, allowed_ports: cleanPorts, activity_retention: activityRetention },
       );
 
       const conflicts = result.conflicting_http_tunnels ?? [];
@@ -259,6 +283,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
       await updateConfig.mutateAsync({
         server_addr: resolvedServerAddr.value,
         allowed_ports: cleanPorts,
+        activity_retention: activityRetention,
       });
       setServerAddr(resolvedServerAddr.value);
       setConflictingHTTPTunnels([]);
@@ -484,6 +509,44 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
             </Button>
           </div>
         </div>
+        <div className="grid grid-cols-[280px_1fr] border-b border-border/40">
+          <div className="p-6 bg-muted/20">
+            <h4 className="font-semibold text-foreground">{t('admin.activityRetentionTitle')}</h4>
+            <p className="text-sm text-muted-foreground mt-1">{t('admin.activityRetentionHelp')}</p>
+          </div>
+          <div className="p-6 w-full">
+            <div className="max-w-2xl overflow-hidden rounded-lg border border-border/60">
+              <div className="grid grid-cols-[1fr_150px_170px] gap-3 bg-muted/40 px-4 py-2.5 text-xs font-medium text-muted-foreground">
+                <span>{t('admin.activitySeverity')}</span>
+                <span>{t('admin.activityRetentionDays')}</span>
+                <span>{t('admin.activityRetentionMinCount')}</span>
+              </div>
+              {(Object.keys(activityRetention) as ActivitySeverity[]).map((severity) => (
+                <div key={severity} className="grid grid-cols-[1fr_150px_170px] items-center gap-3 border-t border-border/40 px-4 py-3">
+                  <span className="text-sm font-medium">{t(`admin.activitySeverity${severity[0].toUpperCase()}${severity.slice(1)}`)}</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={3650}
+                    value={activityRetention[severity].days}
+                    aria-label={`${severity} ${t('admin.activityRetentionDays')}`}
+                    onChange={(event) => updateRetentionRule(severity, 'days', Number.parseInt(event.target.value, 10) || 0)}
+                  />
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100000}
+                    value={activityRetention[severity].min_count}
+                    aria-label={`${severity} ${t('admin.activityRetentionMinCount')}`}
+                    onChange={(event) => updateRetentionRule(severity, 'min_count', Number.parseInt(event.target.value, 10) || 0)}
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 max-w-2xl text-xs leading-relaxed text-muted-foreground">{t('admin.activityRetentionExactRule')}</p>
+          </div>
+        </div>
+
 
         {/* 底部操作区 */}
         <div className="p-6 flex justify-end bg-muted/10 items-center gap-4">

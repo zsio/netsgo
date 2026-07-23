@@ -103,8 +103,9 @@ type RegisteredClient struct {
 
 // ServerConfig holds server configuration (set during initialization)
 type ServerConfig struct {
-	ServerAddr   string      `json:"server_addr"`   // public-facing server address (e.g. https://tunnel.example.com)
-	AllowedPorts []PortRange `json:"allowed_ports"` // allowlist of ports available for tunneling
+	ServerAddr        string                  `json:"server_addr"`   // public-facing server address (e.g. https://tunnel.example.com)
+	AllowedPorts      []PortRange             `json:"allowed_ports"` // allowlist of ports available for tunneling
+	ActivityRetention ActivityRetentionPolicy `json:"activity_retention"`
 }
 
 const (
@@ -151,10 +152,29 @@ type ClientToken struct {
 
 // adminConfigResponse is the read response for `/api/admin/config`.
 type adminConfigResponse struct {
-	ServerAddr          string      `json:"server_addr"`
-	AllowedPorts        []PortRange `json:"allowed_ports"`
-	EffectiveServerAddr string      `json:"effective_server_addr"`
-	ServerAddrLocked    bool        `json:"server_addr_locked"`
+	ServerAddr          string                  `json:"server_addr"`
+	AllowedPorts        []PortRange             `json:"allowed_ports"`
+	ActivityRetention   ActivityRetentionPolicy `json:"activity_retention"`
+	EffectiveServerAddr string                  `json:"effective_server_addr"`
+	ServerAddrLocked    bool                    `json:"server_addr_locked"`
+}
+
+type activityRetentionRulePatch struct {
+	Days     *int `json:"days"`
+	MinCount *int `json:"min_count"`
+}
+
+type activityRetentionPatch struct {
+	Debug   *activityRetentionRulePatch `json:"debug"`
+	Info    *activityRetentionRulePatch `json:"info"`
+	Warning *activityRetentionRulePatch `json:"warning"`
+	Error   *activityRetentionRulePatch `json:"error"`
+}
+
+type adminConfigUpdateRequest struct {
+	ServerAddr        string                  `json:"server_addr"`
+	AllowedPorts      []PortRange             `json:"allowed_ports"`
+	ActivityRetention *activityRetentionPatch `json:"activity_retention"`
 }
 
 // adminConfigUpdateResponse carries unified responses for dry-run, successful save, and conflict scenarios.

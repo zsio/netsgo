@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   Search, Play, Pause, Trash2, Pencil, ShieldCheck, HelpCircle, ArrowRightLeft, Activity,
-  ArrowDown, ArrowUp, Infinity as InfinityIcon,
+  ArrowDown, ArrowUp, Infinity as InfinityIcon, History,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +15,7 @@ import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
 import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
 import { TunnelMigrateDialog } from '@/components/custom/tunnel/TunnelMigrateDialog';
 import { TunnelSpeedDialog } from '@/components/custom/tunnel/TunnelSpeedDialog';
+import { ActivityTimelineSheet } from '@/components/custom/activity/ActivityTimelineSheet';
 import toast from 'react-hot-toast';
 import {
   buildTunnelViewModel,
@@ -31,6 +32,7 @@ import {
 import type { Client, ProxyConfig } from '@/types';
 import { formatBytes, formatNetSpeed } from '@/lib/format';
 import { useTranslation } from 'react-i18next';
+import { useAuthStore } from '@/stores/auth-store';
 
 // 扩展的隧道条目，可以附带归属节点信息
 export interface TunnelEntry extends ProxyConfig {
@@ -101,6 +103,7 @@ export function TunnelListTable({
   onClientClick,
 }: TunnelListTableProps) {
   const { t } = useTranslation();
+  const canReadActivity = useAuthStore((state) => state.user?.role === 'admin');
   const resumeTunnel = useResumeTunnel();
   const stopTunnel = useStopTunnel();
   const deleteTunnel = useDeleteTunnel();
@@ -109,6 +112,7 @@ export function TunnelListTable({
   const [editTarget, setEditTarget] = useState<TunnelEntry | null>(null);
   const [migrateTargetId, setMigrateTargetId] = useState<string | null>(null);
   const [speedTarget, setSpeedTarget] = useState<TunnelEntry | null>(null);
+  const [activityTarget, setActivityTarget] = useState<TunnelEntry | null>(null);
   const orderedTunnels = useMemo(() => [...tunnels].sort(compareTunnelsByCreatedAtDesc), [tunnels]);
   const migrateTarget = getLatestTunnelMigrationTarget(orderedTunnels, migrateTargetId);
   const clientNameById = useMemo(() => buildClientNameMap(clients), [clients]);
@@ -153,6 +157,16 @@ export function TunnelListTable({
 
     return (
       <div className="flex items-center justify-end gap-1">
+        {canReadActivity ? (
+          <button
+            className="rounded p-1.5 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+            title={t('activity.viewTunnelTimeline')}
+            aria-label={t('activity.viewTunnelTimeline')}
+            onClick={() => setActivityTarget(tunnel)}
+          >
+            <History className="h-4 w-4" />
+          </button>
+        ) : null}
         {showTraffic24h && canStop && (
           <button
             className="p-1.5 hover:bg-primary/10 rounded text-primary"
@@ -311,6 +325,7 @@ export function TunnelListTable({
           </div>
         )}
       </div>
+      <ActivityTimelineSheet target={activityTarget ? { id: activityTarget.id, name: activityTarget.name } : null} onOpenChange={(open) => { if (!open) setActivityTarget(null); }} />
 
       {showActions && (
         <>

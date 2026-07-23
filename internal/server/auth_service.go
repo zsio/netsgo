@@ -80,6 +80,20 @@ func (a *AuthService) updateClientRateLimitSettings(settings ClientAuthRateLimit
 	a.replaceClientRateLimiter(settings)
 	return nil
 }
+func (a *AuthService) updateClientRateLimitSettingsWithActivity(settings ClientAuthRateLimitSettings, actor ActivityActor) (int64, error) {
+	a.clientRateLimitUpdateMu.Lock()
+	defer a.clientRateLimitUpdateMu.Unlock()
+
+	activityID, err := a.adminStore.UpdateClientAuthRateLimitSettingsWithActivity(settings, actor)
+	if err != nil {
+		return 0, err
+	}
+	if a.clientRateLimitAfterSaveHook != nil {
+		a.clientRateLimitAfterSaveHook()
+	}
+	a.replaceClientRateLimiter(settings)
+	return activityID, nil
+}
 
 func (a *AuthService) clientRateLimitSnapshot(now time.Time) (ClientAuthRateLimitSettings, []RateLimitSnapshot) {
 	a.clientLimiterMu.RLock()

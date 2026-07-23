@@ -20,9 +20,9 @@ func TestP2PCoordinatorConcurrentGrantStormSharesOnePairSession(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			grant, created, err := c.ensureGrant(p2pGrantSpec{tunnelID: fmt.Sprintf("storm-%03d", i), revision: 1, ingressClientID: "a", targetClientID: "b", ingressGeneration: 10, targetGeneration: 20})
-			if err != nil || !created {
-				errors <- fmt.Errorf("grant %d: created=%v err=%v", i, created, err)
+			grant, lifecycle, err := c.ensureGrant(p2pGrantSpec{tunnelID: fmt.Sprintf("storm-%03d", i), revision: 1, ingressClientID: "a", targetClientID: "b", ingressGeneration: 10, targetGeneration: 20})
+			if err != nil || !lifecycle.GrantCreated {
+				errors <- fmt.Errorf("grant %d: grantCreated=%v err=%v", i, lifecycle.GrantCreated, err)
 				return
 			}
 			sessionIDs <- grant.sessionID
@@ -62,13 +62,19 @@ func TestP2PCoordinatorSharesPairSessionAndKeepsTunnelRolesPerGrant(t *testing.T
 	now := time.Unix(100, 0).UTC()
 	c := newP2PCoordinator(func() time.Time { return now })
 
-	first, created, err := c.ensureGrant(p2pGrantSpec{tunnelID: "t1", revision: 1, ingressClientID: "a", targetClientID: "b", ingressGeneration: 10, targetGeneration: 20})
-	if err != nil || !created {
-		t.Fatalf("first grant: created=%v err=%v", created, err)
+	first, lifecycle, err := c.ensureGrant(p2pGrantSpec{tunnelID: "t1", revision: 1, ingressClientID: "a", targetClientID: "b", ingressGeneration: 10, targetGeneration: 20})
+	if err != nil || !lifecycle.GrantCreated {
+		t.Fatalf("first grant: grantCreated=%v err=%v", lifecycle.GrantCreated, err)
 	}
-	second, created, err := c.ensureGrant(p2pGrantSpec{tunnelID: "t2", revision: 3, ingressClientID: "b", targetClientID: "a", ingressGeneration: 20, targetGeneration: 10})
-	if err != nil || !created {
-		t.Fatalf("second grant: created=%v err=%v", created, err)
+	if !lifecycle.SessionCreated {
+		t.Fatal("first grant must create the pair session")
+	}
+	second, lifecycle, err := c.ensureGrant(p2pGrantSpec{tunnelID: "t2", revision: 3, ingressClientID: "b", targetClientID: "a", ingressGeneration: 20, targetGeneration: 10})
+	if err != nil || !lifecycle.GrantCreated {
+		t.Fatalf("second grant: grantCreated=%v err=%v", lifecycle.GrantCreated, err)
+	}
+	if lifecycle.SessionCreated {
+		t.Fatal("second grant on the same pair must not recreate the session")
 	}
 	if first.sessionID != second.sessionID {
 		t.Fatalf("pair did not share session: %s != %s", first.sessionID, second.sessionID)
@@ -80,6 +86,35 @@ func TestP2PCoordinatorSharesPairSessionAndKeepsTunnelRolesPerGrant(t *testing.T
 		t.Fatalf("session count: want 1 got %d", got)
 	}
 }
+func TestP2PCoordinatorLifecycleSnapshotsAreImmutable(t *testing.T) {
+	c := newP2PCoordinator(time.Now)
+	first, started, err := c.ensureGrant(p2pGrantSpec{tunnelID: "t1", revision: 1, ingressClientID: "a", targetClientID: "b", ingressGeneration: 10, targetGeneration: 20})
+	if err != nil || !started.SessionCreated || !started.GrantCreated || len(started.Session.Grants) != 1 {
+		t.Fatalf("started lifecycle = %+v, err=%v", started, err)
+	}
+	_, attached, err := c.ensureGrant(p2pGrantSpec{tunnelID: "t2", revision: 2, ingressClientID: "a", targetClientID: "b", ingressGeneration: 10, targetGeneration: 20})
+	if err != nil || attached.SessionCreated || !attached.GrantCreated || attached.Session.SessionID != first.sessionID || len(attached.Session.Grants) != 2 {
+		t.Fatalf("attached lifecycle = %+v, err=%v", attached, err)
+	}
+	if len(started.Session.Grants) != 1 || started.Session.Grants[0].TunnelID != "t1" {
+		t.Fatalf("past lifecycle snapshot mutated: %+v", started.Session.Grants)
+	}
+	statusA, err := c.recordReady("a", 10, protocol.P2PSessionStatus{SessionID: first.sessionID, Sequence: 1, State: protocol.P2PStateConnected})
+	if err != nil || !statusA.ReportAccepted || statusA.ReadyEdge {
+		t.Fatalf("first ready report = %+v, err=%v", statusA, err)
+	}
+	statusB, err := c.recordReady("b", 20, protocol.P2PSessionStatus{SessionID: first.sessionID, Sequence: 1, State: protocol.P2PStateConnected})
+	if err != nil || !statusB.ReadyEdge || !statusB.Session.Ready {
+		t.Fatalf("pair ready report = %+v, err=%v", statusB, err)
+	}
+	closed := c.closeSession(first.sessionID, "participant offline raw detail")
+	if !closed.ClosedEdge || closed.ReasonCode != "participant_offline" || len(closed.Session.Grants) != 2 {
+		t.Fatalf("closed lifecycle = %+v", closed)
+	}
+	if len(attached.Session.Grants) != 2 || attached.Session.Ready {
+		t.Fatalf("attached snapshot mutated after ready/close: %+v", attached.Session)
+	}
+}
 
 func TestP2PCoordinatorExistingReadySessionRemainsReadyWhenGrantAdded(t *testing.T) {
 	now := time.Now()
@@ -88,18 +123,18 @@ func TestP2PCoordinatorExistingReadySessionRemainsReadyWhenGrantAdded(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ready, err := c.recordReady("a", 10, protocol.P2PSessionStatus{SessionID: first.sessionID, Sequence: 1, State: protocol.P2PStateConnected}); err != nil || ready {
-		t.Fatalf("first peer ready: ready=%v err=%v", ready, err)
+	if result, err := c.recordReady("a", 10, protocol.P2PSessionStatus{SessionID: first.sessionID, Sequence: 1, State: protocol.P2PStateConnected}); err != nil || result.ReadyEdge {
+		t.Fatalf("first peer ready: ready=%v err=%v", result.ReadyEdge, err)
 	}
-	if ready, err := c.recordReady("b", 20, protocol.P2PSessionStatus{SessionID: first.sessionID, Sequence: 1, State: protocol.P2PStateConnected}); err != nil || !ready {
-		t.Fatalf("pair ready: ready=%v err=%v", ready, err)
+	if result, err := c.recordReady("b", 20, protocol.P2PSessionStatus{SessionID: first.sessionID, Sequence: 1, State: protocol.P2PStateConnected}); err != nil || !result.ReadyEdge {
+		t.Fatalf("pair ready: ready=%v err=%v", result.ReadyEdge, err)
 	}
 	if !c.sessionReady(first.sessionID) {
 		t.Fatal("pair should report ready after both peers connect")
 	}
-	second, created, err := c.ensureGrant(p2pGrantSpec{tunnelID: "t2", revision: 1, ingressClientID: "a", targetClientID: "b", ingressGeneration: 10, targetGeneration: 20})
-	if err != nil || !created {
-		t.Fatalf("add grant to ready pair: created=%v err=%v", created, err)
+	second, lifecycle, err := c.ensureGrant(p2pGrantSpec{tunnelID: "t2", revision: 1, ingressClientID: "a", targetClientID: "b", ingressGeneration: 10, targetGeneration: 20})
+	if err != nil || !lifecycle.GrantCreated {
+		t.Fatalf("add grant to ready pair: grantCreated=%v err=%v", lifecycle.GrantCreated, err)
 	}
 	if second.sessionID != first.sessionID {
 		t.Fatalf("new grant created a different pair session: first=%q second=%q", first.sessionID, second.sessionID)
@@ -135,16 +170,16 @@ func TestP2PCoordinatorRevokesOneGrantWithoutClosingSharedPair(t *testing.T) {
 	c := newP2PCoordinator(func() time.Time { return now })
 	first, _, _ := c.ensureGrant(p2pGrantSpec{tunnelID: "t1", revision: 1, ingressClientID: "a", targetClientID: "b", ingressGeneration: 1, targetGeneration: 2})
 	_, _, _ = c.ensureGrant(p2pGrantSpec{tunnelID: "t2", revision: 1, ingressClientID: "a", targetClientID: "b", ingressGeneration: 1, targetGeneration: 2})
-	closed, revokes := c.revokeTunnel("t1", 1, "disabled")
-	if closed || len(revokes) != 2 {
-		t.Fatalf("first revoke closed=%v messages=%d", closed, len(revokes))
+	result := c.revokeTunnel("t1", 1, "disabled")
+	if result.ClosedEdge || len(result.Outbounds) != 2 {
+		t.Fatalf("first revoke closed=%v messages=%d", result.ClosedEdge, len(result.Outbounds))
 	}
 	if _, ok := c.session(first.sessionID); !ok {
 		t.Fatal("shared pair closed while another grant remained")
 	}
-	closed, revokes = c.revokeTunnel("t2", 1, "deleted")
-	if !closed || len(revokes) != 2 {
-		t.Fatalf("last revoke closed=%v messages=%d", closed, len(revokes))
+	result = c.revokeTunnel("t2", 1, "deleted")
+	if !result.ClosedEdge || len(result.Outbounds) != 4 {
+		t.Fatalf("last revoke closed=%v messages=%d", result.ClosedEdge, len(result.Outbounds))
 	}
 }
 
@@ -168,10 +203,11 @@ func TestP2PCoordinatorClientDisconnectClosesPairOnlyForCurrentGeneration(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out := c.closeClient("a", 9, "stale disconnect"); len(out) != 0 || c.sessionCount() != 1 {
-		t.Fatalf("stale generation closed current pair: out=%+v sessions=%d", out, c.sessionCount())
+	if results := c.closeClient("a", 9, "stale disconnect"); len(results) != 0 || c.sessionCount() != 1 {
+		t.Fatalf("stale generation closed current pair: results=%+v sessions=%d", results, c.sessionCount())
 	}
-	out := c.closeClient("a", 10, "control lost")
+	results := c.closeClient("a", 10, "control lost")
+	out := results[0].Outbounds
 	if len(out) != 1 || out[0].clientID != "b" || out[0].messageType != protocol.MsgTypeP2PClosed {
 		t.Fatalf("current disconnect close notification=%+v", out)
 	}
@@ -294,7 +330,7 @@ func TestP2PCoordinatorAcceptsOneFinalOwnerStatsReportAfterSessionClose(t *testi
 	if _, _, err := c.acceptStats("b", 20, initial); err != nil {
 		t.Fatal(err)
 	}
-	c.closeSession(grant.sessionID, "failed")
+	_ = c.closeSession(grant.sessionID, "failed")
 	final := initial
 	final.Sequence = 2
 	final.IngressBytes = 17

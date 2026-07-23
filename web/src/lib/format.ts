@@ -123,3 +123,20 @@ export function describeFreshness(updatedAt?: string, freshUntil?: string): stri
   if (seconds < 86400) return formatter.format(-Math.floor(seconds / 3600), 'hour');
   return formatter.format(-Math.floor(seconds / 86400), 'day');
 }
+
+export function formatRelativeTimestamp(value: string, now = Date.now()): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return i18n.t('format.unknownTime');
+  const seconds = Math.round((timestamp - now) / 1000);
+  const formatter = new Intl.RelativeTimeFormat(currentLocale(), { numeric: 'auto' });
+  if (Math.abs(seconds) < 60) return formatter.format(seconds, 'second');
+  const minutes = Math.round(seconds / 60);
+  if (Math.abs(minutes) < 60) return formatter.format(minutes, 'minute');
+  const hours = Math.round(minutes / 60);
+  if (Math.abs(hours) < 24) return formatter.format(hours, 'hour');
+  const days = Math.round(hours / 24);
+  if (Math.abs(days) < 30) return formatter.format(days, 'day');
+  const months = Math.round(days / 30);
+  if (Math.abs(months) < 12) return formatter.format(months, 'month');
+  return formatter.format(Math.round(months / 12), 'year');
+}

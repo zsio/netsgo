@@ -115,6 +115,7 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		if r.UserAgent() != session.UserAgent {
 			slog.Warn("session UA mismatch, possible token theft",
 				"session_id", session.ID, "user", session.Username, "module", "security")
+			s.recordSessionEnvironmentMismatch(r, session)
 			writeAPIError(w, http.StatusUnauthorized, "session_environment_mismatch", "session environment mismatch")
 			return
 		}
@@ -129,6 +130,17 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		ctx := context.WithValue(r.Context(), sessionContextKey, info)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
+}
+
+func (s *Server) RequireActivityRead(next http.HandlerFunc) http.HandlerFunc {
+	return s.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		info := GetSessionFromContext(r.Context())
+		if info == nil || info.Role != "admin" {
+			writeAPIError(w, http.StatusForbidden, "activity_read_forbidden", "administrator access required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // sessionContextKey context key 类型（避免碰撞）

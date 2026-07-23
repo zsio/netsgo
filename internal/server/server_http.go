@@ -69,6 +69,7 @@ func (s *Server) registerManagementRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/admin/security/passkeys/{id}", s.RequireAuth(s.handleAPIAdminSecurityPasskeyItem))
 	mux.HandleFunc("DELETE /api/admin/security/passkeys/{id}", s.RequireAuth(s.handleAPIAdminSecurityPasskeyItem))
 
+	mux.HandleFunc("GET /api/activity", s.RequireActivityRead(s.handleAPIActivity))
 	mux.HandleFunc("GET /api/events", s.RequireAuth(s.handleSSE))
 }
 

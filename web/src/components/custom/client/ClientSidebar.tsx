@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import {
   Server as ServerIcon, LayoutDashboard,
-  Settings,
+  Settings, Activity,
   BookOpen, LayersPlus, Languages, LogOut
 } from 'lucide-react';
 import { Link, useMatch, useRouterState, useNavigate } from '@tanstack/react-router';
@@ -59,6 +59,7 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   const { openAddClientDialog } = useAddClientDialog();
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
+  const canReadActivity = useAuthStore((state) => state.user?.role === 'admin');
 
   const handleLogout = async () => {
     try {
@@ -77,8 +78,9 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
   // 判断当前是否在概览页（路径精确为 /dashboard 且无 clientId）
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isAdmin = pathname.includes('/admin');
+  const isActivity = canReadActivity && pathname.includes('/activity');
   const isClientPage = pathname.includes('/clients/');
-  const isOverview = !currentClientId && !isAdmin && !isClientPage;
+  const isOverview = !currentClientId && !isAdmin && !isActivity && !isClientPage;
   const currentLanguage = SUPPORTED_LOCALES.includes(i18n.resolvedLanguage as SupportedLocale)
     ? i18n.resolvedLanguage as SupportedLocale
     : 'en-US';
@@ -127,6 +129,21 @@ export function ClientSidebar({ clients, isLoading }: ClientSidebarProps) {
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {canReadActivity ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={isActivity}
+                  tooltip={t('activity.navLabel')}
+                  className={NAV_ITEM_CLASS}
+                >
+                  <Link to="/dashboard/activity" search={{ scope: 'global', severity: ['info', 'warning', 'error'], category: [] }}>
+                    <Activity className="h-4 w-4" />
+                    <span>{t('activity.navLabel')}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
           </SidebarMenu>
         </SidebarGroup>
 
