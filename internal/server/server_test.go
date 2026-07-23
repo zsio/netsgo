@@ -1549,6 +1549,33 @@ func TestAuth_TimeoutNoMessage(t *testing.T) {
 	}
 }
 
+func TestAuth_IdleConnectionDoesNotBlockAnotherAuthentication(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+	s.auth.authTimeout = 10 * time.Second
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	idleConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("idle WebSocket connection failed: %v", err)
+	}
+	defer mustClose(t, idleConn)
+	// Give the idle connection handler time to enter the authentication read.
+	time.Sleep(50 * time.Millisecond)
+
+	activeConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("active WebSocket connection failed: %v", err)
+	}
+	defer mustClose(t, activeConn)
+	mustSetReadDeadline(t, activeConn, time.Now().Add(testReadTimeout(2*time.Second)))
+
+	authResp := doAuthWithInfo(t, activeConn, "active-host", "test-key")
+	if !authResp.Success {
+		t.Fatalf("active authentication failed behind idle connection: %+v", authResp)
+	}
+}
+
 // ============================================================
 // Control channel — heartbeat (2)
 // ============================================================

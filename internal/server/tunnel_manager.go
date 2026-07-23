@@ -191,28 +191,6 @@ func (s *Server) loadOfflineTunnelBySelector(clientID, selector string) (StoredT
 	return stored, nil
 }
 
-func (s *Server) stopOfflineTunnel(clientID, name string) (protocol.ProxyConfig, error) {
-	stored, err := s.loadOfflineTunnelBySelector(clientID, name)
-	if err != nil {
-		return protocol.ProxyConfig{}, err
-	}
-	name = stored.Name
-	if err := s.store.UpdateStates(clientID, name, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, ""); err != nil {
-		return protocol.ProxyConfig{}, err
-	}
-
-	updated, err := s.store.GetTunnelE(clientID, name)
-	if errors.Is(err, ErrTunnelNotFound) {
-		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", name)
-	}
-	if err != nil {
-		return protocol.ProxyConfig{}, fmt.Errorf("failed to reload tunnel %q: %w", name, err)
-	}
-
-	config := storedTunnelToProxyConfig(updated)
-	s.emitTunnelChangedIfStored(clientID, config, "stopped")
-	return config, nil
-}
 func (s *Server) stopOfflineTunnelWithActivity(clientID, id string, actor ActivityActor) (protocol.ProxyConfig, int64, error) {
 	stored, err := s.loadOfflineTunnelBySelector(clientID, id)
 	if err != nil {

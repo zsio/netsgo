@@ -90,8 +90,6 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuth(conn *websocket.Conn, r *http.Request, clientAddr string) (*ClientConn, error) {
-	s.clientTunnelMutationMu.Lock()
-	defer s.clientTunnelMutationMu.Unlock()
 	remoteAddr := r.RemoteAddr
 	ip := clientAddr
 	if ip == "" {
@@ -137,6 +135,12 @@ func (s *Server) handleAuth(conn *websocket.Conn, r *http.Request, clientAddr st
 	if authReq.InstallID == "" {
 		return nil, fmt.Errorf("authentication failed: install_id cannot be empty")
 	}
+
+	// Do not hold the client/tunnel mutation lock while waiting for an
+	// untrusted peer to send its authentication message. The lock is only
+	// needed once authentication can mutate registered-client or session state.
+	s.clientTunnelMutationMu.Lock()
+	defer s.clientTunnelMutationMu.Unlock()
 
 	var newToken string
 	var clientID string

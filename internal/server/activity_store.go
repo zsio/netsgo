@@ -988,12 +988,12 @@ func (s *ActivityStore) loadActivitySubjects(items []ActivityItem) error {
 	if err != nil {
 		return fmt.Errorf("query activity tunnel subjects: %w", err)
 	}
-	defer tunnelRows.Close()
 	for tunnelRows.Next() {
 		var eventID int64
 		var subject ActivityTunnelSubject
 		var truncated int
 		if err := tunnelRows.Scan(&eventID, &subject.TunnelID, &subject.Relation, &subject.Name, &subject.Type, &subject.Topology, &truncated); err != nil {
+			_ = tunnelRows.Close()
 			return fmt.Errorf("scan activity tunnel subject: %w", err)
 		}
 		subject.Truncated = truncated != 0
@@ -1002,7 +1002,11 @@ func (s *ActivityStore) loadActivitySubjects(items []ActivityItem) error {
 		}
 	}
 	if err := tunnelRows.Err(); err != nil {
+		_ = tunnelRows.Close()
 		return fmt.Errorf("iterate activity tunnel subjects: %w", err)
+	}
+	if err := tunnelRows.Close(); err != nil {
+		return fmt.Errorf("close activity tunnel subjects: %w", err)
 	}
 	return nil
 }

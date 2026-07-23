@@ -93,7 +93,7 @@ func TestClientInvalidKeyProducesSanitizedSecurityActivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial control websocket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	req, _ := protocol.NewMessage(protocol.MsgTypeAuth, protocol.AuthRequest{InstallID: "secret-install", Key: "secret-invalid-key", Client: protocol.ClientInfo{Hostname: "self-claimed-host"}})
 	if err := conn.WriteJSON(req); err != nil {
 		t.Fatalf("write auth request: %v", err)

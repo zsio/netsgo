@@ -67,19 +67,6 @@ func (a *AuthService) replaceClientRateLimiter(settings ClientAuthRateLimitSetti
 	}
 }
 
-func (a *AuthService) updateClientRateLimitSettings(settings ClientAuthRateLimitSettings) error {
-	a.clientRateLimitUpdateMu.Lock()
-	defer a.clientRateLimitUpdateMu.Unlock()
-
-	if err := a.adminStore.UpdateClientAuthRateLimitSettings(settings); err != nil {
-		return err
-	}
-	if a.clientRateLimitAfterSaveHook != nil {
-		a.clientRateLimitAfterSaveHook()
-	}
-	a.replaceClientRateLimiter(settings)
-	return nil
-}
 func (a *AuthService) updateClientRateLimitSettingsWithActivity(settings ClientAuthRateLimitSettings, actor ActivityActor) (int64, error) {
 	a.clientRateLimitUpdateMu.Lock()
 	defer a.clientRateLimitUpdateMu.Unlock()

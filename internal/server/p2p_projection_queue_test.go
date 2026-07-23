@@ -8,8 +8,11 @@ import (
 func TestP2PProjectionRetryQueueIsBoundedAndDeduplicated(t *testing.T) {
 	s := New(0)
 	base := p2pProjectionRetryItem{Result: p2pLifecycleResult{Session: p2pSessionSnapshot{SessionID: "shared"}, ClosedEdge: true, Sequence: 1}}
-	if !s.enqueueP2PProjectionRetry(base) || !s.enqueueP2PProjectionRetry(base) {
-		t.Fatal("same projection should remain enqueueable")
+	if !s.enqueueP2PProjectionRetry(base) {
+		t.Fatal("initial projection should be enqueueable")
+	}
+	if !s.enqueueP2PProjectionRetry(base) {
+		t.Fatal("duplicate projection should remain enqueueable")
 	}
 	if len(s.p2pProjectionRetries) != 1 {
 		t.Fatalf("deduplicated queue size = %d", len(s.p2pProjectionRetries))

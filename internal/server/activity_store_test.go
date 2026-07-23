@@ -292,7 +292,7 @@ func TestActivityStoreRetentionQueryPlanUsesSeverityIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EXPLAIN QUERY PLAN error = %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var details []string
 	for rows.Next() {
 		var id, parent, notUsed int

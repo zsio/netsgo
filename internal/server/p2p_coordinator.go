@@ -536,21 +536,6 @@ func (c *p2pCoordinator) session(id string) (*p2pPairSession, bool) {
 	return s, ok
 }
 
-func (c *p2pCoordinator) tunnelIDs(sessionID string) []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s := c.byID[sessionID]
-	if s == nil {
-		return nil
-	}
-	ids := make([]string, 0, len(s.grants))
-	for id := range s.grants {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
 func (c *p2pCoordinator) sessionReady(sessionID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

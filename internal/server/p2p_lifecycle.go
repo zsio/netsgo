@@ -51,10 +51,6 @@ type p2pRenewResult struct {
 	Closed    []p2pLifecycleResult
 }
 
-func (r p2pLifecycleResult) hasLifecycleEdge() bool {
-	return r.SessionCreated || r.GrantCreated || r.ReportAccepted || r.DetachedEdge || r.ClosedEdge
-}
-
 func (r p2pLifecycleResult) projectionKey(action string) string {
 	return fmt.Sprintf("p2p:%s:%s:%d", r.Session.SessionID, action, r.Sequence)
 }
