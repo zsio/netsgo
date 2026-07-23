@@ -653,9 +653,110 @@ export interface PortRange {
   end: number;
 }
 
+export type ActivitySeverity = 'debug' | 'info' | 'warning' | 'error';
+
+export interface ActivityRetentionRule {
+  days: number;
+  min_count: number;
+}
+
+export interface ActivityRetentionPolicy {
+  debug: ActivityRetentionRule;
+  info: ActivityRetentionRule;
+  warning: ActivityRetentionRule;
+  error: ActivityRetentionRule;
+}
+
 export interface ServerConfig {
   server_addr: string;
   allowed_ports: PortRange[];
+  activity_retention: ActivityRetentionPolicy;
+}
+
+export type ActivityCategory = 'client' | 'tunnel' | 'p2p' | 'admin' | 'security';
+export type ActivityScope = 'global' | 'client' | 'tunnel';
+
+export interface ActivityActor {
+  type: 'admin' | 'client' | 'system' | 'security' | 'unknown';
+  id?: string;
+  name?: string;
+  ip_hash?: string;
+  ip_prefix?: string;
+}
+
+export interface ActivityClientSubject {
+  client_id: string;
+  relation: 'owner' | 'ingress' | 'target' | 'peer' | 'subject' | 'related';
+  display_name?: string;
+  hostname?: string;
+  truncated?: boolean;
+}
+
+export interface ActivityTunnelSubject {
+  tunnel_id: string;
+  relation: 'subject' | 'related' | 'shared_session';
+  name?: string;
+  tunnel_type?: string;
+  topology?: string;
+  truncated?: boolean;
+}
+
+export interface ActivitySummaryArgs {
+  client_name?: string;
+  tunnel_name?: string;
+  resource_name?: string;
+  before?: string;
+  after?: string;
+  value?: number;
+  count?: number;
+  transport?: string;
+  topology?: string;
+}
+
+export interface ActivityPayloadV1 {
+  summary_key?: string;
+  summary_args?: ActivitySummaryArgs;
+  reason_code?: string;
+  before?: string;
+  after?: string;
+  revision?: number;
+  generation?: number;
+  sequence?: number;
+  session_id?: string;
+}
+
+export interface ActivityItem {
+  id: number;
+  occurred_at: string;
+  recorded_at: string;
+  severity: ActivitySeverity;
+  category: ActivityCategory;
+  action: string;
+  source: string;
+  actor: ActivityActor;
+  payload_version: number;
+  payload: ActivityPayloadV1;
+  clients: ActivityClientSubject[];
+  tunnels: ActivityTunnelSubject[];
+}
+
+export interface ActivityPage {
+  items: ActivityItem[];
+  next_cursor?: number;
+  has_more: boolean;
+  direction: 'before' | 'after';
+}
+
+export interface ActivityQuery {
+  scope?: ActivityScope;
+  scopeId?: string;
+  before?: number;
+  after?: number;
+  limit?: number;
+  severities?: ActivitySeverity[];
+  categories?: ActivityCategory[];
+  from?: string;
+  to?: string;
 }
 
 export interface AffectedTunnel {

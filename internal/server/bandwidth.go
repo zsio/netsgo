@@ -273,7 +273,11 @@ func (b *sharedFairBudget) Reserve(direction payloadDirection, bytes int) {
 	remaining := bytes
 	for remaining > 0 {
 		b.mu.Lock()
-		if b.limit <= 0 { b.waiting[index] -= uint64(remaining); b.mu.Unlock(); return }
+		if b.limit <= 0 {
+			b.waiting[index] -= uint64(remaining)
+			b.mu.Unlock()
+			return
+		}
 		now := b.clock.Now()
 		b.refillLocked(now)
 		allowed := int(math.Min(float64(remaining), math.Min(float64(sharedBandwidthMaxBlock), b.tokens)))

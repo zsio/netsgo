@@ -67,18 +67,19 @@ func (a *AuthService) replaceClientRateLimiter(settings ClientAuthRateLimitSetti
 	}
 }
 
-func (a *AuthService) updateClientRateLimitSettings(settings ClientAuthRateLimitSettings) error {
+func (a *AuthService) updateClientRateLimitSettingsWithActivity(settings ClientAuthRateLimitSettings, actor ActivityActor) (int64, error) {
 	a.clientRateLimitUpdateMu.Lock()
 	defer a.clientRateLimitUpdateMu.Unlock()
 
-	if err := a.adminStore.UpdateClientAuthRateLimitSettings(settings); err != nil {
-		return err
+	activityID, err := a.adminStore.UpdateClientAuthRateLimitSettingsWithActivity(settings, actor)
+	if err != nil {
+		return 0, err
 	}
 	if a.clientRateLimitAfterSaveHook != nil {
 		a.clientRateLimitAfterSaveHook()
 	}
 	a.replaceClientRateLimiter(settings)
-	return nil
+	return activityID, nil
 }
 
 func (a *AuthService) clientRateLimitSnapshot(now time.Time) (ClientAuthRateLimitSettings, []RateLimitSnapshot) {

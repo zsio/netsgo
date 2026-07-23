@@ -125,7 +125,20 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📡 SSE client connected: %s", r.RemoteAddr)
 
-	if err := writeSSEEvent(w, flusher, "ready", map[string]any{}); err != nil {
+	includeActivity := true
+	if info := GetSessionFromContext(r.Context()); info != nil {
+		includeActivity = info.Role == "admin"
+	}
+	activityCursor := int64(0)
+	if includeActivity && s.activityStore != nil {
+		var err error
+		activityCursor, err = s.activityStore.MaxID()
+		if err != nil {
+			log.Printf("⚠️ Failed to read activity cursor: %v", err)
+			return
+		}
+	}
+	if err := writeSSEEvent(w, flusher, "ready", map[string]any{"activity_cursor": activityCursor}); err != nil {
 		log.Printf("⚠️ Failed to write initial SSE handshake: %v", err)
 		return
 	}
@@ -144,6 +157,9 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case event, ok := <-ch:
 			if !ok {
 				return
+			}
+			if event.Type == "activity_event" && !includeActivity {
+				continue
 			}
 			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, event.Data); err != nil {
 				log.Printf("⚠️ Failed to write SSE event: %v", err)

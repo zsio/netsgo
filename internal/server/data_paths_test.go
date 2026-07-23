@@ -62,6 +62,12 @@ func TestServerInitStore_SharesSingleDBHandle(t *testing.T) {
 	if s.store.db != s.trafficStore.db {
 		t.Fatal("tunnel and traffic stores should share one server DB handle")
 	}
+	if s.store.db != s.activityStore.db {
+		t.Fatal("tunnel and activity stores should share one server DB handle")
+	}
+	if s.store.activityStore != s.activityStore || s.auth.adminStore.activityStore != s.activityStore {
+		t.Fatal("domain stores should share the server activity writer")
+	}
 	if s.store.trafficStore != s.trafficStore {
 		t.Fatal("tunnel store should coordinate migrations with the server traffic store")
 	}

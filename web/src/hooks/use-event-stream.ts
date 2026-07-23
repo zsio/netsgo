@@ -2,14 +2,17 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { useRouterState } from '@tanstack/react-router';
-import { api } from '@/lib/api';
+import { activityApi, api } from '@/lib/api';
 import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
 import { useConnectionStore } from '@/stores/connection-store';
 import type { ConnectionStatus } from '@/stores/connection-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { buildClientTrafficQueryKey } from '@/hooks/use-client-traffic';
+import { prependActivityToMatchingQueries } from '@/hooks/use-activity';
 import type {
   Client,
+  ActivityItem,
+  ActivityPage,
   ClientOfflineEvent,
   ClientOnlineEvent,
   ClientTrafficResponse,
@@ -41,6 +44,23 @@ export interface EventStreamDiagnostics {
 export interface EventStreamSnapshotState {
   requestSeq: number;
   appliedGeneratedAt?: number;
+}
+
+export interface ActivityRecoveryState {
+  lastScannedId?: number;
+  targetId: number;
+  hints: Map<number, ActivityItem>;
+  running: boolean;
+  retryTimer?: ReturnType<typeof setTimeout>;
+  retryAttempt: number;
+  cancelled: boolean;
+}
+
+const activityHintBufferLimit = 256;
+const activityRecoveryRetryDelays = [1000, 2000, 5000, 10000] as const;
+
+export function createActivityRecoveryState(): ActivityRecoveryState {
+  return { targetId: 0, hints: new Map(), running: false, retryAttempt: 0, cancelled: false };
 }
 
 const consoleSummaryFields = [
@@ -196,6 +216,30 @@ function isProxyConfig(value: unknown): value is ProxyConfig {
     (value.capabilities === undefined || isRecord(value.capabilities))
   );
 }
+interface ActivityReadyPayload {
+  activity_cursor: number;
+}
+
+function isActivityReadyPayload(value: unknown): value is ActivityReadyPayload {
+  return isRecord(value) && Number.isSafeInteger(value.activity_cursor) && Number(value.activity_cursor) >= 0;
+}
+
+function isActivityItem(value: unknown): value is ActivityItem {
+  return isRecord(value)
+    && Number.isSafeInteger(value.id) && Number(value.id) > 0
+    && typeof value.occurred_at === 'string'
+    && typeof value.recorded_at === 'string'
+    && ['debug', 'info', 'warning', 'error'].includes(String(value.severity))
+    && ['client', 'tunnel', 'p2p', 'admin', 'security'].includes(String(value.category))
+    && typeof value.action === 'string'
+    && typeof value.source === 'string'
+    && isRecord(value.actor)
+    && Number.isSafeInteger(value.payload_version)
+    && isRecord(value.payload)
+    && Array.isArray(value.clients)
+    && Array.isArray(value.tunnels);
+}
+
 
 function isTunnelChangedEvent(value: unknown): value is TunnelChangedEvent {
   return (
@@ -357,8 +401,115 @@ function getTunnelChangedClientIds(event: TunnelChangedEvent) {
   ].filter((clientId): clientId is string => Boolean(clientId))));
 }
 
-export function applyEventForDiagnostics(queryClient: EventStreamQueryClient, setStatus: (status: ConnectionStatus) => void, snapshotState: EventStreamSnapshotState, eventType: string, data: string) {
+function invalidateActivityQueries(queryClient: EventStreamQueryClient) {
+  queryClient.invalidateQueries({ queryKey: ['activity'] });
+}
+
+function scheduleActivityRecoveryRetry(queryClient: EventStreamQueryClient, state: ActivityRecoveryState) {
+  if (state.cancelled || state.retryTimer) return;
+  const delay = activityRecoveryRetryDelays[Math.min(state.retryAttempt, activityRecoveryRetryDelays.length - 1)];
+  state.retryAttempt += 1;
+  state.retryTimer = setTimeout(() => {
+    state.retryTimer = undefined;
+    void recoverActivityGap(queryClient, state);
+  }, delay);
+}
+
+export async function recoverActivityGap(queryClient: EventStreamQueryClient, state: ActivityRecoveryState) {
+  if (state.cancelled || state.running || state.lastScannedId === undefined || state.targetId <= state.lastScannedId) return;
+  state.running = true;
+  try {
+    while (!state.cancelled && state.lastScannedId !== undefined && state.targetId > state.lastScannedId) {
+      const targetAtStart = state.targetId;
+      const page: ActivityPage = await activityApi.recovery(state.lastScannedId);
+      for (const item of [...page.items].reverse()) {
+        prependActivityToMatchingQueries(queryClient, item);
+        state.hints.delete(item.id);
+      }
+      if (page.next_cursor && page.next_cursor > state.lastScannedId) {
+        state.lastScannedId = page.next_cursor;
+      } else if (!page.has_more) {
+        state.lastScannedId = targetAtStart;
+      } else {
+        throw new Error('activity recovery cursor did not advance');
+      }
+      if (!page.has_more && state.lastScannedId < targetAtStart) state.lastScannedId = targetAtStart;
+    }
+    state.retryAttempt = 0;
+    for (const [id, hint] of state.hints) {
+      if (state.lastScannedId !== undefined && id <= state.lastScannedId) {
+        prependActivityToMatchingQueries(queryClient, hint);
+        state.hints.delete(id);
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to recover activity gap:', error);
+    scheduleActivityRecoveryRetry(queryClient, state);
+  } finally {
+    state.running = false;
+    if (!state.cancelled && !state.retryTimer && state.lastScannedId !== undefined && state.targetId > state.lastScannedId) {
+      void recoverActivityGap(queryClient, state);
+    }
+  }
+}
+
+function applyActivityReady(queryClient: EventStreamQueryClient, state: ActivityRecoveryState, ready: ActivityReadyPayload) {
+  if (state.lastScannedId === undefined) {
+    state.lastScannedId = ready.activity_cursor;
+    state.targetId = Math.max(state.targetId, ready.activity_cursor);
+    for (const id of state.hints.keys()) if (id <= ready.activity_cursor) state.hints.delete(id);
+    invalidateActivityQueries(queryClient);
+    return;
+  }
+  state.targetId = Math.max(state.targetId, ready.activity_cursor);
+  void recoverActivityGap(queryClient, state);
+}
+
+function applyActivityHint(queryClient: EventStreamQueryClient, state: ActivityRecoveryState, item: ActivityItem) {
+  prependActivityToMatchingQueries(queryClient, item);
+  state.targetId = Math.max(state.targetId, item.id);
+  if (state.hints.size >= activityHintBufferLimit && !state.hints.has(item.id)) {
+    state.hints.clear();
+    invalidateActivityQueries(queryClient);
+  } else {
+    state.hints.set(item.id, item);
+  }
+  if (state.retryTimer) {
+    clearTimeout(state.retryTimer);
+    state.retryTimer = undefined;
+  }
+  void recoverActivityGap(queryClient, state);
+}
+
+export function applyEventForDiagnostics(
+  queryClient: EventStreamQueryClient,
+  setStatus: (status: ConnectionStatus) => void,
+  snapshotState: EventStreamSnapshotState,
+  eventType: string,
+  data: string,
+  activityState?: ActivityRecoveryState,
+) {
   switch (eventType) {
+    case 'ready': {
+      if (!activityState) return;
+      const parsed = parseEventPayload(data, isActivityReadyPayload);
+      if (!parsed) {
+        invalidateActivityQueries(queryClient);
+        return;
+      }
+      applyActivityReady(queryClient, activityState, parsed);
+      return;
+    }
+    case 'activity_event': {
+      if (!activityState) return;
+      const parsed = parseEventPayload(data, isActivityItem);
+      if (!parsed) {
+        invalidateActivityQueries(queryClient);
+        return;
+      }
+      applyActivityHint(queryClient, activityState, parsed);
+      return;
+    }
     case 'snapshot': {
       const parsed = parseEventPayload(data, isConsoleSnapshot);
       if (parsed) {
@@ -540,6 +691,7 @@ export function useEventStream() {
     }
 
     const snapshotState = createEventStreamSnapshotState();
+    const activityState = createActivityRecoveryState();
     let cancelled = false;
     let activeController: AbortController | null = null;
     let hasConnected = false;
@@ -593,7 +745,7 @@ export function useEventStream() {
             }
 
             buffer += decoder.decode(value, { stream: true });
-            buffer = parseSSE(buffer, (eventType, data) => applyEventForDiagnostics(queryClient, setStatus, snapshotState, eventType, data));
+            buffer = parseSSE(buffer, (eventType, data) => applyEventForDiagnostics(queryClient, setStatus, snapshotState, eventType, data, activityState));
           }
         } catch (error) {
           if (cancelled) {
@@ -613,6 +765,8 @@ export function useEventStream() {
 
     return () => {
       cancelled = true;
+      activityState.cancelled = true;
+      if (activityState.retryTimer) clearTimeout(activityState.retryTimer);
       activeController?.abort();
       setStatus('disconnected');
     };

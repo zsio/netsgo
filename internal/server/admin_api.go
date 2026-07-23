@@ -66,6 +66,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 			if s.auth.adminStore != nil {
 				slog.Warn("Login endpoint rate limited", "ip", ip, "module", "security")
 			}
+			s.recordAuthFailure(r, "admin_login_rate_limited", "rate_limited")
 			writeRateLimitResponse(w, retryAfter)
 			return
 		}
@@ -91,6 +92,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		if s.auth.loginLimiter != nil {
 			s.auth.loginLimiter.RecordFailure(ip)
 		}
+		s.recordAuthFailure(r, "admin_login_failed", "bad_credentials")
 		writeAPIError(w, http.StatusUnauthorized, "username_or_password_incorrect", "username or password incorrect")
 		return
 	}
@@ -118,10 +120,12 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.auth.adminStore.DeleteSession(info.SessionID); err != nil {
+	activityID, err := s.auth.adminStore.DeleteSessionWithActivity(info.SessionID, s.activityActorForRequest(r))
+	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "logout_persist_failed", "failed to persist logout")
 		return
 	}
+	s.publishActivityID(activityID)
 	slog.Info("Admin user logged out", "user", info.Username, "module", "auth")
 
 	s.clearSessionCookie(w, r)
@@ -158,10 +162,12 @@ func (s *Server) handleAPIAdminClientAuthRateLimits(w http.ResponseWriter, r *ht
 			writeAPIError(w, http.StatusBadRequest, "invalid_client_auth_rate_limit", err.Error())
 			return
 		}
-		if err := s.auth.updateClientRateLimitSettings(settings); err != nil {
+		activityID, err := s.auth.updateClientRateLimitSettingsWithActivity(settings, s.activityActorForRequest(r))
+		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "client_auth_rate_limit_update_failed", "failed to update client auth rate limit")
 			return
 		}
+		s.publishActivityID(activityID)
 		encodeJSON(w, http.StatusOK, settings)
 
 	case http.MethodDelete:
@@ -231,7 +237,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusInternalServerError, "api_key_generate_failed", "failed to generate api key")
 			return
 		}
-		key, err := s.auth.adminStore.AddAPIKey(req.Name, rawKey, req.Permissions, expiresAt)
+		key, activityID, err := s.auth.adminStore.AddAPIKeyWithActivity(req.Name, rawKey, req.Permissions, expiresAt, req.MaxUses, s.activityActorForRequest(r))
 		if err != nil {
 			encodeJSON(w, http.StatusBadRequest, map[string]any{
 				"error":   err.Error(),
@@ -241,13 +247,7 @@ func (s *Server) handleAPIAdminKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// set MaxUses
-		if req.MaxUses > 0 {
-			if err := s.auth.adminStore.SetAPIKeyMaxUses(key.ID, req.MaxUses); err != nil {
-				slog.Warn("Failed to set max_uses for key", "key_id", key.ID, "module", "admin")
-			}
-			key.MaxUses = req.MaxUses
-		}
+		s.publishActivityID(activityID)
 
 		slog.Info("Created new API Key", "name", req.Name, "module", "admin")
 
@@ -301,10 +301,12 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := s.auth.adminStore.SetAPIKeyActive(keyID, active); err != nil {
+		activityID, err := s.auth.adminStore.SetAPIKeyActiveWithActivity(keyID, active, s.activityActorForRequest(r))
+		if err != nil {
 			writeAPIError(w, http.StatusNotFound, "api_key_not_found", "key not found")
 			return
 		}
+		s.publishActivityID(activityID)
 
 		actionText := "disabled"
 		if active {
@@ -315,10 +317,12 @@ func (s *Server) handleAPIAdminKeyItem(w http.ResponseWriter, r *http.Request) {
 		encodeJSON(w, http.StatusOK, map[string]any{"success": true})
 
 	case http.MethodDelete:
-		if err := s.auth.adminStore.DeleteAPIKey(keyID); err != nil {
+		activityID, err := s.auth.adminStore.DeleteAPIKeyWithActivity(keyID, s.activityActorForRequest(r))
+		if err != nil {
 			writeAPIError(w, http.StatusNotFound, "api_key_not_found", "key not found")
 			return
 		}
+		s.publishActivityID(activityID)
 
 		slog.Info("API Key deleted", "key_id", keyID, "module", "admin")
 		w.WriteHeader(http.StatusNoContent)
@@ -350,6 +354,7 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 			ServerAddr:          config.ServerAddr,
 			AllowedPorts:        config.AllowedPorts,
 			EffectiveServerAddr: effectiveManagementHost(&config, serverListenAddr(s)),
+			ActivityRetention:   config.ActivityRetention,
 			ServerAddrLocked:    isServerAddrLocked(),
 		})
 
@@ -357,8 +362,8 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		s.serverConfigMutationMu.Lock()
 		defer s.serverConfigMutationMu.Unlock()
 
-		var config ServerConfig
-		if err := decodeJSONRequestBody(r, &config); err != nil {
+		var request adminConfigUpdateRequest
+		if err := decodeJSONRequestBody(r, &request); err != nil {
 			writeJSONRequestDecodeError(w, err)
 			return
 		}
@@ -369,6 +374,14 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		config := ServerConfig{ServerAddr: request.ServerAddr, AllowedPorts: request.AllowedPorts, ActivityRetention: current.ActivityRetention}
+		if request.ActivityRetention != nil {
+			config.ActivityRetention = applyActivityRetentionPatch(current.ActivityRetention, request.ActivityRetention)
+		}
+		if err := config.ActivityRetention.validate(); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_activity_retention", err.Error())
+			return
+		}
 		normalizedServerAddr, err := normalizeServerAddrForConfigUpdate(config.ServerAddr, current.ServerAddr)
 		if err != nil {
 			encodeJSON(w, http.StatusBadRequest, map[string]any{
@@ -445,10 +458,13 @@ func (s *Server) handleAPIAdminConfig(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// save config
-		if err := s.auth.adminStore.UpdateServerConfig(config); err != nil {
+		activityID, err := s.auth.adminStore.UpdateServerConfigWithActivity(config, s.activityActorForRequest(r))
+		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "config_update_failed", "failed to update config")
 			return
 		}
+		s.publishActivityID(activityID)
+		go s.pruneActivityEvents()
 		if s.portPolicyAfterConfigSaveHook != nil {
 			s.portPolicyAfterConfigSaveHook()
 		}

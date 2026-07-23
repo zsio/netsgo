@@ -765,6 +765,45 @@ func TestAPI_DeleteClient_OfflineClient(t *testing.T) {
 	if hasIssues || hasReport || watermark.revision != deletedTunnel.Revision {
 		t.Fatalf("client delete runtime purge mismatch: issues=%v report=%v watermark=%+v", hasIssues, hasReport, watermark)
 	}
+	activityPage, err := s.activityStore.Query(ActivityQuery{Scope: ActivityScopeClient, ScopeID: clientID, Limit: 50, Severities: []ActivitySeverity{ActivitySeverityDebug, ActivitySeverityInfo, ActivitySeverityWarning, ActivitySeverityError}})
+	if err != nil {
+		t.Fatalf("query deleted client activity: %v", err)
+	}
+	if len(activityPage.Items) != 2 || activityPage.Items[0].Action != "deleted" || activityPage.Items[1].Action != "deleted" {
+		t.Fatalf("deleted client activities = %+v, want tunnel.deleted and client.deleted", activityPage.Items)
+	}
+	if activityPage.Items[0].Category != ActivityCategoryClient || activityPage.Items[1].Category != ActivityCategoryTunnel {
+		t.Fatalf("deleted activity categories = %s, %s", activityPage.Items[0].Category, activityPage.Items[1].Category)
+	}
+}
+
+func TestAPI_DeleteClient_ActivityFailureRollsBack(t *testing.T) {
+	s, handler, token, cleanup := setupTestServerWithStores(t, true)
+	defer cleanup()
+
+	clientID := registerOfflineHTTPTestClient(t, s, "delete-client-activity-rollback")
+	seedStoredTunnel(t, s, clientID, protocol.ProxyNewRequest{Name: "rollback-tunnel", Type: protocol.ProxyTypeTCP, LocalIP: "127.0.0.1", LocalPort: 8080, RemotePort: 18081}, protocol.ProxyStatusStopped)
+	s.ensureSharedStoreReferences()
+	s.activityStore.failNextAppendsForTest(errors.New("injected activity failure"), 1)
+
+	resp := doMuxRequest(t, handler, http.MethodDelete, "/api/clients/"+clientID, token, nil)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("delete with activity failure: want 500, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if _, ok := s.auth.adminStore.GetRegisteredClient(clientID); !ok {
+		t.Fatal("registered client was deleted despite activity rollback")
+	}
+	tunnels, err := s.store.GetTunnelsByClientID(clientID)
+	if err != nil || len(tunnels) != 1 {
+		t.Fatalf("tunnels after rollback = %+v, err=%v", tunnels, err)
+	}
+	page, err := s.activityStore.Query(ActivityQuery{Scope: ActivityScopeClient, ScopeID: clientID, Limit: 50})
+	if err != nil {
+		t.Fatalf("query activity after rollback: %v", err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("activity committed despite rollback: %+v", page.Items)
+	}
 }
 
 func TestAPI_DeleteClient_RejectsOnlineClient(t *testing.T) {
@@ -1507,6 +1546,33 @@ func TestAuth_TimeoutNoMessage(t *testing.T) {
 	}
 	if elapsed > 3*time.Second {
 		t.Errorf("disconnected too slowly (%v); timeout may not have taken effect", elapsed)
+	}
+}
+
+func TestAuth_IdleConnectionDoesNotBlockAnotherAuthentication(t *testing.T) {
+	s, ts, cleanup := setupWSTestNoConn(t)
+	defer cleanup()
+	s.auth.authTimeout = 10 * time.Second
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/control"
+	idleConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("idle WebSocket connection failed: %v", err)
+	}
+	defer mustClose(t, idleConn)
+	// Give the idle connection handler time to enter the authentication read.
+	time.Sleep(50 * time.Millisecond)
+
+	activeConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("active WebSocket connection failed: %v", err)
+	}
+	defer mustClose(t, activeConn)
+	mustSetReadDeadline(t, activeConn, time.Now().Add(testReadTimeout(2*time.Second)))
+
+	authResp := doAuthWithInfo(t, activeConn, "active-host", "test-key")
+	if !authResp.Success {
+		t.Fatalf("active authentication failed behind idle connection: %+v", authResp)
 	}
 }
 

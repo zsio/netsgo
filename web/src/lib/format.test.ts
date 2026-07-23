@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { describeFreshness, formatNetSpeed, formatTimestamp, bpsToMbpsInput, parseMbpsInputToBps } from './format';
+import { describeFreshness, formatNetSpeed, formatRelativeTimestamp, formatTimestamp, bpsToMbpsInput, parseMbpsInputToBps } from './format';
 
 describe('format helpers', () => {
   test('bpsToMbpsInput 转换 bytes/s 到最短可回填的 MiB/s 字符串', () => {
@@ -65,4 +65,10 @@ describe('format helpers', () => {
 
     expect(describeFreshness(updatedAt, freshUntil)).toContain('ago');
   });
+  test('formatRelativeTimestamp uses stable relative units and rejects invalid input', () => {
+    const now = Date.parse('2026-07-23T12:00:00Z');
+    expect(formatRelativeTimestamp('2026-07-23T11:58:00Z', now)).toBe('2 minutes ago');
+    expect(formatRelativeTimestamp('not-a-date', now)).toBe('Unknown time');
+  });
+
 });

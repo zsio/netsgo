@@ -28,6 +28,8 @@ type Server struct {
 	trafficStore                        *TrafficStore       // traffic history store
 	trafficAccumulator                  *trafficAccumulator // batched traffic observations waiting to be applied to trafficStore
 	serverDB                            *sql.DB             // owned shared SQLite handle for borrowed server stores; close only via closeServerDB
+	activityStore                       *ActivityStore      // durable activity timeline over serverDB
+	activityBootID                      string              // random per complete server start; scopes lifecycle dedupe keys
 	serverDBCloseOnce                   sync.Once
 	serverDBCloseErr                    error
 	clientTunnelMutationMu              sync.Mutex        // serializes registered-client deletion with tunnel target migration
@@ -58,6 +60,11 @@ type Server struct {
 	p2p                                 *p2pCoordinator
 	p2pRetryMu                          sync.Mutex
 	p2pRetries                          map[string]p2pRetryState
+	p2pProjectionMu                     sync.Mutex
+	p2pProjectionRetries                map[string]p2pProjectionRetryItem
+	p2pProjectionWake                   chan struct{}
+	p2pProjectionStop                   chan struct{}
+	p2pProjectionDone                   chan struct{}
 	releaseIndexCache                   *releaseIndexCache
 	updateCapabilityCache               *updateCapabilityCache // cached server install capability for status API
 	serverExposeActivatedHook           func(StoredTunnel, *ProxyTunnel)
@@ -91,6 +98,7 @@ type ClientConn struct {
 	tokenTouchMu   sync.Mutex
 	nextTokenTouch time.Time
 	generation     uint64
+	lifecycleMu    sync.Mutex // serializes promotion and invalidation for one generation
 	state          clientState
 	stateMu        sync.RWMutex
 	pendingTimer   *time.Timer
@@ -114,8 +122,13 @@ func New(port int) *Server {
 		c2c:                         newClientRelayRegistry(),
 		p2p:                         newP2PCoordinator(time.Now),
 		p2pRetries:                  make(map[string]p2pRetryState),
+		p2pProjectionRetries:        make(map[string]p2pProjectionRetryItem),
+		p2pProjectionWake:           make(chan struct{}, 1),
+		p2pProjectionStop:           make(chan struct{}),
+		p2pProjectionDone:           make(chan struct{}),
 		startTime:                   time.Now(),
 		done:                        make(chan struct{}),
+		activityBootID:              generateUUID(),
 	}
 	s.releaseIndexCache = newReleaseIndexCache(fetchDefaultReleaseIndex)
 	s.updateCapabilityCache = newUpdateCapabilityCache(installmethod.Detect)

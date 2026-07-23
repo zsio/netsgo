@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -167,8 +169,8 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 	}
 
 	body := w.BodyString()
-	if !strings.Contains(body, "event: ready\ndata: {}\n\n") {
-		t.Fatalf("expected ready event immediately after SSE connection, actual body: %q", body)
+	if !strings.Contains(body, "event: ready\ndata: {\"activity_cursor\":0}\n\n") {
+		t.Fatalf("expected ready activity cursor immediately after SSE connection, actual body: %q", body)
 	}
 
 	if !strings.Contains(body, "event: snapshot\n") ||
@@ -204,4 +206,55 @@ func TestHandleSSE_DisconnectCleanup(t *testing.T) {
 	if subCount != 0 {
 		t.Errorf("subscription should be cleaned up after client disconnect, remaining: %d", subCount)
 	}
+}
+
+func TestHandleSSESubscribesBeforeActivityCursorRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), serverDBFileName)
+	db, err := openServerDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	s := New(0)
+	s.serverDB = db
+	s.activityStore = newActivityStoreWithDB(path, db, false)
+	_, err = s.activityStore.Append(testActivitySpec("created", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := newLockedRecorder()
+	done := make(chan struct{})
+	go func() {
+		s.handleSSE(w, httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx))
+		close(done)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for !s.events.HasSubscribers() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !s.events.HasSubscribers() {
+		t.Fatal("SSE did not subscribe")
+	}
+	secondID, err := s.activityStore.Append(testActivitySpec("updated", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.publishActivityID(secondID)
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		body := w.BodyString()
+		if strings.Contains(body, fmt.Sprintf(`"activity_cursor":%d`, secondID)) || strings.Contains(body, fmt.Sprintf(`"id":%d`, secondID)) {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("SSE did not stop")
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("event committed after subscription was outside cursor and hint: %s", w.BodyString())
 }

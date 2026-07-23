@@ -389,7 +389,7 @@ func TestUnifiedClientToClientRelayToDirectSwitchKeepsStreamsPinnedAndBytesExact
 	}
 
 	dropSignals.Store(false)
-	s.sendP2POutbounds(s.p2p.closeSession(stored.P2P.SessionID, "test restart with signaling enabled"))
+	s.sendP2PLifecycleResult(s.p2p.closeSession(stored.P2P.SessionID, "test restart with signaling enabled"))
 	ingressLive, ingressOK := s.loadLiveClient(ingressID)
 	targetLive, targetOK := s.loadLiveClient(targetID)
 	if !ingressOK || !targetOK {

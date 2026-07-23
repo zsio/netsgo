@@ -29,29 +29,23 @@ func (s *Server) ensureP2PForTunnel(stored StoredTunnel, ingress, target *Client
 	if !s.p2pRetryAllowed(ingress.ID, target.ID) {
 		return nil
 	}
-	grant, created, err := s.p2p.ensureGrant(p2pGrantSpec{tunnelID: stored.ID, revision: stored.Revision, ingressClientID: ingress.ID, targetClientID: target.ID, ingressGeneration: ingress.generation, targetGeneration: target.generation, totalBPS: stored.TotalBPS})
+	grant, lifecycle, err := s.p2p.ensureGrant(p2pGrantSpec{tunnelID: stored.ID, revision: stored.Revision, ingressClientID: ingress.ID, targetClientID: target.ID, ingressGeneration: ingress.generation, targetGeneration: target.generation, totalBPS: stored.TotalBPS})
 	if err != nil {
 		return err
 	}
-	if !created {
+	if !lifecycle.GrantCreated {
 		return nil
 	}
 	messages, err := s.p2p.prepareMessages(grant.sessionID)
 	if err != nil {
 		return err
 	}
-	s.sendP2POutbounds(messages)
-	actual := protocol.ActualTransportUnknown
-	state := protocol.P2PStateGathering
+	lifecycle.Outbounds = messages
+	lifecycle.Transition = P2PProjectionTransition{Mode: P2PProjectionGathering, SessionID: grant.sessionID}
 	if s.p2p.sessionReady(grant.sessionID) {
-		state = protocol.P2PStateConnected
-		actual = protocol.ActualTransportPeerDirect
-	} else if stored.TransportPolicy == protocol.TransportPolicyDirectPreferred {
-		actual = protocol.ActualTransportServerRelay
+		lifecycle.Transition.Mode = P2PProjectionReady
 	}
-	if s.store != nil {
-		_, _ = s.store.UpdateP2PStateIfCurrent(stored.ID, stored.Revision, state, "", grant.sessionID, actual)
-	}
+	s.sendP2PLifecycleResult(lifecycle)
 	return nil
 }
 
@@ -70,6 +64,15 @@ func (s *Server) sendP2POutbounds(messages []p2pOutbound) {
 		}
 	}
 }
+func (s *Server) sendP2PLifecycleResults(results []p2pLifecycleResult) {
+	for _, result := range results {
+		s.sendP2PLifecycleResult(result)
+	}
+}
+
+func (s *Server) sendP2PLifecycleResult(result p2pLifecycleResult) {
+	s.applyP2PLifecycleResult(result)
+}
 
 func (s *Server) p2pLeaseLoop() {
 	ticker := time.NewTicker(p2pLeaseRenewEvery)
@@ -77,7 +80,9 @@ func (s *Server) p2pLeaseLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			s.sendP2POutbounds(s.p2p.renew(func(clientID string, generation uint64) bool { return s.isCurrentLive(clientID, generation) }))
+			result := s.p2p.renew(func(clientID string, generation uint64) bool { return s.isCurrentLive(clientID, generation) })
+			s.sendP2PLifecycleResults(result.Closed)
+			s.sendP2POutbounds(result.Outbounds)
 		case <-s.done:
 			return
 		}
@@ -110,6 +115,11 @@ func (s *Server) handleP2PSignalMessage(client *ClientConn, msg protocol.Message
 	}
 }
 
+func closeP2PAfterFailedStatus(result p2pLifecycleResult) p2pLifecycleResult {
+	result.Transition = P2PProjectionTransition{}
+	return result
+}
+
 func (s *Server) handleP2PStatusMessage(client *ClientConn, msg protocol.Message) {
 	if !s.isCurrentLive(client.ID, client.generation) {
 		return
@@ -118,35 +128,39 @@ func (s *Server) handleP2PStatusMessage(client *ClientConn, msg protocol.Message
 	if err := msg.ParsePayload(&status); err != nil {
 		return
 	}
-	ready, err := s.p2p.recordReady(client.ID, client.generation, status)
+	lifecycle, err := s.p2p.recordReady(client.ID, client.generation, status)
 	if err != nil {
 		return
 	}
-	if ready {
+	ready := lifecycle.Session.Ready
+	if lifecycle.ReadyEdge {
 		log.Printf("🔗 P2P pair ready: session=%s", status.SessionID)
 	}
-	tunnelIDs := s.p2p.tunnelIDs(status.SessionID)
-	for _, tunnelID := range tunnelIDs {
-		stored, ok, loadErr := s.findStoredTunnelByID(tunnelID)
-		if loadErr != nil || !ok {
-			continue
-		}
-		state, actual, p2pError := status.State, protocol.ActualTransportUnknown, status.Error
-		if ready {
-			state, actual, p2pError = protocol.P2PStateConnected, protocol.ActualTransportPeerDirect, ""
-		} else if stored.TransportPolicy == protocol.TransportPolicyDirectPreferred {
-			actual = protocol.ActualTransportServerRelay
-			if state == protocol.P2PStateFailed {
-				state = protocol.P2PStateFallback
+	tunnelIDs := make([]string, 0, len(lifecycle.Session.Grants))
+	for _, grant := range lifecycle.Session.Grants {
+		tunnelIDs = append(tunnelIDs, grant.TunnelID)
+	}
+	mode := P2PProjectionGathering
+	if ready {
+		mode = P2PProjectionReady
+	} else if status.State == protocol.P2PStateFailed {
+		mode = P2PProjectionFailed
+	}
+	if len(tunnelIDs) > 0 {
+		lifecycle.Transition = P2PProjectionTransition{Mode: mode, SessionID: status.SessionID}
+	}
+	lifecycle.ExpectedSessionID = status.SessionID
+	if lifecycle.FailedEdge {
+		lifecycle.ActivityActions = make(map[string][]p2pGrantSnapshot, 2)
+		for _, grant := range lifecycle.Session.Grants {
+			action := "failed"
+			if stored, ok, _ := s.findStoredTunnelByID(grant.TunnelID); ok && stored.Revision == grant.Revision && stored.TransportPolicy == protocol.TransportPolicyDirectPreferred {
+				action = "fallback"
 			}
-		}
-		if s.store != nil {
-			_, _ = s.store.UpdateP2PStateIfCurrent(stored.ID, stored.Revision, state, p2pError, status.SessionID, actual)
-		}
-		if refreshed, ok, _ := s.findStoredTunnelByID(stored.ID); ok {
-			s.emitTunnelChangedIfStored(refreshed.OwnerClientID, storedTunnelToProxyConfig(refreshed), "p2p_status")
+			lifecycle.ActivityActions[action] = append(lifecycle.ActivityActions[action], grant)
 		}
 	}
+	s.sendP2PLifecycleResult(lifecycle)
 	if ready {
 		if len(tunnelIDs) > 0 {
 			if stored, ok, _ := s.findStoredTunnelByID(tunnelIDs[0]); ok {
@@ -154,7 +168,8 @@ func (s *Server) handleP2PStatusMessage(client *ClientConn, msg protocol.Message
 			}
 		}
 	} else if status.State == protocol.P2PStateFailed {
-		s.sendP2POutbounds(s.p2p.closeSession(status.SessionID, status.Error))
+		closed := closeP2PAfterFailedStatus(s.p2p.closeSession(status.SessionID, status.Error))
+		s.sendP2PLifecycleResult(closed)
 		s.scheduleP2PRetry(tunnelIDs)
 	}
 }
@@ -213,9 +228,9 @@ func (s *Server) scheduleP2PRetry(tunnelIDs []string) {
 }
 
 func (s *Server) handleP2PStatsMessage(client *ClientConn, msg protocol.Message) {
-	if !s.isCurrentLive(client.ID, client.generation) {
-		return
-	}
+	// A graceful disconnect can mark the logical session Closing before this
+	// queued final report is read. acceptStats still authorizes the archived
+	// grant against the authenticated connection's exact client generation.
 	var report protocol.P2PStatsReport
 	if err := msg.ParsePayload(&report); err != nil {
 		return

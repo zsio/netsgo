@@ -33,12 +33,13 @@ func randomBytes(n int) ([]byte, error) {
 
 // AdminStore manages persistence of admin accounts, API Keys, and sessions.
 type AdminStore struct {
-	path      string
-	db        *sql.DB
-	closeDB   bool
-	mu        sync.RWMutex
-	closeOnce sync.Once
-	closeErr  error
+	path          string
+	db            *sql.DB
+	closeDB       bool
+	activityStore *ActivityStore
+	mu            sync.RWMutex
+	closeOnce     sync.Once
+	closeErr      error
 
 	bcryptCost int // 0 means use bcrypt.DefaultCost
 
@@ -63,6 +64,10 @@ var (
 	ErrClientTokenExpired         = errors.New("client token expired")
 	ErrClientTokenInstallMismatch = errors.New("client token install mismatch")
 	ErrRegisteredClientNotFound   = errors.New("registered client not found")
+	ErrClientKeyInvalid           = errors.New("API key is invalid")
+	ErrClientKeyDisabled          = errors.New("client key disabled")
+	ErrClientKeyExpired           = errors.New("client key expired")
+	ErrClientKeyMaxUsesExceeded   = errors.New("client key max uses exceeded")
 )
 
 type dbScanner interface {
@@ -119,6 +124,7 @@ func NewAdminStoreWithOptions(path string, opts AdminStoreOptions) (*AdminStore,
 		_ = db.Close()
 		return nil, err
 	}
+	store.activityStore = newActivityStoreWithDB(path, db, false)
 	return store, nil
 }
 
@@ -445,8 +451,17 @@ func (s *AdminStore) GetServerConfigE() (ServerConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var config ServerConfig
-	err := s.db.QueryRow(`SELECT server_addr FROM server_config WHERE id = 1`).Scan(&config.ServerAddr)
+	config := ServerConfig{ActivityRetention: DefaultActivityRetentionPolicy()}
+	err := s.db.QueryRow(`SELECT server_addr,
+		activity_debug_retention_days, activity_debug_min_count,
+		activity_info_retention_days, activity_info_min_count,
+		activity_warning_retention_days, activity_warning_min_count,
+		activity_error_retention_days, activity_error_min_count
+		FROM server_config WHERE id = 1`).Scan(&config.ServerAddr,
+		&config.ActivityRetention.Debug.Days, &config.ActivityRetention.Debug.MinCount,
+		&config.ActivityRetention.Info.Days, &config.ActivityRetention.Info.MinCount,
+		&config.ActivityRetention.Warning.Days, &config.ActivityRetention.Warning.MinCount,
+		&config.ActivityRetention.Error.Days, &config.ActivityRetention.Error.MinCount)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return config, nil
@@ -490,7 +505,21 @@ func (s *AdminStore) UpdateServerConfig(config ServerConfig) error {
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO server_config (id) VALUES (1)`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE server_config SET server_addr = ? WHERE id = 1`, config.ServerAddr); err != nil {
+	if config.ActivityRetention == (ActivityRetentionPolicy{}) {
+		config.ActivityRetention = DefaultActivityRetentionPolicy()
+	}
+	if err := config.ActivityRetention.validate(); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE server_config SET server_addr = ?,
+		activity_debug_retention_days = ?, activity_debug_min_count = ?,
+		activity_info_retention_days = ?, activity_info_min_count = ?,
+		activity_warning_retention_days = ?, activity_warning_min_count = ?,
+		activity_error_retention_days = ?, activity_error_min_count = ? WHERE id = 1`, config.ServerAddr,
+		config.ActivityRetention.Debug.Days, config.ActivityRetention.Debug.MinCount,
+		config.ActivityRetention.Info.Days, config.ActivityRetention.Info.MinCount,
+		config.ActivityRetention.Warning.Days, config.ActivityRetention.Warning.MinCount,
+		config.ActivityRetention.Error.Days, config.ActivityRetention.Error.MinCount); err != nil {
 		return err
 	}
 	if err := replaceAllowedPorts(tx, config.AllowedPorts); err != nil {
@@ -865,25 +894,25 @@ func upsertClientInfo(exec dbExecer, clientID string, info protocol.ClientInfo, 
 	return nil
 }
 
-func getOrCreateClientInTx(tx *sql.Tx, installID string, info protocol.ClientInfo, lastIP string, now time.Time) (RegisteredClient, error) {
+func getOrCreateClientInTx(tx *sql.Tx, installID string, info protocol.ClientInfo, lastIP string, now time.Time) (RegisteredClient, bool, error) {
 	client, err := loadRegisteredClient(tx, `WHERE install_id = ?`, installID)
 	if err == nil {
 		client.Info = info
 		client.LastSeen = now
 		client.LastIP = lastIP
 		if err := upsertClientInfo(tx, client.ID, info, now, lastIP); err != nil {
-			return RegisteredClient{}, err
+			return RegisteredClient{}, false, err
 		}
 		client.Stats = cloneSystemStats(client.Stats)
-		return client, nil
+		return client, false, nil
 	}
 	if err != sql.ErrNoRows {
-		return RegisteredClient{}, err
+		return RegisteredClient{}, false, err
 	}
 
 	clientID, err := generateUUIDE()
 	if err != nil {
-		return RegisteredClient{}, err
+		return RegisteredClient{}, false, err
 	}
 	client = RegisteredClient{
 		ID:        clientID,
@@ -895,15 +924,15 @@ func getOrCreateClientInTx(tx *sql.Tx, installID string, info protocol.ClientInf
 	}
 	capabilitiesRaw, err := marshalClientCapabilities(info.Capabilities)
 	if err != nil {
-		return RegisteredClient{}, err
+		return RegisteredClient{}, false, err
 	}
 	if _, err := tx.Exec(`INSERT INTO registered_clients
 		(id, install_id, display_name, hostname, os, arch, ip, version, public_ipv4, public_ipv6, ingress_bps, egress_bps, created_at, last_seen, last_ip, last_capabilities)
 		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`,
 		client.ID, client.InstallID, info.Hostname, info.OS, info.Arch, info.IP, info.Version, info.PublicIPv4, info.PublicIPv6, formatTime(now), formatTime(now), lastIP, capabilitiesRaw); err != nil {
-		return RegisteredClient{}, err
+		return RegisteredClient{}, false, err
 	}
-	return client, nil
+	return client, true, nil
 }
 
 func (s *AdminStore) GetOrCreateClient(installID string, info protocol.ClientInfo, remoteAddr string) (*RegisteredClient, error) {
@@ -924,7 +953,7 @@ func (s *AdminStore) GetOrCreateClient(installID string, info protocol.ClientInf
 	committed := false
 	defer rollbackUnlessCommitted(tx, &committed)
 
-	client, err := getOrCreateClientInTx(tx, installID, info, lastIP, now)
+	client, _, err := getOrCreateClientInTx(tx, installID, info, lastIP, now)
 	if err != nil {
 		return nil, err
 	}
@@ -1709,7 +1738,7 @@ func (s *AdminStore) ValidateClientKey(key string) (bool, error) {
 // validateClientKeyLocked is an internal method; caller must already hold mu.
 func (s *AdminStore) validateClientKeyLocked(q dbQuerier, key string) (bool, error) {
 	if key == "" {
-		return false, fmt.Errorf("no valid API key provided and authentication is required")
+		return false, ErrClientKeyInvalid
 	}
 
 	keys, err := candidateAPIKeysForRaw(q, key)
@@ -1722,7 +1751,7 @@ func (s *AdminStore) validateClientKeyLocked(q dbQuerier, key string) (bool, err
 			return false, err
 		}
 		if hasKeys {
-			return false, fmt.Errorf("API key is invalid")
+			return false, ErrClientKeyInvalid
 		}
 		initialized, _, err := s.loadConfigLifecycle(q)
 		if err != nil {
@@ -1731,25 +1760,25 @@ func (s *AdminStore) validateClientKeyLocked(q dbQuerier, key string) (bool, err
 		if !initialized {
 			return false, fmt.Errorf("server not initialized; client connections are not accepted yet")
 		}
-		return false, fmt.Errorf("no API keys configured")
+		return false, ErrClientKeyInvalid
 	}
 
 	for _, k := range keys {
 		if err := bcrypt.CompareHashAndPassword([]byte(k.KeyHash), []byte(key)); err == nil {
 			if !k.IsActive {
-				return false, fmt.Errorf("API key is disabled")
+				return false, ErrClientKeyDisabled
 			}
 			if k.ExpiresAt != nil && k.ExpiresAt.Before(time.Now()) {
-				return false, fmt.Errorf("API key has expired")
+				return false, ErrClientKeyExpired
 			}
 			if k.MaxUses > 0 && k.UseCount >= k.MaxUses {
-				return false, fmt.Errorf("API key has reached its maximum use count")
+				return false, ErrClientKeyMaxUsesExceeded
 			}
 			return true, nil
 		}
 	}
 
-	return false, fmt.Errorf("API key is invalid")
+	return false, ErrClientKeyInvalid
 }
 
 func findKeyByRawLocked(q dbQuerier, key string) (*APIKey, error) {
@@ -1830,9 +1859,10 @@ func loadAPIKeysByLookupDigest(q dbQuerier, digest string) ([]APIKey, error) {
 // ========== Client Tokens ==========
 
 type ClientRegistrationTokenExchange struct {
-	Client   RegisteredClient
-	Token    string
-	TokenRow *ClientToken
+	Client     RegisteredClient
+	Token      string
+	TokenRow   *ClientToken
+	ActivityID int64
 }
 
 func (s *AdminStore) RegisterClientAndExchangeToken(key, installID string, info protocol.ClientInfo, remoteAddr string) (*ClientRegistrationTokenExchange, error) {
@@ -1858,7 +1888,7 @@ func (s *AdminStore) RegisterClientAndExchangeToken(key, installID string, info 
 		return nil, fmt.Errorf("key validation failed: %w", err)
 	}
 
-	client, err := getOrCreateClientInTx(tx, installID, info, ip, now)
+	client, created, err := getOrCreateClientInTx(tx, installID, info, ip, now)
 	if err != nil {
 		return nil, err
 	}
@@ -1866,6 +1896,18 @@ func (s *AdminStore) RegisterClientAndExchangeToken(key, installID string, info 
 	tokenStr, tokenRow, err := exchangeTokenInTx(tx, key, installID, client.ID, ip, now)
 	if err != nil {
 		return nil, err
+	}
+	var activityID int64
+	if created && s.activityStore != nil {
+		payload := newActivityClientLifecyclePayload("registered", "", 0, true, ActivitySummaryArgs{ClientName: activityClientDisplayName(client)})
+		activityID, err = s.appendActivityTx(tx, ActivityEventSpec{
+			OccurredAt: now.UTC(), Category: ActivityCategoryClient, Action: "registered", Source: "server",
+			Actor: ActivityActor{Type: "client", ID: client.ID, Name: activityClientDisplayName(client)}, Payload: payload,
+			Clients: []ActivityClientSubject{{ClientID: client.ID, Relation: "subject", DisplayName: client.DisplayName, Hostname: client.Info.Hostname}},
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := s.maybeFailSave(); err != nil {
 		return nil, err
@@ -1875,9 +1917,10 @@ func (s *AdminStore) RegisterClientAndExchangeToken(key, installID string, info 
 	}
 
 	return &ClientRegistrationTokenExchange{
-		Client:   client,
-		Token:    tokenStr,
-		TokenRow: tokenRow,
+		Client:     client,
+		Token:      tokenStr,
+		TokenRow:   tokenRow,
+		ActivityID: activityID,
 	}, nil
 }
 

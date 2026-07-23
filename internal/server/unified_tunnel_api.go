@@ -196,15 +196,15 @@ func (s *Server) handleUnifiedTunnelAction(w http.ResponseWriter, r *http.Reques
 
 	switch r.PathValue("action") {
 	case "resume":
-		s.resumeUnifiedTunnel(w, current)
+		s.resumeUnifiedTunnel(w, r, current)
 	case "stop":
-		s.stopUnifiedTunnel(w, current)
+		s.stopUnifiedTunnel(w, r, current)
 	default:
 		writeAPIError(w, http.StatusNotFound, "unknown_tunnel_action", "unknown tunnel action")
 	}
 }
 
-func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI) {
+func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, r *http.Request, current tunnelSpecAPI) {
 	stored, err := s.loadOfflineTunnelBySelector(current.OwnerClientID, current.ID)
 	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
@@ -215,14 +215,13 @@ func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAP
 		writeAPIError(w, http.StatusConflict, protocol.TunnelMutationErrorCodeTunnelResumeNotAllowed, "only stopped or error tunnels can be resumed")
 		return
 	}
-	if err := s.store.UpdateStates(current.OwnerClientID, stored.Name, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateOffline, ""); err != nil {
+	stored, activityID, err := s.store.UpdateTunnelStatesWithActivity(current.OwnerClientID, stored.ID, protocol.ProxyDesiredStateRunning, protocol.ProxyRuntimeStateOffline, "", "resumed", s.activityActorForRequest(r))
+	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
-	stored.DesiredState = protocol.ProxyDesiredStateRunning
-	stored.RuntimeState = protocol.ProxyRuntimeStateOffline
-	stored.Error = ""
+	s.publishActivityID(activityID)
 	if err := s.unprovisionStoredUnifiedTunnel(stored, "resume_reconcile", true); err != nil {
 		logUnifiedRuntimeCleanupFailure("resume", stored, err)
 	}
@@ -236,19 +235,20 @@ func (s *Server) resumeUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAP
 	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "tunnel resumed", "tunnel": specFromStoredTunnel(stored, s)})
 }
 
-func (s *Server) stopUnifiedTunnel(w http.ResponseWriter, current tunnelSpecAPI) {
+func (s *Server) stopUnifiedTunnel(w http.ResponseWriter, r *http.Request, current tunnelSpecAPI) {
 	stored, err := s.loadOfflineTunnelBySelector(current.OwnerClientID, current.ID)
 	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
-	config, err := s.stopOfflineTunnel(current.OwnerClientID, current.ID)
+	config, activityID, err := s.stopOfflineTunnelWithActivity(current.OwnerClientID, current.ID, s.activityActorForRequest(r))
 	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
+	s.publishActivityID(activityID)
 	if err := s.unprovisionStoredUnifiedTunnel(stored, "stopped", false); err != nil {
 		logUnifiedRuntimeCleanupFailure("stop", stored, err)
 	}
@@ -347,12 +347,13 @@ func (s *Server) handleCreateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	config, err := s.createUnifiedStoredTunnel(req)
+	config, activityID, err := s.createUnifiedStoredTunnel(req, s.activityActorForRequest(r))
 	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
+	s.publishActivityID(activityID)
 	encodeJSON(w, http.StatusCreated, specFromStoredTunnel(config, s))
 }
 
@@ -382,7 +383,7 @@ func (s *Server) handleUpdateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	updated, err := s.updateUnifiedStoredTunnel(current, req.ExpectedRevision, req.Spec)
+	updated, activityID, err := s.updateUnifiedStoredTunnel(current, req.ExpectedRevision, req.Spec, s.activityActorForRequest(r))
 	if err != nil {
 		if errors.Is(err, ErrTunnelRevisionConflict) {
 			encodeJSON(w, http.StatusConflict, revisionConflictPayload(errTunnelRevisionConflict.Error(), 0))
@@ -392,6 +393,7 @@ func (s *Server) handleUpdateUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		encodeJSON(w, status, payload)
 		return
 	}
+	s.publishActivityID(activityID)
 	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "tunnel": specFromStoredTunnel(updated, s)})
 }
 
@@ -432,7 +434,7 @@ func (s *Server) handleUnifiedTunnelMigrate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	migrated, err := s.migrateUnifiedStoredTunnel(current, req)
+	migrated, activityID, err := s.migrateUnifiedStoredTunnel(current, req, s.activityActorForRequest(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrTunnelRevisionConflict):
@@ -452,6 +454,7 @@ func (s *Server) handleUnifiedTunnelMigrate(w http.ResponseWriter, r *http.Reque
 		encodeJSON(w, status, payload)
 		return
 	}
+	s.publishActivityID(activityID)
 	encodeJSON(w, http.StatusOK, map[string]any{"success": true, "tunnel": specFromStoredTunnel(migrated, s)})
 }
 
@@ -502,17 +505,17 @@ func (s *Server) validateTunnelMigrateRequest(current tunnelSpecAPI, req tunnelM
 	return nil
 }
 
-func (s *Server) migrateUnifiedStoredTunnel(current tunnelSpecAPI, req tunnelMigrateRequestAPI) (StoredTunnel, error) {
+func (s *Server) migrateUnifiedStoredTunnel(current tunnelSpecAPI, req tunnelMigrateRequestAPI, actor ActivityActor) (StoredTunnel, int64, error) {
 	if s.store == nil {
-		return StoredTunnel{}, fmt.Errorf("tunnel store not initialized")
+		return StoredTunnel{}, 0, fmt.Errorf("tunnel store not initialized")
 	}
 
 	existing, err := s.store.GetTunnelByID(current.ID)
 	if err != nil {
-		return StoredTunnel{}, err
+		return StoredTunnel{}, 0, err
 	}
 	if existing.Revision != req.ExpectedRevision {
-		return StoredTunnel{}, ErrTunnelRevisionConflict
+		return StoredTunnel{}, 0, ErrTunnelRevisionConflict
 	}
 
 	replacement := existing
@@ -528,9 +531,9 @@ func (s *Server) migrateUnifiedStoredTunnel(current tunnelSpecAPI, req tunnelMig
 	}
 	setStoredTunnelStates(&replacement, existing.DesiredState, runtimeState, "")
 
-	before, migrated, err := s.store.MigrateTunnelTargetByID(current.ID, req.ExpectedRevision, replacement)
+	before, migrated, activityID, err := s.store.MigrateTunnelTargetByIDWithActivity(current.ID, req.ExpectedRevision, replacement, actor)
 	if err != nil {
-		return StoredTunnel{}, err
+		return StoredTunnel{}, 0, err
 	}
 	if err := s.unprovisionStoredUnifiedTunnel(before, "migrated", true); err != nil {
 		logUnifiedRuntimeCleanupFailure("migrate", before, err)
@@ -540,7 +543,7 @@ func (s *Server) migrateUnifiedStoredTunnel(current tunnelSpecAPI, req tunnelMig
 	if reloaded, err := s.store.GetTunnelByIDE(migrated.OwnerClientID, migrated.ID); err == nil {
 		migrated = reloaded
 	}
-	return migrated, nil
+	return migrated, activityID, nil
 }
 
 func (s *Server) emitMigratedTunnelOwnerEvents(before, after StoredTunnel) {
@@ -592,16 +595,21 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	releaseRuntimeOperation := s.tunnelRuntimeOps.lock(tunnelRuntimeOperationKey(current.ID, current.OwnerClientID, current.Name))
+	defer releaseRuntimeOperation()
+
 	stored, err := s.loadOfflineTunnelBySelector(current.OwnerClientID, current.ID)
 	if err != nil {
 		status, payload := tunnelMutationErrorStatusAndBody(err)
 		encodeJSON(w, status, payload)
 		return
 	}
-	if err := s.deleteStoredUnifiedTunnel(stored); err != nil {
+	activityID, err := s.deleteStoredUnifiedTunnel(stored, s.activityActorForRequest(r))
+	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "tunnel_delete_failed", err.Error())
 		return
 	}
+	s.publishActivityID(activityID)
 	s.unifiedRuntime.purgeTunnelIssues(stored.ID, stored.Revision)
 	if err := s.unprovisionStoredUnifiedTunnel(stored, "deleted", true); err != nil {
 		logUnifiedRuntimeCleanupFailure("delete", stored, err)
@@ -609,21 +617,22 @@ func (s *Server) handleDeleteUnifiedTunnel(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) deleteStoredUnifiedTunnel(stored StoredTunnel) error {
+func (s *Server) deleteStoredUnifiedTunnel(stored StoredTunnel, actor ActivityActor) (int64, error) {
 	if s.store == nil {
-		return fmt.Errorf("tunnel store not initialized")
+		return 0, fmt.Errorf("tunnel store not initialized")
 	}
 	clientID := stored.OwnerClientID
 	if clientID == "" {
 		clientID = stored.ClientID
 	}
-	if err := s.store.RemoveTunnelByID(clientID, stored.ID); err != nil {
-		return err
+	activityID, err := s.store.RemoveTunnelByIDWithActivity(clientID, stored.ID, actor)
+	if err != nil {
+		return 0, err
 	}
 	deletedConfig := storedTunnelToProxyConfig(stored)
 	setProxyConfigStates(&deletedConfig, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, "")
 	s.emitTunnelChanged(clientID, deletedConfig, "deleted")
-	return nil
+	return activityID, nil
 }
 
 func (s *Server) unprovisionStoredUnifiedTunnel(stored StoredTunnel, reason string, removeServerRuntime bool) error {
@@ -873,56 +882,57 @@ func validateEndpointConfigComplexity(raw json.RawMessage) error {
 	}
 }
 
-func (s *Server) createUnifiedStoredTunnel(req tunnelCreateRequestAPI) (StoredTunnel, error) {
+func (s *Server) createUnifiedStoredTunnel(req tunnelCreateRequestAPI, actor ActivityActor) (StoredTunnel, int64, error) {
 	if err := prepareHTTPHostMutationRequest(&req, nil); err != nil {
-		return StoredTunnel{}, err
+		return StoredTunnel{}, 0, err
 	}
 	if err := prepareSOCKS5MutationRequest(&req, nil); err != nil {
-		return StoredTunnel{}, err
+		return StoredTunnel{}, 0, err
 	}
 	stored, err := s.storedTunnelFromUnifiedRequest(req, "")
 	if err != nil {
-		return StoredTunnel{}, err
+		return StoredTunnel{}, 0, err
 	}
 	if s.store == nil {
-		return StoredTunnel{}, fmt.Errorf("tunnel store not initialized")
+		return StoredTunnel{}, 0, fmt.Errorf("tunnel store not initialized")
 	}
-	if err := s.store.AddTunnel(stored); err != nil {
-		return StoredTunnel{}, err
+	activityID, err := s.store.AddTunnelWithActivity(stored, actor)
+	if err != nil {
+		return StoredTunnel{}, 0, err
 	}
 	s.emitTunnelChangedIfStored(stored.OwnerClientID, storedTunnelToProxyConfig(stored), "created")
 	s.scheduleUnifiedTunnelReconcile(stored, "created")
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
 		stored = reloaded
 	}
-	return stored, nil
+	return stored, activityID, nil
 }
 
-func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevision int64, req tunnelCreateRequestAPI) (StoredTunnel, error) {
+func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevision int64, req tunnelCreateRequestAPI, actor ActivityActor) (StoredTunnel, int64, error) {
 	if s.store == nil {
-		return StoredTunnel{}, fmt.Errorf("tunnel store not initialized")
+		return StoredTunnel{}, 0, fmt.Errorf("tunnel store not initialized")
 	}
 
 	existing, err := s.store.GetTunnelByIDE(current.OwnerClientID, current.ID)
 	if err != nil {
-		return StoredTunnel{}, err
+		return StoredTunnel{}, 0, err
 	}
 	if existing.Revision != expectedRevision {
-		return StoredTunnel{}, ErrTunnelRevisionConflict
+		return StoredTunnel{}, 0, ErrTunnelRevisionConflict
 	}
 	if err := prepareHTTPHostMutationRequest(&req, &existing); err != nil {
-		return StoredTunnel{}, err
+		return StoredTunnel{}, 0, err
 	}
 	if err := prepareSOCKS5MutationRequest(&req, &existing); err != nil {
-		return StoredTunnel{}, err
+		return StoredTunnel{}, 0, err
 	}
 
 	stored, err := s.storedTunnelFromUnifiedRequest(req, current.ID)
 	if err != nil {
-		return StoredTunnel{}, err
+		return StoredTunnel{}, 0, err
 	}
 	if stored.OwnerClientID != current.OwnerClientID {
-		return StoredTunnel{}, newProxyRequestValidationError(fmt.Errorf("tunnel owner cannot be changed"), "target.client_id", "owner_change_not_supported", http.StatusBadRequest)
+		return StoredTunnel{}, 0, newProxyRequestValidationError(fmt.Errorf("tunnel owner cannot be changed"), "target.client_id", "owner_change_not_supported", http.StatusBadRequest)
 	}
 	stored.Revision = expectedRevision + 1
 	stored.CreatedAt = existing.CreatedAt
@@ -934,8 +944,9 @@ func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevisi
 	}
 	stored.Error = ""
 
-	if err := s.store.ReplaceTunnelByID(current.OwnerClientID, current.ID, expectedRevision, stored); err != nil {
-		return StoredTunnel{}, err
+	activityID, err := s.store.ReplaceTunnelByIDWithActivity(current.OwnerClientID, current.ID, expectedRevision, stored, actor)
+	if err != nil {
+		return StoredTunnel{}, 0, err
 	}
 	if err := s.unprovisionStoredUnifiedTunnel(existing, "updated", true); err != nil {
 		logUnifiedRuntimeCleanupFailure("update", existing, err)
@@ -945,7 +956,7 @@ func (s *Server) updateUnifiedStoredTunnel(current tunnelSpecAPI, expectedRevisi
 	if reloaded, err := s.store.GetTunnelByIDE(stored.OwnerClientID, stored.ID); err == nil {
 		stored = reloaded
 	}
-	return stored, nil
+	return stored, activityID, nil
 }
 
 func prepareHTTPHostMutationRequest(req *tunnelCreateRequestAPI, existing *StoredTunnel) error {

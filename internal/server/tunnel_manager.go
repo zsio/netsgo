@@ -54,28 +54,23 @@ func (s *Server) persistTunnelStates(clientID, name, desiredState, runtimeState,
 	if s.store == nil {
 		return nil
 	}
-	return s.store.UpdateStates(clientID, name, desiredState, runtimeState, errMsg)
+	stored, ok := s.store.GetTunnel(clientID, name)
+	if !ok {
+		return nil
+	}
+	_, err := s.updateStoredTunnelRuntimeObserved(stored, runtimeState, errMsg)
+	return err
 }
 
 func (s *Server) updateProxyConfigRuntimeIfCurrent(clientID string, config protocol.ProxyConfig, runtimeState, message string) (bool, error) {
-	if s.store == nil {
-		return true, nil
+	stored, ok, err := s.findStoredTunnelByID(config.ID)
+	if err != nil || !ok {
+		return false, err
 	}
-	ownerClientID := config.OwnerClientID
-	if ownerClientID == "" {
-		ownerClientID = config.ClientID
+	if config.Revision > 0 && stored.Revision != config.Revision {
+		return false, nil
 	}
-	if ownerClientID == "" {
-		ownerClientID = clientID
-	}
-	return s.store.UpdateStatesIfCurrent(
-		ownerClientID,
-		config.ID,
-		config.Revision,
-		protocol.ProxyDesiredStateRunning,
-		runtimeState,
-		message,
-	)
+	return s.updateStoredTunnelRuntimeObserved(stored, runtimeState, message)
 }
 
 func (s *Server) upsertTunnelPlaceholderWithRevision(client *ClientConn, req protocol.ProxyNewRequest, revision int64, desiredState, runtimeState, errMsg string, createdAt time.Time) protocol.ProxyConfig {
@@ -196,27 +191,26 @@ func (s *Server) loadOfflineTunnelBySelector(clientID, selector string) (StoredT
 	return stored, nil
 }
 
-func (s *Server) stopOfflineTunnel(clientID, name string) (protocol.ProxyConfig, error) {
-	stored, err := s.loadOfflineTunnelBySelector(clientID, name)
+func (s *Server) stopOfflineTunnelWithActivity(clientID, id string, actor ActivityActor) (protocol.ProxyConfig, int64, error) {
+	stored, err := s.loadOfflineTunnelBySelector(clientID, id)
 	if err != nil {
-		return protocol.ProxyConfig{}, err
+		return protocol.ProxyConfig{}, 0, err
 	}
-	name = stored.Name
-	if err := s.store.UpdateStates(clientID, name, protocol.ProxyDesiredStateStopped, protocol.ProxyRuntimeStateIdle, ""); err != nil {
-		return protocol.ProxyConfig{}, err
-	}
-
-	updated, err := s.store.GetTunnelE(clientID, name)
-	if errors.Is(err, ErrTunnelNotFound) {
-		return protocol.ProxyConfig{}, fmt.Errorf("tunnel %q not found", name)
-	}
+	updated, activityID, err := s.store.UpdateTunnelStatesWithActivity(
+		clientID,
+		stored.ID,
+		protocol.ProxyDesiredStateStopped,
+		protocol.ProxyRuntimeStateIdle,
+		"",
+		"stopped",
+		actor,
+	)
 	if err != nil {
-		return protocol.ProxyConfig{}, fmt.Errorf("failed to reload tunnel %q: %w", name, err)
+		return protocol.ProxyConfig{}, 0, err
 	}
-
 	config := storedTunnelToProxyConfig(updated)
 	s.emitTunnelChangedIfStored(clientID, config, "stopped")
-	return config, nil
+	return config, activityID, nil
 }
 
 func (s *Server) notifyClientProxyClose(client *ClientConn, name, reason string) error {

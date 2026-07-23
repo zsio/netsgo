@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -293,6 +294,39 @@ func TestAuthMiddleware_ValidTokenSuccess(t *testing.T) {
 	}
 	if !handlerCalled {
 		t.Errorf("Handler was not called")
+	}
+}
+func TestAuthMiddleware_SessionEnvironmentMismatchActivityIsUnknownActor(t *testing.T) {
+	store, cleanup := setupMockAdminStore(t)
+	defer cleanup()
+	s := New(0)
+	s.auth.adminStore = store
+	s.ensureSharedStoreReferences()
+
+	session := mustCreateSession(t, store, "user-activity", "admin", "admin", "127.0.0.1", "original-agent")
+	tokenString, err := s.GenerateAdminToken(session)
+	if err != nil {
+		t.Fatalf("GenerateAdminToken() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.RemoteAddr = "192.0.2.77:4321"
+	req.Header.Set("Authorization", "Bearer "+tokenString)
+	req.Header.Set("User-Agent", "stolen-agent")
+	w := httptest.NewRecorder()
+	s.RequireAuth(func(http.ResponseWriter, *http.Request) { t.Fatal("mismatched request reached handler") }).ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+	page, err := s.activityStore.Query(ActivityQuery{Limit: 20})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("security activity = %+v, %v", page.Items, err)
+	}
+	item := page.Items[0]
+	if item.Action != "session_environment_mismatch" || item.Actor.Type != "unknown" || item.Actor.ID != "" || item.Actor.Name != "" {
+		t.Fatalf("mismatch activity = %+v", item)
+	}
+	if strings.Contains(string(item.Payload), "admin") || strings.Contains(string(item.Payload), "stolen-agent") || strings.Contains(string(item.Payload), session.ID) {
+		t.Fatalf("security payload leaked identity or UA: %s", item.Payload)
 	}
 }
 

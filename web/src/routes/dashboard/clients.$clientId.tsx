@@ -5,6 +5,7 @@ import { dashboardRoute } from '@/routes/dashboard';
 import { ClientHeader } from '@/components/custom/client/ClientHeader';
 import { ClientInfoCard } from '@/components/custom/client/ClientInfoCard';
 import { TunnelTable } from '@/components/custom/tunnel/TunnelTable';
+import { ClientActivitySummary } from '@/components/custom/activity/ClientActivitySummary';
 import { TrafficChart } from '@/components/custom/chart/TrafficChart';
 import { useClients, useDeleteClient } from '@/hooks/use-clients';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -64,6 +65,7 @@ function ClientDetailPage() {
     >
       <motion.div variants={fadeUp}><ClientHeader client={client} /></motion.div>
       <motion.div variants={fadeUp}><ClientInfoCard client={client} onRequestDelete={setDeleteTarget} /></motion.div>
+      <motion.div variants={fadeUp}><ClientActivitySummary clientId={clientId} /></motion.div>
       <motion.div variants={fadeUp}><TunnelTable client={client} clients={clients ?? []} /></motion.div>
       <motion.div variants={fadeUp}>
         <TrafficChart clientId={clientId} tunnels={client.proxies ?? []} />

@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { QueryClient } from '@tanstack/react-query';
 
-import type { Client, ProxyConfig } from '@/types';
+import type { ActivityItem, Client, ProxyConfig } from '@/types';
 
-import { applyEventForDiagnostics, createEventStreamSnapshotState } from './use-event-stream';
+import { applyEventForDiagnostics, createActivityRecoveryState, createEventStreamSnapshotState } from './use-event-stream';
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -119,6 +119,15 @@ async function waitForRequests(requests: unknown[], count: number) {
 async function flushAsyncWork() {
   await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function activity(id: number): ActivityItem {
+  return {
+    id, occurred_at: '2026-07-23T00:00:00Z', recorded_at: '2026-07-23T00:00:00Z',
+    severity: 'info', category: 'client', action: 'online', source: 'server',
+    actor: { type: 'system' }, payload_version: 1, payload: {},
+    clients: [{ client_id: 'client-1', relation: 'subject' }], tunnels: [],
+  };
 }
 
 describe('use-event-stream diagnostics', () => {
@@ -466,4 +475,47 @@ describe('use-event-stream diagnostics', () => {
       queryClient.clear();
     }
   });
+  test('recovers activity gaps from the durable global cursor', async () => {
+    const queryClient = new QueryClient();
+    const snapshotState = createEventStreamSnapshotState();
+    const activityState = createActivityRecoveryState();
+    const activityKey = ['activity', 'global', null, 50, ['error', 'info', 'warning'], [], null, null] as const;
+    queryClient.setQueryData(activityKey, { pages: [{ items: [], has_more: false, direction: 'before' }], pageParams: [undefined] });
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({ items: [activity(12), activity(11)], next_cursor: 12, has_more: false, direction: 'after' }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      applyEventForDiagnostics(queryClient, () => undefined, snapshotState, 'ready', JSON.stringify({ activity_cursor: 10 }), activityState);
+      applyEventForDiagnostics(queryClient, () => undefined, snapshotState, 'activity_event', JSON.stringify(activity(12)), activityState);
+      await flushAsyncWork();
+      await flushAsyncWork();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toContain('after=10');
+      expect(activityState.lastScannedId).toBe(12);
+      const cached = queryClient.getQueryData<{ pages: { items: ActivityItem[] }[] }>(activityKey);
+      expect(cached?.pages[0].items.map((entry) => entry.id)).toEqual([12, 11]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      activityState.cancelled = true;
+      queryClient.clear();
+    }
+  });
+
+  test('invalid activity payload invalidates cache without advancing cursor', () => {
+    const queryClient = new QueryClient();
+    const snapshotState = createEventStreamSnapshotState();
+    const activityState = createActivityRecoveryState();
+    applyEventForDiagnostics(queryClient, () => undefined, snapshotState, 'ready', JSON.stringify({ activity_cursor: 7 }), activityState);
+    applyEventForDiagnostics(queryClient, () => undefined, snapshotState, 'activity_event', '{"id":"bad"}', activityState);
+    expect(activityState.lastScannedId).toBe(7);
+    expect(activityState.targetId).toBe(7);
+    activityState.cancelled = true;
+    queryClient.clear();
+  });
+
 });

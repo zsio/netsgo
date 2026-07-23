@@ -1,7 +1,6 @@
 package server
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -71,7 +70,7 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📡 New control channel connection: %s [client_ip=%s]", r.RemoteAddr, clientAddr)
 
-	client, err := s.handleAuth(conn, r.RemoteAddr, clientAddr)
+	client, err := s.handleAuth(conn, r, clientAddr)
 	if err != nil {
 		log.Printf("❌ Client authentication failed [%s]: %v", r.RemoteAddr, err)
 		return
@@ -86,12 +85,12 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	defer s.invalidateLogicalSessionIfCurrent(client.ID, client.generation, "control_loop_exit")
-
-	s.controlLoop(client)
+	cause := s.controlLoop(client)
+	s.invalidateLogicalSessionIfCurrentWithCause(client.ID, client.generation, cause)
 }
 
-func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string) (*ClientConn, error) {
+func (s *Server) handleAuth(conn *websocket.Conn, r *http.Request, clientAddr string) (*ClientConn, error) {
+	remoteAddr := r.RemoteAddr
 	ip := clientAddr
 	if ip == "" {
 		ip = remoteIP(remoteAddr)
@@ -105,6 +104,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 			Code:      protocol.AuthCodeRateLimited,
 			Retryable: true,
 		})
+		s.recordAuthFailure(r, "client_auth_rate_limited", "rate_limited")
 		return nil, fmt.Errorf("authentication failed")
 	}
 
@@ -136,11 +136,18 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 		return nil, fmt.Errorf("authentication failed: install_id cannot be empty")
 	}
 
+	// Do not hold the client/tunnel mutation lock while waiting for an
+	// untrusted peer to send its authentication message. The lock is only
+	// needed once authentication can mutate registered-client or session state.
+	s.clientTunnelMutationMu.Lock()
+	defer s.clientTunnelMutationMu.Unlock()
+
 	var newToken string
 	var clientID string
 	var bandwidthSettings protocol.BandwidthSettings
 	var clientTokenID string
 
+	var registrationActivityID int64
 	if s.auth.adminStore != nil {
 		initialized, err := s.auth.adminStore.IsInitializedE()
 		if err != nil {
@@ -169,11 +176,8 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 		if authReq.Token != "" {
 			clientToken, err := s.auth.adminStore.ValidateClientToken(authReq.Token, authReq.InstallID)
 			if err != nil {
-				log.Printf("⚠️ Client token validation failed [%s]: %v", remoteAddr, err)
-				code := protocol.AuthCodeInvalidToken
-				if errors.Is(err, ErrClientTokenRevoked) {
-					code = protocol.AuthCodeRevokedToken
-				}
+				code, reason := clientTokenFailureReason(err)
+				s.recordAuthFailure(r, "client_auth_failed", reason)
 				_ = writeAuthResult(conn, protocol.AuthResponse{
 					Success:    false,
 					Message:    "authentication failed",
@@ -198,6 +202,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 						Code:      protocol.AuthCodeConcurrentSession,
 						Retryable: true,
 					})
+					s.recordAuthFailure(r, "client_auth_failed", "concurrent_session")
 					return nil, fmt.Errorf("authentication failed")
 				}
 			}
@@ -214,6 +219,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 							Code:      protocol.AuthCodeConcurrentSession,
 							Retryable: true,
 						})
+						s.recordAuthFailure(r, "client_auth_failed", "concurrent_session")
 						return nil, fmt.Errorf("authentication failed")
 					}
 				}
@@ -221,11 +227,13 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 
 			exchange, err := s.auth.adminStore.RegisterClientAndExchangeToken(authReq.Key, authReq.InstallID, authReq.Client, ip)
 			if err != nil {
+				code, reason := clientKeyFailureReason(err)
+				s.recordAuthFailure(r, "client_auth_failed", reason)
 				log.Printf("❌ Failed to exchange client key for token [%s]: %v", remoteAddr, err)
 				_ = writeAuthResult(conn, protocol.AuthResponse{
 					Success: false,
 					Message: "authentication failed",
-					Code:    protocol.AuthCodeInvalidKey,
+					Code:    code,
 				})
 				return nil, fmt.Errorf("authentication failed")
 			}
@@ -235,6 +243,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 			newToken = exchange.Token
 			clientTokenID = exchange.TokenRow.ID
 			log.Printf("🔑 Client key exchanged for token successfully [install_id=%s]", authReq.InstallID)
+			registrationActivityID = exchange.ActivityID
 		}
 	}
 
@@ -264,6 +273,9 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 		return nil, fmt.Errorf("invalid persisted bandwidth settings for client %s: %w", clientID, err)
 	}
 	s.clients.Store(clientID, client)
+	if registrationActivityID > 0 {
+		s.publishActivityID(registrationActivityID)
+	}
 
 	authResp := protocol.AuthResponse{
 		Success:   true,
@@ -275,7 +287,7 @@ func (s *Server) handleAuth(conn *websocket.Conn, remoteAddr, clientAddr string)
 	}
 	if err := writeAuthResult(conn, authResp); err != nil {
 		if current, ok := s.clients.Load(clientID); ok && current == client {
-			_ = s.invalidateLogicalSessionIfCurrent(clientID, client.generation, "auth_response_failed")
+			_ = s.invalidateLogicalSessionIfCurrentLocked(clientID, client.generation, normalizeClientDisconnectCause("auth_response_failed"))
 		}
 		return nil, fmt.Errorf("failed to send authentication response: %w", err)
 	}

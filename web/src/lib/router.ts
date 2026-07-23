@@ -4,6 +4,7 @@ import { indexRoute } from '@/routes/index';
 import { dashboardRoute } from '@/routes/dashboard';
 import { dashboardIndexRoute } from '@/routes/dashboard/index';
 import { dashboardClientRoute } from '@/routes/dashboard/clients.$clientId';
+import { dashboardActivityRoute } from '@/routes/dashboard/activity';
 
 import { loginRoute } from '@/routes/login';
 import { adminIndexRoute, adminRoute } from '@/routes/admin';
@@ -22,6 +23,7 @@ const adminRouteTree = adminRoute.addChildren([
 const dashboardRouteTree = dashboardRoute.addChildren([
   dashboardIndexRoute,
   dashboardClientRoute,
+  dashboardActivityRoute,
   adminRouteTree,
 ]);
 

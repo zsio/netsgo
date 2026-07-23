@@ -28,6 +28,7 @@ func (s *Server) initStore() error {
 		return err
 	}
 	s.serverDB = db
+	s.activityStore = newActivityStoreWithDB(path, db, false)
 
 	store, err := newTunnelStoreWithDB(path, db, false)
 	if err != nil {
@@ -47,6 +48,8 @@ func (s *Server) initStore() error {
 	trafficStore := newTrafficStoreWithDB(path, db, false)
 	s.trafficStore = trafficStore
 	store.attachTrafficStore(trafficStore, s.trafficAccumulator)
+	store.activityStore = s.activityStore
+	adminStore.activityStore = s.activityStore
 
 	return nil
 }
@@ -74,6 +77,7 @@ func (s *Server) getStorePath() string {
 }
 
 func (s *Server) Start() error {
+	s.activityBootID = generateUUID()
 	s.startTime = time.Now()
 	s.done = make(chan struct{})
 	s.doneCloseOnce = sync.Once{}
@@ -182,6 +186,8 @@ func (s *Server) Start() error {
 
 	if s.auth.adminStore != nil {
 		go s.tokenCleanupLoop()
+		s.pruneActivityEvents()
+		go s.activityPruneLoop()
 	}
 	go s.serverStatusLoop()
 	go s.trafficRollupLoop()
@@ -189,6 +195,7 @@ func (s *Server) Start() error {
 	go s.trafficRealtimeLoop()
 	go s.unifiedTunnelReconcileLoop()
 	go s.p2pLeaseLoop()
+	go s.p2pProjectionRetryLoop()
 
 	serving = true
 	return s.httpServer.Serve(serveLn)
@@ -295,6 +302,16 @@ func (s *Server) Shutdown(ctx context.Context) (err error) {
 		}
 	}()
 
+	select {
+	case <-s.p2pProjectionStop:
+	default:
+		close(s.p2pProjectionStop)
+	}
+	select {
+	case <-s.p2pProjectionDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	s.closeDone()
 	if s.auth != nil {
 		s.auth.stopRateLimiters()
@@ -359,7 +376,6 @@ func (s *Server) closeServerDB() error {
 func (s *Server) tokenCleanupLoop() {
 	ticker := time.NewTicker(6 * time.Hour)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-s.done:
@@ -370,6 +386,33 @@ func (s *Server) tokenCleanupLoop() {
 					log.Printf("⚠️ Failed to clean expired tokens: %v", err)
 				}
 			}
+		}
+	}
+}
+
+func (s *Server) pruneActivityEvents() {
+	if s.activityStore == nil || s.auth == nil || s.auth.adminStore == nil {
+		return
+	}
+	config, err := s.auth.adminStore.GetServerConfigE()
+	if err != nil {
+		log.Printf("⚠️ Failed to load activity retention policy: %v", err)
+		return
+	}
+	if _, err := s.activityStore.Prune(time.Now(), config.ActivityRetention); err != nil {
+		log.Printf("⚠️ Failed to prune activity events: %v", err)
+	}
+}
+
+func (s *Server) activityPruneLoop() {
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			s.pruneActivityEvents()
 		}
 	}
 }
