@@ -17,6 +17,20 @@ import (
 
 const dataChannelID uint16 = 0
 
+// p2pMuxStreamWindow is the yamux per-stream window for peer-direct sessions.
+// Single-stream yamux throughput is bounded by window/RTT; the default 256 KiB
+// window caps high-RTT WAN peer paths (DERP-relayed or NAT-traversed) at a few
+// hundred KiB/s, far below what the underlying WebRTC path can carry.
+const p2pMuxStreamWindow = 4 * 1024 * 1024
+
+// p2pMuxConfig returns the yamux config for peer-direct sessions: the default
+// config with a larger stream window (see p2pMuxStreamWindow).
+func p2pMuxConfig() *netsgomux.Config {
+	cfg := netsgomux.DefaultConfig()
+	cfg.MaxStreamWindow = p2pMuxStreamWindow
+	return cfg
+}
+
 type SignalHandler func(protocol.P2PSignal)
 
 type Session struct {
@@ -107,11 +121,11 @@ func (s *Session) attach(dc *webrtc.DataChannel) {
 		s.mu.Unlock()
 		if s.role == protocol.P2PRoleOfferer {
 			s.mu.Lock()
-			s.mux, err = netsgomux.NewClientSession(stream, nil)
+			s.mux, err = netsgomux.NewClientSession(stream, p2pMuxConfig())
 			s.mu.Unlock()
 		} else {
 			s.mu.Lock()
-			s.mux, err = netsgomux.NewServerSession(stream, nil)
+			s.mux, err = netsgomux.NewServerSession(stream, p2pMuxConfig())
 			s.mu.Unlock()
 		}
 	}
