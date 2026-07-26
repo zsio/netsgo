@@ -45,6 +45,9 @@ jobs:
       - name: Lint web
         working-directory: web
         run: bun run lint
+      - name: Test web
+        working-directory: web
+        run: bun run test
       - name: Build web assets
         working-directory: web
         run: bun run build

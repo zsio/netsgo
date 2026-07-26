@@ -20,6 +20,7 @@ VITE_DEV_PROXY_TARGET=http://127.0.0.1:9090 bun run dev
 ## 检查与构建
 
 ```bash
+bun run test
 bun run lint
 bun run build
 ```

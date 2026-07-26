@@ -1,4 +1,4 @@
-.PHONY: build build-web build-go build-desktop-sidecar build-desktop build-desktop-macos-local sign-desktop-macos-app package-desktop-macos-local clean docs dev-server dev-client dev-bench dev-web test test-race lint test-tdd-red test-tdd-red-client test-tdd-red-server test-system-e2e test-system-e2e-nginx test-system-e2e-caddy test-system-e2e-capability-loss test-playwright-e2e test-playwright-e2e-smoke test-playwright-e2e-full test-playwright-e2e-cdp test-playwright-e2e-cdp-smoke test-playwright-e2e-cdp-full test-playwright-e2e-cdp-run test-playwright-e2e-cdp-check test-playwright-e2e-run bench-data system-e2e-up system-e2e-logs system-e2e-down system-e2e-clean docker-build-e2e-current docker-build-e2e-capability-loss docker-build-e2e-stable test-baseline-e2e test-compat-e2e test-upgrade-e2e
+.PHONY: build build-web build-go build-desktop-sidecar build-desktop build-desktop-macos-local sign-desktop-macos-app package-desktop-macos-local clean docs dev-server dev-client dev-bench dev-web test test-web test-race lint test-tdd-red test-tdd-red-client test-tdd-red-server test-system-e2e test-system-e2e-nginx test-system-e2e-caddy test-system-e2e-capability-loss test-playwright-e2e test-playwright-e2e-smoke test-playwright-e2e-full test-playwright-e2e-cdp test-playwright-e2e-cdp-smoke test-playwright-e2e-cdp-full test-playwright-e2e-cdp-run test-playwright-e2e-cdp-check test-playwright-e2e-run bench-data system-e2e-up system-e2e-logs system-e2e-down system-e2e-clean docker-build-e2e-current docker-build-e2e-capability-loss docker-build-e2e-stable test-baseline-e2e test-compat-e2e test-upgrade-e2e
 
 # 编译输出目录
 BIN_DIR=bin
@@ -175,6 +175,9 @@ dev-bench:
 
 test:
 	go test ./...
+
+test-web:
+	cd web && bun run test
 
 test-race:
 	go test -race ./...
