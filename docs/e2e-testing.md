@@ -27,7 +27,7 @@ The Go test owns all business actions:
 
 For regular system E2E, shell scripts must not create tunnels or encode scenario logic. Compose services may use scripts only for process bootstrapping, such as waiting for a client key and starting `netsgo client`.
 
-Run the full system E2E matrix. This runs every Go system test named `TestSystem*E2E`, including the main data-path suite, single-target server-expose compatibility suite, and clean-reject suite:
+Run the full current-version system E2E matrix. This runs every Go system test named `TestSystem*E2E` plus the current-only tunnel migration recovery suite:
 
 ```bash
 make test-system-e2e
@@ -55,7 +55,7 @@ System E2E must model real network boundaries:
 
 - `server` and clients share the `control` network.
 - target backends live on a target-side backend network.
-- only `target-client` can reach target backends directly.
+- only target-side clients (`target-client` and the migration-only `target-client-next`) can reach target backends directly.
 - `ingress-client` exposes client-side ingress ports to the host only when the scenario needs an external caller.
 - `proxy` is an overlay service, not a business-test controller.
 
@@ -86,6 +86,8 @@ This keeps data-path assertions meaningful. For example, a client-to-client SOCK
 - target-client restart recovery for SOCKS5 c2c.
 - server restart recovery with persisted tunnel restoration and data-path revalidation.
 
+`TestCurrentSystemTunnelMigrationE2E` covers a running client-to-client TCP tunnel migrating from target A to an offline, previously registered target B. It verifies stable tunnel identity, revision and ownership changes, recovery when B returns, rejection of stale ownership when A reconnects, a single ingress listener, and persistence across a server restart. The current-only name intentionally keeps this scenario out of stable-baseline and mixed-version suites whose older servers do not expose the migration API.
+
 Add new runtime scenarios here when the behavior depends on real process, network, reverse proxy, restart, or Docker topology.
 
 ## Cross-Version E2E
@@ -101,7 +103,7 @@ make test-compat-e2e COMPAT_BASELINE=v0.1.8
 make test-upgrade-e2e COMPAT_BASELINE=v0.1.8
 ```
 
-`test-baseline-e2e` is the first compatibility gate. It uses only the selected stable image for server, target-client, ingress-client, and NetsGo-based helper services such as the slow TCP and UDP helper containers. It intentionally does not build or reference the current image, even if `E2E_CURRENT_IMAGE` exists in the caller environment. Default `BASELINE_MODE=full` runs `TestSystem*E2E` against the stable-only stack; `BASELINE_MODE=smoke` only verifies stack startup, admin login, and client connectivity. Set `BASELINE_REBUILD_IMAGE=true` to rebuild the stable image even if a local tag already exists.
+`test-baseline-e2e` is the first compatibility gate. It uses only the selected stable image for server, target-client, ingress-client, and NetsGo-based helper services such as the slow TCP and UDP helper containers. It intentionally does not build or reference the current image, even if `E2E_CURRENT_IMAGE` exists in the caller environment. Default `BASELINE_MODE=full` runs `TestSystem*E2E` against the stable-only stack and excludes the current-only migration suite; `BASELINE_MODE=smoke` only verifies stack startup, admin login, and client connectivity. Set `BASELINE_REBUILD_IMAGE=true` to rebuild the stable image even if a local tag already exists.
 
 The `v0.1.8` stable-only baseline has been verified with:
 

@@ -224,7 +224,7 @@ test-system-e2e-run:
 	NETSGO_ADMIN_PASS="$${admin_pass}" \
 	NETSGO_E2E_COMPOSE_PROJECT=$(E2E_PROJECT) \
 	NETSGO_E2E_COMPOSE_FILES=$(E2E_BASE_COMPOSE),$(E2E_PROXY_COMPOSE) \
-	go test -tags=e2e ./test/e2e -run 'TestSystem.*E2E' -count=1 -timeout 20m
+	go test -tags=e2e ./test/e2e -run '^(TestSystem.*E2E|TestCurrentSystemTunnelMigrationE2E)$$' -count=1 -timeout 20m
 
 test-playwright-e2e: test-playwright-e2e-smoke
 

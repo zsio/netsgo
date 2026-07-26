@@ -23,23 +23,24 @@ import (
 )
 
 const (
-	defaultAdminUser       = "admin"
-	defaultManagementHost  = "panel.system.local"
-	defaultTunnelHost      = "app.system.local"
-	defaultTargetHostname  = "system-target-client"
-	defaultIngressHostname = "system-ingress-client"
-	backendHost            = "tcp-backend"
-	backendPort            = 18083
-	backendResponse        = "system tcp backend response"
-	backendAltHost         = "tcp-backend-alt"
-	backendAltPort         = 18085
-	backendAltResponse     = "system tcp alt response"
-	backendSlowHost        = "tcp-backend-slow"
-	backendSlowPort        = 18086
-	backendEchoHost        = "tcp-backend-echo"
-	backendEchoPort        = 18087
-	udpBackendHost         = "udp-backend"
-	udpBackendPort         = 18084
+	defaultAdminUser          = "admin"
+	defaultManagementHost     = "panel.system.local"
+	defaultTunnelHost         = "app.system.local"
+	defaultTargetHostname     = "system-target-client"
+	defaultNextTargetHostname = "system-target-client-next"
+	defaultIngressHostname    = "system-ingress-client"
+	backendHost               = "tcp-backend"
+	backendPort               = 18083
+	backendResponse           = "system tcp backend response"
+	backendAltHost            = "tcp-backend-alt"
+	backendAltPort            = 18085
+	backendAltResponse        = "system tcp alt response"
+	backendSlowHost           = "tcp-backend-slow"
+	backendSlowPort           = 18086
+	backendEchoHost           = "tcp-backend-echo"
+	backendEchoPort           = 18087
+	udpBackendHost            = "udp-backend"
+	udpBackendPort            = 18084
 )
 
 type systemHarness struct {
@@ -55,6 +56,7 @@ type systemHarness struct {
 	adminUser               string
 	adminPass               string
 	targetHostname          string
+	nextTargetHostname      string
 	ingressHostname         string
 	serverTCPPort           int
 	serverUDPPort           int
@@ -86,8 +88,13 @@ type apiKeyResponse struct {
 }
 
 type tunnelResponse struct {
-	ID           string          `json:"id"`
-	Name         string          `json:"name"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Revision      int64  `json:"revision"`
+	OwnerClientID string `json:"owner_client_id"`
+	Target        struct {
+		ClientID string `json:"client_id"`
+	} `json:"target"`
 	RuntimeState string          `json:"runtime_state"`
 	Issues       json.RawMessage `json:"issues,omitempty"`
 }
@@ -269,6 +276,83 @@ func TestSystemE2E(t *testing.T) {
 	})
 }
 
+func TestCurrentSystemTunnelMigrationE2E(t *testing.T) {
+	h := newSystemHarness(t)
+	h.startInfrastructure(t)
+	h.adminToken = h.waitForAdminToken(t, 90*time.Second)
+	clientKey := h.createAPIKey(t)
+	h.startClients(t, clientKey)
+	h.targetClientID, h.ingressClientID = h.waitForClientPair(t, 90*time.Second)
+	oldTargetID := h.targetClientID
+	ingressID := h.ingressClientID
+
+	h.startNextTargetClient(t, clientKey)
+	nextTargetID := h.waitForClientOnline(t, h.nextTargetHostname, 90*time.Second)
+
+	tunnel := h.createTCPClientToClientTunnel(t, "system-c2c-target-migration", h.c2cTCPPort, backendHost, backendPort)
+	h.waitTunnelState(t, tunnel.ID, "active", 90*time.Second)
+	h.expectTunnelNoIssues(t, tunnel.ID)
+	h.expectIngressListenerCount(t, "tcp", h.c2cTCPPort, 1)
+	h.expectTCPHTTPContains(t, h.c2cTCPPort, backendHost, backendResponse)
+
+	// Keep the second target registered but offline when ownership changes.
+	h.compose(t, h.composeEnv, "stop", "target-client-next")
+	h.waitForClientOffline(t, nextTargetID, 90*time.Second)
+	migrated := h.migrateTunnelTarget(t, tunnel, nextTargetID)
+	wantRevision := tunnel.Revision + 1
+	assertTunnelTarget(t, migrated, tunnel.ID, nextTargetID, wantRevision)
+	h.waitTunnelState(t, tunnel.ID, "offline", 90*time.Second)
+
+	h.compose(t, h.composeEnv, "start", "target-client-next")
+	if got := h.waitForClientOnline(t, h.nextTargetHostname, 90*time.Second); got != nextTargetID {
+		t.Fatalf("next target client id changed after start: got %q want %q", got, nextTargetID)
+	}
+	h.waitTunnelState(t, tunnel.ID, "active", 120*time.Second)
+	h.expectTunnelNoIssues(t, tunnel.ID)
+	assertTunnelTarget(t, h.getTunnel(t, tunnel.ID), tunnel.ID, nextTargetID, wantRevision)
+	h.expectIngressListenerCount(t, "tcp", h.c2cTCPPort, 1)
+	h.expectTCPHTTPContains(t, h.c2cTCPPort, backendHost, backendResponse)
+
+	// Reconnecting the former owner must not provision the migrated revision.
+	h.compose(t, h.composeEnv, "restart", "target-client")
+	if got := h.waitForClientOnline(t, h.targetHostname, 90*time.Second); got != oldTargetID {
+		t.Fatalf("old target client id changed after restart: got %q want %q", got, oldTargetID)
+	}
+	h.waitTunnelState(t, tunnel.ID, "active", 90*time.Second)
+	assertTunnelTarget(t, h.getTunnel(t, tunnel.ID), tunnel.ID, nextTargetID, wantRevision)
+	h.expectIngressListenerCount(t, "tcp", h.c2cTCPPort, 1)
+	h.expectTCPHTTPContains(t, h.c2cTCPPort, backendHost, backendResponse)
+
+	// With the actual owner offline, the old online target must not keep the tunnel active.
+	h.compose(t, h.composeEnv, "stop", "target-client-next")
+	h.waitForClientOffline(t, nextTargetID, 90*time.Second)
+	h.waitTunnelState(t, tunnel.ID, "offline", 120*time.Second)
+	assertTunnelTarget(t, h.getTunnel(t, tunnel.ID), tunnel.ID, nextTargetID, wantRevision)
+
+	h.compose(t, h.composeEnv, "start", "target-client-next")
+	if got := h.waitForClientOnline(t, h.nextTargetHostname, 90*time.Second); got != nextTargetID {
+		t.Fatalf("next target client id changed after recovery: got %q want %q", got, nextTargetID)
+	}
+	h.waitTunnelState(t, tunnel.ID, "active", 120*time.Second)
+	h.expectTunnelNoIssues(t, tunnel.ID)
+	h.expectTCPHTTPContains(t, h.c2cTCPPort, backendHost, backendResponse)
+
+	h.compose(t, h.composeEnv, "restart", "server")
+	h.adminToken = h.waitForAdminToken(t, 90*time.Second)
+	restartedTargetID, restartedIngressID := h.waitForClientPair(t, 120*time.Second)
+	if restartedTargetID != oldTargetID || restartedIngressID != ingressID {
+		t.Fatalf("client ids changed after server restart: target=%q/%q ingress=%q/%q", restartedTargetID, oldTargetID, restartedIngressID, ingressID)
+	}
+	if got := h.waitForClientOnline(t, h.nextTargetHostname, 120*time.Second); got != nextTargetID {
+		t.Fatalf("next target client id changed after server restart: got %q want %q", got, nextTargetID)
+	}
+	h.waitTunnelState(t, tunnel.ID, "active", 120*time.Second)
+	h.expectTunnelNoIssues(t, tunnel.ID)
+	assertTunnelTarget(t, h.getTunnel(t, tunnel.ID), tunnel.ID, nextTargetID, wantRevision)
+	h.expectIngressListenerCount(t, "tcp", h.c2cTCPPort, 1)
+	h.expectTCPHTTPContains(t, h.c2cTCPPort, backendHost, backendResponse)
+}
+
 func TestSystemSingleTargetClientE2E(t *testing.T) {
 	h := newSystemHarness(t)
 	h.startInfrastructure(t)
@@ -439,6 +523,7 @@ func newSystemHarness(t *testing.T) *systemHarness {
 		adminUser:               getenvDefault("NETSGO_ADMIN_USER", defaultAdminUser),
 		adminPass:               adminPass,
 		targetHostname:          getenvDefault("NETSGO_TARGET_CLIENT_HOSTNAME", defaultTargetHostname),
+		nextTargetHostname:      getenvDefault("NETSGO_NEXT_TARGET_CLIENT_HOSTNAME", defaultNextTargetHostname),
 		ingressHostname:         getenvDefault("NETSGO_INGRESS_CLIENT_HOSTNAME", defaultIngressHostname),
 		serverTCPPort:           mustAtoi(t, getenvDefault("SERVER_TCP_PORT", "19093")),
 		serverUDPPort:           mustAtoi(t, getenvDefault("SERVER_UDP_PORT", "19094")),
@@ -463,6 +548,7 @@ func newSystemHarness(t *testing.T) *systemHarness {
 		"NETSGO_ADMIN_PASS="+h.adminPass,
 		"NETSGO_SERVER_ADDR=http://"+h.managementHost,
 		"NETSGO_TARGET_CLIENT_HOSTNAME="+h.targetHostname,
+		"NETSGO_NEXT_TARGET_CLIENT_HOSTNAME="+h.nextTargetHostname,
 		"NETSGO_INGRESS_CLIENT_HOSTNAME="+h.ingressHostname,
 	)
 	t.Cleanup(func() {
@@ -503,6 +589,13 @@ func (h *systemHarness) startTargetClient(t *testing.T, clientKey string) {
 	env := append([]string{}, h.composeEnv...)
 	env = append(env, "NETSGO_CLIENT_KEY="+clientKey)
 	h.compose(t, env, "up", "-d", "--remove-orphans", "target-client")
+}
+
+func (h *systemHarness) startNextTargetClient(t *testing.T, clientKey string) {
+	t.Helper()
+	env := append([]string{}, h.composeEnv...)
+	env = append(env, "NETSGO_CLIENT_KEY="+clientKey)
+	h.compose(t, env, "up", "-d", "--remove-orphans", "target-client-next")
 }
 
 func (h *systemHarness) compose(t *testing.T, env []string, args ...string) {
@@ -674,6 +767,22 @@ func (h *systemHarness) waitForClientOnline(t *testing.T, hostname string, timeo
 	return clientID
 }
 
+func (h *systemHarness) waitForClientOffline(t *testing.T, clientID string, timeout time.Duration) {
+	t.Helper()
+	h.poll(t, timeout, func() (bool, string) {
+		for _, client := range h.listClients(t) {
+			if client.ID != clientID {
+				continue
+			}
+			if client.Online {
+				return false, fmt.Sprintf("client %q is still online", clientID)
+			}
+			return true, ""
+		}
+		return false, fmt.Sprintf("client %q is not registered", clientID)
+	})
+}
+
 func (h *systemHarness) listClients(t *testing.T) []apiClient {
 	t.Helper()
 	resp, err := h.apiRequest(http.MethodGet, "/api/clients", h.adminToken, nil)
@@ -711,6 +820,61 @@ func (h *systemHarness) createTunnel(t *testing.T, body string) tunnelResponse {
 		t.Fatalf("create tunnel response missing id: %+v", tunnel)
 	}
 	return tunnel
+}
+
+func (h *systemHarness) getTunnel(t *testing.T, id string) tunnelResponse {
+	t.Helper()
+	resp, err := h.apiRequest(http.MethodGet, "/api/tunnels/"+id, h.adminToken, nil)
+	if err != nil {
+		t.Fatalf("get tunnel %s: %v", id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(resp.Body)
+		t.Fatalf("get tunnel %s: want 200, got %d body=%s", id, resp.StatusCode, payload)
+	}
+	var tunnel tunnelResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tunnel); err != nil {
+		t.Fatalf("decode tunnel %s: %v", id, err)
+	}
+	return tunnel
+}
+
+func (h *systemHarness) migrateTunnelTarget(t *testing.T, tunnel tunnelResponse, targetClientID string) tunnelResponse {
+	t.Helper()
+	if tunnel.Revision <= 0 {
+		t.Fatalf("tunnel %s has invalid revision %d", tunnel.ID, tunnel.Revision)
+	}
+	body := []byte(fmt.Sprintf(`{"expected_revision":%d,"target_client_id":%q}`, tunnel.Revision, targetClientID))
+	resp, err := h.apiRequest(http.MethodPost, "/api/tunnels/"+tunnel.ID+"/migrate", h.adminToken, body)
+	if err != nil {
+		t.Fatalf("migrate tunnel %s: %v", tunnel.ID, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(resp.Body)
+		t.Fatalf("migrate tunnel %s: want 200, got %d body=%s", tunnel.ID, resp.StatusCode, payload)
+	}
+	var out struct {
+		Tunnel tunnelResponse `json:"tunnel"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode migrated tunnel %s: %v", tunnel.ID, err)
+	}
+	return out.Tunnel
+}
+
+func assertTunnelTarget(t *testing.T, tunnel tunnelResponse, id, targetClientID string, revision int64) {
+	t.Helper()
+	if tunnel.ID != id {
+		t.Fatalf("tunnel id changed: got %q want %q", tunnel.ID, id)
+	}
+	if tunnel.Revision != revision {
+		t.Fatalf("tunnel %s revision: got %d want %d", id, tunnel.Revision, revision)
+	}
+	if tunnel.OwnerClientID != targetClientID || tunnel.Target.ClientID != targetClientID {
+		t.Fatalf("tunnel %s owner/target: owner=%q target=%q want %q", id, tunnel.OwnerClientID, tunnel.Target.ClientID, targetClientID)
+	}
 }
 
 func (h *systemHarness) expectTunnelCreateRejected(t *testing.T, body string, wantStatus int, wantCode, wantField string) {
