@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "project": "netsgo",
+  "channels": {
+    "beta": {
+      "latest": "v0.1.15-beta.1",
+      "release_urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/git/raw/release-index/updates/index-v1/releases/v0.1.15-beta.1.json"
+        },
+        {
+          "provider": "github",
+          "url": "https://raw.githubusercontent.com/zsio/netsgo/release-index/updates/index-v1/releases/v0.1.15-beta.1.json"
+        }
+      ]
+    },
+    "stable": {
+      "latest": "v0.1.14",
+      "release_urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/git/raw/release-index/updates/index-v1/releases/v0.1.14.json"
+        },
+        {
+          "provider": "github",
+          "url": "https://raw.githubusercontent.com/zsio/netsgo/release-index/updates/index-v1/releases/v0.1.14.json"
+        }
+      ]
+    }
+  },
+  "generated_at": "2026-07-31T09:35:43.768Z"
+}
