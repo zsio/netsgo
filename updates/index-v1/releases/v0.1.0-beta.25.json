@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "project": "netsgo",
+  "version": "v0.1.0-beta.25",
+  "prerelease": true,
+  "generated_at": "2026-06-02T02:37:33.148Z",
+  "checksum_asset": {
+    "name": "checksums.txt",
+    "urls": [
+      {
+        "provider": "cnb",
+        "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/checksums.txt",
+        "requires_auth": false
+      },
+      {
+        "provider": "github",
+        "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/checksums.txt",
+        "requires_auth": false
+      }
+    ]
+  },
+  "signature_assets": {
+    "ed25519": {
+      "name": "checksums.txt.sig",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/checksums.txt.sig",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/checksums.txt.sig",
+          "requires_auth": false
+        }
+      ]
+    },
+    "sshsig": {
+      "name": "checksums.txt.sshsig",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/checksums.txt.sshsig",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/checksums.txt.sshsig",
+          "requires_auth": false
+        }
+      ]
+    }
+  },
+  "assets": [
+    {
+      "name": "netsgo_0.1.0-beta.25_linux_amd64.tar.gz",
+      "os": "linux",
+      "arch": "amd64",
+      "size": 6919491,
+      "sha256": "b28ec40552d24fd767c393a9b6db4c397692401b74b2ea87cc474ea170bea07a",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/netsgo_0.1.0-beta.25_linux_amd64.tar.gz",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/netsgo_0.1.0-beta.25_linux_amd64.tar.gz",
+          "requires_auth": false
+        }
+      ]
+    },
+    {
+      "name": "netsgo_0.1.0-beta.25_linux_arm64.tar.gz",
+      "os": "linux",
+      "arch": "arm64",
+      "size": 6440880,
+      "sha256": "4219738cf7e8c549c1871e67debebbaed125fec718ae45121457ae14a0409625",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/netsgo_0.1.0-beta.25_linux_arm64.tar.gz",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/netsgo_0.1.0-beta.25_linux_arm64.tar.gz",
+          "requires_auth": false
+        }
+      ]
+    },
+    {
+      "name": "netsgo_0.1.0-beta.25_linux_armv7.tar.gz",
+      "os": "linux",
+      "arch": "armv7",
+      "size": 6618098,
+      "sha256": "530e66ecb7e72f08bb5aedad884dcdae1fc2331a07857d4478d644d0a4c40787",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/netsgo_0.1.0-beta.25_linux_armv7.tar.gz",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/netsgo_0.1.0-beta.25_linux_armv7.tar.gz",
+          "requires_auth": false
+        }
+      ]
+    },
+    {
+      "name": "NetsGo_0.1.0-beta.25_macos_arm64.dmg",
+      "os": "macos",
+      "arch": "arm64",
+      "size": 10060732,
+      "sha256": "70690da2908ad955b45e5dc21c56f447d884cb35c38cc7d700652ac8535b0b95",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/NetsGo_0.1.0-beta.25_macos_arm64.dmg",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/NetsGo_0.1.0-beta.25_macos_arm64.dmg",
+          "requires_auth": false
+        }
+      ]
+    },
+    {
+      "name": "NetsGo_0.1.0-beta.25_macos_x64.app.tar.gz",
+      "os": "macos",
+      "arch": "x64",
+      "size": 10497391,
+      "sha256": "2c76e79b8d2140e3cb46fc9087a294c59583cd894c750e641f5b80f0473a1d2e",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/NetsGo_0.1.0-beta.25_macos_x64.app.tar.gz",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/NetsGo_0.1.0-beta.25_macos_x64.app.tar.gz",
+          "requires_auth": false
+        }
+      ]
+    },
+    {
+      "name": "NetsGo_0.1.0-beta.25_windows_x64-setup.exe",
+      "os": "windows",
+      "arch": "x64",
+      "size": 7573108,
+      "sha256": "f2f779173015ffad379aed4f8cbbe5cca73a53f3dfbc7fa99091f1a0b021c11f",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/NetsGo_0.1.0-beta.25_windows_x64-setup.exe",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/NetsGo_0.1.0-beta.25_windows_x64-setup.exe",
+          "requires_auth": false
+        }
+      ]
+    },
+    {
+      "name": "NetsGo_0.1.0-beta.25_windows_x64_en-US.msi",
+      "os": "windows",
+      "arch": "x64",
+      "size": 10387456,
+      "sha256": "da1077465d6514481918e03f977432c2058913df979d8676693f55327abd7c95",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.0-beta.25/NetsGo_0.1.0-beta.25_windows_x64_en-US.msi",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.0-beta.25/NetsGo_0.1.0-beta.25_windows_x64_en-US.msi",
+          "requires_auth": false
+        }
+      ]
+    }
+  ]
+}

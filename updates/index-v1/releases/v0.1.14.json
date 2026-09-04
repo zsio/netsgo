@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "project": "netsgo",
+  "version": "v0.1.14",
+  "prerelease": false,
+  "generated_at": "2026-07-22T11:20:52.393Z",
+  "checksum_asset": {
+    "name": "checksums.txt",
+    "urls": [
+      {
+        "provider": "cnb",
+        "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.14/checksums.txt",
+        "requires_auth": false
+      },
+      {
+        "provider": "github",
+        "url": "https://github.com/zsio/netsgo/releases/download/v0.1.14/checksums.txt",
+        "requires_auth": false
+      }
+    ]
+  },
+  "signature_assets": {
+    "ed25519": {
+      "name": "checksums.txt.sig",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.14/checksums.txt.sig",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.14/checksums.txt.sig",
+          "requires_auth": false
+        }
+      ]
+    },
+    "sshsig": {
+      "name": "checksums.txt.sshsig",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.14/checksums.txt.sshsig",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.14/checksums.txt.sshsig",
+          "requires_auth": false
+        }
+      ]
+    }
+  },
+  "assets": [
+    {
+      "name": "netsgo_0.1.14_linux_amd64.tar.gz",
+      "os": "linux",
+      "arch": "amd64",
+      "size": 9238012,
+      "sha256": "70228e4f4b2dab5b03234a5a9854085d91bc3c8f0bbaaf76d08b0cdb328ff53c",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.14/netsgo_0.1.14_linux_amd64.tar.gz",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.14/netsgo_0.1.14_linux_amd64.tar.gz",
+          "requires_auth": false
+        }
+      ]
+    },
+    {
+      "name": "netsgo_0.1.14_linux_arm64.tar.gz",
+      "os": "linux",
+      "arch": "arm64",
+      "size": 8559816,
+      "sha256": "f57afe6929cc3977fb955ccf93c7f3a380d96b7729662e77653e4206c3d4fab5",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.14/netsgo_0.1.14_linux_arm64.tar.gz",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.14/netsgo_0.1.14_linux_arm64.tar.gz",
+          "requires_auth": false
+        }
+      ]
+    },
+    {
+      "name": "netsgo_0.1.14_linux_armv7.tar.gz",
+      "os": "linux",
+      "arch": "armv7",
+      "size": 8779775,
+      "sha256": "2c8766dd2eb92d6940bc28330f44a916c25be67309709a63081c0aa7cf137cda",
+      "urls": [
+        {
+          "provider": "cnb",
+          "url": "https://cnb.cool/zsio/netsgo/-/releases/download/v0.1.14/netsgo_0.1.14_linux_armv7.tar.gz",
+          "requires_auth": false
+        },
+        {
+          "provider": "github",
+          "url": "https://github.com/zsio/netsgo/releases/download/v0.1.14/netsgo_0.1.14_linux_armv7.tar.gz",
+          "requires_auth": false
+        }
+      ]
+    }
+  ]
+}
