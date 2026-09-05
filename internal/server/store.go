@@ -1664,6 +1664,12 @@ func validateUnifiedTunnelSpec(t StoredTunnel) error {
 	if !json.Valid(t.Target.Config) {
 		return fmt.Errorf("invalid target config JSON")
 	}
+	if t.Ingress.Type == TunnelIngressTypeHTTPHost {
+		domain := tunnelIngressDomain(t)
+		if strings.Contains(domain, "*") {
+			return validateHTTPDomain(domain)
+		}
+	}
 	return nil
 }
 
@@ -1789,6 +1795,16 @@ func replaceTunnelResourceLocksTx(tx *sql.Tx, tunnel StoredTunnel) error {
 }
 
 func checkTunnelIngressResourceConflictTx(tx *sql.Tx, tunnel StoredTunnel) error {
+	if tunnel.Ingress.Type == TunnelIngressTypeHTTPHost {
+		_, conflict, err := findHTTPIngressConflict(tx, tunnel, tunnel.ID)
+		if err != nil {
+			return err
+		}
+		if conflict {
+			return httpDomainResourceConflictError()
+		}
+		return nil
+	}
 	keys := tunnelIngressConflictKeys(tunnel)
 	patterns := tunnelIngressConflictPatterns(tunnel)
 	if len(keys) == 0 && len(patterns) == 0 {
@@ -1821,6 +1837,11 @@ func checkTunnelIngressResourceConflictTx(tx *sql.Tx, tunnel StoredTunnel) error
 }
 
 func (s *TunnelStore) findIngressResourceConflict(candidate StoredTunnel, excludeID string) (StoredTunnel, bool, error) {
+	if candidate.Ingress.Type == TunnelIngressTypeHTTPHost {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return findHTTPIngressConflict(s.db, candidate, excludeID)
+	}
 	keys := tunnelIngressConflictKeys(candidate)
 	patterns := tunnelIngressConflictPatterns(candidate)
 	if len(keys) == 0 && len(patterns) == 0 {
@@ -1958,7 +1979,7 @@ func tunnelIngressResourceLock(tunnel StoredTunnel) (key, kind, clientID string)
 		}
 		return "ingress:" + locationID + ":udp:" + tunnelIngressBindIP(tunnel) + ":" + strconv.Itoa(port), kind, tunnel.Ingress.ClientID
 	case TunnelIngressTypeHTTPHost:
-		domain := strings.ToLower(tunnelIngressDomain(tunnel))
+		domain := canonicalHTTPDomain(tunnelIngressDomain(tunnel))
 		if domain == "" {
 			return "", "", ""
 		}

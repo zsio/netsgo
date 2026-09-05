@@ -135,7 +135,7 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 	}
 
 	if req.Type == protocol.ProxyTypeHTTP {
-		if err := validateDomain(req.Domain); err != nil {
+		if err := validateHTTPDomain(req.Domain); err != nil {
 			return newProxyRequestValidationError(err, protocol.TunnelMutationFieldDomain, protocol.TunnelMutationErrorCodeDomainInvalid, http.StatusBadRequest)
 		}
 		if err := checkDomainConflict(req.Domain, excludeName, excludeClientID, s); err != nil {

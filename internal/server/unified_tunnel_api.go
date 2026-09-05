@@ -823,9 +823,10 @@ func decodeListenEndpointConfigWithOptions(endpoint endpointSpecAPI, topology st
 			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(fmt.Errorf("invalid http_host config: %w", err), "ingress.config", "invalid_endpoint_config", http.StatusBadRequest)
 		}
 		cfg.Domain = strings.TrimSpace(cfg.Domain)
-		if err := validateDomain(cfg.Domain); err != nil {
+		if err := validateHTTPDomain(cfg.Domain); err != nil {
 			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(err, protocol.TunnelMutationFieldDomain, protocol.TunnelMutationErrorCodeDomainInvalid, http.StatusBadRequest)
 		}
+		cfg.Domain = canonicalHTTPDomain(cfg.Domain)
 		auth, err := normalizeHTTPAuthConfig(cfg.Auth)
 		if err != nil {
 			return ingressEndpointConfigAPI{}, newProxyRequestValidationError(err, "ingress.config.auth", "invalid_endpoint_config", http.StatusBadRequest)
@@ -1209,7 +1210,7 @@ func (s *Server) storedTunnelFromUnifiedRequestForUser(ownerUserID string, req t
 	if err := s.validateUnifiedClientsAndCapabilitiesForUser(ownerUserID, req); err != nil {
 		return StoredTunnel{}, err
 	}
-	if err := s.validateUnifiedIngressResourceAvailable(req, ingressConfig, existingID); err != nil {
+	if err := s.validateUnifiedIngressResourceAvailable(ownerUserID, req, ingressConfig, existingID); err != nil {
 		return StoredTunnel{}, err
 	}
 	if err := s.preflightClientIngressForUser(ownerUserID, req, ingressConfig, existingID); err != nil {
@@ -1380,7 +1381,7 @@ func (s *Server) validateUnifiedClientsAndCapabilitiesForUser(ownerUserID string
 	return nil
 }
 
-func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequestAPI, ingressConfig ingressEndpointConfigAPI, excludeID string) error {
+func (s *Server) validateUnifiedIngressResourceAvailable(ownerUserID string, req tunnelCreateRequestAPI, ingressConfig ingressEndpointConfigAPI, excludeID string) error {
 	if s.store == nil {
 		return nil
 	}
@@ -1402,11 +1403,22 @@ func (s *Server) validateUnifiedIngressResourceAvailable(req tunnelCreateRequest
 	}
 
 	candidate := ingressResourceCandidateFromUnifiedRequest(req, ingressConfig, excludeID)
+	candidate.OwnerUserID = ownerUserID
+	if candidate.OwnerUserID == "" {
+		if client, ok := s.loadLiveClient(req.Target.ClientID); ok {
+			candidate.OwnerUserID = client.OwnerUserID
+		} else if client, ok := s.registeredClientInfo(req.Target.ClientID); ok {
+			candidate.OwnerUserID = client.OwnerUserID
+		}
+	}
 	conflict, ok, err := s.store.findIngressResourceConflict(candidate, excludeID)
 	if err != nil {
 		return fmt.Errorf("failed to check ingress resource conflicts: %w", err)
 	}
 	if ok {
+		if req.Ingress.Type == tunnelIngressTypeHTTPHost {
+			return httpDomainResourceConflictError()
+		}
 		return newProxyRequestValidationError(fmt.Errorf("ingress resource conflicts with tunnel %q", conflict.Name), ingressResourceConflictField(req.Ingress.Type), protocol.TunnelMutationErrorCodeIngressResourceConflict, http.StatusConflict)
 	}
 

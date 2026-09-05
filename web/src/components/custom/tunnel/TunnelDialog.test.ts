@@ -46,6 +46,28 @@ describe('ClientToClientTopologyButton', () => {
 });
 
 describe('getInitialTunnelFormState', () => {
+  test.each(['*.x.com', '*.a.b.com', '*.*.x.com', '*.*.*.x.com'])(
+    '编辑时从入口配置保留泛域名 %s',
+    (domain) => {
+      const form = getInitialTunnelFormState({
+        mode: 'edit',
+        tunnel: {
+          id: 'wildcard', name: 'wildcard', clientId: 'client-1', client_id: 'client-1',
+          type: 'http', local_ip: '127.0.0.1', local_port: 3000, remote_port: 0,
+          domain: 'stale.example.com', ingress_bps: 0, egress_bps: 0,
+          created_at: '2026-09-05T00:00:00Z', desired_state: 'running', runtime_state: 'offline',
+          capabilities: { can_resume: false, can_stop: true, can_edit: true, can_delete: true, can_migrate: true },
+          ingress: {
+            location: 'server', type: 'http_host',
+            config: { domain, allowed_source_cidrs: ['0.0.0.0/0', '::/0'] },
+          },
+        },
+      });
+      expect(form.domain).toBe(domain);
+      expect(form.type).toBe('http');
+    },
+  );
+
   test('创建隧道时入口监听地址默认使用通配地址', () => {
     const form = getInitialTunnelFormState({
       mode: 'create',

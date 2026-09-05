@@ -678,7 +678,7 @@ func TestDispatch_HTTPTunnelHTTPBasicAuth(t *testing.T) {
 	}
 }
 
-func TestDispatch_HTTPTunnel_PersistedInactiveStatusesDoNotRegisterHost(t *testing.T) {
+func TestDispatch_HTTPTunnel_PersistedInactiveStatusesReserveHost(t *testing.T) {
 	testCases := []struct {
 		name   string
 		status string
@@ -705,8 +705,8 @@ func TestDispatch_HTTPTunnel_PersistedInactiveStatusesDoNotRegisterHost(t *testi
 
 			s.StartHTTPOnly().ServeHTTP(w, req)
 
-			if w.Code != http.StatusNotFound {
-				t.Fatalf("inactive HTTP tunnel should not register host: want 404, got %d", w.Code)
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("inactive HTTP tunnel should reserve its host: want 503, got %d", w.Code)
 			}
 		})
 	}

@@ -625,7 +625,7 @@ export const zhCN = {
     targetHintServerExpose: "映射到该 Client 本机的服务地址与端口。",
     targetHintClientToClient: "入口 Client 将连接到的目标服务地址与端口。",
     domain: "业务域名",
-    httpDomainHelp: "HTTP 隧道按域名分流，不再使用公网端口作为用户输入。",
+    httpDomainHelp: "支持单域名和泛域名，如 *.example.com、*.*.example.com。开头最多三个 *，每个仅匹配一级子域名；不含根域名。单域名优先，同一用户的泛域名以固定后缀更长者优先。",
     bindAddress: "入口监听地址",
     bindPort: "入口监听端口",
     publicPort: "公网端口",

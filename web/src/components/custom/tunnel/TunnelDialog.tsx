@@ -950,7 +950,7 @@ function TunnelDialogForm({
               <label className="text-sm font-medium">{t('tunnels.domain')}</label>
               <Input
                 aria-label={t('tunnels.domain')}
-                placeholder="e.g. app.example.com"
+                placeholder="app.example.com / *.example.com"
                 value={domain}
                 onChange={(e) => {
                   clearMutationFeedback();
