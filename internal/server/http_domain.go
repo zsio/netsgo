@@ -45,14 +45,25 @@ func canonicalHTTPRouteHost(host string) string {
 		return ""
 	}
 	if name, port, err := net.SplitHostPort(host); err == nil {
+		if strings.HasPrefix(host, "[") && net.ParseIP(name) == nil {
+			return ""
+		}
+		for _, digit := range port {
+			if digit < '0' || digit > '9' {
+				return ""
+			}
+		}
 		n, err := strconv.Atoi(port)
 		if err != nil || n < 1 || n > 65535 {
 			return ""
 		}
 		host = name
-	} else if strings.Contains(host, ":") {
+	} else if strings.ContainsAny(host, ":[]") {
 		// Preserve exact loopback routing used by existing installations/tests.
-		if net.ParseIP(strings.Trim(host, "[]")) == nil {
+		if strings.ContainsAny(host, "[]") && (!strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]")) {
+			return ""
+		}
+		if net.ParseIP(strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")) == nil {
 			return ""
 		}
 	}

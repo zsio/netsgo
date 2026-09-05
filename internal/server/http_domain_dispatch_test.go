@@ -249,3 +249,64 @@ func TestHTTPDomainDispatchInternalChannelsPrecedeWildcard(t *testing.T) {
 		_ = conn.Close()
 	}
 }
+
+func TestHTTPDomainRuntimePriorityWithoutStore(t *testing.T) {
+	s := New(0)
+	client := &ClientConn{ID: "runtime-client", proxies: make(map[string]*ProxyTunnel)}
+	for name, domain := range map[string]string{
+		"exact": "shop.dev.x.com", "specific": "*.dev.x.com", "broad": "*.*.x.com",
+	} {
+		client.proxies[name] = &ProxyTunnel{Config: protocol.ProxyConfig{
+			Name: name, Type: protocol.ProxyTypeHTTP, Domain: domain,
+			DesiredState: protocol.ProxyDesiredStateRunning, RuntimeState: protocol.ProxyRuntimeStatePending,
+		}}
+	}
+	s.clients.Store(client.ID, client)
+	for _, tc := range []struct{ host, name string }{
+		{"SHOP.DEV.X.COM:8443", "exact"}, {"other.dev.x.com", "specific"}, {"other.prod.x.com", "broad"},
+	} {
+		route, ok, err := s.findHTTPRouteByHost(tc.host)
+		if err != nil || !ok || route.config.Name != tc.name || route.serviceable() {
+			t.Fatalf("pending runtime %q: route=%q found=%v err=%v", tc.host, route.config.Name, ok, err)
+		}
+	}
+}
+
+func TestHTTPDomainDispatchStorageFailureReturns503(t *testing.T) {
+	s := New(0)
+	s.store = newTestTunnelStore(t)
+	if err := s.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	managementCalled := false
+	handler := s.hostDispatchHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		managementCalled = true
+	}))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, newManagementRequest(http.MethodGet, "/", "shop.x.com", nil))
+	if w.Code != http.StatusServiceUnavailable || managementCalled {
+		t.Fatalf("storage error must not fall through: status=%d management=%v", w.Code, managementCalled)
+	}
+}
+
+func TestHTTPDomainLegacyRequestValidation(t *testing.T) {
+	s := New(0)
+	for _, domain := range []string{"*.x.com", "*.a.b.com", "*.*.x.com", "*.*.*.x.com", "*.*.*.*.x.com"} {
+		err := s.validateProxyRequest(&ClientConn{}, protocol.ProxyNewRequest{
+			Name: "legacy-wildcard", Type: protocol.ProxyTypeHTTP, Domain: domain,
+		})
+		if domain != "*.*.*.*.x.com" {
+			if err != nil {
+				t.Fatalf("legacy request %q rejected: %v", domain, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatal("legacy request accepted four wildcard labels")
+		}
+		status, body := tunnelMutationErrorStatusAndBody(err)
+		if status != http.StatusBadRequest || body.Field != "domain" || body.Code != protocol.TunnelMutationErrorCodeDomainInvalid {
+			t.Fatalf("legacy request must enforce depth limit: err=%v status=%d body=%+v", err, status, body)
+		}
+	}
+}

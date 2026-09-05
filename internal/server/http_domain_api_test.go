@@ -123,7 +123,7 @@ func TestHTTPDomainAPICrossUserConflictAndRelease(t *testing.T) {
 		}
 	}
 	resp = doMuxRequest(t, handler, http.MethodDelete, "/api/tunnels/"+created.ID, tokenA, nil)
-	if resp.Code != http.StatusOK {
+	if resp.Code != http.StatusNoContent {
 		t.Fatalf("delete: %d %s", resp.Code, resp.Body.String())
 	}
 	resp = doMuxRequest(t, handler, http.MethodPost, "/api/tunnels", tokenB,
