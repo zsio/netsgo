@@ -180,7 +180,8 @@ test:
 	go test ./...
 
 test-race:
-	go test -race ./... -timeout=20m
+	# SQLite-backed server tests approach 20 minutes under the race detector on CI.
+	go test -race ./... -timeout=25m
 
 test-tdd-red: test-tdd-red-client test-tdd-red-server
 
