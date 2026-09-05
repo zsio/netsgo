@@ -94,6 +94,18 @@ func (s *Server) hostDispatchHandler(management http.Handler) http.Handler {
 			return
 		}
 
+		// The configured management address is reserved even when an HTTP
+		// wildcard covers it. Generic loopback/dev fallbacks stay below routes.
+		reserved, err := s.managementHostMatch(r.Host, false)
+		if err != nil {
+			http.Error(w, `{"error":"temporary storage failure"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if reserved {
+			management.ServeHTTP(w, r)
+			return
+		}
+
 		route, ok, err := s.findHTTPRouteByHost(r.Host)
 		if err != nil {
 			http.Error(w, `{"error":"temporary storage failure"}`, http.StatusServiceUnavailable)
@@ -124,6 +136,10 @@ func (s *Server) hostDispatchHandler(management http.Handler) http.Handler {
 }
 
 func (s *Server) isManagementHost(host string) (bool, error) {
+	return s.managementHostMatch(host, true)
+}
+
+func (s *Server) managementHostMatch(host string, allowLoopbackFallback bool) (bool, error) {
 	var cfg *ServerConfig
 	if s.auth.adminStore != nil {
 		current, err := s.auth.adminStore.GetServerConfigE()
@@ -169,7 +185,7 @@ func (s *Server) isManagementHost(host string) (bool, error) {
 		}
 	}
 
-	if !s.AllowLoopbackManagementHost {
+	if !allowLoopbackFallback || !s.AllowLoopbackManagementHost {
 		return false, nil
 	}
 
@@ -202,59 +218,73 @@ func isLoopbackHost(host string) bool {
 }
 
 func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool, error) {
-	canonical := canonicalHost(host)
+	canonical := canonicalHTTPRouteHost(host)
 	if canonical == "" {
 		return httpTunnelRoute{}, false, nil
 	}
-
-	serverRoute, ok := s.findRuntimeHTTPRoute(canonical)
-	if ok {
-		return serverRoute, true, nil
+	if s.store != nil {
+		claim, ok, err := s.store.findHTTPDomainClaim(canonical)
+		if err != nil || !ok {
+			return httpTunnelRoute{}, false, err
+		}
+		if claim.DesiredState == protocol.ProxyDesiredStateRunning {
+			if route, found := s.findRuntimeHTTPRouteForClaim(canonical, &claim); found {
+				return route, true, nil
+			}
+		}
+		return httpTunnelRoute{config: storedTunnelToProxyConfig(claim)}, true, nil
 	}
-
-	return httpTunnelRoute{}, false, nil
+	route, ok := s.findRuntimeHTTPRoute(canonical)
+	return route, ok, nil
 }
 
 func (s *Server) findRuntimeHTTPRoute(host string) (httpTunnelRoute, bool) {
+	return s.findRuntimeHTTPRouteForClaim(host, nil)
+}
+
+func (s *Server) findRuntimeHTTPRouteForClaim(host string, claim *StoredTunnel) (httpTunnelRoute, bool) {
+	patterns := httpDomainCandidates(host)
+	bestRank := len(patterns)
 	var route httpTunnelRoute
-	var found bool
 
 	s.RangeClients(func(_ string, client *ClientConn) bool {
+		if claim != nil && (client.ID != claim.OwnerClientID || client.OwnerUserID != claim.OwnerUserID) {
+			return true
+		}
 		client.proxyMu.Lock()
-		candidates := make([]httpTunnelRoute, 0, 1)
+		defer client.proxyMu.Unlock()
 		for _, tunnel := range client.proxies {
 			if tunnel.Config.Type != protocol.ProxyTypeHTTP {
 				continue
 			}
-			domain := httpTunnelDomain(tunnel.Config)
-			if canonicalHost(domain) != host {
-				continue
+			config := tunnel.Config
+			domain := canonicalHTTPDomain(httpTunnelDomain(config))
+			if claim != nil {
+				// Legacy runtime entries can lack ID/revision, but must still
+				// match this owner's exact persisted name and endpoint domain.
+				if (config.ID != "" && config.ID != claim.ID) || config.Name != claim.Name ||
+					(config.Revision > 0 && config.Revision != claim.Revision) ||
+					domain != canonicalHTTPDomain(tunnelIngressDomain(*claim)) {
+					continue
+				}
 			}
-			activation := proxyActivationSnapshotLocked(tunnel)
-			config := activation.config
-			config.Domain = domain
-			candidates = append(candidates, httpTunnelRoute{
-				config:      config,
-				client:      client,
-				tunnel:      tunnel,
-				activation:  activation,
-				sourceCIDRs: activation.sourceCIDRs,
-			})
-		}
-		client.proxyMu.Unlock()
-
-		for _, candidate := range candidates {
-			if !candidate.serviceable() {
-				continue
+			for rank, pattern := range patterns {
+				if pattern != domain || rank >= bestRank {
+					continue
+				}
+				activation := proxyActivationSnapshotLocked(tunnel)
+				config = activation.config
+				config.Domain = domain
+				route = httpTunnelRoute{
+					config: config, client: client, tunnel: tunnel,
+					activation: activation, sourceCIDRs: activation.sourceCIDRs,
+				}
+				bestRank = rank
 			}
-			route = candidate
-			found = true
-			break
 		}
-		return !found
+		return true
 	})
-
-	return route, found
+	return route, bestRank < len(patterns)
 }
 
 func httpTunnelDomain(config protocol.ProxyConfig) string {
@@ -359,7 +389,7 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 		FlushInterval: -1,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
-			host, headers := computeForwardedHeaders(s, pr.In, route.config.Domain)
+			host, headers := computeForwardedHeaders(s, pr.In)
 			pr.Out.Host = host
 			pr.Out.Header = headers
 		},

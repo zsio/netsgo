@@ -634,7 +634,7 @@ export const enUS = {
       "Target service address and port the ingress client will connect to.",
     domain: "Business domain",
     httpDomainHelp:
-      "HTTP tunnels route by domain and no longer use a public port input.",
+      "Use an exact domain or a wildcard such as *.example.com or *.*.example.com. Up to three leading stars each match one subdomain label, excluding the base domain. Exact domains take priority; overlapping wildcards owned by the same user use the longest fixed suffix.",
     bindAddress: "Ingress bind address",
     bindPort: "Ingress bind port",
     publicPort: "Public port",

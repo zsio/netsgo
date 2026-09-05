@@ -61,7 +61,9 @@ export function getInitialTunnelFormState(props: TunnelInitialFormProps): Tunnel
       localIp: getInitialTargetHost(props.tunnel),
       localPort: String(getInitialTargetPort(props.tunnel) || ''),
       remotePort: String(getInitialIngressPort(props.tunnel) || ''),
-      domain: props.tunnel.domain || '',
+      domain: props.tunnel.ingress?.type === 'http_host'
+        ? props.tunnel.ingress.config.domain
+        : props.tunnel.domain || '',
       ingressBps: bpsToMbpsInput(props.tunnel.ingress_bps),
       egressBps: bpsToMbpsInput(props.tunnel.egress_bps),
       totalBps: bpsToMbpsInput(props.tunnel.total_bps ?? props.tunnel.bandwidth_settings?.total_bps ?? 0),

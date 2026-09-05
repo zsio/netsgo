@@ -656,7 +656,7 @@ func TestTrustedProxyHeaders(t *testing.T) {
 			req.TLS = tc.requestTLS
 			req.Header = tc.forwarded.Clone()
 
-			gotHost, gotHeaders := computeForwardedHeaders(s, req, tc.domain)
+			gotHost, gotHeaders := computeForwardedHeaders(s, req)
 			if gotHost != tc.wantHost {
 				t.Fatalf("Host = %q, want %q", gotHost, tc.wantHost)
 			}

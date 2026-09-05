@@ -353,7 +353,7 @@ func findHTTPDomainConflictNames(domain, excludeName, excludeClientID string, se
 
 	server.RangeClients(func(clientID string, client *ClientConn) bool {
 		client.RangeProxies(func(name string, tunnel *ProxyTunnel) bool {
-			matchAndAppend(clientID, name, tunnel.Config.Type, tunnel.Config.Domain)
+			matchAndAppend(clientID, name, tunnel.Config.Type, httpTunnelDomain(tunnel.Config))
 			return true
 		})
 		return true
@@ -365,7 +365,7 @@ func findHTTPDomainConflictNames(domain, excludeName, excludeClientID string, se
 			return nil, fmt.Errorf("load persisted tunnels for HTTP tunnel conflict detection: %w", err)
 		}
 		for _, tunnel := range allTunnels {
-			matchAndAppend(tunnel.ClientID, tunnel.Name, tunnel.Type, tunnel.Domain)
+			matchAndAppend(tunnel.ClientID, tunnel.Name, tunnel.Type, tunnelIngressDomain(tunnel))
 		}
 	}
 
@@ -373,11 +373,8 @@ func findHTTPDomainConflictNames(domain, excludeName, excludeClientID string, se
 	return conflicts, nil
 }
 
-func computeForwardedHeaders(s *Server, r *http.Request, originalDomain string) (string, http.Header) {
-	host := originalDomain
-	if strings.TrimSpace(host) == "" {
-		host = r.Host
-	}
+func computeForwardedHeaders(s *Server, r *http.Request) (string, http.Header) {
+	host := r.Host
 
 	headers := r.Header.Clone()
 	headers.Set("X-Forwarded-Host", host)
