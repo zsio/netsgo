@@ -94,7 +94,7 @@ jobs:
         shell: bash
         run: tar -xzf web-dist-archive/web-dist.tgz -C web
       - name: Run govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest && govulncheck ./...
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0 && govulncheck ./...
 
   test:
     runs-on: ubuntu-latest
