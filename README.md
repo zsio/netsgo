@@ -79,6 +79,7 @@ If you want to start the server quickly, connect private-network machines, and t
 - **One binary is enough**: run `./netsgo server` to start the server, and `./netsgo client` to connect a remote node.
 - **One port is enough**: the Web console, control channel, and data channel share the same entry point, so firewalls and reverse proxies only need one shared access path. TCP/UDP tunnels use additional ports only when needed.
 - **A console is included by default**: after a client connects, manage nodes, inspect status, and configure tunnels directly in the Web console.
+- **Keep HTTPS certificates on your private server**: [TLS SNI passthrough](docs/tls-sni.md) routes business TLS through the shared server port to an existing HTTPS service.
 
 ## How It Differs From Common Alternatives
 

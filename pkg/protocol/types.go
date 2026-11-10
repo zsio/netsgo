@@ -20,6 +20,7 @@ const (
 	IngressTypeTCPListen    = "tcp_listen"
 	IngressTypeUDPListen    = "udp_listen"
 	IngressTypeHTTPHost     = "http_host"
+	IngressTypeTLSSNI       = "tls_sni"
 	IngressTypeSOCKS5Listen = "socks5_listen"
 
 	TargetTypeTCPService           = "tcp_service"
@@ -341,6 +342,7 @@ const (
 	ProxyTypeTCP  = "tcp"
 	ProxyTypeUDP  = "udp"
 	ProxyTypeHTTP = "http"
+	ProxyTypeTLS  = "tls"
 )
 
 // Tunnel mutation field constants used by the admin HTTP API.

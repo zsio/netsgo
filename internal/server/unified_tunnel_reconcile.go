@@ -690,7 +690,7 @@ func serverExposeRuntimeHeld(tunnel *ProxyTunnel, config protocol.ProxyConfig) b
 		return false
 	}
 	switch config.Type {
-	case protocol.ProxyTypeHTTP:
+	case protocol.ProxyTypeHTTP, protocol.ProxyTypeTLS:
 		return true
 	case protocol.ProxyTypeUDP:
 		return tunnel.UDPState != nil
@@ -744,7 +744,7 @@ func (s *Server) recordServerExposeIngressIssue(tunnelID string, revision int64,
 }
 
 func serverExposeIngressIssueCode(ingressType, message string) string {
-	if ingressType == protocol.IngressTypeHTTPHost || ingressType == protocol.ProxyTypeHTTP {
+	if isDomainIngressType(ingressType) || ingressType == protocol.ProxyTypeHTTP || ingressType == protocol.ProxyTypeTLS {
 		return protocol.TunnelIssueCodeIngressRouteFailed
 	}
 	lower := strings.ToLower(message)

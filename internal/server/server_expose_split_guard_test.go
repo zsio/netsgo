@@ -23,6 +23,7 @@ func TestUnifiedServerExposeRuntimeDoesNotReadStoredProxyNewRequest(t *testing.T
 	// MUST be appended here; leaving it off silently bypasses the guard.
 	files := []string{
 		"server_expose_unified.go",
+		"tls_sni.go",
 		"unified_tunnel_reconcile.go",
 		"unified_tunnel_runtime.go",
 		"unified_tunnel_api.go",

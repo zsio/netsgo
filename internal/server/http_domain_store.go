@@ -24,8 +24,8 @@ func findHTTPIngressConflict(db httpDomainQueryer, candidate StoredTunnel, exclu
 		location = protocol.EndpointLocationServer
 	}
 	rows, err := db.Query(`SELECT `+tunnelSelectColumns+` FROM tunnels
-		WHERE ingress_type = ? AND ingress_location = ? AND ingress_client_id = ? AND id <> ?
-		ORDER BY id`, TunnelIngressTypeHTTPHost, location, candidate.Ingress.ClientID, excludeID)
+		WHERE ingress_type IN (?, ?) AND ingress_location = ? AND ingress_client_id = ? AND id <> ?
+		ORDER BY id`, TunnelIngressTypeHTTPHost, TunnelIngressTypeTLSSNI, location, candidate.Ingress.ClientID, excludeID)
 	if err != nil {
 		return StoredTunnel{}, false, err
 	}
@@ -44,7 +44,7 @@ func findHTTPIngressConflict(db httpDomainQueryer, candidate StoredTunnel, exclu
 
 func httpDomainResourceConflictError() error {
 	// Do not disclose the other user's client, tunnel name, or domain pattern.
-	return newProxyRequestValidationError(fmt.Errorf("HTTP domain is already occupied by a conflicting tunnel"),
+	return newProxyRequestValidationError(fmt.Errorf("domain is already occupied by a conflicting tunnel"),
 		protocol.TunnelMutationFieldDomain, protocol.TunnelMutationErrorCodeIngressResourceConflict, http.StatusConflict)
 }
 
@@ -82,7 +82,7 @@ func (s *TunnelStore) findHTTPDomainClaim(host string) (StoredTunnel, bool, erro
 		if err != nil {
 			return StoredTunnel{}, false, err
 		}
-		if stored.Ingress.Type != TunnelIngressTypeHTTPHost || stored.Ingress.Location != protocol.EndpointLocationServer {
+		if !isDomainIngressType(stored.Ingress.Type) || stored.Ingress.Location != protocol.EndpointLocationServer {
 			continue
 		}
 		domain := canonicalHTTPDomain(tunnelIngressDomain(stored))

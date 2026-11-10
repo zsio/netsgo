@@ -621,10 +621,17 @@ export const enUS = {
     domainRequired: "Business domain is required.",
     bindAddressRequired: "Ingress bind address is required.",
     topology: "Tunnel topology",
+    accessMode: "Access mode",
+    publicAccess: "Public access",
+    clientAccess: "Client to Client",
     c2cRequiresTwoClients:
       "Add a second client to create a Client-to-Client tunnel.",
     sourceClient: "Service source client",
     ingressClient: "Ingress client",
+    publicIngress: "Public entry",
+    clientIngress: "Client entry",
+    serviceEndpoint: "Private service",
+    socks5DynamicTarget: "Each connection chooses its target. Configure access rules in advanced settings.",
     sectionRouting: "Routing",
     sectionEndpoint: "Endpoint & protocol",
     protocolType: "Protocol type",
@@ -692,6 +699,9 @@ export const enUS = {
       "Let one client reach another client's local service through its ingress.",
     protocolDescTcp: "TCP: forward any TCP service such as SSH or databases.",
     protocolDescUdp: "UDP: forward UDP services such as DNS, games, or QUIC.",
+    protocolDescTls: "Pass HTTPS / TLS through; certificates stay on the private service.",
+    tlsDomainHelp: "Point DNS to the server's public IP and use its shared port. Wildcards such as *.example.com are supported.",
+    tlsSourceCidrsProxyHelp: "Source restrictions use the TCP peer IP. Behind a layer 4 proxy this is the proxy IP; HTTP forwarding headers and PROXY protocol are not read.",
     protocolDescHttp:
       "HTTP: route by domain with optional Basic auth, no public port needed.",
     protocolDescSocks5:
@@ -699,7 +709,7 @@ export const enUS = {
     advancedSecurity: "Access control & security",
     advancedPerformance: "Rate limit & performance",
     suggestionPrefix: "Suggested",
-    createTitle: "Create proxy tunnel",
+    createTitle: "Create tunnel",
     editTitle: "Edit tunnel",
     editDescription:
       'Edit the name, topology, and mapping configuration for tunnel "{{name}}".',
@@ -1134,6 +1144,7 @@ export const enUS = {
       "Tunnel was changed by another request. Refresh and try again.",
     tcp_udp_remote_port_required:
       "TCP/UDP tunnels require an explicit public port.",
+    client_to_client_tls_unsupported: "Client-to-client tunnels do not support TLS/SNI ingress.",
     client_to_client_http_unsupported:
       "Client-to-Client does not support HTTP ingress yet.",
     client_to_client_same_participant:

@@ -137,7 +137,7 @@ async function openScopedTunnelDialog(page: Page, userID: string, clientID: stri
   await page.goto(e2eURL(`/#/dashboard/users/${encodeURIComponent(userID)}/clients/${encodeURIComponent(clientID)}`));
   await expect(page.getByText('Child tunnels')).toBeVisible();
   await page.getByRole('button', { name: 'Add tunnel' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Create proxy tunnel' });
+  const dialog = page.getByRole('dialog', { name: 'Create tunnel' });
   await expect(dialog).toBeVisible();
   return dialog;
 }

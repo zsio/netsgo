@@ -40,6 +40,19 @@ function createTunnel(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
 }
 
 describe('tunnel-model', () => {
+  test('TLS/SNI uses the shared server ingress and the existing TCP target', () => {
+    const req = buildTunnelSpecCreateRequest({ clientId: 'client-1', name: 'https', type: 'tls', domain: '*.example.test', local_ip: '127.0.0.1', local_port: 443 });
+    expect(req.ingress).toEqual({ location: 'server', type: 'tls_sni', config: { domain: '*.example.test', allowed_source_cidrs: ['0.0.0.0/0', '::/0'] } });
+    expect(req.target).toEqual({ location: 'client', client_id: 'client-1', type: 'tcp_service', config: { ip: '127.0.0.1', port: 443 } });
+    expect(req.transport_policy).toBe('server_relay_only');
+    const view = buildTunnelViewModel(createTunnel({ type: 'tls', remote_port: 0, ingress: req.ingress, target: req.target }), true);
+    expect(view.routeLabel).toBe('*.example.test -> 127.0.0.1:443');
+  });
+
+  test('TLS/SNI cannot be used as client-to-client ingress', () => {
+    expect(() => buildClientToClientTunnelSpecCreateRequest({ ingressClientId: 'a', targetClientId: 'b', name: 'tls', type: 'tls', bind_ip: '0.0.0.0', local_ip: '127.0.0.1', local_port: 443, domain: 'app.example.test' })).toThrow();
+  });
+
   test('支持 running + pending 状态并输出等待建立文案', () => {
     const view = buildTunnelViewModel(
       createTunnel({

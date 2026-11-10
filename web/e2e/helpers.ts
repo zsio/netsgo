@@ -162,7 +162,7 @@ export async function openCreateTunnelDialog(page: Page, clientID: string) {
   await page.goto(e2eURL(clientPath));
   await expect(page.getByText('Child tunnels')).toBeVisible();
   await page.getByRole('button', { name: 'Add tunnel' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Create proxy tunnel' });
+  const dialog = page.getByRole('dialog', { name: 'Create tunnel' });
   await expect(dialog).toBeVisible();
   return dialog;
 }

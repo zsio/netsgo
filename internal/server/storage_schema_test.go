@@ -556,6 +556,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"014_activity_webhooks",
 		"015_webhook_delivery_policy",
 		"016_webhook_notification_interval",
+		"017_tls_sni_ingress",
 	}
 	if got := appliedMigrationNames(t, db, "schema_migrations"); !reflect.DeepEqual(got, wantStrictMigrationNames) {
 		t.Fatalf("strict applied migrations = %#v, want %#v", got, wantStrictMigrationNames)
@@ -604,6 +605,7 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"014_activity_webhooks",
 		"015_webhook_delivery_policy",
 		"016_webhook_notification_interval",
+		"017_tls_sni_ingress",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -763,8 +765,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + serverCompatibleMigrationTable).Scan(&compatibleCount); err != nil {
 		t.Fatalf("count compatible migrations failed: %v", err)
 	}
-	if strictCount != 14 || compatibleCount != 2 {
-		t.Fatalf("migration counts = strict %d, compatible %d; want 14 and 2", strictCount, compatibleCount)
+	if strictCount != 15 || compatibleCount != 2 {
+		t.Fatalf("migration counts = strict %d, compatible %d; want 15 and 2", strictCount, compatibleCount)
 	}
 }
 
@@ -1468,7 +1470,8 @@ func strictServerMigrationsBeforeMultiUser(t *testing.T) []storage.Migration {
 		if migration.Name != "012_multi_user_ownership" &&
 			migration.Name != "013_global_passkey_challenges" &&
 			migration.Name != "014_activity_webhooks" &&
-			migration.Name != "016_webhook_notification_interval" {
+			migration.Name != "016_webhook_notification_interval" &&
+			migration.Name != "017_tls_sni_ingress" {
 			legacyStrict = append(legacyStrict, migration)
 		}
 	}
@@ -1486,7 +1489,8 @@ func openServerDBThroughMigration011(t *testing.T, path string) *sql.DB {
 		if migration.Name == "012_multi_user_ownership" ||
 			migration.Name == "013_global_passkey_challenges" ||
 			migration.Name == "014_activity_webhooks" ||
-			migration.Name == "016_webhook_notification_interval" {
+			migration.Name == "016_webhook_notification_interval" ||
+			migration.Name == "017_tls_sni_ingress" {
 			continue
 		}
 		legacyMigrations = append(legacyMigrations, migration)

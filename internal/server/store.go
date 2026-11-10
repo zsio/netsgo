@@ -30,6 +30,7 @@ const (
 	TunnelIngressTypeTCPListen           = protocol.IngressTypeTCPListen
 	TunnelIngressTypeUDPListen           = protocol.IngressTypeUDPListen
 	TunnelIngressTypeHTTPHost            = protocol.IngressTypeHTTPHost
+	TunnelIngressTypeTLSSNI              = protocol.IngressTypeTLSSNI
 	TunnelIngressTypeSOCKS5Listen        = protocol.IngressTypeSOCKS5Listen
 	TunnelTargetTypeTCPService           = protocol.TargetTypeTCPService
 	TunnelTargetTypeUDPService           = protocol.TargetTypeUDPService
@@ -1548,6 +1549,8 @@ func normalizeUnifiedTunnelSpec(t *StoredTunnel) {
 			t.Type = protocol.ProxyTypeUDP
 		case TunnelIngressTypeHTTPHost:
 			t.Type = protocol.ProxyTypeHTTP
+		case TunnelIngressTypeTLSSNI:
+			t.Type = protocol.ProxyTypeTLS
 		default:
 			t.Type = protocol.ProxyTypeTCP
 		}
@@ -1585,6 +1588,8 @@ func legacyIngressSpec(t *StoredTunnel) EndpointSpec {
 		ingressType = TunnelIngressTypeUDPListen
 	case protocol.ProxyTypeHTTP:
 		ingressType = TunnelIngressTypeHTTPHost
+	case protocol.ProxyTypeTLS:
+		ingressType = TunnelIngressTypeTLSSNI
 	}
 	return EndpointSpec{
 		Location: "server",
@@ -1644,7 +1649,7 @@ func validateUnifiedTunnelSpec(t StoredTunnel) error {
 		return fmt.Errorf("unsupported target location %q", t.Target.Location)
 	}
 	switch t.Ingress.Type {
-	case TunnelIngressTypeTCPListen, TunnelIngressTypeUDPListen, TunnelIngressTypeHTTPHost, TunnelIngressTypeSOCKS5Listen:
+	case TunnelIngressTypeTCPListen, TunnelIngressTypeUDPListen, TunnelIngressTypeHTTPHost, TunnelIngressTypeTLSSNI, TunnelIngressTypeSOCKS5Listen:
 	default:
 		return fmt.Errorf("unsupported ingress type %q", t.Ingress.Type)
 	}
@@ -1664,7 +1669,13 @@ func validateUnifiedTunnelSpec(t StoredTunnel) error {
 	if !json.Valid(t.Target.Config) {
 		return fmt.Errorf("invalid target config JSON")
 	}
-	if t.Ingress.Type == TunnelIngressTypeHTTPHost {
+	if t.Ingress.Type == TunnelIngressTypeTLSSNI {
+		if err := validateUnifiedEndpointCombination(t.Topology, endpointSpecAPI(t.Ingress), endpointSpecAPI(t.Target)); err != nil {
+			return err
+		}
+		return validateHTTPDomain(tunnelIngressDomain(t))
+	}
+	if isDomainIngressType(t.Ingress.Type) {
 		domain := tunnelIngressDomain(t)
 		if strings.Contains(domain, "*") {
 			return validateHTTPDomain(domain)
@@ -1795,7 +1806,7 @@ func replaceTunnelResourceLocksTx(tx *sql.Tx, tunnel StoredTunnel) error {
 }
 
 func checkTunnelIngressResourceConflictTx(tx *sql.Tx, tunnel StoredTunnel) error {
-	if tunnel.Ingress.Type == TunnelIngressTypeHTTPHost {
+	if isDomainIngressType(tunnel.Ingress.Type) {
 		_, conflict, err := findHTTPIngressConflict(tx, tunnel, tunnel.ID)
 		if err != nil {
 			return err
@@ -1837,7 +1848,7 @@ func checkTunnelIngressResourceConflictTx(tx *sql.Tx, tunnel StoredTunnel) error
 }
 
 func (s *TunnelStore) findIngressResourceConflict(candidate StoredTunnel, excludeID string) (StoredTunnel, bool, error) {
-	if candidate.Ingress.Type == TunnelIngressTypeHTTPHost {
+	if isDomainIngressType(candidate.Ingress.Type) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		return findHTTPIngressConflict(s.db, candidate, excludeID)
@@ -1978,7 +1989,7 @@ func tunnelIngressResourceLock(tunnel StoredTunnel) (key, kind, clientID string)
 			kind = "client_udp_port"
 		}
 		return "ingress:" + locationID + ":udp:" + tunnelIngressBindIP(tunnel) + ":" + strconv.Itoa(port), kind, tunnel.Ingress.ClientID
-	case TunnelIngressTypeHTTPHost:
+	case TunnelIngressTypeHTTPHost, TunnelIngressTypeTLSSNI:
 		domain := canonicalHTTPDomain(tunnelIngressDomain(tunnel))
 		if domain == "" {
 			return "", "", ""
@@ -1991,6 +2002,8 @@ func tunnelIngressResourceLock(tunnel StoredTunnel) (key, kind, clientID string)
 
 func tunnelIngressConfig(t *StoredTunnel) map[string]any {
 	switch t.Type {
+	case protocol.ProxyTypeTLS:
+		return map[string]any{"domain": t.Domain, "allowed_source_cidrs": allowAllSourceCIDRs()}
 	case protocol.ProxyTypeHTTP:
 		return map[string]any{
 			"domain":               t.Domain,
@@ -2017,7 +2030,7 @@ func mustJSONRawMessage(v any) json.RawMessage {
 }
 
 func tunnelIngressBindIP(tunnel StoredTunnel) string {
-	if tunnel.Ingress.Type == TunnelIngressTypeHTTPHost {
+	if isDomainIngressType(tunnel.Ingress.Type) {
 		return ""
 	}
 	var cfg struct {
@@ -2030,7 +2043,7 @@ func tunnelIngressBindIP(tunnel StoredTunnel) string {
 }
 
 func tunnelIngressPort(tunnel StoredTunnel) int {
-	if tunnel.Ingress.Type == TunnelIngressTypeHTTPHost {
+	if isDomainIngressType(tunnel.Ingress.Type) {
 		return 0
 	}
 	var cfg struct {
@@ -2043,7 +2056,7 @@ func tunnelIngressPort(tunnel StoredTunnel) int {
 }
 
 func tunnelIngressDomain(tunnel StoredTunnel) string {
-	if tunnel.Ingress.Type != TunnelIngressTypeHTTPHost {
+	if !isDomainIngressType(tunnel.Ingress.Type) {
 		return ""
 	}
 	var cfg struct {

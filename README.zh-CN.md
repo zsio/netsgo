@@ -79,6 +79,7 @@ curl -fsSL https://netsgo.zs.uy/upgrade.sh | sh -s -- -y
 - **一个二进制就能跑**：`./netsgo server` 启服务端，`./netsgo client` 连远程节点。
 - **一个端口就够**：Web 控制台、控制通道和数据通道共用同一个入口，防火墙和反向代理只配一处就够。（TCP/UDP 隧道按需使用额外端口。）
 - **默认就带控制台**：连上客户端后，直接在 Web 面板里管理节点、查看状态、配置隧道。
+- **HTTPS 证书留在内网**：[TLS SNI 透传](docs/tls-sni.md) 按域名将同一服务端端口上的业务 TLS 转发到已有的内网 HTTPS 服务。
 
 ## 和常见方案的区别
 

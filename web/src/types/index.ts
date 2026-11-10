@@ -65,11 +65,11 @@ export interface Client {
 
 // --- Tunnel / Proxy ---
 
-export type ProxyType = "tcp" | "udp" | "http";
+export type ProxyType = "tcp" | "udp" | "http" | "tls";
 export type TunnelFormType = ProxyType | "socks5";
 export type TunnelTopology = "server_expose" | "client_to_client";
 export type EndpointLocation = "server" | "client";
-export type IngressEndpointType = "tcp_listen" | "udp_listen" | "http_host" | "socks5_listen";
+export type IngressEndpointType = "tcp_listen" | "udp_listen" | "http_host" | "tls_sni" | "socks5_listen";
 export type TargetEndpointType = "tcp_service" | "udp_service" | "socks5_connect_handler";
 export type EndpointType = IngressEndpointType | TargetEndpointType;
 export type TransportPolicy = "server_relay_only" | "direct_preferred" | "direct_only";
@@ -104,6 +104,11 @@ export interface HttpHostConfig {
   domain: string;
   allowed_source_cidrs?: string[];
   auth?: HttpAuthConfig;
+}
+
+export interface TlsSniConfig {
+  domain: string;
+  allowed_source_cidrs?: string[];
 }
 
 export interface HttpAuthConfig {
@@ -160,6 +165,12 @@ export type TunnelIngress =
     client_id?: string;
     type: "http_host";
     config: HttpHostConfig;
+  }
+  | {
+    location: "server";
+    client_id?: string;
+    type: "tls_sni";
+    config: TlsSniConfig;
   }
   | {
     location: "server" | "client";

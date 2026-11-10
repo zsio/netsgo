@@ -137,6 +137,14 @@ func storedTunnelToProxyConfig(stored StoredTunnel) protocol.ProxyConfig {
 		BandwidthSettings: stored.BandwidthSettings,
 		CreatedAt:         stored.CreatedAt,
 	}
+	if stored.Ingress.Type == protocol.IngressTypeTLSSNI {
+		// TLS runtime semantics come from endpoints, never legacy flat fields.
+		config.Type, config.Domain, config.LocalIP, config.LocalPort = protocol.ProxyTypeTLS, "", "", 0
+		config.RemotePort, config.BindIP = 0, ""
+		if req, err := serverExposeRuntimeProxyRequest(stored); err == nil {
+			config.Domain, config.LocalIP, config.LocalPort = req.Domain, req.LocalIP, req.LocalPort
+		}
+	}
 	if stored.TransportPolicy != "" {
 		config.TransportPolicy = stored.TransportPolicy
 	}

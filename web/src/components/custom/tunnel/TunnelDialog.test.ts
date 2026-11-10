@@ -46,6 +46,23 @@ describe('ClientToClientTopologyButton', () => {
 });
 
 describe('getInitialTunnelFormState', () => {
+  test('TLS editing restores the SNI domain and TCP target from endpoint fields', () => {
+    const form = getInitialTunnelFormState({ mode: 'edit', tunnel: {
+      id: 'tls', name: 'tls', clientId: 'client-1', client_id: 'client-1', type: 'tls',
+      local_ip: 'stale', local_port: 1, remote_port: 0, domain: 'stale.test',
+      ingress_bps: 0, egress_bps: 0, created_at: '2026-11-10T00:00:00Z', desired_state: 'running', runtime_state: 'offline',
+      capabilities: { can_resume: false, can_stop: true, can_edit: true, can_delete: true, can_migrate: true },
+      ingress: { location: 'server', type: 'tls_sni', config: { domain: '*.example.test', allowed_source_cidrs: ['192.0.2.0/24'] } },
+      target: { location: 'client', client_id: 'client-1', type: 'tcp_service', config: { host: '192.168.1.2', port: 443 } },
+    } });
+    expect(form.type).toBe('tls');
+    expect(form.domain).toBe('*.example.test');
+    expect(form.localIp).toBe('192.168.1.2');
+    expect(form.localPort).toBe('443');
+    expect(form.sourceCidrs).toBe('192.0.2.0/24');
+    expect(form.httpAuthEnabled).toBe(false);
+  });
+
   test.each(['*.x.com', '*.a.b.com', '*.*.x.com', '*.*.*.x.com'])(
     '编辑时从入口配置保留泛域名 %s',
     (domain) => {

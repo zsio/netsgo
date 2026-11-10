@@ -160,7 +160,8 @@ func (s *Server) Start() error {
 		go s.serveSTUN(stunConn)
 	}
 
-	serveLn := ln
+	s.sniListener = newSNIListener(ln, s.routeSNIConnection)
+	var serveLn net.Listener = s.sniListener
 	if s.TLS != nil && s.TLS.IsEnabled() {
 		dataDir := s.getDataDir()
 		tlsConfig, fingerprint, err := s.TLS.loadOrBuildTLSConfig(dataDir)
@@ -169,7 +170,7 @@ func (s *Server) Start() error {
 		}
 		s.TLSFingerprint = fingerprint
 		s.tlsEnabled = true
-		serveLn = tls.NewListener(ln, tlsConfig)
+		serveLn = tls.NewListener(s.sniListener, tlsConfig)
 	}
 
 	log.Printf("🚀 NetsGo Server started, listening on :%d", s.Port)
@@ -231,6 +232,9 @@ func logServerEndpoints(port int, tlsEnabled bool, hasWebUI bool, cfg *ServerCon
 }
 
 func (s *Server) cleanupFailedStartup() {
+	if s.sniListener != nil {
+		_ = s.sniListener.Close()
+	}
 	if s.webhookDispatcher != nil {
 		stopContext, cancel := context.WithTimeout(context.Background(), webhookRequestTimeout+time.Second)
 		_ = s.webhookDispatcher.Stop(stopContext)

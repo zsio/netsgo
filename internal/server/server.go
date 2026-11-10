@@ -56,6 +56,7 @@ type Server struct {
 	cachedStatusMu                      sync.RWMutex      // protects cachedStatus
 	sessions                            *SessionManager   // connection lifecycle (managedConns, longLivedHandlers, generations, data timeout)
 	httpServer                          *http.Server
+	sniListener                         *sniListener
 	listener                            net.Listener
 	stunConn                            net.PacketConn
 	done                                chan struct{}
