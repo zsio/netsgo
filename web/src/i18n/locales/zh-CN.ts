@@ -308,6 +308,8 @@ export const zhCN = {
     },
     events: {
       title: "事件订阅",
+      minInterval: "最小通知间隔（秒）",
+      minIntervalHint: "同一目标的同类事件在间隔内只通知一次，上线和离线分别计时。0 表示不限制，最多 86400 秒。测试和手动重放不受影响。",
       group: {
         client: "客户端生命周期",
         tunnel: "隧道事件",
@@ -506,6 +508,7 @@ export const zhCN = {
       confirm: "确认重放",
     },
     validation: {
+      invalidInterval: "请输入 0 到 86400 之间的整数秒数。",
       required: "请完成这个必填项。",
       invalidUrl: "目标 URL 格式不正确。",
       invalidUrlScheme: "目标 URL 只支持 HTTP 或 HTTPS。",

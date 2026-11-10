@@ -43,6 +43,7 @@ func TestOpenServerDBCreatesExpectedTables(t *testing.T) {
 		"activity_webhook_deliveries",
 		"activity_webhook_delivery_attempts",
 		"activity_webhook_dispatch_slots",
+		"activity_webhook_notification_state",
 	}
 	for _, table := range wantTables {
 		if !sqliteTableExists(t, db, table) {
@@ -322,11 +323,19 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 			{name: "last_called_at_ns", typ: "INTEGER"},
 			{name: "created_at_ns", typ: "INTEGER", notNull: true},
 			{name: "updated_at_ns", typ: "INTEGER", notNull: true},
+			{name: "min_interval_seconds", typ: "INTEGER", notNull: true, defaultValue: "0"},
 		},
 		"activity_webhook_events": {
 			{name: "owner_user_id", typ: "TEXT", notNull: true, primaryKey: true},
 			{name: "webhook_id", typ: "TEXT", notNull: true, primaryKey: true},
 			{name: "event_type", typ: "TEXT", notNull: true, primaryKey: true},
+		},
+		"activity_webhook_notification_state": {
+			{name: "owner_user_id", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "webhook_id", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "event_type", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "target_id", typ: "TEXT", notNull: true, primaryKey: true},
+			{name: "last_enqueued_at_ns", typ: "INTEGER", notNull: true},
 		},
 		"activity_webhook_targets": {
 			{name: "owner_user_id", typ: "TEXT", notNull: true, primaryKey: true},
@@ -485,6 +494,9 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"activity_webhook_targets": {
 			{name: "sqlite_autoindex_activity_webhook_targets_1", unique: true, columns: []string{"owner_user_id", "webhook_id", "target_id"}},
 		},
+		"activity_webhook_notification_state": {
+			{name: "sqlite_autoindex_activity_webhook_notification_state_1", unique: true, columns: []string{"owner_user_id", "webhook_id", "event_type", "target_id"}},
+		},
 		"activity_webhook_deliveries": {
 			{name: "idx_activity_webhook_deliveries_due", unique: false, columns: []string{"status", "next_attempt_at_ns", "created_at_ns", "id"}},
 			{name: "idx_activity_webhook_deliveries_event_dedupe", unique: true, columns: []string{"owner_user_id", "webhook_id", "source_event_id"}},
@@ -543,6 +555,7 @@ func TestOpenServerDBMigratesEmptyDatabaseToExpectedSchema(t *testing.T) {
 		"013_global_passkey_challenges",
 		"014_activity_webhooks",
 		"015_webhook_delivery_policy",
+		"016_webhook_notification_interval",
 	}
 	if got := appliedMigrationNames(t, db, "schema_migrations"); !reflect.DeepEqual(got, wantStrictMigrationNames) {
 		t.Fatalf("strict applied migrations = %#v, want %#v", got, wantStrictMigrationNames)
@@ -590,6 +603,7 @@ func TestServerMigrationsLoadsEmbeddedFiles(t *testing.T) {
 		"013_global_passkey_challenges",
 		"014_activity_webhooks",
 		"015_webhook_delivery_policy",
+		"016_webhook_notification_interval",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("migration names = %#v, want %#v", gotNames, wantNames)
@@ -749,8 +763,8 @@ func TestOpenServerDBSkipsAppliedEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + serverCompatibleMigrationTable).Scan(&compatibleCount); err != nil {
 		t.Fatalf("count compatible migrations failed: %v", err)
 	}
-	if strictCount != 13 || compatibleCount != 2 {
-		t.Fatalf("migration counts = strict %d, compatible %d; want 13 and 2", strictCount, compatibleCount)
+	if strictCount != 14 || compatibleCount != 2 {
+		t.Fatalf("migration counts = strict %d, compatible %d; want 14 and 2", strictCount, compatibleCount)
 	}
 }
 
@@ -1451,7 +1465,10 @@ func strictServerMigrationsBeforeMultiUser(t *testing.T) []storage.Migration {
 	_, strict := partitionServerMigrations(migrations)
 	legacyStrict := make([]storage.Migration, 0, len(strict))
 	for _, migration := range strict {
-		if migration.Name != "012_multi_user_ownership" && migration.Name != "013_global_passkey_challenges" && migration.Name != "014_activity_webhooks" {
+		if migration.Name != "012_multi_user_ownership" &&
+			migration.Name != "013_global_passkey_challenges" &&
+			migration.Name != "014_activity_webhooks" &&
+			migration.Name != "016_webhook_notification_interval" {
 			legacyStrict = append(legacyStrict, migration)
 		}
 	}
@@ -1466,7 +1483,10 @@ func openServerDBThroughMigration011(t *testing.T, path string) *sql.DB {
 	}
 	legacyMigrations := make([]storage.Migration, 0, len(migrations)-1)
 	for _, migration := range migrations {
-		if migration.Name == "012_multi_user_ownership" || migration.Name == "013_global_passkey_challenges" || migration.Name == "014_activity_webhooks" {
+		if migration.Name == "012_multi_user_ownership" ||
+			migration.Name == "013_global_passkey_challenges" ||
+			migration.Name == "014_activity_webhooks" ||
+			migration.Name == "016_webhook_notification_interval" {
 			continue
 		}
 		legacyMigrations = append(legacyMigrations, migration)

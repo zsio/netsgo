@@ -12,14 +12,15 @@ import (
 )
 
 const (
-	webhookMaxPerUser            = 50
-	webhookMaxHeaders            = 32
-	webhookMaxTargets            = 500
-	webhookTemplateMaxBytes      = 64 << 10
-	webhookRenderedRequestMax    = 256 << 10
-	webhookResponseBodyMaxBytes  = 64 << 10
-	webhookJSONRequestLimitBytes = 128 << 10
-	webhookDeliveryHistoryLimit  = 1000
+	webhookMaxPerUser                     = 50
+	webhookMaxHeaders                     = 32
+	webhookMaxTargets                     = 500
+	webhookTemplateMaxBytes               = 64 << 10
+	webhookRenderedRequestMax             = 256 << 10
+	webhookResponseBodyMaxBytes           = 64 << 10
+	webhookJSONRequestLimitBytes          = 128 << 10
+	webhookDeliveryHistoryLimit           = 1000
+	webhookMaxNotificationIntervalSeconds = 86400
 )
 
 type WebhookMethod string
@@ -80,6 +81,7 @@ type ActivityWebhook struct {
 	Headers             []WebhookHeader   `json:"headers"`
 	Body                string            `json:"body"`
 	Events              []string          `json:"events"`
+	MinIntervalSeconds  int               `json:"min_interval_seconds"`
 	Calls24h            int64             `json:"calls_24h"`
 	LastStatus          string            `json:"last_status"`
 	ConsecutiveFailures int64             `json:"consecutive_failures"`
@@ -89,32 +91,34 @@ type ActivityWebhook struct {
 }
 
 type WebhookConfigInput struct {
-	ID               string            `json:"id"`
-	ExpectedRevision int64             `json:"expected_revision,omitempty"`
-	Name             string            `json:"name"`
-	Enabled          bool              `json:"enabled"`
-	TargetKind       WebhookTargetKind `json:"target_kind"`
-	TargetMode       WebhookTargetMode `json:"target_mode"`
-	TargetIDs        []string          `json:"target_ids"`
-	Method           WebhookMethod     `json:"method"`
-	URL              string            `json:"url"`
-	Headers          []WebhookHeader   `json:"headers"`
-	Body             string            `json:"body"`
-	Events           []string          `json:"events"`
+	ID                 string            `json:"id"`
+	ExpectedRevision   int64             `json:"expected_revision,omitempty"`
+	Name               string            `json:"name"`
+	Enabled            bool              `json:"enabled"`
+	TargetKind         WebhookTargetKind `json:"target_kind"`
+	TargetMode         WebhookTargetMode `json:"target_mode"`
+	TargetIDs          []string          `json:"target_ids"`
+	Method             WebhookMethod     `json:"method"`
+	URL                string            `json:"url"`
+	Headers            []WebhookHeader   `json:"headers"`
+	Body               string            `json:"body"`
+	Events             []string          `json:"events"`
+	MinIntervalSeconds int               `json:"min_interval_seconds"`
 }
 
 type webhookConfigSnapshot struct {
-	ID         string            `json:"id"`
-	Revision   int64             `json:"revision"`
-	Name       string            `json:"name"`
-	TargetKind WebhookTargetKind `json:"target_kind"`
-	TargetMode WebhookTargetMode `json:"target_mode"`
-	TargetIDs  []string          `json:"target_ids"`
-	Method     WebhookMethod     `json:"method"`
-	URL        string            `json:"url"`
-	Headers    []WebhookHeader   `json:"headers"`
-	Body       string            `json:"body"`
-	Events     []string          `json:"events"`
+	ID                 string            `json:"id"`
+	Revision           int64             `json:"revision"`
+	Name               string            `json:"name"`
+	TargetKind         WebhookTargetKind `json:"target_kind"`
+	TargetMode         WebhookTargetMode `json:"target_mode"`
+	TargetIDs          []string          `json:"target_ids"`
+	Method             WebhookMethod     `json:"method"`
+	URL                string            `json:"url"`
+	Headers            []WebhookHeader   `json:"headers"`
+	Body               string            `json:"body"`
+	Events             []string          `json:"events"`
+	MinIntervalSeconds int               `json:"min_interval_seconds"`
 }
 
 func (w ActivityWebhook) snapshot() webhookConfigSnapshot {
@@ -123,6 +127,7 @@ func (w ActivityWebhook) snapshot() webhookConfigSnapshot {
 		TargetKind: w.TargetKind, TargetMode: w.TargetMode,
 		TargetIDs: slices.Clone(w.TargetIDs), Method: w.Method, URL: w.URL,
 		Headers: slices.Clone(w.Headers), Body: w.Body, Events: slices.Clone(w.Events),
+		MinIntervalSeconds: w.MinIntervalSeconds,
 	}
 }
 
@@ -134,6 +139,7 @@ func (w ActivityWebhook) toConfigInput(enabled bool) WebhookConfigInput {
 		TargetKind: w.TargetKind, TargetMode: w.TargetMode,
 		TargetIDs: slices.Clone(w.TargetIDs), Method: w.Method, URL: w.URL,
 		Headers: slices.Clone(w.Headers), Body: w.Body, Events: slices.Clone(w.Events),
+		MinIntervalSeconds: w.MinIntervalSeconds,
 	}
 }
 
@@ -143,6 +149,7 @@ func (input WebhookConfigInput) snapshot(revision int64) webhookConfigSnapshot {
 		TargetKind: input.TargetKind, TargetMode: input.TargetMode,
 		TargetIDs: slices.Clone(input.TargetIDs), Method: input.Method, URL: input.URL,
 		Headers: slices.Clone(input.Headers), Body: input.Body, Events: slices.Clone(input.Events),
+		MinIntervalSeconds: input.MinIntervalSeconds,
 	}
 }
 
@@ -222,6 +229,9 @@ func uniqueNonEmptyStrings(values []string) []string {
 }
 
 func validateWebhookInput(input WebhookConfigInput, fixtures map[string]map[string]any, variables []WebhookVariable, allowPrivateTargets bool) error {
+	if input.MinIntervalSeconds < 0 || input.MinIntervalSeconds > webhookMaxNotificationIntervalSeconds {
+		return invalidWebhook("min_interval_seconds", "invalid_interval", "minimum notification interval must be between 0 and 86400 seconds")
+	}
 	if !webhookIDPattern.MatchString(input.ID) {
 		return invalidWebhook("id", "invalid_id", "Webhook id is invalid")
 	}

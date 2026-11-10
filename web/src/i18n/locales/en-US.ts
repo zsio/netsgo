@@ -310,6 +310,8 @@ export const enUS = {
     },
     events: {
       title: "Event subscriptions",
+      minInterval: "Minimum notification interval (seconds)",
+      minIntervalHint: "Notify once per target and event type within this interval. Online and offline are timed separately. Set 0 for no limit, up to 86400 seconds. Tests and manual replays are unaffected.",
       group: {
         client: "Client lifecycle",
         tunnel: "Tunnel events",
@@ -508,6 +510,7 @@ export const enUS = {
       confirm: "Replay event",
     },
     validation: {
+      invalidInterval: "Enter a whole number of seconds between 0 and 86400.",
       required: "Complete this required field.",
       invalidUrl: "The destination URL is invalid.",
       invalidUrlScheme: "The destination URL must use HTTP or HTTPS.",
