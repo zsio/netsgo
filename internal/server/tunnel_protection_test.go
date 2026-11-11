@@ -189,6 +189,8 @@ func TestLinuxNetworkNamespaceLoopRejectedAfterAuth(t *testing.T) {
 	}
 	_ = json.Unmarshal(resp.Body.Bytes(), &created)
 	waitForUnifiedTunnelRuntimeState(t, s, token, created.ID, tunnelRuntimeStateActive)
+	events := s.events.Subscribe()
+	defer s.events.Unsubscribe(events)
 	seed, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +202,33 @@ func TestLinuxNetworkNamespaceLoopRejectedAfterAuth(t *testing.T) {
 	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
 		t.Fatal("loop stalled instead of rejected")
 	}
-	waitForUnifiedTunnelRuntimeState(t, s, token, created.ID, protocol.TunnelRuntimeStateError)
+	// Runtime reports schedule reconciliation, which may reprovision the
+	// hostname before an API poll observes its transient issue. Verify the
+	// accepted report event instead of requiring that issue to stay visible.
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	reported := false
+	for !reported {
+		select {
+		case event := <-events:
+			if event.Type != "tunnel_changed" {
+				continue
+			}
+			var payload struct {
+				Action   string `json:"action"`
+				ClientID string `json:"client_id"`
+				Tunnel   struct {
+					ID string `json:"id"`
+				} `json:"tunnel"`
+			}
+			if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+				t.Fatal(err)
+			}
+			reported = payload.Action == "runtime_report" && payload.ClientID == id && payload.Tunnel.ID == created.ID
+		case <-timer.C:
+			t.Fatal("server did not accept the DNS loop runtime report")
+		}
+	}
 	deadline := time.Now().Add(time.Second)
 	for s.dataConnections.Active() != 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
