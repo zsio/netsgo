@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"netsgo/internal/client"
+	"netsgo/internal/connlimit"
 	"netsgo/pkg/datadir"
 	"netsgo/pkg/flock"
 
@@ -70,6 +71,11 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 		}
 
 		c := client.New(serverAddr, key)
+		maxConnections, err := connectionLimitForCommand(cmd)
+		if err != nil {
+			fatalClient(logger, err)
+		}
+		c.MaxConnections = maxConnections
 		c.Logger = logger
 		dataDirFlag := cmd.Flag("data-dir")
 		c.DataDir = resolveClientDataDir(dataDirFlag.Value.String(), dataDirFlag.Changed)
@@ -123,6 +129,7 @@ func resolveClientDataDir(flagValue string, flagChanged bool) string {
 
 func init() {
 	clientCmd.Flags().StringP("server", "s", "http://localhost:9527", "Service address (http/https recommended; ws/wss accepted)")
+	clientCmd.Flags().Int("max-connections", connlimit.Default, "Maximum active forwarding connections/UDP associations across tunnels (NETSGO_MAX_CONNECTIONS)")
 	clientCmd.Flags().StringP("key", "k", "", "Authentication key")
 	clientCmd.Flags().String("data-dir", datadir.DefaultDataDir(), "Data root directory")
 	clientCmd.Flags().String("log-format", client.LogFormatText, "Client log format: text or json")

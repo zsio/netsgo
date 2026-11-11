@@ -1121,6 +1121,7 @@ export const enUS = {
     unknown_client: "Client not found.",
     capability_not_supported:
       "This client does not support the requested tunnel capability.",
+    tunnel_loop: "The target points back to this tunnel's own TCP ingress. Change the target address, ingress port, or target client.",
     same_ingress_and_target_client:
       "Ingress client and service source client must be different.",
     same_target_client: "Select a different service source client.",

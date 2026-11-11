@@ -122,10 +122,11 @@ type TunnelCreateRequest struct {
 
 // TunnelProvisionRequest is sent by the server to an ingress or target client.
 type TunnelProvisionRequest struct {
-	TunnelID string     `json:"tunnel_id"`
-	Revision int64      `json:"revision"`
-	Role     string     `json:"role"`
-	Spec     TunnelSpec `json:"spec"`
+	IngressNetworkID string     `json:"ingress_network_id,omitempty"` // Optional loop protection; old peers ignore it.
+	TunnelID         string     `json:"tunnel_id"`
+	Revision         int64      `json:"revision"`
+	Role             string     `json:"role"`
+	Spec             TunnelSpec `json:"spec"`
 }
 
 // TunnelCreateResponse is returned for unified tunnel creation.

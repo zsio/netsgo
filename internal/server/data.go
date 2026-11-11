@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 
+	"netsgo/internal/connlimit"
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
@@ -210,16 +211,21 @@ func (s *Server) acceptClientOpenedDataStreams(client *ClientConn, session *yamu
 		if err != nil {
 			return
 		}
+		admitted, ok := s.admitForwardingConn(stream, &s.dataConnections)
+		if !ok {
+			continue
+		}
 		streamWG.Add(1)
 		go func() {
 			defer streamWG.Done()
-			header, err := protocol.DecodeDataStreamHeader(stream)
+			defer func() { _ = admitted.Close() }()
+			header, err := protocol.DecodeDataStreamHeader(admitted)
 			if err != nil {
 				log.Printf("⚠️ data channel: decode client-opened stream header failed [%s]: %v", client.ID, err)
 				_ = stream.Close()
 				return
 			}
-			s.handleClientOpenedDataStreamForSession(client, session, stream, header)
+			s.handleClientOpenedDataStreamForSession(client, session, admitted, header)
 		}()
 	}
 }
@@ -259,6 +265,17 @@ func (s *Server) openStreamToClientWithHeaderMatching(
 	activation *proxyActivationSnapshot,
 	mutate func(*protocol.DataStreamHeader),
 ) (net.Conn, error) {
+	release, accepted := s.dataConnections.Acquire(s.MaxConnections)
+	if !accepted {
+		s.reportConnectionLimit(&s.dataConnections)
+		return nil, connlimit.ErrReached
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			release()
+		}
+	}()
 	if client.generation != 0 && !s.isCurrentLive(client.ID, client.generation) {
 		return nil, fmt.Errorf("client [%s] is not online", client.ID)
 	}
@@ -325,7 +342,8 @@ func (s *Server) openStreamToClientWithHeaderMatching(
 		return nil, fmt.Errorf("write DataStreamHeader failed: %w", err)
 	}
 
-	return stream, nil
+	transferred = true
+	return connlimit.Wrap(stream, release), nil
 }
 
 func proxyActivationCurrentLocked(current, expected *ProxyTunnel, activation proxyActivationSnapshot) bool {

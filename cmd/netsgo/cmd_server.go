@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"netsgo/internal/connlimit"
 	"netsgo/internal/server"
 	"netsgo/pkg/datadir"
 	"netsgo/pkg/flock"
@@ -144,6 +145,11 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 		log.Printf("🚀 NetsGo Server starting (port: %d)...", port)
 
 		s := server.New(port)
+		maxConnections, err := connectionLimitForCommand(cmd)
+		if err != nil {
+			log.Fatalf("❌ %v", err)
+		}
+		s.MaxConnections = maxConnections
 		s.DataDir = viper.GetString("data-dir")
 		s.AllowLoopbackManagementHost = viper.GetBool("allow-loopback-management-host")
 
@@ -222,6 +228,7 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 
 func init() {
 	serverCmd.Flags().IntP("port", "p", 9527, "Server listening port")
+	serverCmd.Flags().Int("max-connections", connlimit.Default, "Maximum active forwarding connections/UDP associations across tunnels (NETSGO_MAX_CONNECTIONS)")
 	serverCmd.Flags().String("data-dir", datadir.DefaultDataDir(), "Data root directory")
 
 	serverCmd.Flags().String("tls-mode", "", "TLS mode: custom / auto / off")

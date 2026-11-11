@@ -72,6 +72,16 @@ After installation, follow the interactive prompts to initialize a Server or Cli
 
 ---
 
+### Forwarding connections and loop protection
+
+Each Server and Client defaults to **10000** active forwarding connections/UDP associations shared across its tunnels. Excess new connections are closed without interrupting existing transfers; closing a connection returns its capacity. HTTP ingress returns 503 when the Server's capacity is full.
+
+Configure `netsgo server --max-connections 20000`, `netsgo client --max-connections 20000`, or `NETSGO_MAX_CONNECTIONS=20000`. For systemd installations, set the variable in the relevant `/etc/netsgo/services/server.env` or `client.env` and restart that service. The value must be positive; connection capacity and bandwidth limits are separate.
+
+On Linux, updated peers compare boot-scoped network namespace identities to reject a TCP target that points back to its own ingress listener. Checks run during configuration/provisioning and after DNS resolution before actual target connections, without probing target services. Equal port numbers on different machines or separate container networks remain valid.
+
+Older peers, platforms without network identity evidence, and indirect cycles through multiple tunnels/external proxies retain connection limits as a fallback. A limit of 10000 does not guarantee memory safety; size it for the instance's available memory and workload.
+
 ## Why NetsGo
 
 If you want to start the server quickly, connect private-network machines, and then create tunnels, NetsGo focuses on exactly that:

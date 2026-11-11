@@ -253,6 +253,11 @@ func (c *Client) acceptIngressSOCKS5(rt *sessionRuntime, req protocol.TunnelProv
 				return
 			}
 		}
+		admitted, accepted := c.admitForwardingConn(conn)
+		if !accepted {
+			continue
+		}
+		conn = admitted
 		if !runtime.trackTCPConn(conn) {
 			_ = conn.Close()
 			return

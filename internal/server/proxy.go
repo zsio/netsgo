@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"netsgo/internal/connlimit"
+	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
 
@@ -722,7 +725,11 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listen
 			}
 		}
 
-		go s.handleProxyConn(client, tunnel, listener, extConn, activation)
+		admitted, ok := s.admitForwardingConn(extConn, &s.tcpHandlers)
+		if !ok {
+			continue
+		}
+		go s.handleProxyConn(client, tunnel, listener, admitted, activation)
 	}
 }
 
@@ -738,6 +745,9 @@ func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listen
 
 	stream, err := s.openStreamToClientForActivation(client, tunnel, activation)
 	if err != nil {
+		if errors.Is(err, connlimit.ErrReached) || mux.IsClosedStream(err) {
+			return
+		}
 		log.Printf("⚠️ proxy [%s] open stream failed: %v", activation.config.Name, err)
 		s.markTCPProxyRuntimeErrorIfCurrent(client, activation.config.Name, tunnel, listener, activation.config, fmt.Sprintf("TCP proxy forwarding channel failed: %v", err))
 		return

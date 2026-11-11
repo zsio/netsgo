@@ -13,6 +13,7 @@ import (
 )
 
 type ServerEnv struct {
+	MaxConnections                     int
 	Port                               int
 	TLSMode                            string
 	TLSCert                            string
@@ -24,6 +25,7 @@ type ServerEnv struct {
 }
 
 type ClientEnv struct {
+	MaxConnections int
 	Server         string
 	Key            string
 	TLSSkipVerify  bool
@@ -32,6 +34,9 @@ type ClientEnv struct {
 
 func WriteServerEnv(layout ServiceLayout, env ServerEnv) error {
 	values := map[string]string{}
+	if err := writeConnectionLimit(values, env.MaxConnections); err != nil {
+		return err
+	}
 	if env.Port != 0 {
 		values["NETSGO_PORT"] = strconv.Itoa(env.Port)
 	}
@@ -60,6 +65,9 @@ func WriteServerEnv(layout ServiceLayout, env ServerEnv) error {
 
 func WriteClientEnv(layout ServiceLayout, env ClientEnv) error {
 	values := map[string]string{}
+	if err := writeConnectionLimit(values, env.MaxConnections); err != nil {
+		return err
+	}
 	if env.Server != "" {
 		values["NETSGO_SERVER"] = env.Server
 	}
@@ -82,6 +90,10 @@ func ReadServerEnv(layout ServiceLayout) (ServerEnv, error) {
 	}
 
 	var env ServerEnv
+	env.MaxConnections, err = readConnectionLimit(values)
+	if err != nil {
+		return ServerEnv{}, err
+	}
 	if raw := values["NETSGO_PORT"]; raw != "" {
 		port, err := strconv.Atoi(raw)
 		if err != nil {
@@ -108,12 +120,39 @@ func ReadClientEnv(layout ServiceLayout) (ClientEnv, error) {
 	if err != nil {
 		return ClientEnv{}, err
 	}
+	maxConnections, err := readConnectionLimit(values)
+	if err != nil {
+		return ClientEnv{}, err
+	}
 	return ClientEnv{
+		MaxConnections: maxConnections,
 		Server:         values["NETSGO_SERVER"],
 		Key:            values["NETSGO_KEY"],
 		TLSSkipVerify:  values["NETSGO_TLS_SKIP_VERIFY"] == "true",
 		TLSFingerprint: values["NETSGO_TLS_FINGERPRINT"],
 	}, nil
+}
+
+func writeConnectionLimit(values map[string]string, limit int) error {
+	if limit < 0 {
+		return fmt.Errorf("NETSGO_MAX_CONNECTIONS must be positive")
+	}
+	if limit > 0 {
+		values["NETSGO_MAX_CONNECTIONS"] = strconv.Itoa(limit)
+	}
+	return nil
+}
+
+func readConnectionLimit(values map[string]string) (int, error) {
+	raw := values["NETSGO_MAX_CONNECTIONS"]
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit <= 0 {
+		return 0, fmt.Errorf("NETSGO_MAX_CONNECTIONS must be a positive integer")
+	}
+	return limit, nil
 }
 
 func writeEnvFile(path string, values map[string]string) error {

@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"netsgo/internal/connlimit"
+	"netsgo/internal/tunnelloop"
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
@@ -34,6 +36,9 @@ type clientTunnelRuntime struct {
 }
 
 type fixedServiceTargetRuntime struct {
+	loopGuard       *tunnelloop.Guard
+	loopReportOnce  *sync.Once
+	loopRuntime     *sessionRuntime
 	tunnelID        string
 	revision        int64
 	targetType      string
@@ -328,6 +333,14 @@ func (c *Client) handleTunnelProvision(rt *sessionRuntime, req protocol.TunnelPr
 				ack.Message = err.Error()
 				return ack
 			}
+			targetRuntime.loopGuard = tunnelloop.New(req.Spec, req.IngressNetworkID, c.NetworkNamespaceID)
+			targetRuntime.loopReportOnce = &sync.Once{}
+			targetRuntime.loopRuntime = rt
+			if err := targetRuntime.loopGuard.CheckLiteral(targetRuntime.host, targetRuntime.port); err != nil {
+				ack.Accepted = false
+				ack.Message = err.Error()
+				return ack
+			}
 			c.fixedTargetRuntimes.Store(req.TunnelID, &targetRuntime)
 			return ack
 		default:
@@ -503,6 +516,11 @@ func (c *Client) acceptIngressTCP(rt *sessionRuntime, req protocol.TunnelProvisi
 				return
 			}
 		}
+		admitted, accepted := c.admitForwardingConn(conn)
+		if !accepted {
+			continue
+		}
+		conn = admitted
 		if !runtime.trackTCPConn(conn) {
 			_ = conn.Close()
 			return
@@ -622,8 +640,14 @@ func (c *Client) getOrCreateIngressUDPAssociation(rt *sessionRuntime, req protoc
 		}
 	}
 
+	release, accepted := c.dataConnections.Acquire(c.MaxConnections)
+	if !accepted {
+		c.reportConnectionLimit()
+		return nil, false
+	}
 	stream, _, err := c.ingressTransportSelector(rt, req).Open(req, c.CurrentClientID(), nil)
 	if err != nil {
+		release()
 		message := fmt.Sprintf("open UDP tunnel ingress stream failed [%s]: %v", req.TunnelID, err)
 		log.Printf("⚠️ %s", message)
 		if shouldReportIngressOpenError(err) {
@@ -632,7 +656,7 @@ func (c *Client) getOrCreateIngressUDPAssociation(rt *sessionRuntime, req protoc
 		return nil, false
 	}
 
-	assoc := newClientUDPAssociation(key, srcAddr, stream)
+	assoc := newClientUDPAssociation(key, srcAddr, connlimit.Wrap(stream, release))
 	actual, loaded := runtime.udpAssociations.LoadOrStore(key, assoc)
 	if loaded {
 		assoc.close()
@@ -734,7 +758,7 @@ func (c *Client) handleIngressTCPConn(rt *sessionRuntime, req protocol.TunnelPro
 }
 
 func shouldReportIngressOpenError(err error) bool {
-	return !errors.Is(err, errPeerDirectUnavailable) && !errors.Is(err, errPeerDirectOpenFailed)
+	return !errors.Is(err, errPeerDirectUnavailable) && !errors.Is(err, errPeerDirectOpenFailed) && !mux.IsClosedStream(err)
 }
 
 func (c *Client) reportTunnelRuntimeError(rt *sessionRuntime, req protocol.TunnelProvisionRequest, message string) {

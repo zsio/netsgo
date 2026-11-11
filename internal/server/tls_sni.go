@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"netsgo/internal/connlimit"
+	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
 
@@ -213,6 +215,9 @@ func (s *Server) routeSNIConnection(conn net.Conn, serverName string) bool {
 	}
 	stream, err := s.openStreamToClientForActivation(route.client, route.tunnel, route.activation)
 	if err != nil {
+		if errors.Is(err, connlimit.ErrReached) || mux.IsClosedStream(err) {
+			return true
+		}
 		s.markTCPProxyRuntimeErrorIfCurrent(route.client, route.activation.config.Name, route.tunnel, nil, route.activation.config, "TLS tunnel forwarding channel failed: "+err.Error())
 		return true
 	}

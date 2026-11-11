@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"netsgo/internal/connlimit"
 	"netsgo/pkg/protocol"
 )
 
@@ -407,6 +409,10 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 			pr.Out.Header = headers
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			if errors.Is(err, connlimit.ErrReached) {
+				http.Error(w, connlimit.ErrReached.Error(), http.StatusServiceUnavailable)
+				return
+			}
 			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		},
 	}

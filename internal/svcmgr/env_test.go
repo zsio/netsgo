@@ -14,6 +14,7 @@ func TestWriteReadServerEnvRoundTrip(t *testing.T) {
 	layout.EnvPath = filepath.Join(t.TempDir(), "server.env")
 
 	want := ServerEnv{
+		MaxConnections:                     20000,
 		Port:                               9527,
 		TLSMode:                            "off",
 		TLSCert:                            "/tmp/cert.pem",
@@ -185,6 +186,7 @@ func TestWriteReadClientEnvRoundTrip(t *testing.T) {
 	layout.EnvPath = filepath.Join(t.TempDir(), "client.env")
 
 	want := ClientEnv{
+		MaxConnections: 30000,
 		Server:         "wss://panel.example.com",
 		Key:            "sk-test-key",
 		TLSSkipVerify:  true,

@@ -560,6 +560,17 @@ func (s *Server) validateTunnelMigrateRequest(ownerUserID string, current tunnel
 	if !clientSupportsTargetType(target.Info.Capabilities, current.Target.Type) {
 		return newProxyRequestValidationError(fmt.Errorf("target client does not support %s", current.Target.Type), "target.type", protocol.TunnelMutationErrorCodeCapabilityNotSupported, http.StatusBadRequest)
 	}
+	var targetConfig serviceConfigAPI
+	if err := json.Unmarshal(current.Target.Config, &targetConfig); err == nil {
+		if targetConfig.Host == "" {
+			targetConfig.Host = targetConfig.IP
+		}
+		nextTarget := current.Target
+		nextTarget.ClientID = req.TargetClientID
+		if err := s.validateTunnelLoop(current.Ingress, nextTarget, targetConfig.Host, targetConfig.Port); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1222,6 +1233,9 @@ func (s *Server) storedTunnelFromUnifiedRequestForUser(ownerUserID string, req t
 		return StoredTunnel{}, err
 	}
 	if err := s.validateUnifiedClientsAndCapabilitiesForUser(ownerUserID, req); err != nil {
+		return StoredTunnel{}, err
+	}
+	if err := s.validateTunnelLoop(req.Ingress, req.Target, targetConfig.Host, targetConfig.Port); err != nil {
 		return StoredTunnel{}, err
 	}
 	if err := s.validateUnifiedIngressResourceAvailable(ownerUserID, req, ingressConfig, existingID); err != nil {

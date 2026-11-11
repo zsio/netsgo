@@ -15,14 +15,18 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 
 	"netsgo/internal/clientaddr"
+	"netsgo/internal/connlimit"
 	"netsgo/internal/installmethod"
+	"netsgo/internal/netidentity"
 	"netsgo/internal/svcmgr"
+	"netsgo/internal/tunnelloop"
 	"netsgo/pkg/mux"
 	"netsgo/pkg/netutil"
 	"netsgo/pkg/protocol"
@@ -46,6 +50,10 @@ var (
 
 // Client is the core client structure.
 type Client struct {
+	// Configure before Start; zero selects the default of 10000.
+	MaxConnections         int
+	NetworkNamespaceID     string
+	dataConnections        connlimit.Limiter
 	ServerAddr             string // Server address (supports ws://, wss://, http://, and https://, normalized internally)
 	Key                    string // Authentication key (used to exchange for a token)
 	Token                  string // Client connection token (exchanged from Key)
@@ -145,6 +153,8 @@ func (rt *sessionRuntime) closeDone() {
 // New creates a new client instance.
 func New(serverAddr, key string) *Client {
 	return &Client{
+		MaxConnections:       connlimit.Default,
+		NetworkNamespaceID:   netidentity.Current(),
 		ServerAddr:           serverAddr,
 		Key:                  key,
 		done:                 make(chan struct{}),
@@ -639,11 +649,12 @@ func (c *Client) authenticateRuntime(rt *sessionRuntime) error {
 		Token:     token,
 		InstallID: c.InstallID,
 		Client: protocol.ClientInfo{
-			Hostname: hostname,
-			OS:       runtime.GOOS,
-			Arch:     runtime.GOARCH,
-			IP:       localIP,
-			Version:  buildversion.Current,
+			NetworkNamespaceID: c.NetworkNamespaceID,
+			Hostname:           hostname,
+			OS:                 runtime.GOOS,
+			Arch:               runtime.GOARCH,
+			IP:                 localIP,
+			Version:            buildversion.Current,
 			UpdateCapability: &protocol.UpdateCapability{
 				InstallMethod: installmethod.Detect(svcmgr.RoleClient),
 			},
@@ -976,7 +987,11 @@ func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
 			}
 		}
 
-		go c.handleStream(stream)
+		admitted, ok := c.admitForwardingConn(stream)
+		if !ok {
+			continue
+		}
+		go c.handleStream(admitted)
 	}
 }
 
@@ -986,6 +1001,11 @@ func (c *Client) acceptStreamLoopRuntime(rt *sessionRuntime) {
 // 3. Dial the local service
 // 4. Relay(stream, localConn)
 func (c *Client) handleStream(stream net.Conn) {
+	var accepted bool
+	stream, accepted = c.admitForwardingConn(stream)
+	if !accepted {
+		return
+	}
 	defer func() { _ = stream.Close() }()
 
 	header, err := protocol.DecodeDataStreamHeader(stream)
@@ -997,6 +1017,11 @@ func (c *Client) handleStream(stream net.Conn) {
 }
 
 func (c *Client) handleDirectStream(manager *clientPeerManager, sessionID string, stream net.Conn) {
+	var accepted bool
+	stream, accepted = c.admitForwardingConn(stream)
+	if !accepted {
+		return
+	}
 	defer func() { _ = stream.Close() }()
 	header, err := protocol.DecodeDataStreamHeader(stream)
 	if err != nil {
@@ -1124,8 +1149,22 @@ func (c *Client) handleFixedTargetStream(stream net.Conn, header protocol.DataSt
 		}
 		mux.UDPRelayWithTraffic(stream, conn, observe)
 	default:
-		conn, err := net.DialTimeout("tcp", target.address(), 5*time.Second)
+		dialer := net.Dialer{Timeout: 5 * time.Second}
+		if target.loopGuard != nil {
+			dialer.Control = func(_, address string, _ syscall.RawConn) error {
+				return target.loopGuard.CheckAddress(address)
+			}
+		}
+		conn, err := dialer.Dial("tcp", target.address())
 		if err != nil {
+			if errors.Is(err, tunnelloop.ErrLoop) && target.loopReportOnce != nil {
+				target.loopReportOnce.Do(func() {
+					c.reportTunnelRuntimeError(target.loopRuntime, protocol.TunnelProvisionRequest{
+						TunnelID: target.tunnelID, Revision: target.revision, Role: protocol.DataStreamRoleTarget,
+						Spec: protocol.TunnelSpec{TransportPolicy: target.transportPolicy},
+					}, err.Error())
+				})
+			}
 			log.Printf("⚠️ Failed to connect to fixed TCP target [%s → %s]: %v", header.TunnelID, target.address(), err)
 			return
 		}

@@ -1076,6 +1076,7 @@ export const zhCN = {
     unknown_client: "客户端不存在。",
     capability_not_supported: "该客户端不支持请求的隧道能力。",
     same_ingress_and_target_client: "访问入口客户端不能与服务来源客户端相同。",
+    tunnel_loop: "目标地址指向当前隧道自己的 TCP 入口，会形成循环连接。请修改目标地址、入口端口或目标客户端。",
     same_target_client: "请选择不同的服务来源客户端。",
     tunnel_pending: "隧道正在建立中，暂时不能迁移。",
     tunnel_name_conflict: "目标客户端已存在同名隧道。",

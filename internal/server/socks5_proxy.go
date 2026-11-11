@@ -2,14 +2,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"sync"
 	"time"
 
+	"netsgo/internal/connlimit"
 	"netsgo/internal/ingresspolicy"
 	"netsgo/internal/socks5wire"
+	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
 
@@ -118,7 +121,11 @@ func (s *Server) socks5ProxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, 
 			}
 		}
 
-		go s.handleSOCKS5ProxyConn(client, tunnel, listener, extConn, listenCfg, activation)
+		admitted, ok := s.admitForwardingConn(extConn, &s.tcpHandlers)
+		if !ok {
+			continue
+		}
+		go s.handleSOCKS5ProxyConn(client, tunnel, listener, admitted, listenCfg, activation)
 	}
 }
 
@@ -136,8 +143,11 @@ func (s *Server) handleSOCKS5ProxyConn(client *ClientConn, tunnel *ProxyTunnel, 
 	_ = extConn.SetDeadline(time.Time{})
 	stream, err := s.openSOCKS5StreamToClient(client, tunnel, activation, request)
 	if err != nil {
-		log.Printf("⚠️ SOCKS5 proxy [%s] open stream failed: %v", activation.config.Name, err)
 		_ = socks5wire.WriteReply(extConn, socks5wire.RepGeneralFailure, "", 0)
+		if errors.Is(err, connlimit.ErrReached) || mux.IsClosedStream(err) {
+			return
+		}
+		log.Printf("⚠️ SOCKS5 proxy [%s] open stream failed: %v", activation.config.Name, err)
 		s.markTCPProxyRuntimeErrorIfCurrent(client, activation.config.Name, tunnel, listener, activation.config, fmt.Sprintf("SOCKS5 proxy forwarding channel failed: %v", err))
 		return
 	}

@@ -12,12 +12,19 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 
+	"netsgo/internal/connlimit"
 	"netsgo/internal/installmethod"
+	"netsgo/internal/netidentity"
 	"netsgo/pkg/protocol"
 )
 
 // Server is the core server struct.
 type Server struct {
+	// Configure before Start; zero selects the default of 10000.
+	MaxConnections                      int
+	dataConnections                     connlimit.Limiter
+	tcpHandlers                         connlimit.Limiter
+	networkNamespaceID                  string
 	Port                                int
 	DataDir                             string
 	AllowLoopbackManagementHost         bool
@@ -128,6 +135,8 @@ type ClientConn struct {
 // New creates a new Server instance.
 func New(port int) *Server {
 	s := &Server{
+		MaxConnections:              connlimit.Default,
+		networkNamespaceID:          netidentity.Current(),
 		Port:                        port,
 		AllowLoopbackManagementHost: true,
 		events:                      NewEventBus(),
