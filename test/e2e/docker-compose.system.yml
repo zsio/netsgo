@@ -124,6 +124,28 @@ services:
       - control
       - target-backend
 
+  target-client-next:
+    # Migration target kept separate so its install id survives stop/start cycles.
+    <<: *netsgo-e2e-tools
+    image: ${NETSGO_TARGET_CLIENT_IMAGE:-netsgo-e2e:local}
+    hostname: ${NETSGO_NEXT_TARGET_CLIENT_HOSTNAME:-system-target-client-next}
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - /opt/netsgo-e2e/run-client.sh
+    environment:
+      NETSGO_SERVER: ${NETSGO_CLIENT_SERVER:-http://proxy}
+      NETSGO_CLIENT_KEY: ${NETSGO_CLIENT_KEY:-}
+      NETSGO_DATA_DIR: /var/lib/netsgo
+    volumes:
+      - netsgo-system-next-target-data:/var/lib/netsgo
+    depends_on:
+      - server
+      - tcp-backend
+    networks:
+      - control
+      - target-backend
+
   ingress-client:
     # See server note: compat/upgrade runs must prebuild images and use --no-build.
     <<: *netsgo-e2e-tools
@@ -159,5 +181,6 @@ networks:
 
 volumes:
   netsgo-system-ingress-data:
+  netsgo-system-next-target-data:
   netsgo-system-server-data:
   netsgo-system-target-data:
