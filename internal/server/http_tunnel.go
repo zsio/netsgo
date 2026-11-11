@@ -334,14 +334,21 @@ func findHTTPDomainConflictNames(domain, excludeName, excludeClientID string, se
 	conflicts := []string{}
 	seenTunnels := map[string]struct{}{}
 	matchAndAppend := func(clientID, name, tunnelType, tunnelDomain string) {
-		if tunnelType != protocol.ProxyTypeHTTP {
+		if tunnelType != protocol.ProxyTypeHTTP && tunnelType != protocol.ProxyTypeTLS {
 			return
 		}
 		if excludeName != "" && excludeClientID != "" && name == excludeName && clientID == excludeClientID {
 			return
 		}
 		if canonicalHost(tunnelDomain) != canonicalDomain {
-			return
+			if tunnelType != protocol.ProxyTypeTLS {
+				return
+			}
+			claimed, _ := splitCanonicalHostPort(tunnelDomain)
+			requested, _ := splitCanonicalHostPort(domain)
+			if canonicalHTTPDomain(claimed) != canonicalHTTPDomain(requested) {
+				return
+			}
 		}
 		key := clientID + ":" + name
 		if _, exists := seenTunnels[key]; exists {

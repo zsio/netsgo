@@ -99,7 +99,7 @@ func InstallServerWith(deps serverDeps) error {
 	}
 	trustedProxies, err := deps.UI.Input("可信代理 CIDR", tui.InputOptions{
 		Placeholder: "e.g. 127.0.0.1/8,10.0.0.0/8 or 0.0.0.0/0",
-		Description: "逗号分隔的可信代理 CIDR；默认仅信任本机回环地址。若 NetsGo 位于反向代理后方，可添加代理所在网段；若需信任所有来源可设为 0.0.0.0/0，但需注意此配置允许客户端伪造 X-Forwarded-For。",
+		Description: "逗号分隔的可信代理 CIDR；默认仅信任本机回环地址。若 NetsGo 位于反向代理后方，可添加代理所在网段；若前面有多层代理（如 CDN → nginx），需列出每一层的网段，否则会把最近的未列出的一层识别为客户端；若需信任所有来源可设为 0.0.0.0/0，但需注意此配置允许客户端伪造 X-Forwarded-For。",
 		Default:     "127.0.0.1/8",
 	})
 	if err != nil {

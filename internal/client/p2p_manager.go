@@ -282,7 +282,11 @@ func (m *clientPeerManager) acceptLoop(session *clientPeerSession) {
 		if err != nil {
 			break
 		}
-		go m.client.handleDirectStream(m, session.id, stream)
+		admitted, ok := m.client.admitForwardingConn(stream)
+		if !ok {
+			continue
+		}
+		go m.client.handleDirectStream(m, session.id, admitted)
 	}
 }
 

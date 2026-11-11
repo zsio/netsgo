@@ -348,7 +348,10 @@ func TestWebhookDispatcherHandlesNetworkErrorAndTimeout(t *testing.T) {
 		dispatcher.client.Timeout = 25 * time.Millisecond
 		dispatcher.execute(claimed)
 		stored, err := webhookStore.GetDelivery(owner.ID, delivery.ID)
-		if err != nil || stored.Status != WebhookDeliveryFailed || !strings.Contains(strings.ToLower(stored.Error), "timeout") {
+		// The HTTP client can report either its timeout or the request context's
+		// deadline, depending on which cancellation path wins.
+		timeoutError := strings.Contains(strings.ToLower(stored.Error), "timeout") || strings.Contains(stored.Error, context.DeadlineExceeded.Error())
+		if err != nil || stored.Status != WebhookDeliveryFailed || !timeoutError {
 			t.Fatalf("timeout delivery = %+v, %v", stored, err)
 		}
 	})

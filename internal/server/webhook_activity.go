@@ -18,7 +18,7 @@ func enqueueActivityWebhookDeliveriesTx(tx *sql.Tx, activityID int64, prepared p
 		return nil
 	}
 	rows, err := tx.Query(`SELECT w.id, w.revision, w.name, w.target_kind, w.target_mode,
-		w.method, w.url_template, w.headers_json, w.body_template
+		w.method, w.url_template, w.headers_json, w.body_template, w.min_interval_seconds
 		FROM activity_webhooks w
 		JOIN activity_webhook_events e
 			ON e.owner_user_id = w.owner_user_id AND e.webhook_id = w.id
@@ -35,7 +35,7 @@ func enqueueActivityWebhookDeliveriesTx(tx *sql.Tx, activityID int64, prepared p
 		var item candidate
 		var headersJSON string
 		if err := rows.Scan(&item.config.ID, &item.config.Revision, &item.config.Name, &item.config.TargetKind,
-			&item.config.TargetMode, &item.config.Method, &item.config.URL, &headersJSON, &item.config.Body); err != nil {
+			&item.config.TargetMode, &item.config.Method, &item.config.URL, &headersJSON, &item.config.Body, &item.config.MinIntervalSeconds); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -72,6 +72,10 @@ func enqueueActivityWebhookDeliveriesTx(tx *sql.Tx, activityID int64, prepared p
 			return err
 		}
 		matched := matchedWebhookTargetIDs(item.config.TargetKind, item.config.TargetMode, item.config.TargetIDs, baseSnapshot)
+		matched, err = webhookNotificationTargetsTx(tx, prepared.scopeUserID, item.config, eventType, matched, prepared.recordedAt)
+		if err != nil {
+			return err
+		}
 		if len(matched) == 0 {
 			continue
 		}
@@ -89,6 +93,9 @@ func enqueueActivityWebhookDeliveriesTx(tx *sql.Tx, activityID int64, prepared p
 				log.Printf("⚠️ Skipping Webhook delivery [webhook_id=%s activity_id=%d]: %v", item.config.ID, activityID, err)
 				continue
 			}
+			return err
+		}
+		if err := recordWebhookNotificationTx(tx, prepared.scopeUserID, item.config, eventType, matched, prepared.recordedAt); err != nil {
 			return err
 		}
 	}

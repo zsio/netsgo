@@ -103,7 +103,7 @@ export interface ClientToClientTunnelSpecMutationInput extends TunnelMutationPay
   bind_ip: string;
 }
 
-export const currentIngressTypes = ['tcp_listen', 'udp_listen', 'http_host', 'socks5_listen'] as const satisfies readonly IngressEndpointType[];
+export const currentIngressTypes = ['tcp_listen', 'udp_listen', 'http_host', 'tls_sni', 'socks5_listen'] as const satisfies readonly IngressEndpointType[];
 export const currentTargetTypes = ['tcp_service', 'udp_service', 'socks5_connect_handler'] as const satisfies readonly TargetEndpointType[];
 export const futureOnlyTargetTypes = ['unix_socket', 'static_file', 'serial_device'] as const;
 
@@ -134,16 +134,17 @@ export function buildTunnelMutationPayload(input: TunnelMutationPayloadInput) {
   const localIP = input.local_ip.trim();
   const domain = (input.domain ?? '').trim();
   const remotePort = input.remote_port ?? 0;
+  const isDomain = input.type === 'http' || input.type === 'tls';
 
-  if (input.type !== 'http' && (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535)) {
+  if (!isDomain && (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535)) {
     throw new Error(i18n.t('errors.tcp_udp_remote_port_required'));
   }
 
   return {
     local_ip: localIP,
     local_port: input.local_port,
-    remote_port: input.type === 'http' ? 0 : remotePort,
-    domain: input.type === 'http' ? domain : '',
+    remote_port: isDomain ? 0 : remotePort,
+    domain: isDomain ? domain : '',
     ingress_bps: normalizeBandwidthLimit(input.ingress_bps),
     egress_bps: normalizeBandwidthLimit(input.egress_bps),
     ...(input.total_bps == null ? {} : { total_bps: normalizeBandwidthLimit(input.total_bps) }),
@@ -216,6 +217,9 @@ export function buildTunnelSpecCreateRequest(input: TunnelSpecMutationInput): Tu
 export function buildClientToClientTunnelSpecCreateRequest(
   input: ClientToClientTunnelSpecMutationInput,
 ): TunnelCreateRequest {
+  if (input.type === 'tls') {
+    throw new Error(i18n.t('errors.client_to_client_tls_unsupported'));
+  }
   if (input.type === 'http') {
     throw new Error(i18n.t('errors.client_to_client_http_unsupported'));
   }
@@ -446,6 +450,8 @@ function buildServerExposeIngress(
   httpAuth?: HTTPAuthMutationInput,
 ): TunnelIngress {
   switch (proxyType) {
+    case 'tls':
+      return { location: 'server', type: 'tls_sni', config: { domain, allowed_source_cidrs: allowedSourceCIDRs } };
     case 'http':
       return {
         location: 'server',
@@ -576,6 +582,7 @@ function getTunnelIngressLabel(tunnel: ProxyConfig) {
   if (ingress) {
     switch (ingress.type) {
       case 'http_host':
+      case 'tls_sni':
         return ingress.config?.domain || '(domain not set)';
       case 'tcp_listen':
       case 'udp_listen':

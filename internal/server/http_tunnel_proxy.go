@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"netsgo/internal/connlimit"
 	"netsgo/pkg/protocol"
 )
 
@@ -227,6 +229,9 @@ func (s *Server) findHTTPRouteByHost(host string) (httpTunnelRoute, bool, error)
 		if err != nil || !ok {
 			return httpTunnelRoute{}, false, err
 		}
+		if claim.Ingress.Type == protocol.IngressTypeTLSSNI {
+			return httpTunnelRoute{}, false, nil
+		}
 		if claim.DesiredState == protocol.ProxyDesiredStateRunning {
 			if route, found := s.findRuntimeHTTPRouteForClaim(canonical, &claim); found {
 				return route, true, nil
@@ -243,6 +248,10 @@ func (s *Server) findRuntimeHTTPRoute(host string) (httpTunnelRoute, bool) {
 }
 
 func (s *Server) findRuntimeHTTPRouteForClaim(host string, claim *StoredTunnel) (httpTunnelRoute, bool) {
+	return s.findRuntimeDomainRouteForClaim(host, claim, protocol.IngressTypeHTTPHost)
+}
+
+func (s *Server) findRuntimeDomainRouteForClaim(host string, claim *StoredTunnel, ingressType string) (httpTunnelRoute, bool) {
 	patterns := httpDomainCandidates(host)
 	bestRank := len(patterns)
 	var route httpTunnelRoute
@@ -254,7 +263,13 @@ func (s *Server) findRuntimeHTTPRouteForClaim(host string, claim *StoredTunnel) 
 		client.proxyMu.Lock()
 		defer client.proxyMu.Unlock()
 		for _, tunnel := range client.proxies {
-			if tunnel.Config.Type != protocol.ProxyTypeHTTP {
+			kind := ""
+			if tunnel.Config.Ingress != nil {
+				kind = tunnel.Config.Ingress.Type
+			} else if tunnel.Config.Type == protocol.ProxyTypeHTTP {
+				kind = protocol.IngressTypeHTTPHost
+			}
+			if kind != ingressType {
 				continue
 			}
 			config := tunnel.Config
@@ -288,7 +303,7 @@ func (s *Server) findRuntimeHTTPRouteForClaim(host string, claim *StoredTunnel) 
 }
 
 func httpTunnelDomain(config protocol.ProxyConfig) string {
-	if config.Ingress != nil && config.Ingress.Type == protocol.IngressTypeHTTPHost {
+	if config.Ingress != nil && isDomainIngressType(config.Ingress.Type) {
 		var cfg httpHostConfigAPI
 		if err := json.Unmarshal(config.Ingress.Config, &cfg); err == nil && strings.TrimSpace(cfg.Domain) != "" {
 			return cfg.Domain
@@ -394,6 +409,10 @@ func (s *Server) proxyHTTPRequest(w http.ResponseWriter, r *http.Request, route 
 			pr.Out.Header = headers
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			if errors.Is(err, connlimit.ErrReached) {
+				http.Error(w, connlimit.ErrReached.Error(), http.StatusServiceUnavailable)
+				return
+			}
 			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		},
 	}

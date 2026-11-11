@@ -194,7 +194,7 @@ func (s *Server) handleProxyCreateMessage(client *ClientConn, msg protocol.Messa
 	req.IngressBPS = 0
 	req.EgressBPS = 0
 
-	if req.Type == protocol.ProxyTypeHTTP {
+	if req.Type == protocol.ProxyTypeHTTP || req.Type == protocol.ProxyTypeTLS {
 		resp, _ := protocol.NewMessage(protocol.MsgTypeProxyCreateResp, protocol.ProxyCreateResponse{
 			Name:    req.Name,
 			Success: false,

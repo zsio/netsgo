@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"netsgo/internal/connlimit"
+	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
 
@@ -134,7 +137,12 @@ func (s *Server) validateProxyRequestWithExclusions(client *ClientConn, req prot
 		}
 	}
 
-	if req.Type == protocol.ProxyTypeHTTP {
+	if req.Type == protocol.ProxyTypeHTTP || req.Type == protocol.ProxyTypeTLS {
+		if req.Type == protocol.ProxyTypeTLS {
+			if err := s.validateSNIManagementDomain(req.Domain); err != nil {
+				return err
+			}
+		}
 		if err := validateHTTPDomain(req.Domain); err != nil {
 			return newProxyRequestValidationError(err, protocol.TunnelMutationFieldDomain, protocol.TunnelMutationErrorCodeDomainInvalid, http.StatusBadRequest)
 		}
@@ -317,7 +325,7 @@ func (s *Server) prepareProxyTunnelWithExclusions(client *ClientConn, req protoc
 		client.proxyMu.Unlock()
 		return nil, fmt.Errorf("proxy tunnel %q already exists", req.Name)
 	}
-	if req.Type == protocol.ProxyTypeHTTP {
+	if req.Type == protocol.ProxyTypeHTTP || req.Type == protocol.ProxyTypeTLS {
 		req.RemotePort = 0
 	}
 	tunnel := &ProxyTunnel{
@@ -368,7 +376,7 @@ func (s *Server) activatePreparedTunnel(client *ClientConn, tunnel *ProxyTunnel)
 		return s.activatePreparedSOCKS5ServerExposeTunnel(client, tunnel, config)
 	}
 
-	if config.Type == protocol.ProxyTypeHTTP {
+	if config.Type == protocol.ProxyTypeHTTP || isTLSIngress(config) {
 		policy, err := decodeIngressAccessPolicyFromProxyConfig(config)
 		if err != nil {
 			return fmt.Errorf("decode HTTP ingress policy: %w", err)
@@ -717,7 +725,11 @@ func (s *Server) proxyAcceptLoop(client *ClientConn, tunnel *ProxyTunnel, listen
 			}
 		}
 
-		go s.handleProxyConn(client, tunnel, listener, extConn, activation)
+		admitted, ok := s.admitForwardingConn(extConn, &s.tcpHandlers)
+		if !ok {
+			continue
+		}
+		go s.handleProxyConn(client, tunnel, listener, admitted, activation)
 	}
 }
 
@@ -733,6 +745,9 @@ func (s *Server) handleProxyConn(client *ClientConn, tunnel *ProxyTunnel, listen
 
 	stream, err := s.openStreamToClientForActivation(client, tunnel, activation)
 	if err != nil {
+		if errors.Is(err, connlimit.ErrReached) || mux.IsClosedStream(err) {
+			return
+		}
 		log.Printf("⚠️ proxy [%s] open stream failed: %v", activation.config.Name, err)
 		s.markTCPProxyRuntimeErrorIfCurrent(client, activation.config.Name, tunnel, listener, activation.config, fmt.Sprintf("TCP proxy forwarding channel failed: %v", err))
 		return

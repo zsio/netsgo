@@ -5,9 +5,15 @@ import (
 	"net"
 	"strconv"
 	"strings"
+
+	"netsgo/pkg/protocol"
 )
 
 const maxHTTPDomainWildcards = 3
+
+func isDomainIngressType(kind string) bool {
+	return kind == protocol.IngressTypeHTTPHost || kind == protocol.IngressTypeTLSSNI
+}
 
 // HTTP patterns consist of up to three leading '*.' labels and a fixed FQDN.
 // Each star consumes exactly one nonempty label; it never includes the apex.

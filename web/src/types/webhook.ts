@@ -70,6 +70,7 @@ export interface ActivityWebhookConfig {
   headers: WebhookHeader[];
   body: string;
   events: WebhookEventKey[];
+  minIntervalSeconds: number;
   calls24h: number;
   lastStatus: 'success' | 'failed' | 'retrying' | 'idle';
   consecutiveFailures: number;
@@ -91,6 +92,7 @@ export interface ActivityWebhookAPI {
   headers: WebhookHeader[];
   body: string;
   events: WebhookEventKey[];
+  min_interval_seconds: number;
   calls_24h: number;
   last_status: ActivityWebhookConfig['lastStatus'];
   consecutive_failures: number;
@@ -112,6 +114,7 @@ export interface WebhookConfigInputAPI {
   headers: WebhookHeader[];
   body: string;
   events: WebhookEventKey[];
+  min_interval_seconds: number;
 }
 
 export function activityWebhookFromAPI(value: ActivityWebhookAPI): ActivityWebhookConfig {
@@ -128,6 +131,7 @@ export function activityWebhookFromAPI(value: ActivityWebhookAPI): ActivityWebho
     headers: value.headers ?? [],
     body: value.body,
     events: value.events ?? [],
+    minIntervalSeconds: value.min_interval_seconds,
     calls24h: value.calls_24h,
     lastStatus: value.last_status,
     consecutiveFailures: value.consecutive_failures,
@@ -151,6 +155,7 @@ export function activityWebhookToAPI(value: ActivityWebhookConfig): WebhookConfi
     headers: value.headers,
     body: value.body,
     events: value.events,
+    min_interval_seconds: value.minIntervalSeconds,
   };
 }
 
@@ -169,6 +174,7 @@ export function createEmptyWebhook(catalog: WebhookCatalog): ActivityWebhookConf
     headers: [{ id: `header_${createLocalId('header')}`, key: 'Content-Type', value: 'application/json' }],
     body: catalog.default_body,
     events: [],
+    minIntervalSeconds: 0,
     calls24h: 0,
     lastStatus: 'idle',
     consecutiveFailures: 0,

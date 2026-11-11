@@ -503,6 +503,51 @@ func TestAdminClientAuthRateLimits_RejectsInvalidSettingsWithoutReplacingLimiter
 	}
 }
 
+// A same-host reverse proxy (loopback peer, trusted by default) that appends to X-Forwarded-For
+// leaves the client-supplied prefix in place. Rotating that prefix must not yield a fresh
+// rate-limit identity, otherwise brute-force protection is trivially bypassed.
+func TestLogin_RateLimitIgnoresSpoofedForwardedForPrefix(t *testing.T) {
+	const maxFailures = 3
+	s, cleanup := setupRateLimitedServer(t, RateLimiterConfig{
+		WindowSize:    time.Minute,
+		MaxRequests:   100,
+		MaxFailures:   maxFailures,
+		LockoutPeriod: time.Hour,
+	}, RateLimiterConfig{
+		WindowSize:    time.Minute,
+		MaxRequests:   100,
+		MaxFailures:   100,
+		LockoutPeriod: time.Hour,
+	})
+	defer cleanup()
+
+	badLogin := []byte(`{"username":"admin","password":"wrong-password"}`)
+	attempt := func(forwardedFor string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(badLogin))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", forwardedFor)
+		req.RemoteAddr = "127.0.0.1:50000" // nginx on the same host
+		w := httptest.NewRecorder()
+		s.handleAPILogin(w, req)
+		return w.Code
+	}
+
+	// The proxy always appends the real peer (203.0.113.9); only the prefix changes.
+	for i := 0; i < maxFailures; i++ {
+		if code := attempt(fmt.Sprintf("10.9.9.%d, 203.0.113.9", i+1)); code != http.StatusUnauthorized {
+			t.Fatalf("failure #%d: want 401, got %d", i+1, code)
+		}
+	}
+	if code := attempt("10.9.9.100, 203.0.113.9"); code != http.StatusTooManyRequests {
+		t.Fatalf("after %d failures with a rotated spoofed prefix, want 429, got %d", maxFailures, code)
+	}
+
+	// A genuinely different client behind the same proxy is unaffected.
+	if code := attempt("198.51.100.77"); code != http.StatusUnauthorized {
+		t.Fatalf("a different real client must not share the locked identity: want 401, got %d", code)
+	}
+}
+
 func TestLogin_RateLimitXForwardedFor(t *testing.T) {
 	s, cleanup := setupRateLimitedServer(t, RateLimiterConfig{
 		WindowSize:    time.Minute,

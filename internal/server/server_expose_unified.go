@@ -257,6 +257,13 @@ func serverExposeRuntimeProxyRequest(stored StoredTunnel) (protocol.ProxyNewRequ
 	}
 
 	switch stored.Ingress.Type {
+	case protocol.IngressTypeTLSSNI:
+		var ingress protocol.TLSSNIConfig
+		if err := json.Unmarshal(stored.Ingress.Config, &ingress); err != nil {
+			return protocol.ProxyNewRequest{}, fmt.Errorf("decode tls_sni ingress config: %w", err)
+		}
+		config.Type = protocol.ProxyTypeTLS
+		config.Domain = ingress.Domain
 	case protocol.IngressTypeHTTPHost:
 		var ingress httpHostConfigAPI
 		if err := json.Unmarshal(stored.Ingress.Config, &ingress); err != nil {

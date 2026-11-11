@@ -192,7 +192,7 @@ func (s *WebhookStore) Get(ownerUserID, id string) (ActivityWebhook, error) {
 }
 
 const webhookListQuery = `SELECT w.id, w.revision, w.name, w.enabled, w.target_kind, w.target_mode,
-	w.method, w.url_template, w.headers_json, w.body_template,
+	w.method, w.url_template, w.headers_json, w.body_template, w.min_interval_seconds,
 	w.last_status, w.consecutive_failures, w.last_called_at_ns, w.created_at_ns, w.updated_at_ns,
 	(SELECT COUNT(*) FROM activity_webhook_deliveries d
 	 WHERE d.owner_user_id = w.owner_user_id AND d.webhook_id = w.id
@@ -238,10 +238,10 @@ func (s *WebhookStore) Create(ownerUserID string, raw WebhookConfigInput) (Activ
 	}
 	_, err = tx.Exec(`INSERT INTO activity_webhooks (
 		owner_user_id, id, revision, name, enabled, target_kind, target_mode, method,
-		url_template, headers_json, body_template, created_at_ns, updated_at_ns
-	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ownerUserID, input.ID, input.Name,
+		url_template, headers_json, body_template, min_interval_seconds, created_at_ns, updated_at_ns
+	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ownerUserID, input.ID, input.Name,
 		boolToInt(input.Enabled), input.TargetKind, input.TargetMode, input.Method, input.URL,
-		string(headersJSON), input.Body, now.UnixNano(), now.UnixNano())
+		string(headersJSON), input.Body, input.MinIntervalSeconds, now.UnixNano(), now.UnixNano())
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return ActivityWebhook{}, ErrWebhookRevisionConflict
@@ -292,9 +292,9 @@ func (s *WebhookStore) Update(ownerUserID, id string, raw WebhookConfigInput) (A
 		return ActivityWebhook{}, err
 	}
 	result, err := tx.Exec(`UPDATE activity_webhooks SET revision = revision + 1, name = ?, enabled = ?,
-		target_kind = ?, target_mode = ?, method = ?, url_template = ?, headers_json = ?, body_template = ?, updated_at_ns = ?
+		target_kind = ?, target_mode = ?, method = ?, url_template = ?, headers_json = ?, body_template = ?, min_interval_seconds = ?, updated_at_ns = ?
 		WHERE owner_user_id = ? AND id = ? AND revision = ?`, input.Name, boolToInt(input.Enabled), input.TargetKind,
-		input.TargetMode, input.Method, input.URL, string(headersJSON), input.Body, now.UnixNano(), ownerUserID, id, input.ExpectedRevision)
+		input.TargetMode, input.Method, input.URL, string(headersJSON), input.Body, input.MinIntervalSeconds, now.UnixNano(), ownerUserID, id, input.ExpectedRevision)
 	if err != nil {
 		return ActivityWebhook{}, fmt.Errorf("update Webhook: %w", err)
 	}
@@ -551,7 +551,7 @@ func scanActivityWebhook(scanner dbScanner) (ActivityWebhook, error) {
 	var lastCalledAt sql.NullInt64
 	var createdAtNS, updatedAtNS int64
 	err := scanner.Scan(&item.ID, &item.Revision, &item.Name, &enabled, &item.TargetKind, &item.TargetMode,
-		&item.Method, &item.URL, &headersJSON, &item.Body, &item.LastStatus, &item.ConsecutiveFailures,
+		&item.Method, &item.URL, &headersJSON, &item.Body, &item.MinIntervalSeconds, &item.LastStatus, &item.ConsecutiveFailures,
 		&lastCalledAt, &createdAtNS, &updatedAtNS, &item.Calls24h)
 	if err != nil {
 		return ActivityWebhook{}, err
@@ -989,6 +989,10 @@ func decodeWebhookDeliveryCursor(raw string) (webhookDeliveryCursor, error) {
 }
 
 func (s *WebhookStore) Prune(now time.Time) (int64, error) {
+	if _, err := s.db.Exec(`DELETE FROM activity_webhook_notification_state WHERE last_enqueued_at_ns <= ?`,
+		now.UTC().Add(-time.Duration(webhookMaxNotificationIntervalSeconds)*time.Second).UnixNano()); err != nil {
+		return 0, fmt.Errorf("prune Webhook notification state: %w", err)
+	}
 	result, err := s.db.Exec(`DELETE FROM activity_webhook_deliveries
 		WHERE status IN ('success', 'failed', 'canceled') AND (
 			completed_at_ns < ? OR id IN (

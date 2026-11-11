@@ -8,7 +8,6 @@ import {
   Radio, Waypoints,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -80,6 +79,7 @@ const typeOptions: { value: TunnelFormType; label: string; icon: IconType; descK
   { value: 'tcp', label: 'TCP', icon: Cable, descKey: 'tunnels.protocolDescTcp' },
   { value: 'udp', label: 'UDP', icon: Radio, descKey: 'tunnels.protocolDescUdp' },
   { value: 'http', label: 'HTTP', icon: Globe, descKey: 'tunnels.protocolDescHttp' },
+  { value: 'tls', label: 'TLS', icon: Globe, descKey: 'tunnels.protocolDescTls' },
   { value: 'socks5', label: 'SOCKS5', icon: Waypoints, descKey: 'tunnels.protocolDescSocks5' },
 ];
 
@@ -167,6 +167,7 @@ function serverFieldError(error: unknown): LocalFieldError | null {
 }
 
 const ADVANCED_FIELD_NAMES = new Set<string>([
+  'transport_policy',
   'ingress.config.allowed_source_cidrs',
   'ingress.config',
   'ingress.config.auth',
@@ -199,28 +200,28 @@ function formatPortRanges(ranges: PortRange[] | undefined) {
 
 function topologyCardClassName(selected: boolean) {
   return cn(
-    'flex w-full flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors',
+    'flex min-h-6 w-full items-center justify-center rounded-md px-2 py-0.5 text-center text-xs whitespace-nowrap transition-colors',
     'focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
     selected
-      ? 'border-primary bg-primary/10'
-      : 'border-input bg-background hover:bg-muted/50',
+      ? 'bg-background text-primary shadow-sm'
+      : 'text-muted-foreground hover:text-foreground',
     'disabled:opacity-60',
   );
 }
 
 function protocolCardClassName(selected: boolean) {
   return cn(
-    'flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
+    'flex min-h-8 min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-xs font-medium transition-colors sm:text-sm',
     'focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
     selected
-      ? 'border-primary bg-primary/10 text-primary'
-      : 'border-input bg-background text-foreground hover:bg-muted/50',
+      ? 'bg-background text-primary shadow-sm'
+      : 'text-muted-foreground hover:text-foreground',
   );
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <p className="text-xs font-semibold text-muted-foreground">
       {children}
     </p>
   );
@@ -230,26 +231,22 @@ export function TopologyCardButton({
   selected,
   disabled,
   label,
-  description,
   onSelect,
 }: {
   selected: boolean;
   disabled?: boolean;
   label: string;
-  description?: string;
   onSelect: () => void;
 }) {
   return (
     <button
       type="button"
       disabled={disabled}
+      aria-pressed={selected}
       onClick={onSelect}
       className={topologyCardClassName(selected)}
     >
       <span className="text-sm font-medium">{label}</span>
-      {description ? (
-        <span className="text-[11px] leading-snug text-muted-foreground">{description}</span>
-      ) : null}
     </button>
   );
 }
@@ -258,14 +255,12 @@ export function ClientToClientTopologyButton({
   selected,
   disabled,
   label,
-  description,
   tooltip,
   onSelect,
 }: {
   selected: boolean;
   disabled: boolean;
   label: string;
-  description?: string;
   tooltip: string;
   onSelect: () => void;
 }) {
@@ -274,7 +269,6 @@ export function ClientToClientTopologyButton({
       selected={selected}
       disabled={disabled}
       label={label}
-      description={description}
       onSelect={onSelect}
     />
   );
@@ -382,12 +376,14 @@ function TunnelDialogForm({
     : ingressClientOptions[0]?.id || '';
   const isClientToClient = topology === 'client_to_client';
   const isHttp = type === 'http';
+  const isTls = type === 'tls';
+  const isDomain = isHttp || isTls;
   const isSocks5 = type === 'socks5';
   const showLoopbackCIDRWarning = shouldWarnMissingLoopbackSourceCIDRs(sourceCidrs);
   const isEditing = props.mode === 'edit';
   const canUseClientToClient = ingressClientOptions.length > 0;
   const parsedLocalPort = parsePortInput(localPort);
-  const parsedRemotePort = isHttp ? 0 : parsePortInput(remotePort);
+  const parsedRemotePort = isDomain ? 0 : parsePortInput(remotePort);
   const parsedSocks5DialTimeout = Number.parseInt(socks5DialTimeout, 10);
 
   const createTunnel = useCreateTunnel(props.scope);
@@ -424,7 +420,7 @@ function TunnelDialogForm({
     const parsedEgressBps = parseMbpsInputToBps(egressBps);
     const parsedTotalBps = parseMbpsInputToBps(totalBps);
 
-    if (!isClientToClient && !isHttp && (!status || isBootstrapError)) {
+    if (!isClientToClient && !isDomain && (!status || isBootstrapError)) {
       failField(localFieldError('remote_port', t('tunnels.bootstrapUnavailable')));
       return;
     }
@@ -439,12 +435,12 @@ function TunnelDialogForm({
       return;
     }
 
-    if (isHttp && !domain.trim()) {
+    if (isDomain && !domain.trim()) {
       failField(localFieldError('domain', t('tunnels.domainRequired')));
       return;
     }
 
-    if (!isHttp && !parsedRemotePort) {
+    if (!isDomain && !parsedRemotePort) {
       failField(localFieldError('remote_port', portErrorMessage));
       return;
     }
@@ -491,7 +487,7 @@ function TunnelDialogForm({
       return;
     }
 
-    if (!isClientToClient && !isHttp && parsedRemotePort && !isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)) {
+    if (!isClientToClient && !isDomain && parsedRemotePort && !isPortAllowedByRanges(parsedRemotePort, status?.allowed_ports)) {
       const message = t('tunnels.portMustBeAllowed', { ranges: formatPortRanges(status?.allowed_ports) });
       failField({ field: 'remote_port', message, code: 'port_not_allowed' });
       toast.error(message);
@@ -607,7 +603,7 @@ function TunnelDialogForm({
   };
 
   const effectiveTypeOptions = isClientToClient
-    ? typeOptions.filter((opt) => opt.value !== 'http')
+    ? typeOptions.filter((opt) => opt.value !== 'http' && opt.value !== 'tls')
     : typeOptions;
 
   const suggestedName = (() => {
@@ -615,13 +611,13 @@ function TunnelDialogForm({
     const portPart = (isSocks5 ? remotePort : localPort) || remotePort;
     return portPart ? `${type}-${portPart}` : '';
   })();
-  const suggestedRemotePort = (!remotePort && !isHttp && !isClientToClient && status?.allowed_ports?.[0])
+  const suggestedRemotePort = (!remotePort && !isDomain && !isClientToClient && status?.allowed_ports?.[0])
     ? String(status.allowed_ports[0].start)
     : '';
 
   const validateRemotePortRange = () => {
     const port = parsePortInput(remotePort);
-    if (!isClientToClient && !isHttp && port && !isPortAllowedByRanges(port, status?.allowed_ports)) {
+    if (!isClientToClient && !isDomain && port && !isPortAllowedByRanges(port, status?.allowed_ports)) {
       setFieldError({
         field: 'remote_port',
         message: t('tunnels.portMustBeAllowed', { ranges: formatPortRanges(status?.allowed_ports) }),
@@ -631,7 +627,7 @@ function TunnelDialogForm({
   };
 
   return (
-    <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
+    <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <GitBranchPlus className="h-5 w-5 text-primary" />
@@ -645,46 +641,42 @@ function TunnelDialogForm({
       </DialogHeader>
 
       <form noValidate onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col gap-4">
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto -mr-4 pr-4 pl-0.5">
-        {/* 隧道名称 */}
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium">{t('tunnels.name')}</label>
-          <Input
-            aria-label={t('tunnels.name')}
-            placeholder={t('tunnels.namePlaceholder')}
-            value={name}
-            onChange={(e) => {
-              clearMutationFeedback();
-              setName(e.target.value);
-            }}
-            autoFocus
-          />
-          {suggestedName && (
-            <button
-              type="button"
-              className="text-[11px] font-medium text-primary hover:underline"
-              onClick={() => {
-                clearMutationFeedback();
-                setName(suggestedName);
-              }}
-            >
-              {t('tunnels.suggestionPrefix')}：{suggestedName}
-            </button>
-          )}
-          <FieldErrorText error={fieldError} fields={['name']} />
-        </div>
-
-        {/* 链路：拓扑 + 客户端 */}
-        <div className="space-y-3 rounded-lg border border-border/60 bg-muted/10 p-3">
-          <SectionLabel>{t('tunnels.sectionRouting')}</SectionLabel>
-          {/* 隧道拓扑 */}
+        <div className="-mx-1 min-h-0 flex-1 space-y-4 overflow-y-auto px-1">
+        <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">{t('tunnels.topology')}</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex h-5 items-center justify-between gap-2">
+              <label className="text-sm font-medium">{t('tunnels.name')}</label>
+              {suggestedName && (
+                <button
+                  type="button"
+                  className="truncate text-xs text-primary hover:underline"
+                  onClick={() => {
+                    clearMutationFeedback();
+                    setName(suggestedName);
+                  }}
+                >
+                  {t('tunnels.suggestionPrefix')}：{suggestedName}
+                </button>
+              )}
+            </div>
+            <Input
+              aria-label={t('tunnels.name')}
+              placeholder={t('tunnels.namePlaceholder')}
+              value={name}
+              onChange={(e) => {
+                clearMutationFeedback();
+                setName(e.target.value);
+              }}
+              autoFocus
+            />
+            <FieldErrorText error={fieldError} fields={['name']} />
+          </div>
+          <div className="space-y-1.5">
+            <label className="block h-5 text-sm font-medium">{t('tunnels.accessMode')}</label>
+            <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted/60 p-1">
               <TopologyCardButton
-                selected={topology === 'server_expose'}
-                label={t('tunnels.serverExpose')}
-                description={t('tunnels.serverExposeDesc')}
+                selected={!isClientToClient}
+                label={t('tunnels.publicAccess')}
                 onSelect={() => {
                   clearMutationFeedback();
                   setTopology('server_expose');
@@ -694,190 +686,100 @@ function TunnelDialogForm({
                 }}
               />
               <ClientToClientTopologyButton
-                selected={topology === 'client_to_client'}
+                selected={isClientToClient}
                 disabled={!canUseClientToClient}
-                label={t('tunnels.clientToClient')}
-                description={t('tunnels.clientToClientDesc')}
+                label={t('tunnels.clientAccess')}
                 tooltip={t('tunnels.c2cRequiresTwoClients')}
                 onSelect={() => {
-                  if (!canUseClientToClient) {
-                    return;
-                  }
+                  if (!canUseClientToClient) return;
                   clearMutationFeedback();
                   setTopology('client_to_client');
-                  if (type === 'http') setType('tcp');
+                  if (isDomain) setType('tcp');
                   if (isSocks5 && isDefaultSourceCidrs(sourceCidrs)) {
                     setSourceCidrs(getDefaultSourceCidrs(type, 'client_to_client'));
                   }
                 }}
               />
             </div>
-            <FieldErrorText error={fieldError} fields={['topology', 'transport_policy']} />
+            <FieldErrorText error={fieldError} fields={['topology']} />
           </div>
-
-          {isClientToClient && (
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">{t('tunnels.transportPolicy')}</label>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {([
-                  ['server_relay_only', t('tunnels.serverRelay')],
-                  ['direct_preferred', t('tunnels.directPreferred')],
-                  ['direct_only', t('tunnels.directOnly')],
-                ] satisfies [TransportPolicy, string][]).map(([value, label]) => {
-                  const selected = transportPolicy === value;
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      aria-pressed={selected}
-                      className={protocolCardClassName(selected)}
-                      onClick={() => {
-                        clearMutationFeedback();
-                        setTransportPolicy(value);
-                      }}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="text-xs text-muted-foreground">{t('tunnels.transportPolicyHint')}</p>
-              <FieldErrorText error={fieldError} fields={['transport_policy']} />
-            </div>
-          )}
-
-          {(isClientToClient || clients.length > 1) && (
-            <div className={cn('grid gap-3', isClientToClient ? 'grid-cols-2' : 'grid-cols-1')}>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">{t('tunnels.sourceClient')}</label>
-                {clients.length > 0 ? (
-                  <Select
-                    value={selectedTargetClientId}
-                    disabled={isEdit}
-                    onValueChange={(nextTargetClientId) => {
-                      clearMutationFeedback();
-                      setTargetClientId(nextTargetClientId);
-                      if (ingressClientId === nextTargetClientId) {
-                        setIngressClientId('');
-                      }
-                    }}
-                  >
-                    <SelectTrigger aria-label={t('tunnels.sourceClient')} className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {clients.map((client) => (
-                        <SelectItem key={client.id} value={client.id}>
-                          {getClientDisplayName(client)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Input value={sourceClient ? getClientDisplayName(sourceClient) : selectedTargetClientId} disabled />
-                )}
-                <FieldErrorText error={fieldError} fields={['target.client_id', 'client_id']} />
-              </div>
-              {isClientToClient && (
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">{t('tunnels.ingressClient')}</label>
-                  <Select
-                    value={selectedIngressClientId}
-                    onValueChange={(nextIngressClientId) => {
-                      clearMutationFeedback();
-                      setIngressClientId(nextIngressClientId);
-                    }}
-                  >
-                    <SelectTrigger aria-label={t('tunnels.ingressClient')} className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {ingressClientOptions.map((client) => (
-                        <SelectItem key={client.id} value={client.id}>
-                          {getClientDisplayName(client)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FieldErrorText error={fieldError} fields={['ingress.client_id']} />
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
-        {/* 端点与协议 */}
-        <div className="space-y-3 rounded-lg border border-border/60 bg-muted/10 p-3">
-          <SectionLabel>{t('tunnels.sectionEndpoint')}</SectionLabel>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">{t('tunnels.protocolType')}</label>
-            <div className="flex gap-2">
-              {effectiveTypeOptions.map((opt) => {
-                const Icon = opt.icon;
-                const selected = type === opt.value;
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    aria-pressed={selected}
-                    className={protocolCardClassName(selected)}
-                    onClick={() => {
-                      clearMutationFeedback();
-                      setType(opt.value);
-                      if (isDefaultSourceCidrs(sourceCidrs)) {
-                        setSourceCidrs(getDefaultSourceCidrs(opt.value, topology));
-                      }
-                    }}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-            <p className="text-[11px] text-muted-foreground">
-              {t(typeOptions.find((opt) => opt.value === type)?.descKey ?? 'tunnels.protocolDescTcp')}
-            </p>
-            <FieldErrorText error={fieldError} fields={['target.type', 'ingress.type']} />
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">{t('tunnels.protocolType')}</label>
+          <div className={cn('grid gap-1 rounded-lg bg-muted/60 p-1', isClientToClient ? 'grid-cols-3' : 'grid-cols-5')}>
+            {effectiveTypeOptions.map((opt) => {
+              const Icon = opt.icon;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  aria-pressed={type === opt.value}
+                  className={protocolCardClassName(type === opt.value)}
+                  onClick={() => {
+                    clearMutationFeedback();
+                    setType(opt.value);
+                    if (isDefaultSourceCidrs(sourceCidrs)) {
+                      setSourceCidrs(getDefaultSourceCidrs(opt.value, topology));
+                    }
+                  }}
+                >
+                  <Icon className="hidden h-3.5 w-3.5 shrink-0 sm:block" />
+                  {opt.label}
+                </button>
+              );
+            })}
           </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t(typeOptions.find((opt) => opt.value === type)?.descKey ?? 'tunnels.protocolDescTcp')}
+          </p>
+          <FieldErrorText error={fieldError} fields={['target.type', 'ingress.type']} />
+        </div>
 
-          {!isSocks5 && (
-            <div className="space-y-2">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium">{isClientToClient ? t('tunnels.targetAddress') : t('tunnels.localIp')}</label>
-                  <Input
-                    aria-label={isClientToClient ? t('tunnels.targetAddress') : t('tunnels.localIp')}
-                    placeholder="127.0.0.1"
-                    value={localIp}
-                    onChange={(e) => {
-                      clearMutationFeedback();
-                      setLocalIp(e.target.value);
-                    }}
-                  />
-                  <FieldErrorText error={fieldError} fields={['target.config.ip', 'target.config.host', 'target.config', 'local_ip']} />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium">{isClientToClient ? t('tunnels.targetPort') : t('tunnels.localPort')}</label>
-                  <Input
-                    aria-label={isClientToClient ? t('tunnels.targetPort') : t('tunnels.localPort')}
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    placeholder="e.g. 22"
-                    value={localPort}
-                    onChange={(e) => {
-                      clearMutationFeedback();
-                      setLocalPort(e.target.value);
-                    }}
-                  />
-                  <FieldErrorText error={fieldError} fields={['target.config.port', 'local_port']} />
-                  {localPort && !parsedLocalPort && (
-                    <p className="text-[11px] font-medium text-destructive">{portErrorMessage}</p>
-                  )}
-                </div>
-                {!isHttp && isClientToClient && (
-                  <div className="space-y-1.5">
+        <div className="grid gap-5 border-y border-border/60 py-4 sm:grid-cols-2">
+          <section className="min-w-0 space-y-3">
+            <SectionLabel>{t(isClientToClient ? 'tunnels.clientIngress' : 'tunnels.publicIngress')}</SectionLabel>
+            {isClientToClient && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">{t('tunnels.ingressClient')}</label>
+                <Select value={selectedIngressClientId} onValueChange={(value) => {
+                  clearMutationFeedback();
+                  setIngressClientId(value);
+                }}>
+                  <SelectTrigger aria-label={t('tunnels.ingressClient')} className="w-full min-w-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ingressClientOptions.map((client) => (
+                      <SelectItem key={client.id} value={client.id}>{getClientDisplayName(client)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FieldErrorText error={fieldError} fields={['ingress.client_id']} />
+              </div>
+            )}
+            {isDomain ? (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">{t('tunnels.domain')}</label>
+                <Input
+                  aria-label={t('tunnels.domain')}
+                  placeholder="app.example.com"
+                  value={domain}
+                  onChange={(e) => {
+                    clearMutationFeedback();
+                    setDomain(e.target.value);
+                  }}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+                <FieldErrorText error={fieldError} fields={['domain', 'ingress.config.domain']} />
+                <p className="text-xs leading-relaxed text-muted-foreground">{t(isTls ? 'tunnels.tlsDomainHelp' : 'tunnels.httpDomainHelp')}</p>
+              </div>
+            ) : (
+              <div className={cn('grid gap-3', isClientToClient && 'grid-cols-[minmax(0,1fr)_6rem]')}>
+                {isClientToClient && (
+                  <div className="min-w-0 space-y-1.5">
                     <label className="block text-sm font-medium">{t('tunnels.bindAddress')}</label>
                     <Input
                       aria-label={t('tunnels.bindAddress')}
@@ -894,148 +796,107 @@ function TunnelDialogForm({
                     <FieldErrorText error={fieldError} fields={['ingress.config.bind_ip', 'bind_ip']} />
                   </div>
                 )}
-                {!isHttp && (
-                  <div className={cn('space-y-1.5', !isClientToClient && 'max-w-[220px]')}>
-                    <label className="block text-sm font-medium">{isClientToClient ? t('tunnels.bindPort') : t('tunnels.publicPort')}</label>
-                    <Input
-                      aria-label={isClientToClient ? t('tunnels.bindPort') : t('tunnels.publicPort')}
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      placeholder="18080"
-                      value={remotePort}
-                      onChange={(e) => {
-                        clearMutationFeedback();
-                        setRemotePort(e.target.value);
-                      }}
-                      onBlur={validateRemotePortRange}
-                    />
-                    <FieldErrorText error={fieldError} fields={['remote_port', 'ingress.config.port']} />
-                    {remotePort && !parsedRemotePort && (
-                      <p className="text-[11px] font-medium text-destructive">{portErrorMessage}</p>
-                    )}
-                    {suggestedRemotePort && (
-                      <button
-                        type="button"
-                        className="text-[11px] font-medium text-primary hover:underline"
-                        onClick={() => {
-                          clearMutationFeedback();
-                          setRemotePort(suggestedRemotePort);
-                        }}
-                      >
-                        {t('tunnels.suggestionPrefix')}：{suggestedRemotePort}
-                      </button>
-                    )}
-                    {!isClientToClient && (
-                      <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <span>{t('tunnels.portRangeAllowed')}</span>
-                        <Badge variant="secondary" className="font-mono">
-                          {status?.allowed_ports === undefined
-                            ? t('common.loading')
-                            : formatPortRanges(status.allowed_ports)}
-                        </Badge>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-              <p className="text-[11px] text-muted-foreground">
-                {isClientToClient ? t('tunnels.targetHintClientToClient') : t('tunnels.targetHintServerExpose')}
-              </p>
-            </div>
-          )}
-
-          {isHttp ? (
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">{t('tunnels.domain')}</label>
-              <Input
-                aria-label={t('tunnels.domain')}
-                placeholder="app.example.com / *.example.com"
-                value={domain}
-                onChange={(e) => {
-                  clearMutationFeedback();
-                  setDomain(e.target.value);
-                }}
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-              />
-              <FieldErrorText error={fieldError} fields={['domain', 'ingress.config.domain']} />
-              <p className="text-[11px] text-muted-foreground mt-1.5">
-                {t('tunnels.httpDomainHelp')}
-              </p>
-            </div>
-          ) : isSocks5 ? (
-            <div className={cn('grid gap-3', isClientToClient ? 'grid-cols-2' : 'grid-cols-1')}>
-              {isClientToClient && (
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium">{t('tunnels.bindAddress')}</label>
+                <div className="min-w-0 space-y-1.5">
+                  <label className="block text-sm font-medium">{t(isClientToClient ? 'tunnels.bindPort' : 'tunnels.publicPort')}</label>
                   <Input
-                    aria-label={t('tunnels.bindAddress')}
-                    placeholder="0.0.0.0"
-                    value={bindIp}
+                    aria-label={t(isClientToClient ? 'tunnels.bindPort' : 'tunnels.publicPort')}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    placeholder="18080"
+                    value={remotePort}
                     onChange={(e) => {
                       clearMutationFeedback();
-                      setBindIp(e.target.value);
+                      setRemotePort(e.target.value);
+                    }}
+                    onBlur={validateRemotePortRange}
+                  />
+                  <FieldErrorText error={fieldError} fields={['remote_port', 'ingress.config.port']} />
+                  {remotePort && !parsedRemotePort && <p className="text-xs font-medium text-destructive">{portErrorMessage}</p>}
+                  {suggestedRemotePort && (
+                    <button type="button" className="text-xs text-primary hover:underline" onClick={() => {
+                      clearMutationFeedback();
+                      setRemotePort(suggestedRemotePort);
+                    }}>{t('tunnels.suggestionPrefix')}：{suggestedRemotePort}</button>
+                  )}
+                </div>
+              </div>
+            )}
+            {!isClientToClient && !isDomain && (
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {t('tunnels.portRangeAllowed')} {status?.allowed_ports === undefined ? t('common.loading') : formatPortRanges(status.allowed_ports)}
+              </p>
+            )}
+          </section>
+
+          <section className="min-w-0 space-y-3">
+            <SectionLabel>{t('tunnels.serviceEndpoint')}</SectionLabel>
+            {(isClientToClient || clients.length > 1) && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">{t('tunnels.sourceClient')}</label>
+                {clients.length > 0 ? (
+                  <Select value={selectedTargetClientId} disabled={isEdit} onValueChange={(value) => {
+                    clearMutationFeedback();
+                    setTargetClientId(value);
+                    if (ingressClientId === value) setIngressClientId('');
+                  }}>
+                    <SelectTrigger aria-label={t('tunnels.sourceClient')} className="w-full min-w-0"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => <SelectItem key={client.id} value={client.id}>{getClientDisplayName(client)}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input value={sourceClient ? getClientDisplayName(sourceClient) : selectedTargetClientId} disabled />
+                )}
+                <FieldErrorText error={fieldError} fields={['target.client_id', 'client_id']} />
+              </div>
+            )}
+            {!isSocks5 ? (
+              <div className="grid grid-cols-[minmax(0,1fr)_6rem] gap-3">
+                <div className="min-w-0 space-y-1.5">
+                  <label className="block text-sm font-medium">{t(isClientToClient ? 'tunnels.targetAddress' : 'tunnels.localIp')}</label>
+                  <Input
+                    aria-label={t(isClientToClient ? 'tunnels.targetAddress' : 'tunnels.localIp')}
+                    placeholder="127.0.0.1"
+                    value={localIp}
+                    onChange={(e) => {
+                      clearMutationFeedback();
+                      setLocalIp(e.target.value);
                     }}
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
                   />
-                  <FieldErrorText error={fieldError} fields={['ingress.config.bind_ip', 'bind_ip']} />
+                  <FieldErrorText error={fieldError} fields={['target.config.ip', 'target.config.host', 'target.config', 'local_ip']} />
                 </div>
-              )}
-              <div className="space-y-1.5">
-                <label className="block text-sm font-medium">{isClientToClient ? t('tunnels.bindPort') : t('tunnels.publicPort')}</label>
-                <Input
-                  className={isClientToClient ? undefined : 'max-w-[220px]'}
-                  aria-label={isClientToClient ? t('tunnels.bindPort') : t('tunnels.publicPort')}
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  placeholder="18080"
-                  value={remotePort}
-                  onChange={(e) => {
-                    clearMutationFeedback();
-                    setRemotePort(e.target.value);
-                  }}
-                  onBlur={validateRemotePortRange}
-                />
-                <FieldErrorText error={fieldError} fields={['remote_port', 'ingress.config.port']} />
-                {remotePort && !parsedRemotePort && (
-                  <p className="text-[11px] font-medium text-destructive">{portErrorMessage}</p>
-                )}
-                {suggestedRemotePort && (
-                  <button
-                    type="button"
-                    className="text-[11px] font-medium text-primary hover:underline"
-                    onClick={() => {
+                <div className="min-w-0 space-y-1.5">
+                  <label className="block text-sm font-medium">{t(isClientToClient ? 'tunnels.targetPort' : 'tunnels.localPort')}</label>
+                  <Input
+                    aria-label={t(isClientToClient ? 'tunnels.targetPort' : 'tunnels.localPort')}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    placeholder={isTls ? '443' : '22'}
+                    value={localPort}
+                    onChange={(e) => {
                       clearMutationFeedback();
-                      setRemotePort(suggestedRemotePort);
+                      setLocalPort(e.target.value);
                     }}
-                  >
-                    {t('tunnels.suggestionPrefix')}：{suggestedRemotePort}
-                  </button>
-                )}
-                {!isClientToClient && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <span>{t('tunnels.portRangeAllowed')}</span>
-                    <Badge variant="secondary" className="font-mono">
-                      {status?.allowed_ports === undefined
-                        ? t('common.loading')
-                        : formatPortRanges(status.allowed_ports)}
-                    </Badge>
-                  </div>
-                )}
+                  />
+                  <FieldErrorText error={fieldError} fields={['target.config.port', 'local_port']} />
+                  {localPort && !parsedLocalPort && <p className="text-xs font-medium text-destructive">{portErrorMessage}</p>}
+                </div>
               </div>
-            </div>
-          ) : null}
+            ) : (
+              <p className="text-xs leading-relaxed text-muted-foreground">{t('tunnels.socks5DynamicTarget')}</p>
+            )}
+          </section>
         </div>
 
-        <div className="rounded-lg border border-border bg-muted/20">
+        <div>
           <button
             type="button"
-            className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium"
+            className="flex w-full items-center justify-between py-1 text-left text-sm font-medium text-muted-foreground hover:text-foreground"
             onClick={() => setAdvancedOpen((value) => !value)}
             aria-expanded={advancedOpen}
           >
@@ -1043,7 +904,37 @@ function TunnelDialogForm({
             <ChevronDown className={cn('h-4 w-4 transition-transform', advancedOpen && 'rotate-180')} />
           </button>
           {advancedOpen && (
-            <div className="space-y-4 border-t border-border px-3 py-3">
+            <div className="space-y-4 pt-4">
+              {isClientToClient && (
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">{t('tunnels.transportPolicy')}</label>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {([
+                      ['server_relay_only', t('tunnels.serverRelay')],
+                      ['direct_preferred', t('tunnels.directPreferred')],
+                      ['direct_only', t('tunnels.directOnly')],
+                    ] satisfies [TransportPolicy, string][]).map(([value, label]) => {
+                      const selected = transportPolicy === value;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={selected}
+                          className={protocolCardClassName(selected)}
+                          onClick={() => {
+                            clearMutationFeedback();
+                            setTransportPolicy(value);
+                          }}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{t('tunnels.transportPolicyHint')}</p>
+                  <FieldErrorText error={fieldError} fields={['transport_policy']} />
+                </div>
+              )}
               <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {t('tunnels.advancedSecurity')}
               </p>
@@ -1067,9 +958,9 @@ function TunnelDialogForm({
                     {t('tunnels.sourceCidrsLoopbackWarning')}
                   </p>
                 )}
-                {isHttp && (
+                {isDomain && (
                   <p className="text-[11px] text-muted-foreground">
-                    {t('tunnels.httpSourceCidrsProxyHelp')}
+                    {t(isTls ? 'tunnels.tlsSourceCidrsProxyHelp' : 'tunnels.httpSourceCidrsProxyHelp')}
                   </p>
                 )}
               </div>
@@ -1308,7 +1199,7 @@ function TunnelDialogForm({
             {getTunnelMutationErrorMessage(mutation.error)}
           </div>
         )}
-        {!isClientToClient && !isHttp && isBootstrapError && (
+        {!isClientToClient && !isDomain && isBootstrapError && (
           <div className="flex items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
             <AlertTriangle className="size-4 shrink-0" />
             {t('tunnels.bootstrapUnavailable')}
@@ -1316,7 +1207,7 @@ function TunnelDialogForm({
         )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="flex-row justify-end">
           <Button
             type="button"
             variant="outline"
@@ -1326,7 +1217,7 @@ function TunnelDialogForm({
           </Button>
           <Button
             type="submit"
-            disabled={mutation.isPending || (!isClientToClient && !isHttp && (!status || isBootstrapError))}
+            disabled={mutation.isPending || (!isClientToClient && !isDomain && (!status || isBootstrapError))}
           >
             {mutation.isPending
               ? (isEdit ? t('tunnels.updating') : t('tunnels.creating'))

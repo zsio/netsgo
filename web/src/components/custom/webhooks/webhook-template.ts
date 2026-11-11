@@ -29,9 +29,10 @@ export interface WebhookTemplateIssue {
 }
 
 export interface WebhookValidationIssue {
-  field: 'name' | 'events' | 'targets' | 'url' | 'headers' | 'body';
+  field: 'name' | 'events' | 'targets' | 'url' | 'headers' | 'body' | 'minIntervalSeconds';
   code:
     | 'required'
+    | 'invalidInterval'
     | 'invalidUrl'
     | 'invalidUrlScheme'
     | 'invalidJson'
@@ -215,6 +216,9 @@ export function renderWebhookRequest(
 export function validateWebhook(webhook: ActivityWebhookConfig, catalog: WebhookCatalog): WebhookValidationIssue[] {
   const issues: WebhookValidationIssue[] = [];
   if (!webhook.name.trim()) issues.push({ field: 'name', code: 'required' });
+  if (!Number.isInteger(webhook.minIntervalSeconds) || webhook.minIntervalSeconds < 0 || webhook.minIntervalSeconds > 86400) {
+    issues.push({ field: 'minIntervalSeconds', code: 'invalidInterval' });
+  }
   if (webhook.events.length === 0) issues.push({ field: 'events', code: 'required' });
   if (webhook.targetMode === 'selected' && webhook.targetIds.length === 0) {
     issues.push({ field: 'targets', code: 'required' });

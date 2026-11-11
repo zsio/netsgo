@@ -306,6 +306,51 @@ func TestClientIP(t *testing.T) {
 			remoteAddr: "127.0.0.1:80",
 			want:       "127.0.0.1",
 		},
+		{
+			// nginx `$proxy_add_x_forwarded_for` appends the real peer after whatever the client sent.
+			name:       "回环_追加模式_客户端伪造的最左项被忽略",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
+			xff:        "1.1.1.1, 203.0.113.9",
+			want:       "203.0.113.9",
+		},
+		{
+			name:       "回环_追加模式_伪造多个前缀",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
+			xff:        "1.1.1.1, 2.2.2.2, 203.0.113.9",
+			want:       "203.0.113.9",
+		},
+		{
+			name:       "回环_伪造项为非法值_仍取代理写入的真实IP",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
+			xff:        "not-an-ip, 203.0.113.9",
+			want:       "203.0.113.9",
+		},
+		{
+			name:       "回环_XFF含端口和IPv6方括号_规范化",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
+			xff:        "[2001:db8::1]:4711",
+			want:       "2001:db8::1",
+		},
+		{
+			name:       "回环_XFF仅有非法值_回退XRI",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
+			xff:        "unknown",
+			xri:        "198.51.100.1",
+			want:       "198.51.100.1",
+		},
+		{
+			name:       "回环_XFF与XRI均非法_回退RemoteAddr",
+			tls:        nil,
+			remoteAddr: "127.0.0.1:80",
+			xff:        "unknown",
+			xri:        "garbage",
+			want:       "127.0.0.1",
+		},
 
 		// === TLS mode=custom: 直连 TLS，非回环忽略代理头 ===
 		{
@@ -341,8 +386,31 @@ func TestClientIP(t *testing.T) {
 			want:       "203.0.113.50",
 		},
 		{
-			name:       "off模式_受信任代理_XFF多IP取第一个",
+			// 70.41.3.18 is the nearest hop that is not a trusted proxy; 203.0.113.50 is to its left
+			// and therefore client-supplied.
+			name:       "off模式_受信任代理_XFF多IP从右跳过可信代理",
 			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"10.0.0.0/8"}},
+			remoteAddr: "10.0.0.1:80",
+			xff:        "203.0.113.50, 70.41.3.18",
+			want:       "70.41.3.18",
+		},
+		{
+			name:       "off模式_多层代理_全部列为可信_取真实客户端",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"10.0.0.0/8", "70.41.3.0/24"}},
+			remoteAddr: "10.0.0.1:80",
+			xff:        "203.0.113.50, 70.41.3.18",
+			want:       "203.0.113.50",
+		},
+		{
+			name:       "off模式_链尾有多个可信代理_跳过后取最近的不可信跳",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"10.0.0.0/8"}},
+			remoteAddr: "10.0.0.1:80",
+			xff:        "203.0.113.50, 70.41.3.18, 10.0.0.7",
+			want:       "70.41.3.18",
+		},
+		{
+			name:       "off模式_全部可信_取最左",
+			tls:        &TLSConfig{Mode: TLSModeOff, TrustedProxies: []string{"0.0.0.0/0"}},
 			remoteAddr: "10.0.0.1:80",
 			xff:        "203.0.113.50, 70.41.3.18",
 			want:       "203.0.113.50",
@@ -404,6 +472,22 @@ func TestClientIP(t *testing.T) {
 				t.Errorf("clientIP() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// Proxies such as HAProxy append a separate X-Forwarded-For line rather than extending the
+// existing one. The header lines must be read as one chain, otherwise the client-supplied first
+// line would be mistaken for the proxy's.
+func TestClientIP_MultipleForwardedForLines(t *testing.T) {
+	s := &Server{}
+
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "127.0.0.1:80"
+	r.Header.Add("X-Forwarded-For", "1.1.1.1")
+	r.Header.Add("X-Forwarded-For", "203.0.113.9")
+
+	if got := s.clientIP(r); got != "203.0.113.9" {
+		t.Errorf("clientIP() = %q, want %q", got, "203.0.113.9")
 	}
 }
 

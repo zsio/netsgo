@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import type { ActivityWebhookConfig, WebhookCatalog, WebhookVariable } from '@/types/webhook';
+import { activityWebhookFromAPI, activityWebhookToAPI, createEmptyWebhook } from '@/types/webhook';
 import {
   getPickerVariables,
   getTemplateIssues,
@@ -103,6 +104,7 @@ function webhook(overrides: Partial<ActivityWebhookConfig>): ActivityWebhookConf
     headers: [],
     body: defaultBody,
     events: ['client.online'],
+    minIntervalSeconds: 0,
     calls24h: 0,
     lastStatus: 'idle',
     consecutiveFailures: 0,
@@ -349,5 +351,29 @@ describe('webhook configuration validation', () => {
       url: 'https://hooks.example.test/{{client.id}}?delivery={{delivery.id}}',
       headers: [{ id: 'event', key: 'X-Event', value: '{{event.name.en-US}}' }],
     }), catalog)).toEqual([]);
+  });
+
+  test.each([-1, 86401, 1.5, NaN])('rejects invalid notification interval %s', (minIntervalSeconds) => {
+    expect(validateWebhook(webhook({ minIntervalSeconds }), catalog)).toContainEqual({ field: 'minIntervalSeconds', code: 'invalidInterval' });
+  });
+
+  test.each([0, 300, 86400])('accepts notification interval %s', (minIntervalSeconds) => {
+    expect(validateWebhook(webhook({ minIntervalSeconds }), catalog)).toEqual([]);
+  });
+
+  test('preserves the notification interval through API conversion and defaults new Webhooks to unlimited', () => {
+    const config = webhook({ minIntervalSeconds: 300 });
+    const input = activityWebhookToAPI(config);
+    expect(input.min_interval_seconds).toBe(300);
+    expect(activityWebhookFromAPI({
+      ...input,
+      revision: 1,
+      calls_24h: 0,
+      last_status: 'idle',
+      consecutive_failures: 0,
+      created_at: config.createdAt,
+      updated_at: config.updatedAt,
+    }).minIntervalSeconds).toBe(300);
+    expect(createEmptyWebhook(catalog).minIntervalSeconds).toBe(0);
   });
 });

@@ -277,35 +277,74 @@ func (rl *RateLimiter) cleanup() {
 //  2. TLS mode is "off" and the source IP is in the TrustedProxies list — explicitly configured by the user.
 //
 // In all other cases RemoteAddr is used to prevent attackers from spoofing proxy headers to bypass rate limiting.
+//
+// X-Forwarded-For is resolved from the right: see clientIPFromForwardedFor. In a multi-hop chain
+// (e.g. CDN → nginx → NetsGo) every proxy hop must be trusted, otherwise the nearest untrusted hop
+// is reported as the client.
 func (s *Server) clientIP(r *http.Request) string {
 	// Extract the direct connection IP first.
 	directIP := remoteIPFromAddr(r.RemoteAddr)
 
 	// Determine whether to trust proxy headers.
 	if s.trustProxyHeaders(r) {
-		// Prefer X-Forwarded-For (take the first IP).
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.SplitN(xff, ",", 2)
-			ip := strings.TrimSpace(parts[0])
-			if ip != "" {
-				return ip
-			}
+		// Prefer X-Forwarded-For.
+		if ip := clientIPFromForwardedFor(r.Header.Values("X-Forwarded-For"), s.isTrustedProxyIP); ip != "" {
+			return ip
 		}
 
 		// Fall back to X-Real-IP.
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return strings.TrimSpace(xri)
+		if ip := normalizeHeaderIP(firstHeaderToken(r.Header.Get("X-Real-IP"))); ip != "" {
+			return ip
 		}
 	}
 
 	return directIP
 }
 
+// clientIPFromForwardedFor resolves the original client from X-Forwarded-For header lines.
+//
+// Each proxy appends the peer it received the request from, so only the entries to the right of
+// the first untrusted hop were written by infrastructure we control. Anything further left is
+// client-supplied and can be forged freely, so the chain is walked from the right and the first
+// address that is not a trusted proxy is returned. If every hop is trusted, the leftmost entry is
+// returned.
+//
+// The caller must already have established that the direct peer is a trusted proxy; it is the
+// implicit rightmost hop. An empty string is returned when the header is absent or an entry cannot
+// be parsed before the client has been identified, so the caller can fall back to other signals.
+func clientIPFromForwardedFor(lines []string, trusted func(ip string) bool) string {
+	// Multiple header lines form one chain in order; proxies may append a new line instead of
+	// extending the last one.
+	var hops []string
+	for _, line := range lines {
+		hops = append(hops, strings.Split(line, ",")...)
+	}
+
+	leftmost := ""
+	for i := len(hops) - 1; i >= 0; i-- {
+		ip := normalizeHeaderIP(hops[i])
+		if ip == "" {
+			return ""
+		}
+		if !trusted(ip) {
+			return ip
+		}
+		leftmost = ip
+	}
+	return leftmost
+}
+
+// isTrustedProxyIP reports whether ip may speak for the original client via proxy headers.
+// Loopback is trusted by default; other addresses must be explicitly configured and only apply
+// when TLS mode is "off" (management-plane trust is deliberately narrower than tunnel trust).
+func (s *Server) isTrustedProxyIP(ip string) bool {
+	return isLoopback(ip) || (s.TLS != nil && s.TLS.isTrustedProxy(ip))
+}
+
 // trustProxyHeaders reports whether proxy headers can be trusted for the current request.
 // The rule matches clientIP: loopback is trusted by default, or when the source is an explicitly configured trusted proxy.
 func (s *Server) trustProxyHeaders(r *http.Request) bool {
-	directIP := remoteIPFromAddr(r.RemoteAddr)
-	return isLoopback(directIP) || (s.TLS != nil && s.TLS.isTrustedProxy(directIP))
+	return s.isTrustedProxyIP(remoteIPFromAddr(r.RemoteAddr))
 }
 
 // isHTTPSRequest reports whether the browser-side request was made over HTTPS.

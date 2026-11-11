@@ -359,6 +359,7 @@ func (s *Server) beginClientTunnelProvisionAckWaitForTask(client *ClientConn, re
 		return nil, err
 	}
 
+	req.IngressNetworkID = s.ingressNetworkIdentity(req.Spec.Ingress)
 	msg, err := protocol.NewMessage(protocol.MsgTypeTunnelProvision, req)
 	if err == nil {
 		err = s.writeControlMessageBefore(client, msg, time.Now().Add(lifecycleControlWriteTimeout))

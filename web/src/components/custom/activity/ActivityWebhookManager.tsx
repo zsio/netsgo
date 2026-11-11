@@ -174,6 +174,7 @@ function sameWebhook(left: WebhookPrototype | null, right: WebhookPrototype | nu
     headers: left.headers,
     body: left.body,
     events: left.events,
+    minIntervalSeconds: left.minIntervalSeconds,
   }) === JSON.stringify({
     name: right.name,
     enabled: right.enabled,
@@ -185,6 +186,7 @@ function sameWebhook(left: WebhookPrototype | null, right: WebhookPrototype | nu
     headers: right.headers,
     body: right.body,
     events: right.events,
+    minIntervalSeconds: right.minIntervalSeconds,
   });
 }
 
@@ -561,6 +563,7 @@ function WebhookConfiguration({
   const liveBodyIssue = validateWebhook(webhook, catalog).find((issue) => issue.field === 'body');
   const nameIssue = validationIssues.find((issue) => issue.field === 'name');
   const eventIssue = validationIssues.find((issue) => issue.field === 'events');
+  const intervalIssue = validationIssues.find((issue) => issue.field === 'minIntervalSeconds');
   const urlIssue = validationIssues.find((issue) => issue.field === 'url');
   const headerIssue = validationIssues.find((issue) => issue.field === 'headers');
   const eventFamilies: WebhookEventFamily[] = webhook.targetKind === 'client' ? ['client'] : ['tunnel', 'p2p'];
@@ -667,6 +670,25 @@ function WebhookConfiguration({
             );
           })}
           {eventIssue ? <FieldError>{validationIssueMessage(t, eventIssue)}</FieldError> : null}
+          <Field data-webhook-field="minIntervalSeconds" data-invalid={Boolean(intervalIssue)}>
+            <FieldLabel htmlFor={`webhook-interval-${webhook.id}`}>{t('webhooks.events.minInterval')}</FieldLabel>
+            <Input
+              id={`webhook-interval-${webhook.id}`}
+              type="number"
+              min={0}
+              max={86400}
+              step={1}
+              value={webhook.minIntervalSeconds}
+              onChange={(event) => onUpdate('minIntervalSeconds', Number(event.target.value))}
+              aria-invalid={Boolean(intervalIssue)}
+              aria-describedby={`webhook-interval-hint-${webhook.id}`}
+              className="max-w-48"
+            />
+            <FieldDescription id={`webhook-interval-hint-${webhook.id}`}>
+              {t('webhooks.events.minIntervalHint')}
+            </FieldDescription>
+            {intervalIssue ? <FieldError>{validationIssueMessage(t, intervalIssue)}</FieldError> : null}
+          </Field>
         </div>
       </EditorSection>
 

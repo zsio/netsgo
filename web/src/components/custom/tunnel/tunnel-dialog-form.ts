@@ -61,7 +61,7 @@ export function getInitialTunnelFormState(props: TunnelInitialFormProps): Tunnel
       localIp: getInitialTargetHost(props.tunnel),
       localPort: String(getInitialTargetPort(props.tunnel) || ''),
       remotePort: String(getInitialIngressPort(props.tunnel) || ''),
-      domain: props.tunnel.ingress?.type === 'http_host'
+      domain: props.tunnel.ingress?.type === 'http_host' || props.tunnel.ingress?.type === 'tls_sni'
         ? props.tunnel.ingress.config.domain
         : props.tunnel.domain || '',
       ingressBps: bpsToMbpsInput(props.tunnel.ingress_bps),
@@ -137,6 +137,7 @@ function getInitialIngressPort(tunnel: TunnelDialogEditData) {
 }
 
 function getInitialType(tunnel: TunnelDialogEditData): TunnelFormType {
+  if (tunnel.ingress?.type === 'tls_sni') return 'tls';
   if (tunnel.ingress?.type === 'socks5_listen' || tunnel.target?.type === 'socks5_connect_handler') {
     return 'socks5';
   }
@@ -149,6 +150,7 @@ function getInitialSourceCIDRs(tunnel: TunnelDialogEditData) {
     ingress?.type === 'tcp_listen'
     || ingress?.type === 'udp_listen'
     || ingress?.type === 'http_host'
+    || ingress?.type === 'tls_sni'
     || ingress?.type === 'socks5_listen'
   ) {
     const cidrs = ingress.config.allowed_source_cidrs ?? [];
