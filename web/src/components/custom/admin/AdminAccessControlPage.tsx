@@ -1,34 +1,22 @@
-import { useState } from "react";
-import { Save, ShieldOff, Trash2 } from "lucide-react";
-import toast from "react-hot-toast";
-import { useTranslation } from "react-i18next";
+import { useState } from 'react';
+import { RotateCcw, Save, ShieldAlert, Trash2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
 import {
   useClientAuthRateLimitMutations,
   useClientAuthRateLimits,
-} from "@/hooks/use-admin-rate-limits";
-import { formatTimestamp, formatUptime } from "@/lib/format";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from '@/hooks/use-admin-rate-limits';
+import { formatTimestamp, formatUptime } from '@/lib/format';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from '@/components/ui/input-group';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
 import {
   Table,
   TableBody,
@@ -36,8 +24,10 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import type { ClientAuthRateLimitSettings, RateLimitEntry } from "@/types";
+} from '@/components/ui/table';
+import type { ClientAuthRateLimitSettings, RateLimitEntry } from '@/types';
+import { SettingRow, SettingsSectionCard } from './security/security-primitives';
+import { WebhookDeliverySection } from './security/WebhookDeliverySection';
 
 export function AdminAccessControlPage() {
   const { t } = useTranslation();
@@ -64,9 +54,9 @@ export function AdminAccessControlPage() {
     setResettingIP(ip);
     try {
       await mutations.resetIP.mutateAsync(ip);
-      toast.success(t("admin.clientAuthRateLimitCleared", { ip }));
+      toast.success(t('admin.clientAuthRateLimitCleared', { ip }));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("errors.generic"));
+      toast.error(error instanceof Error ? error.message : t('errors.generic'));
     } finally {
       setResettingIP(null);
     }
@@ -74,113 +64,137 @@ export function AdminAccessControlPage() {
 
   const saveSettings = async () => {
     if (!settingsValid) {
-      toast.error(t("admin.clientAuthRateLimitInvalid"));
+      toast.error(t('admin.clientAuthRateLimitInvalid'));
       return;
     }
     try {
       await mutations.updateSettings.mutateAsync(displayedSettings);
       setSettings(null);
-      toast.success(t("admin.clientAuthRateLimitSettingsSaved"));
+      toast.success(t('admin.clientAuthRateLimitSettingsSaved'));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("errors.generic"));
+      toast.error(error instanceof Error ? error.message : t('errors.generic'));
     }
   };
 
   return (
-    <div className="flex flex-col gap-6 pb-10">
-      <div>
-        <h3 className="text-xl font-semibold tracking-tight">
-          {t("admin.accessControlTitle")}
-        </h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {t("admin.accessControlDescription")}
-        </p>
-      </div>
-      <ClientAuthRateLimitSettingsCard
+    <div className="flex flex-col gap-5 pb-10">
+      <ClientAuthRateLimitCard
         settings={displayedSettings}
+        entries={data?.entries ?? []}
         isLoading={isLoading}
         isDirty={settingsDirty}
         isValid={settingsValid}
         isSaving={mutations.updateSettings.isPending}
-        onChange={setSettings}
-        onSave={saveSettings}
-      />
-      <ClientAuthRateLimitsSection
-        entries={data?.entries ?? []}
-        isLoading={isLoading}
         resettingIP={resettingIP}
-        onReset={resetClientAuthRateLimit}
+        onChange={setSettings}
+        onDiscard={() => setSettings(null)}
+        onSave={saveSettings}
+        onResetIP={resetClientAuthRateLimit}
       />
+      <WebhookDeliverySection />
     </div>
   );
 }
 
-function ClientAuthRateLimitSettingsCard({
+function ClientAuthRateLimitCard({
   settings,
+  entries,
   isLoading,
   isDirty,
   isValid,
   isSaving,
+  resettingIP,
   onChange,
+  onDiscard,
   onSave,
+  onResetIP,
 }: {
   settings: ClientAuthRateLimitSettings;
+  entries: RateLimitEntry[];
   isLoading: boolean;
   isDirty: boolean;
   isValid: boolean;
   isSaving: boolean;
+  resettingIP: string | null;
   onChange: (settings: ClientAuthRateLimitSettings) => void;
+  onDiscard: () => void;
   onSave: () => void;
+  onResetIP: (ip: string) => void;
 }) {
   const { t } = useTranslation();
+  const limitedCount = entries.filter((entry) => entry.limited).length;
 
   if (isLoading) {
-    return <Skeleton className="h-44 w-full rounded-xl" />;
+    return <Skeleton className="h-60 w-full rounded-xl" />;
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("admin.clientAuthRateLimitSettings")}</CardTitle>
-        <CardDescription>
-          {t("admin.clientAuthRateLimitSettingsDescription")}
-        </CardDescription>
-        <CardAction>
-          <Badge variant={settings.enabled ? "default" : "outline"}>
-            {settings.enabled ? t("common.enabled") : t("common.disabled")}
-          </Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-col divide-y divide-border/50">
-          <div className="grid gap-4 pb-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6">
-            <div className="min-w-0">
-              <p className="font-medium text-foreground">
-                {t("admin.enableClientAuthRateLimit")}
-              </p>
-              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                {t("admin.enableClientAuthRateLimitHelp")}
-              </p>
-            </div>
-            <Switch
-              id="client-auth-rate-limit-enabled"
-              checked={settings.enabled}
-              onCheckedChange={(enabled) => onChange({ ...settings, enabled })}
-            />
+    <SettingsSectionCard
+      icon={ShieldAlert}
+      title={t('admin.clientAuthRateLimitSettings')}
+      description={t('admin.clientAuthRateLimitSettingsDescription')}
+      badge={
+        <Badge variant={settings.enabled ? 'default' : 'outline'}>
+          {settings.enabled ? t('common.enabled') : t('common.disabled')}
+        </Badge>
+      }
+      footer={
+        <>
+          <span className="text-xs text-muted-foreground">
+            {isDirty ? t('admin.unsavedChangesHint') : ''}
+          </span>
+          <div className="flex items-center gap-2">
+            {isDirty ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={isSaving}
+                onClick={onDiscard}
+              >
+                <RotateCcw data-icon="inline-start" />
+                {t('admin.discardChanges')}
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              disabled={!isDirty || !isValid || isSaving}
+              onClick={onSave}
+            >
+              {isSaving ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Save data-icon="inline-start" />
+              )}
+              {isSaving ? t('common.saving') : t('common.save')}
+            </Button>
           </div>
+        </>
+      }
+    >
+      <SettingRow
+        title={t('admin.enableClientAuthRateLimit')}
+        description={t('admin.enableClientAuthRateLimitHelp')}
+        actions={
+          <Switch
+            id="client-auth-rate-limit-enabled"
+            checked={settings.enabled}
+            onCheckedChange={(enabled) => onChange({ ...settings, enabled })}
+          />
+        }
+      />
 
-          <div className="grid gap-4 pt-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6">
-            <div className="min-w-0">
-              <p className="font-medium text-foreground">
-                {t("admin.clientAuthRequestsPerMinute")}
-              </p>
-              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                {isValid
-                  ? t("admin.clientAuthRequestsPerMinuteHelp")
-                  : t("admin.clientAuthRateLimitInvalid")}
-              </p>
-            </div>
-            <Input
+      <SettingRow
+        title={t('admin.clientAuthRequestsPerMinute')}
+        description={
+          isValid
+            ? t('admin.clientAuthRequestsPerMinuteHelp')
+            : t('admin.clientAuthRateLimitInvalid')
+        }
+        actions={
+          <InputGroup className="w-40">
+            <InputGroupInput
               id="client-auth-rate-limit-per-minute"
               type="number"
               min={1}
@@ -194,101 +208,55 @@ function ClientAuthRateLimitSettingsCard({
                 })
               }
               aria-invalid={!isValid}
-              className="w-28"
+              className="font-mono text-sm"
             />
+            <InputGroupAddon align="inline-end" className="text-xs">
+              {t('admin.requestsPerMinuteUnit')}
+            </InputGroupAddon>
+          </InputGroup>
+        }
+      />
+
+      {/* Integrated Live Rate-Limit Records */}
+      <div>
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/15 px-4 py-2.5 sm:px-5">
+          <span className="text-xs font-medium text-muted-foreground">
+            {t('admin.clientAuthRateLimits')}
+          </span>
+          <div className="flex items-center gap-1.5">
+            <Badge
+              variant={limitedCount > 0 ? 'destructive' : 'secondary'}
+              className="text-[11px]"
+            >
+              {t('admin.clientAuthRateLimitedCount', { count: limitedCount })}
+            </Badge>
+            <Badge variant="outline" className="text-[11px]">
+              {t('admin.clientAuthRateLimitEntryCount', { count: entries.length })}
+            </Badge>
           </div>
         </div>
-      </CardContent>
-      <CardFooter className="justify-end">
-        <Button
-          type="button"
-          size="sm"
-          disabled={!isDirty || !isValid || isSaving}
-          onClick={onSave}
-        >
-          {isSaving ? (
-            <Spinner data-icon="inline-start" />
-          ) : (
-            <Save data-icon="inline-start" />
-          )}
-          {isSaving ? t("common.saving") : t("common.save")}
-        </Button>
-      </CardFooter>
-    </Card>
-  );
-}
 
-function ClientAuthRateLimitsSection({
-  entries,
-  isLoading,
-  resettingIP,
-  onReset,
-}: {
-  entries: RateLimitEntry[];
-  isLoading: boolean;
-  resettingIP: string | null;
-  onReset: (ip: string) => void;
-}) {
-  const { t } = useTranslation();
-  const limitedCount = entries.filter((entry) => entry.limited).length;
-
-  if (isLoading) {
-    return (
-      <div className="flex flex-col gap-3">
-        <Skeleton className="h-20 w-full rounded-xl" />
-        <Skeleton className="h-48 w-full rounded-xl" />
-      </div>
-    );
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("admin.clientAuthRateLimits")}</CardTitle>
-        <CardDescription>
-          {t("admin.clientAuthRateLimitsDescription")}
-        </CardDescription>
-        <CardAction className="flex items-center gap-2">
-          <Badge variant={limitedCount > 0 ? "destructive" : "secondary"}>
-            {t("admin.clientAuthRateLimitedCount", { count: limitedCount })}
-          </Badge>
-          <Badge variant="outline">
-            {t("admin.clientAuthRateLimitEntryCount", {
-              count: entries.length,
-            })}
-          </Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="px-0">
         {entries.length === 0 ? (
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <ShieldOff />
-              </EmptyMedia>
-              <EmptyTitle>{t("admin.noClientAuthRateLimits")}</EmptyTitle>
-              <EmptyDescription>
-                {t("admin.noClientAuthRateLimitsDescription")}
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+          <div className="flex items-center gap-2.5 px-4 py-3.5 text-xs text-muted-foreground sm:px-5">
+            <span className="size-2 shrink-0 rounded-full bg-emerald-500/80" />
+            <span className="font-medium text-foreground/80">
+              {t('admin.noClientAuthRateLimits')}
+            </span>
+            <span className="hidden truncate sm:inline">
+              · {t('admin.noClientAuthRateLimitsDescription')}
+            </span>
+          </div>
         ) : (
-          <div className="overflow-x-auto">
-            <Table className="min-w-[780px]">
+          <div className="overflow-x-auto border-t border-border/30">
+            <Table className="min-w-[680px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="px-4">{t("admin.ipAddress")}</TableHead>
-                  <TableHead className="px-4">{t("admin.limitStatus")}</TableHead>
-                  <TableHead className="px-4">
-                    {t("admin.windowRequests")}
-                  </TableHead>
-                  <TableHead className="px-4">{t("admin.retryAfter")}</TableHead>
-                  <TableHead className="px-4">
-                    {t("admin.lastActivity")}
-                  </TableHead>
-                  <TableHead className="px-4 text-right">
-                    {t("admin.actions")}
-                  </TableHead>
+                  <TableHead className="px-4">{t('admin.ipAddress')}</TableHead>
+                  <TableHead className="px-4">{t('admin.limitStatus')}</TableHead>
+                  <TableHead className="px-4">{t('admin.windowRequests')}</TableHead>
+                  <TableHead className="px-4">{t('admin.retryAfter')}</TableHead>
+                  <TableHead className="px-4">{t('admin.lastActivity')}</TableHead>
+                  <TableHead className="px-4 text-right">{t('admin.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -300,9 +268,7 @@ function ClientAuthRateLimitsSection({
                         {entry.ip}
                       </TableCell>
                       <TableCell className="px-4">
-                        <Badge
-                          variant={entry.limited ? "destructive" : "secondary"}
-                        >
+                        <Badge variant={entry.limited ? 'destructive' : 'secondary'}>
                           {rateLimitStatusLabel(entry, t)}
                         </Badge>
                       </TableCell>
@@ -310,9 +276,7 @@ function ClientAuthRateLimitsSection({
                         {entry.request_count} / {entry.max_requests}
                       </TableCell>
                       <TableCell className="px-4 text-muted-foreground">
-                        {entry.limited
-                          ? formatUptime(entry.retry_after_seconds)
-                          : "-"}
+                        {entry.limited ? formatUptime(entry.retry_after_seconds) : '-'}
                       </TableCell>
                       <TableCell className="px-4 text-muted-foreground">
                         {formatTimestamp(entry.last_activity)}
@@ -323,9 +287,9 @@ function ClientAuthRateLimitsSection({
                           variant="ghost"
                           size="icon-sm"
                           disabled={resetPending || resettingIP !== null}
-                          onClick={() => onReset(entry.ip)}
-                          title={t("admin.clearClientAuthRateLimit")}
-                          aria-label={t("admin.clearClientAuthRateLimit")}
+                          onClick={() => onResetIP(entry.ip)}
+                          title={t('admin.clearClientAuthRateLimit')}
+                          aria-label={t('admin.clearClientAuthRateLimit')}
                         >
                           {resetPending ? <Spinner /> : <Trash2 />}
                         </Button>
@@ -337,23 +301,23 @@ function ClientAuthRateLimitsSection({
             </Table>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSectionCard>
   );
 }
 
 function rateLimitStatusLabel(
   entry: RateLimitEntry,
-  t: ReturnType<typeof useTranslation>["t"],
+  t: ReturnType<typeof useTranslation>['t'],
 ) {
   if (!entry.limited) {
-    return t("admin.clientAuthRateLimitCounting");
+    return t('admin.clientAuthRateLimitCounting');
   }
-  if (entry.reason === "lockout") {
-    return t("admin.clientAuthRateLimitLockout");
+  if (entry.reason === 'lockout') {
+    return t('admin.clientAuthRateLimitLockout');
   }
-  if (entry.reason === "window") {
-    return t("admin.clientAuthRateLimitWindow");
+  if (entry.reason === 'window') {
+    return t('admin.clientAuthRateLimitWindow');
   }
-  return t("admin.clientAuthRateLimitLimited");
+  return t('admin.clientAuthRateLimitLimited');
 }

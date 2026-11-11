@@ -1,7 +1,8 @@
 import { type FormEvent, useState } from 'react';
-import { Check } from 'lucide-react';
+import { Check, UserRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAdminSecurityMutations } from '@/hooks/use-admin-security';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -21,7 +22,7 @@ import {
   CredentialBlock,
   LabeledInput,
   SettingRow,
-  SettingsList,
+  SettingsSectionCard,
 } from './security-primitives';
 
 export function AccountPasswordSection({
@@ -83,11 +84,19 @@ export function AccountPasswordSection({
 
   return (
     <>
-      <SettingsList>
+      <SettingsSectionCard
+        icon={UserRound}
+        title={t('admin.accountProfile')}
+        description={t('admin.accountPasswordTabDescription')}
+      >
         <SettingRow
           title={t('admin.currentAdmin')}
           description={t('admin.accountProfileDescription')}
-          value={currentUser.username}
+          value={
+            <code className="rounded-md border border-border/60 bg-muted/50 px-2 py-0.5 font-mono text-xs text-foreground">
+              {currentUser.username}
+            </code>
+          }
           actionLabel={t('admin.updateUsername')}
           onAction={() => {
             setUsernameForm(emptyUsernameForm(currentUser.username));
@@ -97,14 +106,14 @@ export function AccountPasswordSection({
         <SettingRow
           title={t('admin.passwordSecurity')}
           description={t('admin.passwordSecurityDescription')}
-          value={t('admin.passwordConfigured')}
+          value={<Badge variant="secondary">{t('admin.passwordConfigured')}</Badge>}
           actionLabel={t('admin.updatePassword')}
           onAction={() => {
             setPasswordForm(emptyPasswordForm());
             setAccountDialog('password');
           }}
         />
-      </SettingsList>
+      </SettingsSectionCard>
 
       <UsernameDialog
         open={accountDialog === 'username'}

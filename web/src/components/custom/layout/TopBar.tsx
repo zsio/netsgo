@@ -1,6 +1,7 @@
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Monitor, Zap, MonitorOff, Pause, Github, Star, Sun, Moon, LaptopMinimal, Loader2, WifiOff,
+  Monitor, Zap, MonitorOff, Pause, Github, Star, Loader2, WifiOff,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from '@tanstack/react-router';
@@ -8,7 +9,6 @@ import { useNavigate } from '@tanstack/react-router';
 import { EMPTY_CONSOLE_SUMMARY } from '@/lib/console-summary';
 import { useConsoleSummary } from '@/hooks/use-console-summary';
 import { useConnectionStore } from '@/stores/connection-store';
-import { useThemeStore, type ThemePreference } from '@/stores/theme-store';
 import { DualTriggerCard } from '@/components/custom/common/DualTriggerCard';
 import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
@@ -17,63 +17,56 @@ import type { ResourceScope } from '@/lib/resource-scope';
 export { DualTriggerCard };
 
 const GITHUB_REPO_URL = 'https://github.com/zsio/netsgo';
-
-const THEME_LABEL_KEYS: Record<ThemePreference, 'common.themeLight' | 'common.themeDark' | 'common.themeSystem'> = {
-  light: 'common.themeLight',
-  dark: 'common.themeDark',
-  system: 'common.themeSystem',
-};
-
-function ThemeToggleButton() {
-  const { t } = useTranslation();
-  const preference = useThemeStore((state) => state.preference);
-  const cyclePreference = useThemeStore((state) => state.cyclePreference);
-  const modeLabel = `${t('common.theme')}: ${t(THEME_LABEL_KEYS[preference])}`;
-
-  const Icon = preference === 'light' ? Sun : preference === 'dark' ? Moon : LaptopMinimal;
-
-  return (
-    <button
-      type="button"
-      onClick={cyclePreference}
-      title={modeLabel}
-      aria-label={modeLabel}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/50 bg-muted/30 text-muted-foreground transition-colors hover:border-border hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-    >
-      <Icon className="h-3.5 w-3.5" />
-    </button>
-  );
-}
+const SSE_STATUS_DISPLAY_DELAY_MS = 2500;
 
 function ConnectionStatusPill() {
   const { t } = useTranslation();
   const status = useConnectionStore((state) => state.status);
+  const isHealthy = status === 'connected' || status === 'connecting';
+  const [showDegraded, setShowDegraded] = useState(false);
+
+  useEffect(() => {
+    if (isHealthy) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setShowDegraded(true);
+    }, SSE_STATUS_DISPLAY_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      setShowDegraded(false);
+    };
+  }, [isHealthy]);
+
+  const visibleStatus = !isHealthy && showDegraded ? status : null;
 
   return (
     <AnimatePresence initial={false}>
-      {status !== 'connected' ? (
+      {visibleStatus ? (
         <motion.div
-          key={status}
+          key={visibleStatus}
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.95 }}
           transition={{ duration: 0.18 }}
           role="status"
           aria-live="polite"
-          title={status === 'reconnecting' ? t('common.sseReconnecting') : t('common.sseDisconnected')}
+          title={visibleStatus === 'reconnecting' ? t('common.sseReconnecting') : t('common.sseDisconnected')}
           className={
-            status === 'reconnecting'
+            visibleStatus === 'reconnecting'
               ? 'inline-flex h-7 items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 text-xs font-medium text-amber-600 dark:text-amber-400'
               : 'inline-flex h-7 items-center gap-1.5 rounded-full border border-destructive/30 bg-destructive/10 px-2.5 text-xs font-medium text-destructive'
           }
         >
-          {status === 'reconnecting' ? (
+          {visibleStatus === 'reconnecting' ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : (
             <WifiOff className="h-3 w-3" />
           )}
           <span className="hidden md:inline">
-            {status === 'reconnecting' ? t('common.sseReconnecting') : t('common.sseDisconnected')}
+            {visibleStatus === 'reconnecting' ? t('common.sseReconnecting') : t('common.sseDisconnected')}
           </span>
         </motion.div>
       ) : null}
@@ -238,7 +231,6 @@ function TopBarInner({ scope }: { scope: ResourceScope | null }) {
 
       <div className="flex items-center justify-end gap-2">
         <ConnectionStatusPill />
-        <ThemeToggleButton />
         <GitHubStarLink />
       </div>
     </header>

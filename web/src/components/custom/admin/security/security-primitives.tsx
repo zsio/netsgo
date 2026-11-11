@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from 'react';
+import type { ComponentProps, ComponentType, ReactNode } from 'react';
 import { CheckCircle2, KeyRound, ShieldOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -6,8 +6,65 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import type { CredentialForm } from '@/routes/admin/security-state';
 
+export function SettingsSectionCard({
+  icon: Icon,
+  title,
+  description,
+  badge,
+  actions,
+  footer,
+  bodyClassName,
+  children,
+}: {
+  icon?: ComponentType<{ className?: string }>;
+  title: string;
+  description?: string;
+  badge?: ReactNode;
+  actions?: ReactNode;
+  footer?: ReactNode;
+  bodyClassName?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-border/40 bg-card/50 shadow-sm backdrop-blur-sm">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border/40 bg-muted/20 px-4 py-3.5 sm:px-5">
+        <div className="flex min-w-0 items-start gap-3">
+          {Icon ? (
+            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/50 bg-background/80 text-foreground/80 shadow-2xs">
+              <Icon className="size-4" />
+            </div>
+          ) : null}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h4 className="text-sm font-semibold text-foreground">{title}</h4>
+              {badge}
+            </div>
+            {description ? (
+              <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+                {description}
+              </p>
+            ) : null}
+          </div>
+        </div>
+        {actions ? (
+          <div className="flex shrink-0 items-center gap-2">{actions}</div>
+        ) : null}
+      </header>
+      <div className={cn('divide-y divide-border/40', bodyClassName)}>
+        {children}
+      </div>
+      {footer ? (
+        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 bg-muted/15 px-4 py-3 sm:px-5">
+          {footer}
+        </footer>
+      ) : null}
+    </section>
+  );
+}
+
 export function SettingRow({
   title,
+  titleBadge,
   description,
   value,
   actionLabel,
@@ -17,7 +74,8 @@ export function SettingRow({
   actions,
 }: {
   title: string;
-  description: string;
+  titleBadge?: ReactNode;
+  description?: string;
   value?: ReactNode;
   actionLabel?: string;
   actionVariant?: ComponentProps<typeof Button>['variant'];
@@ -26,12 +84,19 @@ export function SettingRow({
   actions?: ReactNode;
 }) {
   return (
-    <div className="grid gap-4 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-5">
+    <div className="grid gap-3 px-4 py-3.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6 sm:px-5">
       <div className="min-w-0">
-        <p className="font-medium text-foreground">{title}</p>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm font-medium text-foreground">{title}</p>
+          {titleBadge}
+        </div>
+        {description ? (
+          <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+            {description}
+          </p>
+        ) : null}
       </div>
-      <div className="flex min-w-0 items-center gap-3 sm:justify-end">
+      <div className="flex min-w-0 flex-wrap items-center gap-2.5 sm:justify-end">
         {value ? (
           <span className="min-w-0 truncate text-sm font-medium text-muted-foreground">
             {value}
@@ -39,7 +104,13 @@ export function SettingRow({
         ) : null}
         {actions}
         {actionLabel && onAction ? (
-          <Button type="button" variant={actionVariant} disabled={actionDisabled} onClick={onAction}>
+          <Button
+            type="button"
+            size="sm"
+            variant={actionVariant}
+            disabled={actionDisabled}
+            onClick={onAction}
+          >
             {actionLabel}
           </Button>
         ) : null}
@@ -50,7 +121,7 @@ export function SettingRow({
 
 export function SettingsList({ children }: { children: ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-border/50 bg-background/90 divide-y divide-border/50">
+    <div className="overflow-hidden rounded-xl border border-border/40 bg-card/50 shadow-sm backdrop-blur-sm divide-y divide-border/40">
       {children}
     </div>
   );

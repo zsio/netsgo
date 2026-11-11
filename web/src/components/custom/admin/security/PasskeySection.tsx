@@ -1,8 +1,9 @@
 import { type FormEvent, useMemo, useState } from 'react';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { Fingerprint, KeyRound, Pencil, Plus, ShieldAlert, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import { useAdminSecurityMutations } from '@/hooks/use-admin-security';
+import { formatTimestamp } from '@/lib/format';
 import {
   isPasskeySupported,
   normalizeCreationOptions,
@@ -18,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { TableActionIconButton } from '@/components/custom/common/TableActionIconButton';
 import {
   emptyCredentialForm,
   emptyPasskeyForm,
@@ -29,8 +31,7 @@ import {
   CredentialBlock,
   FactorStatusRow,
   LabeledInput,
-  SettingRow,
-  SettingsList,
+  SettingsSectionCard,
 } from './security-primitives';
 
 export function PasskeySection({
@@ -54,6 +55,11 @@ export function PasskeySection({
   const [passkeyAddOpen, setPasskeyAddOpen] = useState(false);
 
   const passkeySupported = useMemo(() => isPasskeySupported(), []);
+  const isInsecureOrigin =
+    typeof window !== 'undefined' && window.isSecureContext === false;
+  const unsupportedReason = isInsecureOrigin
+    ? t('admin.passkeySecureContextHint')
+    : t('admin.passkeyUnsupported');
 
   const closePasskeyAdd = () => {
     setPasskeyAddOpen(false);
@@ -73,7 +79,7 @@ export function PasskeySection({
   const addPasskey = async (event: FormEvent) => {
     event.preventDefault();
     if (!passkeySupported) {
-      toast.error(t('admin.passkeyUnsupported'));
+      toast.error(unsupportedReason);
       return;
     }
     try {
@@ -141,64 +147,117 @@ export function PasskeySection({
 
   return (
     <>
-      <SettingsList>
-        <SettingRow
-          title={t('admin.addPasskey')}
-          description={passkeySupported ? t('admin.passkeyAddDescription') : t('admin.passkeyUnsupported')}
-          value={!passkeySupported ? <Badge variant="secondary">{t('common.disabled')}</Badge> : undefined}
-          actionLabel={t('admin.addPasskey')}
-          actionDisabled={!passkeySupported}
-          onAction={() => {
-            setPasskeyForm(emptyPasskeyForm());
-            setPasskeyAddOpen(true);
-          }}
-        />
+      <SettingsSectionCard
+        icon={Fingerprint}
+        title={t('admin.passkeys')}
+        description={t('admin.passkeyAddDescription')}
+        badge={
+          passkeys.length > 0 ? (
+            <Badge variant="secondary" className="font-mono text-xs">
+              {passkeys.length}
+            </Badge>
+          ) : !passkeySupported ? (
+            <Badge variant="outline" className="text-muted-foreground">
+              {t('common.disabled')}
+            </Badge>
+          ) : undefined
+        }
+        actions={
+          <Button
+            type="button"
+            size="sm"
+            variant={passkeys.length === 0 ? 'default' : 'outline'}
+            disabled={!passkeySupported}
+            onClick={() => {
+              setPasskeyForm(emptyPasskeyForm());
+              setPasskeyAddOpen(true);
+            }}
+          >
+            <Plus data-icon="inline-start" />
+            {t('admin.addPasskey')}
+          </Button>
+        }
+      >
+        {!passkeySupported && passkeys.length > 0 ? (
+          <div className="flex items-center gap-2.5 bg-amber-500/5 px-4 py-2.5 text-xs text-amber-600 dark:text-amber-400 sm:px-5">
+            <ShieldAlert className="size-4 shrink-0" />
+            <span>{unsupportedReason}</span>
+          </div>
+        ) : null}
 
         {passkeys.length === 0 ? (
-          <SettingRow
-            title={t('admin.noPasskeys')}
-            description={t('admin.noPasskeysDescription')}
-          />
+          <div className="flex items-start gap-3 px-4 py-4 sm:px-5">
+            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
+              <KeyRound className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">
+                {t('admin.noPasskeys')}
+              </p>
+              <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+                {passkeySupported ? t('admin.noPasskeysDescription') : unsupportedReason}
+              </p>
+            </div>
+          </div>
         ) : (
           passkeys.map((passkey) => (
-            <SettingRow
+            <div
               key={passkey.id}
-              title={passkey.name}
-              description={t('admin.passkeyCredentialDescription')}
-              actions={(
-                <>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => {
-                      setRenamePasskey(passkey);
-                      setRenameForm(emptyPasskeyForm(passkey.name));
-                    }}
-                    title={t('common.edit')}
-                    aria-label={t('common.edit')}
-                  >
-                    <Pencil />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => {
-                      setDeletePasskey(passkey);
-                      setDeleteForm(emptyCredentialForm());
-                    }}
-                    title={t('common.delete')}
-                    aria-label={t('common.delete')}
-                  >
-                    <Trash2 />
-                  </Button>
-                </>
-              )}
-            />
+              className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5 sm:px-5"
+            >
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Fingerprint className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {passkey.name}
+                  </p>
+                  <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                    <span>
+                      {t('admin.passkeyCreatedAt', {
+                        time: formatTimestamp(passkey.created_at),
+                      })}
+                    </span>
+                    <span>·</span>
+                    <span>
+                      {passkey.last_used_at
+                        ? t('admin.passkeyLastUsedAt', {
+                            time: formatTimestamp(passkey.last_used_at),
+                          })
+                        : t('admin.passkeyNeverUsed')}
+                    </span>
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <TableActionIconButton
+                  type="button"
+                  label={t('common.edit')}
+                  tone="primary"
+                  onClick={() => {
+                    setRenamePasskey(passkey);
+                    setRenameForm(emptyPasskeyForm(passkey.name));
+                  }}
+                >
+                  <Pencil className="size-3.5" />
+                </TableActionIconButton>
+                <TableActionIconButton
+                  type="button"
+                  label={t('common.delete')}
+                  tone="destructive"
+                  onClick={() => {
+                    setDeletePasskey(passkey);
+                    setDeleteForm(emptyCredentialForm());
+                  }}
+                >
+                  <Trash2 className="size-3.5" />
+                </TableActionIconButton>
+              </div>
+            </div>
           ))
         )}
-      </SettingsList>
+      </SettingsSectionCard>
 
       <PasskeyAddDialog
         open={passkeyAddOpen}

@@ -3,7 +3,7 @@ import {
   Server as ServerIcon, LayoutDashboard,
   Settings, Activity, Users, Webhook,
   BookOpen, LayersPlus, Languages, LogOut, Search, ChevronDown, ChevronUp,
-  Sun, Moon, LaptopMinimal, UserRound,
+  Sun, Moon, LaptopMinimal, ChevronsUpDown, ShieldCheck,
 } from 'lucide-react';
 import { Link, useRouterState, useNavigate } from '@tanstack/react-router';
 import type { Client } from '@/types';
@@ -25,8 +25,15 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Sidebar,
   SidebarContent,
@@ -41,6 +48,8 @@ import {
   SidebarMenuButton,
   SidebarMenuBadge,
   SidebarRail,
+  SidebarSeparator,
+  useSidebar,
 } from '@/components/ui/sidebar';
 
 interface ClientSidebarProps {
@@ -139,6 +148,7 @@ const ClientSidebarMenuItem = memo(function ClientSidebarMenuItem({
 export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps) {
   const { t, i18n } = useTranslation();
   const { openAddClientDialog } = useAddClientDialog();
+  const { isMobile } = useSidebar();
   const navigate = useNavigate();
   const principal = useAuthStore((state) => state.user);
   const isAdmin = principal?.is_admin === true;
@@ -147,6 +157,7 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
   const ThemeIcon = themePreference === 'light' ? Sun : themePreference === 'dark' ? Moon : LaptopMinimal;
   const [searchQuery, setSearchQuery] = useState('');
   const [expanded, setExpanded] = useState(false);
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
 
   const handleLogout = async () => {
     await logoutCurrentSession();
@@ -388,22 +399,9 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
         </SidebarGroup> : null}
       </SidebarContent>
 
-      <SidebarFooter className="pb-[calc(1rem+var(--safe-area-bottom))]">
-        <SidebarGroup className="text-muted-foreground/80">
+      <SidebarFooter className="pb-[calc(0.75rem+var(--safe-area-bottom))]">
+        <SidebarGroup className="p-1 text-muted-foreground/80">
           <SidebarMenu>
-            {isAdmin ? <SidebarMenuItem>
-              <SidebarMenuButton
-                asChild
-                isActive={pathname.startsWith('/dashboard/admin')}
-                tooltip={t('dashboard.systemSettings')}
-                className={NAV_ITEM_CLASS}
-              >
-                <Link to="/dashboard/admin/config">
-                  <Settings className="h-4 w-4" />
-                  <span>{t('dashboard.systemSettings')}</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem> : null}
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild
@@ -424,7 +422,7 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
               >
                 <ThemeIcon className="h-4 w-4" />
                 <span>{t('common.theme')}</span>
-                <span className="ml-auto text-xs">{t(THEME_LABEL_KEYS[themePreference])}</span>
+                <span className="ml-auto text-xs text-muted-foreground/70">{t(THEME_LABEL_KEYS[themePreference])}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
@@ -435,49 +433,113 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
               >
                 <Languages className="h-4 w-4" />
                 <span>{t('common.language')}</span>
-                <span className="ml-auto text-xs">{t(LANGUAGE_LABEL_KEYS[currentLanguage])}</span>
+                <span className="ml-auto text-xs text-muted-foreground/70">{t(LANGUAGE_LABEL_KEYS[currentLanguage])}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
-            {principal ? (
+            {isAdmin ? (
               <SidebarMenuItem>
-                <div className="mt-1 flex items-center gap-2 rounded-md border border-sidebar-border/60 bg-sidebar-accent/30 px-2.5 py-1.5 text-xs">
-                  <UserRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate font-medium text-sidebar-foreground">
-                    {principal.username}
-                  </span>
-                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                    {principal.is_admin ? t('users.admin') : t('users.member')}
-                  </span>
-                </div>
+                <SidebarMenuButton
+                  asChild
+                  isActive={pathname.startsWith('/dashboard/admin')}
+                  tooltip={t('dashboard.systemSettings')}
+                  className={NAV_ITEM_CLASS}
+                >
+                  <Link to="/dashboard/admin/config">
+                    <Settings className="h-4 w-4" />
+                    <span>{t('dashboard.systemSettings')}</span>
+                  </Link>
+                </SidebarMenuButton>
               </SidebarMenuItem>
             ) : null}
-            <SidebarMenuItem>
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <SidebarMenuButton
-                    tooltip={t('auth.logout')}
-                    className={NAV_ITEM_CLASS}
-                  >
-                    <LogOut className="h-4 w-4" />
-                    <span>{t('auth.logout')}</span>
-                  </SidebarMenuButton>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>{t('auth.logoutTitle')}</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      {t('auth.logoutDescription')}
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
-                    <AlertDialogAction onClick={handleLogout}>{t('auth.confirmLogout')}</AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
+
+        {principal ? (
+          <>
+            <SidebarSeparator className="mx-2 my-0.5" />
+            <SidebarMenu className="px-1">
+              <SidebarMenuItem>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <SidebarMenuButton
+                      size="lg"
+                      tooltip={principal.username}
+                      className="rounded-lg px-2 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+                    >
+                      <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/12 text-xs font-semibold uppercase text-primary">
+                        {principal.username.slice(0, 1) || 'U'}
+                      </div>
+                      <div className="grid flex-1 text-left text-sm leading-tight">
+                        <span className="truncate font-semibold text-sidebar-foreground">
+                          {principal.username}
+                        </span>
+                        <span className="truncate text-[11px] text-muted-foreground">
+                          {principal.is_admin ? t('users.admin') : t('users.member')}
+                        </span>
+                      </div>
+                      <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
+                    </SidebarMenuButton>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    className="w-56 rounded-lg"
+                    side={isMobile ? 'top' : 'right'}
+                    align="end"
+                    sideOffset={6}
+                  >
+                    <DropdownMenuLabel className="p-0 font-normal">
+                      <div className="flex items-center gap-2.5 px-2.5 py-2 text-left text-sm">
+                        <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/12 text-xs font-semibold uppercase text-primary">
+                          {principal.username.slice(0, 1) || 'U'}
+                        </div>
+                        <div className="grid flex-1 text-left text-sm leading-tight">
+                          <span className="truncate font-semibold">{principal.username}</span>
+                          <span className="truncate text-xs text-muted-foreground">
+                            {principal.is_admin ? t('users.admin') : t('users.member')}
+                          </span>
+                        </div>
+                      </div>
+                    </DropdownMenuLabel>
+                    {isAdmin ? (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem asChild>
+                          <Link to="/dashboard/admin/security" className="cursor-pointer">
+                            <ShieldCheck className="size-4" />
+                            <span>{t('admin.accountSecurityShortcut')}</span>
+                          </Link>
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      className="cursor-pointer"
+                      onSelect={() => setLogoutDialogOpen(true)}
+                    >
+                      <LogOut className="size-4" />
+                      <span>{t('auth.logout')}</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </>
+        ) : null}
+
+        <AlertDialog open={logoutDialogOpen} onOpenChange={setLogoutDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t('auth.logoutTitle')}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t('auth.logoutDescription')}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+              <AlertDialogAction onClick={handleLogout}>{t('auth.confirmLogout')}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </SidebarFooter>
 
       <SidebarRail />

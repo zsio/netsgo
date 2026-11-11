@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from 'react';
-import { Plus, RotateCcw, X } from 'lucide-react';
+import { Plus, RotateCcw, ShieldCheck, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAdminSecurityMutations } from '@/hooks/use-admin-security';
 import { Badge } from '@/components/ui/badge';
@@ -15,7 +15,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { emptyCredentialForm, type CredentialForm } from '@/routes/admin/security-state';
 import type { RecoveryCodesResponse, TOTPBeginResponse } from '@/types';
-import { CredentialBlock, SettingRow, SettingsList } from './security-primitives';
+import { CredentialBlock, SettingRow, SettingsSectionCard } from './security-primitives';
 
 export function TOTPSection({
   enabled,
@@ -108,7 +108,16 @@ export function TOTPSection({
 
   return (
     <>
-      <SettingsList>
+      <SettingsSectionCard
+        icon={ShieldCheck}
+        title={t('admin.twoFactorAuth')}
+        description={t('admin.totpPanelDescription')}
+        badge={
+          <Badge variant={enabled ? 'default' : 'outline'}>
+            {enabled ? t('common.enabled') : t('common.disabled')}
+          </Badge>
+        }
+      >
         <SettingRow
           title={enabled ? t('admin.totpEnabled') : t('admin.totpDisabled')}
           description={
@@ -116,11 +125,6 @@ export function TOTPSection({
               ? t('admin.totpEnabledDescription', { count: recoveryCodesRemaining })
               : t('admin.totpDisabledDescription')
           }
-          value={(
-            <Badge variant={enabled ? 'default' : 'secondary'}>
-              {enabled ? t('common.enabled') : t('common.disabled')}
-            </Badge>
-          )}
           actionLabel={enabled ? t('admin.disableTOTP') : t('admin.enableTOTP')}
           actionVariant={enabled ? 'destructive' : 'default'}
           onAction={
@@ -140,7 +144,11 @@ export function TOTPSection({
           <SettingRow
             title={t('admin.recoveryCodes')}
             description={t('admin.recoveryCodesManageDescription')}
-            value={t('admin.recoveryCodesRemaining', { count: recoveryCodesRemaining })}
+            value={
+              <Badge variant="outline" className="font-mono text-xs">
+                {t('admin.recoveryCodesRemaining', { count: recoveryCodesRemaining })}
+              </Badge>
+            }
             actionLabel={t('admin.regenerateRecoveryCodes')}
             onAction={() => {
               setTotpForm(emptyCredentialForm());
@@ -148,7 +156,7 @@ export function TOTPSection({
             }}
           />
         ) : null}
-      </SettingsList>
+      </SettingsSectionCard>
 
       <TOTPActionDialog
         action={totpAction}
@@ -283,7 +291,7 @@ export function TOTPSetupDialog({
         </DialogHeader>
         {setup ? (
           <div className="grid gap-5 sm:grid-cols-[220px_1fr]">
-            <div className="rounded-xl border border-border/50 bg-background p-3">
+            <div className="rounded-xl border border-border/50 bg-white p-3 shadow-2xs">
               <img src={setup.qr_data_url} alt={t('admin.totpQRCode')} className="aspect-square w-full rounded-lg" />
             </div>
             <div className="flex flex-col gap-4">

@@ -23,6 +23,23 @@ export { createEventStreamSnapshotState } from './event-stream/snapshot';
 export { createActivityRecoveryState, recoverActivityGap } from './event-stream/activity-recovery';
 export { applyEventForDiagnostics } from './event-stream/apply-event';
 
+const ADMIN_GLOBAL_EVENT_SCOPE: ActivityReadScope = { kind: 'admin-global' };
+
+function getEventScopeKey(scope: ActivityReadScope | null): string | null {
+  if (!scope) return null;
+  return scope.kind === 'admin-user' ? `admin-user:${scope.userId}` : scope.kind;
+}
+
+function parseEventScopeKey(key: string | null): ActivityReadScope | null {
+  if (!key) return null;
+  if (key === 'self') return SELF_RESOURCE_SCOPE;
+  if (key === 'admin-global') return ADMIN_GLOBAL_EVENT_SCOPE;
+  if (key.startsWith('admin-user:')) {
+    return { kind: 'admin-user', userId: key.slice('admin-user:'.length) };
+  }
+  return null;
+}
+
 export function resolveEventStreamScope(
   resourceScope: ResourceScope | null,
   isAdmin: boolean,
@@ -35,7 +52,7 @@ export function resolveEventStreamScope(
   if (pathname.startsWith('/dashboard/activity') && selectedActivityUserId) {
     return { kind: 'admin-user', userId: selectedActivityUserId };
   }
-  return { kind: 'admin-global' };
+  return ADMIN_GLOBAL_EVENT_SCOPE;
 }
 
 function eventStreamScopesEqual(left: ActivityReadScope, right: ActivityReadScope) {
@@ -57,7 +74,7 @@ export function resolveEventStreamScopes(
   const global = isAdmin
     && pathname.startsWith('/dashboard/users/')
     && primary?.kind !== 'admin-global'
-    ? { kind: 'admin-global' as const }
+    ? ADMIN_GLOBAL_EVENT_SCOPE
     : null;
   return { primary, secondary, global };
 }
@@ -70,8 +87,11 @@ function useScopedEventStream(
   shouldConnect: boolean,
   setStatus: (status: ConnectionStatus) => void,
 ) {
+  const eventScopeKey = getEventScopeKey(eventScope);
+
   useEffect(() => {
-    if (!shouldConnect || !eventScope) {
+    const resolvedScope = parseEventScopeKey(eventScopeKey);
+    if (!shouldConnect || !resolvedScope) {
       setStatus('disconnected');
       return;
     }
@@ -90,7 +110,7 @@ function useScopedEventStream(
           const isReconnect = hasConnected;
           setStatus(hasConnected ? 'reconnecting' : 'connecting');
 
-          const response = await fetch(scopedEventStreamPath(eventScope), {
+          const response = await fetch(scopedEventStreamPath(resolvedScope), {
             method: 'GET',
             headers: {
               Accept: 'text/event-stream',
@@ -109,8 +129,8 @@ function useScopedEventStream(
             throw new Error(`event stream failed: ${response.status}`);
           }
 
-          if (isReconnect && eventScope.kind !== 'admin-global') {
-            await resyncConsoleSnapshotSafely(queryClient, eventScope, snapshotState, setStatus);
+          if (isReconnect && resolvedScope.kind !== 'admin-global') {
+            await resyncConsoleSnapshotSafely(queryClient, resolvedScope, snapshotState, setStatus);
           }
 
           hasConnected = true;
@@ -137,7 +157,7 @@ function useScopedEventStream(
               eventType,
               data,
               activityState,
-              eventScope,
+              resolvedScope,
             ));
           }
         } catch (error) {
@@ -161,9 +181,8 @@ function useScopedEventStream(
       activityState.cancelled = true;
       if (activityState.retryTimer) clearTimeout(activityState.retryTimer);
       activeController?.abort();
-      setStatus('disconnected');
     };
-  }, [queryClient, eventScope, setStatus, shouldConnect]);
+  }, [queryClient, eventScopeKey, setStatus, shouldConnect]);
 }
 
 export function useEventStream() {

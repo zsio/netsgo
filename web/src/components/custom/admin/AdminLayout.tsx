@@ -1,9 +1,8 @@
 import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { motion } from 'motion/react';
-import { Shield, ShieldAlert, SlidersHorizontal } from 'lucide-react';
+import { ShieldAlert, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { cn } from '@/lib/utils';
 
 export function AdminLayout() {
   const { t } = useTranslation();
@@ -16,77 +15,40 @@ export function AdminLayout() {
 
   return (
     <motion.div
-      className="z-10 mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8"
+      className="z-10 mx-auto flex w-full max-w-5xl flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' as const }}
+      transition={{ duration: 0.25, ease: 'easeOut' as const }}
     >
-      <div className="border-b border-border/60">
-        <div className="flex flex-col gap-5">
-          <div>
-            <h2 className="text-3xl font-bold tracking-tight">{t('admin.systemSettingsTitle')}</h2>
-            <p className="mt-2 max-w-2xl text-sm font-medium text-muted-foreground">{t('admin.systemSettingsDescription')}</p>
-          </div>
-          <Tabs value={activeTab} className="w-full">
-            <TabsList variant="line" className="h-12 w-full justify-start gap-8 rounded-none p-0">
-              <AdminTabTrigger
-                active={activeTab === 'config'}
-                icon={SlidersHorizontal}
-                label={t('admin.serviceConfigTab')}
-                to="/dashboard/admin/config"
-                value="config"
-              />
-              <AdminTabTrigger
-                active={activeTab === 'security'}
-                icon={Shield}
-                label={t('admin.securityTab')}
-                to="/dashboard/admin/security"
-                value="security"
-              />
-              <AdminTabTrigger
-                active={activeTab === 'access-control'}
-                icon={ShieldAlert}
-                label={t('admin.accessControlTab')}
-                to="/dashboard/admin/access-control"
-                value="access-control"
-              />
-            </TabsList>
-          </Tabs>
+      <div className="flex flex-col gap-4">
+        <div>
+          <h3 className="text-xl font-semibold tracking-tight">{t('admin.systemSettingsTitle')}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{t('admin.systemSettingsDescription')}</p>
         </div>
+        <Tabs value={activeTab} className="w-full">
+          <TabsList className="h-9 w-full justify-start sm:w-fit">
+            <TabsTrigger value="config" asChild className="px-3">
+              <Link to="/dashboard/admin/config">
+                <SlidersHorizontal data-icon="inline-start" />
+                <span>{t('admin.serviceConfigTab')}</span>
+              </Link>
+            </TabsTrigger>
+            <TabsTrigger value="access-control" asChild className="px-3">
+              <Link to="/dashboard/admin/access-control">
+                <ShieldAlert data-icon="inline-start" />
+                <span>{t('admin.accessControlTab')}</span>
+              </Link>
+            </TabsTrigger>
+            <TabsTrigger value="security" asChild className="px-3">
+              <Link to="/dashboard/admin/security">
+                <ShieldCheck data-icon="inline-start" />
+                <span>{t('admin.securityTab')}</span>
+              </Link>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
       <Outlet />
     </motion.div>
-  );
-}
-
-function AdminTabTrigger({
-  active,
-  icon: Icon,
-  label,
-  to,
-  value,
-}: {
-  active: boolean;
-  icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
-  label: string;
-  to: string;
-  value: string;
-}) {
-  return (
-    <TabsTrigger value={value} asChild>
-      <Link
-        to={to}
-        className={cn(
-          'relative h-12 flex-none rounded-none px-0 text-sm font-semibold transition-colors',
-          'after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-full after:transition-opacity',
-          active
-            ? 'text-primary after:bg-primary after:opacity-100'
-            : 'text-muted-foreground after:bg-transparent after:opacity-0 hover:text-foreground',
-        )}
-      >
-        <Icon data-icon="inline-start" />
-        {label}
-      </Link>
-    </TabsTrigger>
   );
 }
