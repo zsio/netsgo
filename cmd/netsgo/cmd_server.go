@@ -235,7 +235,7 @@ func init() {
 	serverCmd.Flags().String("tls-cert", "", "TLS certificate file path (custom mode)")
 	serverCmd.Flags().String("tls-key", "", "TLS private key file path (custom mode)")
 	serverCmd.Flags().String("tls-auto-dir", "", "Self-signed cert storage dir (auto mode, default: <data-dir>/server/tls)")
-	serverCmd.Flags().String("trusted-proxies", "", "Trusted proxy CIDR/IP list for forwarded client headers, comma-separated")
+	serverCmd.Flags().String("trusted-proxies", "", "Trusted proxy CIDR/IP list for forwarded client headers, comma-separated (behind multiple proxies, e.g. CDN -> nginx, list every hop)")
 	serverCmd.Flags().String("init-admin-username", "", "Admin username for first-time initialization")
 	serverCmd.Flags().String("init-admin-password", "", "Admin password for first-time initialization")
 	serverCmd.Flags().String("init-server-addr", "", "Server external address for first-time initialization")
