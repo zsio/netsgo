@@ -1,17 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Waypoints, Laptop, ArrowRightLeft } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useClients } from '@/hooks/use-clients';
 import { useAuthStore } from '@/stores/auth-store';
 import { ServerInfoCard } from './ServerInfoCard';
 import { DashboardClientTable } from './DashboardClientTable';
 import { DashboardTunnelTable } from './DashboardTunnelTable';
-import { NetworkTopology } from './topology/NetworkTopology';
 import { buildDashboardTabMetrics, formatDashboardTabCount } from './dashboard-tab-metrics';
-import type { ResourceScope } from '@/lib/resource-scope';
+import { SELF_RESOURCE_SCOPE, type ResourceScope } from '@/lib/resource-scope';
+
+const LazyNetworkTopology = lazy(() =>
+  import('./topology/NetworkTopology').then((m) => ({ default: m.NetworkTopology })),
+);
 
 const stagger = {
   hidden: {},
@@ -138,7 +142,9 @@ export function OverviewPage({
             </TabsList>
             {showTopologyTab && (
               <TabsContent value="topology" forceMount className="data-[state=inactive]:hidden">
-                <NetworkTopology scope={scope} />
+                <Suspense fallback={<Skeleton className="h-[460px] w-full rounded-xl" />}>
+                  <LazyNetworkTopology scope={scope} />
+                </Suspense>
               </TabsContent>
             )}
             <TabsContent value="clients"><DashboardClientTable scope={scope} /></TabsContent>
@@ -150,4 +156,8 @@ export function OverviewPage({
       </motion.div>
     </motion.div>
   );
+}
+
+export function SelfOverviewPage() {
+  return <OverviewPage scope={SELF_RESOURCE_SCOPE} />;
 }

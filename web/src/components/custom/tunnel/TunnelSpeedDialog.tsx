@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Activity } from 'lucide-react';
 import {
   Dialog,
@@ -5,11 +6,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { TrafficRateChart } from '@/components/custom/chart/TrafficRateChart';
+import { Skeleton } from '@/components/ui/skeleton';
 import type { ProxyConfig } from '@/types';
 import type { ResourceScope } from '@/lib/resource-scope';
 import { useTranslation } from 'react-i18next';
 import { buildTunnelSpeedFilter } from '@/lib/tunnel-speed';
+
+const LazyTrafficRateChart = lazy(() =>
+  import('@/components/custom/chart/TrafficRateChart').then((m) => ({
+    default: m.TrafficRateChart,
+  })),
+);
 
 interface TunnelSpeedDialogProps {
   scope: ResourceScope;
@@ -39,7 +46,15 @@ export function TunnelSpeedDialog({
           </DialogTitle>
         </DialogHeader>
         <div className="min-w-0">
-          <TrafficRateChart scope={scope} clientId={clientId} tunnelFilter={buildTunnelSpeedFilter(tunnel)} />
+          {open ? (
+            <Suspense fallback={<Skeleton className="h-72 w-full rounded-xl" />}>
+              <LazyTrafficRateChart
+                scope={scope}
+                clientId={clientId}
+                tunnelFilter={buildTunnelSpeedFilter(tunnel)}
+              />
+            </Suspense>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>

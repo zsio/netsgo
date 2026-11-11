@@ -1,20 +1,36 @@
 import { useClients, useDeleteClient } from '@/hooks/use-clients';
 import { useNavigate } from '@tanstack/react-router';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Laptop, Cpu, HardDrive, Eye, Trash2, Globe, Wifi, LayersPlus } from 'lucide-react';
+import { Laptop, Cpu, HardDrive, Eye, Trash2, Globe, Wifi, LayersPlus, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatPercent } from '@/lib/format';
 import { TableActionIconButton } from '@/components/custom/common/TableActionIconButton';
+import { DEFAULT_TABLE_PAGE_SIZE, sliceTablePage } from '@/components/custom/common/table-pagination';
+import { TablePaginationBar } from '@/components/custom/common/TablePaginationBar';
 import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
 import { useAddClientDialog } from '@/components/custom/client/add-client-dialog-context';
 import type { Client } from '@/types';
 import { getClientDisplayName } from '@/lib/client-utils';
 import type { ReactNode } from 'react';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import type { ResourceScope } from '@/lib/resource-scope';
+
+const CLIENT_SEARCH_VISIBLE_THRESHOLD = 5;
+
+function matchesClientQuery(client: Client, lowerQuery: string) {
+  return (
+    getClientDisplayName(client).toLowerCase().includes(lowerQuery)
+    || client.info.hostname.toLowerCase().includes(lowerQuery)
+    || (client.info.ip && client.info.ip.toLowerCase().includes(lowerQuery))
+    || (client.info.public_ipv4 && client.info.public_ipv4.toLowerCase().includes(lowerQuery))
+    || (client.info.public_ipv6 && client.info.public_ipv6.toLowerCase().includes(lowerQuery))
+    || (client.last_ip && client.last_ip.toLowerCase().includes(lowerQuery))
+    || `${client.info.os}/${client.info.arch}`.toLowerCase().includes(lowerQuery)
+  );
+}
 
 function sortClientsForDashboard(clients: Client[] | undefined) {
   return [...(clients ?? [])].sort((a, b) => {
@@ -153,7 +169,7 @@ function ClientMobileCard({
   );
 }
 
-function DashboardClientDesktopRow({
+const DashboardClientDesktopRow = memo(function DashboardClientDesktopRow({
   client,
   onNavigate,
   onDelete,
@@ -205,7 +221,7 @@ function DashboardClientDesktopRow({
       </td>
     </tr>
   );
-}
+});
 
 interface DashboardClientTableContentProps {
   clients?: Client[];
@@ -221,37 +237,63 @@ export function DashboardClientTableContent({
   onAddClient,
 }: DashboardClientTableContentProps) {
   const { t } = useTranslation();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
   const sortedClients = useMemo(() => sortClientsForDashboard(clients), [clients]);
-
-  const navigateToClient = (clientId: string) => {
-    onNavigate(clientId);
-  };
+  const filteredClients = useMemo(() => {
+    const trimmed = searchQuery.trim().toLowerCase();
+    if (!trimmed) return sortedClients;
+    return sortedClients.filter((client) => matchesClientQuery(client, trimmed));
+  }, [searchQuery, sortedClients]);
+  const { pageItems: pagedClients, currentPage } = useMemo(
+    () => sliceTablePage(filteredClients, page, DEFAULT_TABLE_PAGE_SIZE),
+    [filteredClients, page],
+  );
+  const showSearch = sortedClients.length > CLIENT_SEARCH_VISIBLE_THRESHOLD || searchQuery.length > 0;
+  const emptyMessage = sortedClients.length === 0 ? t('dashboard.noClients') : t('dashboard.noMatchingClients');
 
   return (
     <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden">
-      <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-border/40 bg-muted/20 flex items-center justify-between">
+      <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-border/40 bg-muted/20 flex items-center justify-between gap-3">
         <h3 className="font-semibold text-foreground flex items-center gap-2">
           <Laptop className="h-5 w-5 text-primary" />
           {t('dashboard.onlineEndpoints')}
         </h3>
-        {onAddClient && (
-          <Button type="button" variant="secondary" size="sm" onClick={onAddClient}>
-            <LayersPlus className="h-4 w-4 mr-1.5" />
-            {t('dashboard.addClient')}
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {showSearch && (
+            <div className="relative hidden sm:block">
+              <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder={t('dashboard.searchClientsPlaceholder')}
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setPage(1);
+                }}
+                className="h-8 w-44 rounded bg-background pl-8 pr-3 text-xs border border-border/50 focus:outline-none focus:border-primary/50"
+              />
+            </div>
+          )}
+          {onAddClient && (
+            <Button type="button" variant="secondary" size="sm" onClick={onAddClient}>
+              <LayersPlus className="h-4 w-4 mr-1.5" />
+              {t('dashboard.addClient')}
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Mobile: Card List */}
       <div className="md:hidden">
-        {sortedClients.length === 0 ? (
-          <div className="px-4 py-8 text-center text-muted-foreground text-sm">{t('dashboard.noClients')}</div>
+        {pagedClients.length === 0 ? (
+          <div className="px-4 py-8 text-center text-muted-foreground text-sm">{emptyMessage}</div>
         ) : (
-          sortedClients.map((client) => (
+          pagedClients.map((client) => (
             <ClientMobileCard
               key={client.id}
               client={client}
-              onNavigate={() => navigateToClient(client.id)}
+              onNavigate={() => onNavigate(client.id)}
             />
           ))
         )}
@@ -270,18 +312,18 @@ export function DashboardClientTableContent({
             </tr>
           </thead>
           <tbody className="divide-y divide-border/40">
-            {sortedClients.length === 0 ? (
+            {pagedClients.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
-                  {t('dashboard.noClients')}
+                  {emptyMessage}
                 </td>
               </tr>
             ) : (
-              sortedClients.map((client) => (
+              pagedClients.map((client) => (
                 <DashboardClientDesktopRow
                   key={client.id}
                   client={client}
-                  onNavigate={navigateToClient}
+                  onNavigate={onNavigate}
                   onDelete={onDelete}
                 />
               ))
@@ -289,6 +331,13 @@ export function DashboardClientTableContent({
           </tbody>
         </table>
       </div>
+
+      <TablePaginationBar
+        totalItems={filteredClients.length}
+        page={currentPage}
+        pageSize={DEFAULT_TABLE_PAGE_SIZE}
+        onPageChange={setPage}
+      />
     </div>
   );
 }

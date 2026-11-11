@@ -6,7 +6,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { preserveLoopbackSourceCIDRsOnFirstRestriction } from '@/lib/source-cidrs';
 
 import { ClientToClientTopologyButton } from './TunnelDialog';
-import { getInitialTunnelFormState } from './tunnel-dialog-form';
+import { countConfiguredAdvancedSettings, getInitialTunnelFormState } from './tunnel-dialog-form';
 
 const legacyInlineWarning = ['客户端互访', '需要', '至少', '两个客户端'].join('');
 function renderClientToClientButton(disabled: boolean) {
@@ -151,5 +151,25 @@ describe('preserveLoopbackSourceCIDRsOnFirstRestriction', () => {
         '',
       ),
     ).toBe('');
+  });
+});
+
+describe('countConfiguredAdvancedSettings', () => {
+  test('默认新建表单高级项计数为 0', () => {
+    const form = getInitialTunnelFormState({ mode: 'create', clientId: 'client-1' });
+    expect(countConfiguredAdvancedSettings(form)).toBe(0);
+  });
+
+  test('统计已配置的源地址白名单、HTTP 鉴权与带宽限速', () => {
+    const form = getInitialTunnelFormState({ mode: 'create', clientId: 'client-1' });
+    expect(
+      countConfiguredAdvancedSettings({
+        ...form,
+        type: 'http',
+        sourceCidrs: '192.0.2.0/24',
+        httpAuthEnabled: true,
+        ingressBps: '10',
+      }),
+    ).toBe(3);
   });
 });

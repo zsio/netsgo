@@ -73,6 +73,25 @@ func (s *Server) handleGetClientTraffic(w http.ResponseWriter, r *http.Request) 
 	encodeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleGetRealtimeTraffic(w http.ResponseWriter, r *http.Request) {
+	scope, scopeOK := requireResourceScope(w, r)
+	if !scopeOK {
+		return
+	}
+	if s.trafficStore == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "traffic_store_unavailable", "traffic store unavailable")
+		return
+	}
+
+	event, err := s.collectRealtimeTrafficForUser(scope.OwnerUserID, time.Now())
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "traffic_query_failed", "failed to query realtime traffic")
+		return
+	}
+
+	encodeJSON(w, http.StatusOK, event)
+}
+
 func parseTrafficResolution(resolutionStr string, from, to time.Time) (TrafficResolution, error) {
 	if resolutionStr == "" {
 		return autoTrafficResolution(from, to), nil

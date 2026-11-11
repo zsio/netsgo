@@ -6,7 +6,6 @@ import { scopedClientApi } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Client } from '@/types';
 import { invalidateResourceScope, type ResourceScope } from '@/lib/resource-scope';
-import { formatUptime } from '@/lib/format';
 import { getClientDisplayName } from '@/lib/client-utils';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
@@ -16,12 +15,6 @@ interface ClientHeaderProps {
   client: Client;
   onShowActivity?: () => void;
 }
-
-const osLabels: Record<string, string> = {
-  darwin: 'macOS',
-  linux: 'Linux',
-  windows: 'Windows',
-};
 
 export function ClientHeader({ scope, client, onShowActivity }: ClientHeaderProps) {
   const { t } = useTranslation();
@@ -192,9 +185,18 @@ export function ClientHeader({ scope, client, onShowActivity }: ClientHeaderProp
             )}
 
             {/* Metadata 行 */}
-            <div className="text-sm text-muted-foreground flex items-center gap-2 mt-1 flex-wrap">
-              <span className="font-mono bg-muted/50 px-1.5 py-0.5 rounded">{client.id.slice(0, 8)}</span>
-              <span>•</span>
+            <div className="text-sm text-muted-foreground flex items-center gap-2 mt-1.5 flex-wrap">
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${
+                  client.online
+                    ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    : 'border-destructive/25 bg-destructive/10 text-destructive'
+                }`}
+              >
+                <span className={`size-1.5 rounded-full ${client.online ? 'bg-emerald-500' : 'bg-destructive'}`} />
+                {client.online ? t('clients.online') : t('clients.offline')}
+              </span>
+              <span className="font-mono text-xs bg-muted/50 px-1.5 py-0.5 rounded">{client.id.slice(0, 8)}</span>
               <AnimatePresence mode="popLayout">
                 {client.display_name && (
                   <motion.span
@@ -205,25 +207,11 @@ export function ClientHeader({ scope, client, onShowActivity }: ClientHeaderProp
                     transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
                     className="inline-flex items-center gap-2 overflow-hidden"
                   >
-                    <span className="text-xs" title={t('clients.machineName')}>{client.info.hostname}</span>
                     <span>•</span>
+                    <span className="font-mono text-xs" title={t('clients.machineName')}>{client.info.hostname}</span>
                   </motion.span>
                 )}
               </AnimatePresence>
-              <span>{osLabels[client.info.os] ?? client.info.os} / {client.info.arch}</span>
-              <span>•</span>
-              <span>{client.info.ip}</span>
-              {client.stats?.process_uptime != null && client.stats.process_uptime > 0 ? (
-                <>
-                  <span>•</span>
-                  <span>{t('clients.processRunning', { uptime: formatUptime(client.stats.process_uptime) })}</span>
-                </>
-              ) : client.stats?.uptime != null && (
-                <>
-                  <span>•</span>
-                  <span>{t('clients.systemUptime', { uptime: formatUptime(client.stats.uptime) })}</span>
-                </>
-              )}
             </div>
           </div>
         </div>

@@ -3,22 +3,22 @@ import { HardDrive, Clock, Cpu, Network, Monitor, Box, Database, CircleHelp, Glo
 import { useServerStatus } from '@/hooks/use-server-status';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CopyableIpLine } from '@/components/custom/common/CopyableIpLine';
+import { DualTriggerCard } from '@/components/custom/common/DualTriggerCard';
 import { VersionUpdateIndicator } from '@/components/custom/common/VersionUpdateIndicator';
 import { formatUptime, formatBytes } from '@/lib/format';
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card"
 import { useTranslation } from 'react-i18next';
 import type { ResourceScope } from '@/lib/resource-scope';
 
 function ProgressBar({ value, label, total, colorClass = "bg-primary" }: { value: number, label: string, total?: string, colorClass?: string }) {
+  const { t } = useTranslation();
+  const percent = value.toFixed(1);
   return (
     <div className="flex flex-col gap-1.5 w-full">
-      <div className="flex justify-between items-center text-xs">
+      <div className="flex justify-between items-center text-xs gap-2">
         <span className="text-muted-foreground font-medium truncate max-w-[120px]" title={label}>{label}</span>
-        <span className="font-medium text-foreground whitespace-nowrap">{value.toFixed(1)}%{total ? ` of ${total}` : ''}</span>
+        <span className="font-mono font-medium text-foreground whitespace-nowrap">
+          {total ? t('clients.percentOfTotal', { percent, total }) : `${percent}%`}
+        </span>
       </div>
       <div className="h-2 w-full bg-secondary overflow-hidden rounded-full">
         <div className={`h-full ${colorClass} transition-all duration-500`} style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
@@ -114,39 +114,42 @@ export function ServerInfoCard({ scope }: { scope?: ResourceScope }) {
             {t('clients.cpuUsage')}
             <span className="ml-auto text-xs text-muted-foreground font-normal">{status?.cpu_cores ? t('clients.cpuCores', { count: status.cpu_cores }) : '-'}</span>
           </div>
-          <ProgressBar value={status?.cpu_usage || 0} label="Usage" colorClass="bg-blue-500" />
+          <ProgressBar value={status?.cpu_usage || 0} label={t('clients.usageLabel')} colorClass="bg-blue-500" />
         </div>
 
         <div className="p-4 sm:p-6 flex flex-col gap-3 sm:gap-4">
           <div className="flex items-center gap-2 text-foreground font-medium text-sm">
             <Database className="w-4 h-4 text-emerald-500" />
             {t('clients.memoryUsage')}
-            <HoverCard>
-              <HoverCardTrigger asChild>
-                <span className="ml-auto text-xs text-muted-foreground font-normal cursor-help inline-flex items-center gap-1">
+            <DualTriggerCard
+              side="bottom"
+              align="end"
+              triggerClassName="ml-auto inline-flex"
+              contentClassName="w-[220px] p-3 text-xs shadow-xl border-border/50"
+              triggers={
+                <span className="text-xs text-muted-foreground font-normal cursor-pointer inline-flex items-center gap-1">
                   NetsGo: {status?.app_mem_used ? formatBytes(status.app_mem_used) : '-'}
                   <CircleHelp className="w-3.5 h-3.5 text-muted-foreground/60" />
                 </span>
-              </HoverCardTrigger>
-              <HoverCardContent className="w-[220px] p-3 text-xs shadow-xl border-border/50" side="bottom" align="end">
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">{t('clients.heapMemory')}</span>
-                    <span className="font-medium text-foreground">{status?.app_mem_used ? formatBytes(status.app_mem_used) : '-'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">{t('clients.processUsage')}</span>
-                    <span className="font-medium text-foreground">{status?.app_mem_sys ? formatBytes(status.app_mem_sys) : '-'}</span>
-                  </div>
-                  <p className="text-muted-foreground/70 text-[11px] pt-1 border-t border-border/40">{t('clients.processUsageHelp')}</p>
+              }
+            >
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('clients.heapMemory')}</span>
+                  <span className="font-mono font-medium text-foreground">{status?.app_mem_used ? formatBytes(status.app_mem_used) : '-'}</span>
                 </div>
-              </HoverCardContent>
-            </HoverCard>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('clients.processUsage')}</span>
+                  <span className="font-mono font-medium text-foreground">{status?.app_mem_sys ? formatBytes(status.app_mem_sys) : '-'}</span>
+                </div>
+                <p className="text-muted-foreground/70 text-[11px] pt-1 border-t border-border/40">{t('clients.processUsageHelp')}</p>
+              </div>
+            </DualTriggerCard>
           </div>
           <ProgressBar
             value={memPercent}
-            label="Memory"
-            total={status?.mem_total ? formatBytes(status.mem_total) : '-'}
+            label={t('clients.memory')}
+            total={status?.mem_total ? formatBytes(status.mem_total) : undefined}
             colorClass={memPercent > 85 ? 'bg-destructive' : 'bg-emerald-500'}
           />
         </div>
@@ -160,43 +163,44 @@ export function ServerInfoCard({ scope }: { scope?: ResourceScope }) {
             )}
           </div>
           {multipleDisks ? (
-            <HoverCard>
-              <HoverCardTrigger asChild>
-                <div className="cursor-help">
+            <DualTriggerCard
+              align="end"
+              contentClassName="w-[min(320px,calc(100vw-2rem))] p-4 flex flex-col gap-4 shadow-xl border-border/50"
+              triggers={
+                <div className="cursor-pointer">
                   <ProgressBar
                     value={diskPercent}
-                    label="All Partitions"
-                    total={status?.disk_total ? formatBytes(status.disk_total) : '-'}
+                    label={t('clients.allPartitions')}
+                    total={status?.disk_total ? formatBytes(status.disk_total) : undefined}
                     colorClass={diskPercent > 90 ? 'bg-destructive' : 'bg-amber-500'}
                   />
                 </div>
-              </HoverCardTrigger>
-              <HoverCardContent className="w-[320px] p-4 flex flex-col gap-4 shadow-xl border-border/50">
-                <div className="flex items-center gap-2 text-sm font-semibold text-foreground pb-2 border-b border-border/40">
-                  <HardDrive className="w-4 h-4" />
-                  {t('clients.allPartitions')}
-                </div>
-                <div className="flex flex-col gap-4 max-h-[300px] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {diskPartitions.map((p, idx) => {
-                    const dpPercent = p.total ? (p.used / p.total) * 100 : 0;
-                    return (
-                      <ProgressBar
-                        key={idx}
-                        value={dpPercent}
-                        label={p.path}
-                        total={formatBytes(p.total)}
-                        colorClass={dpPercent > 90 ? 'bg-destructive' : 'bg-amber-500'}
-                      />
-                    );
-                  })}
-                </div>
-              </HoverCardContent>
-            </HoverCard>
+              }
+            >
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground pb-2 border-b border-border/40">
+                <HardDrive className="w-4 h-4" />
+                {t('clients.allPartitions')}
+              </div>
+              <div className="flex flex-col gap-4 max-h-[300px] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {diskPartitions.map((p, idx) => {
+                  const dpPercent = p.total ? (p.used / p.total) * 100 : 0;
+                  return (
+                    <ProgressBar
+                      key={idx}
+                      value={dpPercent}
+                      label={p.path}
+                      total={formatBytes(p.total)}
+                      colorClass={dpPercent > 90 ? 'bg-destructive' : 'bg-amber-500'}
+                    />
+                  );
+                })}
+              </div>
+            </DualTriggerCard>
           ) : (
             <ProgressBar
               value={diskPercent}
-              label={diskPartitions[0]?.path || "Storage"}
-              total={status?.disk_total ? formatBytes(status.disk_total) : '-'}
+              label={diskPartitions[0]?.path || t('clients.disk')}
+              total={status?.disk_total ? formatBytes(status.disk_total) : undefined}
               colorClass={diskPercent > 90 ? 'bg-destructive' : 'bg-amber-500'}
             />
           )}

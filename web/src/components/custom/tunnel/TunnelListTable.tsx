@@ -12,6 +12,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { ConfirmDialog } from '@/components/custom/common/ConfirmDialog';
+import { DEFAULT_TABLE_PAGE_SIZE, sliceTablePage } from '@/components/custom/common/table-pagination';
+import { TablePaginationBar } from '@/components/custom/common/TablePaginationBar';
 import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
 import { TunnelMigrateDialog } from '@/components/custom/tunnel/TunnelMigrateDialog';
 import { TunnelSpeedDialog } from '@/components/custom/tunnel/TunnelSpeedDialog';
@@ -109,6 +111,7 @@ export function TunnelListTable({
   const stopTunnel = useStopTunnel(scope);
   const deleteTunnel = useDeleteTunnel(scope);
   const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; clientId: string } | null>(null);
   const [editTarget, setEditTarget] = useState<TunnelEntry | null>(null);
   const [migrateTargetId, setMigrateTargetId] = useState<string | null>(null);
@@ -117,30 +120,41 @@ export function TunnelListTable({
   const migrateTarget = getLatestTunnelMigrationTarget(orderedTunnels, migrateTargetId);
   const clientNameById = useMemo(() => buildClientNameMap(clients), [clients]);
 
+  const preparedTunnels = useMemo(
+    () => orderedTunnels.map((tunnel) => {
+      const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
+      return {
+        tunnel,
+        view,
+        ingress: buildIngressPresentation(tunnel, view, clientNameById),
+        target: buildTargetPresentation(tunnel, view, clientNameById),
+      };
+    }),
+    [clientNameById, orderedTunnels],
+  );
 
   const filteredTunnels = useMemo(() => {
-    if (!searchQuery.trim()) return orderedTunnels;
+    if (!searchQuery.trim()) return preparedTunnels;
     const q = searchQuery.toLowerCase();
-    return orderedTunnels.filter(
-      (tunnel) => {
-        const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
-        const ingress = buildIngressPresentation(tunnel, view, clientNameById);
-        const target = buildTargetPresentation(tunnel, view, clientNameById);
-
-        return (
-          tunnel.name.toLowerCase().includes(q) ||
-          tunnel.type.toLowerCase().includes(q) ||
-          view.routeLabel.toLowerCase().includes(q) ||
-          ingress.addressLabel.toLowerCase().includes(q) ||
-          ingress.nodeLabel.toLowerCase().includes(q) ||
-          target.addressLabel.toLowerCase().includes(q) ||
-          target.nodeLabel.toLowerCase().includes(q) ||
-          view.status.label.toLowerCase().includes(q) ||
-          (tunnel.clientName && tunnel.clientName.toLowerCase().includes(q))
-        );
-      },
+    return preparedTunnels.filter(
+      ({ tunnel, view, ingress, target }) => (
+        tunnel.name.toLowerCase().includes(q) ||
+        tunnel.type.toLowerCase().includes(q) ||
+        view.routeLabel.toLowerCase().includes(q) ||
+        ingress.addressLabel.toLowerCase().includes(q) ||
+        ingress.nodeLabel.toLowerCase().includes(q) ||
+        target.addressLabel.toLowerCase().includes(q) ||
+        target.nodeLabel.toLowerCase().includes(q) ||
+        view.status.label.toLowerCase().includes(q) ||
+        (tunnel.clientName && tunnel.clientName.toLowerCase().includes(q))
+      ),
     );
-  }, [clientNameById, orderedTunnels, searchQuery]);
+  }, [preparedTunnels, searchQuery]);
+
+  const { pageItems: pagedTunnels, currentPage } = useMemo(
+    () => sliceTablePage(filteredTunnels, page, DEFAULT_TABLE_PAGE_SIZE),
+    [filteredTunnels, page],
+  );
 
   const actionArgs = (id: string) => ({ tunnelId: id });
 
@@ -153,7 +167,7 @@ export function TunnelListTable({
       canDelete,
       canMigrate,
     } = getTunnelActionAvailability(tunnel);
-		const hasMigrationCandidate = getTunnelMigrationCandidates(tunnel, clients).length > 0;
+    const hasMigrationCandidate = canMigrate && getTunnelMigrationCandidates(tunnel, clients).length > 0;
 
     return (
       <div className="flex items-center justify-end gap-1">
@@ -258,7 +272,10 @@ export function TunnelListTable({
                 type="text"
                 placeholder={t('tunnels.searchPlaceholder')}
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setPage(1);
+                }}
                 className="h-8 pl-8 pr-3 rounded bg-background border border-border/50 text-xs w-48 focus:outline-none focus:border-primary/50"
               />
             </div>
@@ -284,12 +301,11 @@ export function TunnelListTable({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/40">
-                  {filteredTunnels.map((tunnel) => (
+                  {pagedTunnels.map((prepared) => (
                     <TunnelTableRow
-                      key={tunnel.id}
-                      tunnel={tunnel}
+                      key={prepared.tunnel.id}
+                      prepared={prepared}
                       showClient={showClient}
-                      clientNameById={clientNameById}
                       showTraffic24h={showTraffic24h}
                       traffic24hState={traffic24hState}
                       showActions={showActions}
@@ -300,6 +316,12 @@ export function TunnelListTable({
                   ))}
                 </tbody>
               </table>
+              <TablePaginationBar
+                totalItems={filteredTunnels.length}
+                page={currentPage}
+                pageSize={DEFAULT_TABLE_PAGE_SIZE}
+                onPageChange={setPage}
+              />
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
@@ -363,10 +385,16 @@ export function TunnelListTable({
   );
 }
 
+interface PreparedTunnelEntry {
+  tunnel: TunnelEntry;
+  view: ReturnType<typeof buildTunnelViewModel>;
+  ingress: TunnelEndpointPresentation;
+  target: TunnelEndpointPresentation;
+}
+
 function TunnelTableRow({
-  tunnel,
+  prepared,
   showClient,
-  clientNameById,
   showTraffic24h,
   traffic24hState,
   showActions,
@@ -374,9 +402,8 @@ function TunnelTableRow({
   onClientClick,
   renderActionButtons,
 }: {
-  tunnel: TunnelEntry;
+  prepared: PreparedTunnelEntry;
   showClient: boolean;
-  clientNameById: Map<string, string>;
   showTraffic24h: boolean;
   traffic24hState: Traffic24hState;
   showActions: boolean;
@@ -385,9 +412,7 @@ function TunnelTableRow({
   renderActionButtons: (tunnel: TunnelEntry) => React.ReactNode;
 }) {
   const { t } = useTranslation();
-  const view = buildTunnelViewModel(tunnel, tunnel.clientOnline);
-  const ingress = buildIngressPresentation(tunnel, view, clientNameById);
-  const target = buildTargetPresentation(tunnel, view, clientNameById);
+  const { tunnel, view, ingress, target } = prepared;
 
   return (
     <tr className="hover:bg-muted/30 transition-colors">

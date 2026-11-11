@@ -1,4 +1,5 @@
 import { bpsToMbpsInput } from '@/lib/format';
+import { isDefaultSourceCidrs } from '@/lib/source-cidrs';
 import type { Client, ProxyConfig, TransportPolicy, TunnelFormType, TunnelTopology } from '@/types';
 
 /** 编辑模式下传入的隧道数据 */
@@ -127,6 +128,50 @@ export function getInitialTunnelFormState(props: TunnelInitialFormProps): Tunnel
     socks5DialTimeout: '10',
     confirmNoAuthRisk: false,
   };
+}
+
+export interface AdvancedSettingsSnapshot {
+  topology: TunnelTopology;
+  type: TunnelFormType;
+  transportPolicy: TransportPolicy;
+  sourceCidrs: string;
+  httpAuthEnabled: boolean;
+  socks5AuthEnabled: boolean;
+  socks5TargetCidrs: string;
+  socks5TargetHosts: string;
+  socks5TargetPorts: string;
+  totalBps: string;
+  ingressBps: string;
+  egressBps: string;
+}
+
+export function countConfiguredAdvancedSettings(state: AdvancedSettingsSnapshot): number {
+  let count = 0;
+  if (state.topology === 'client_to_client' && state.transportPolicy !== 'server_relay_only') {
+    count += 1;
+  }
+  if (state.sourceCidrs.trim() !== '' && !isDefaultSourceCidrs(state.sourceCidrs)) {
+    count += 1;
+  }
+  if (state.type === 'http' && state.httpAuthEnabled) {
+    count += 1;
+  }
+  if (state.type === 'socks5') {
+    if (state.socks5AuthEnabled) count += 1;
+    if (state.socks5TargetCidrs.trim() !== '' && !isDefaultSourceCidrs(state.socks5TargetCidrs)) count += 1;
+    if (state.socks5TargetHosts.trim() !== '') count += 1;
+    if (state.socks5TargetPorts.trim() !== '') count += 1;
+  }
+  if (state.topology === 'client_to_client' && Number(state.totalBps) > 0) {
+    count += 1;
+  }
+  if (Number(state.ingressBps) > 0) {
+    count += 1;
+  }
+  if (Number(state.egressBps) > 0) {
+    count += 1;
+  }
+  return count;
 }
 
 function getInitialIngressPort(tunnel: TunnelDialogEditData) {

@@ -195,6 +195,12 @@ export function scopedConsoleSnapshotPath(scope: ResourceScope) {
     : `${adminUserBase(scope.userId)}/console/snapshot`;
 }
 
+export function scopedRealtimeTrafficPath(scope: ResourceScope) {
+  return scope.kind === 'self'
+    ? '/api/traffic/realtime'
+    : `${adminUserBase(scope.userId)}/traffic/realtime`;
+}
+
 export type EventStreamScope = ResourceScope | { kind: 'admin-global' };
 
 export function scopedEventStreamPath(scope: EventStreamScope) {

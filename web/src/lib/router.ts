@@ -46,6 +46,7 @@ const hashHistory = createHashHistory();
 export const router = createRouter({
   routeTree,
   history: hashHistory,
+  defaultPreload: 'intent',
 });
 
 // 类型声明 — TanStack Router 类型安全

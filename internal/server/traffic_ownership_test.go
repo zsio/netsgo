@@ -258,3 +258,88 @@ func TestCollectRealtimeTrafficEventsGroupsPayloadsByOwner(t *testing.T) {
 		t.Fatalf("second owner realtime payload leaked or missed data: %+v", second)
 	}
 }
+
+func TestRealtimeTrafficBatchAPIUsesResourceScopeAndAggregatesClients(t *testing.T) {
+	fixture := newTrafficOwnerFixture(t)
+	extraClient, err := fixture.server.auth.adminStore.GetOrCreateClientForUser(
+		fixture.ownerA.ID,
+		"traffic-owner-a-install-2",
+		protocol.ClientInfo{Hostname: "owner-a-2"},
+		"127.0.0.3",
+	)
+	if err != nil {
+		t.Fatalf("register second client for ownerA: %v", err)
+	}
+	extraTunnel := testStoredServerExposeTCPTunnel(
+		"traffic-owner-tunnel-a-2",
+		"owner-a-http",
+		extraClient.ID,
+		8082,
+		28080,
+		time.Now().UTC(),
+	)
+	extraTunnel.OwnerUserID = fixture.ownerA.ID
+	if _, err := fixture.server.store.AddTunnelForUser(fixture.ownerA.ID, extraTunnel, nil); err != nil {
+		t.Fatalf("save extra tunnel: %v", err)
+	}
+
+	sample := secondFloorUTC(time.Now().UTC()).Add(-time.Second)
+	fixture.store.ApplyDeltas([]TrafficDelta{
+		trafficOwnerDelta(fixture.tunnelA, sample, 51, 19, true),
+		trafficOwnerDelta(extraTunnel, sample, 61, 29, true),
+		trafficOwnerDelta(fixture.tunnelB, sample, 151, 119, true),
+	})
+	fixture.server.clients.Store(fixture.clientA.ID, &ClientConn{ID: fixture.clientA.ID, OwnerUserID: fixture.ownerA.ID, state: clientStateLive, proxies: make(map[string]*ProxyTunnel)})
+	fixture.server.clients.Store(extraClient.ID, &ClientConn{ID: extraClient.ID, OwnerUserID: fixture.ownerA.ID, state: clientStateLive, proxies: make(map[string]*ProxyTunnel)})
+	fixture.server.clients.Store(fixture.clientB.ID, &ClientConn{ID: fixture.clientB.ID, OwnerUserID: fixture.ownerB.ID, state: clientStateLive, proxies: make(map[string]*ProxyTunnel)})
+
+	adminSelf := doMuxRequest(t, fixture.handler, http.MethodGet, "/api/traffic/realtime", fixture.adminToken, nil)
+	if adminSelf.Code != http.StatusOK {
+		t.Fatalf("admin self realtime traffic = %d: %s", adminSelf.Code, adminSelf.Body.String())
+	}
+	var selfEvent realtimeTrafficEvent
+	if err := mustDecodeJSON(t, adminSelf.Body, &selfEvent); err != nil {
+		t.Fatalf("decode admin self realtime traffic: %v", err)
+	}
+	if len(selfEvent.Clients) != 2 {
+		t.Fatalf("admin self realtime clients = %+v, want 2 clients", selfEvent.Clients)
+	}
+	gotIDs := []string{selfEvent.Clients[0].ClientID, selfEvent.Clients[1].ClientID}
+	wantIDs := []string{fixture.clientA.ID, extraClient.ID}
+	if wantIDs[0] > wantIDs[1] {
+		wantIDs[0], wantIDs[1] = wantIDs[1], wantIDs[0]
+	}
+	if gotIDs[0] != wantIDs[0] || gotIDs[1] != wantIDs[1] {
+		t.Fatalf("admin self realtime client ids = %v, want %v", gotIDs, wantIDs)
+	}
+
+	ownerBToken := loginAdminTokenLocal(t, fixture.handler, fixture.ownerB.Username, "Password123")
+	ownerBSelf := doMuxRequest(t, fixture.handler, http.MethodGet, "/api/traffic/realtime", ownerBToken, nil)
+	if ownerBSelf.Code != http.StatusOK {
+		t.Fatalf("ownerB self realtime traffic = %d: %s", ownerBSelf.Code, ownerBSelf.Body.String())
+	}
+	var ownerBEvent realtimeTrafficEvent
+	if err := mustDecodeJSON(t, ownerBSelf.Body, &ownerBEvent); err != nil {
+		t.Fatalf("decode ownerB self realtime traffic: %v", err)
+	}
+	if len(ownerBEvent.Clients) != 1 || ownerBEvent.Clients[0].ClientID != fixture.clientB.ID {
+		t.Fatalf("ownerB realtime traffic leaked or missed scoped data: %+v", ownerBEvent.Clients)
+	}
+
+	nonAdminCrossScope := doMuxRequest(t, fixture.handler, http.MethodGet, "/api/admin/users/"+fixture.ownerA.ID+"/traffic/realtime", ownerBToken, nil)
+	if nonAdminCrossScope.Code != http.StatusForbidden {
+		t.Fatalf("non-admin target-user realtime traffic = %d, want 403", nonAdminCrossScope.Code)
+	}
+
+	adminTarget := doMuxRequest(t, fixture.handler, http.MethodGet, "/api/admin/users/"+fixture.ownerB.ID+"/traffic/realtime", fixture.adminToken, nil)
+	if adminTarget.Code != http.StatusOK {
+		t.Fatalf("admin target realtime traffic = %d: %s", adminTarget.Code, adminTarget.Body.String())
+	}
+	var targetEvent realtimeTrafficEvent
+	if err := mustDecodeJSON(t, adminTarget.Body, &targetEvent); err != nil {
+		t.Fatalf("decode admin target realtime traffic: %v", err)
+	}
+	if len(targetEvent.Clients) != 1 || targetEvent.Clients[0].ClientID != fixture.clientB.ID {
+		t.Fatalf("admin target realtime traffic = %+v, want client %s", targetEvent.Clients, fixture.clientB.ID)
+	}
+}

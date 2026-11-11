@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { memo, useMemo, useState } from 'react';
 import {
   Server as ServerIcon, LayoutDashboard,
   Settings, Activity, Users, Webhook,
-  BookOpen, LayersPlus, Languages, LogOut
+  BookOpen, LayersPlus, Languages, LogOut, Search, ChevronDown, ChevronUp,
+  Sun, Moon, LaptopMinimal, UserRound,
 } from 'lucide-react';
 import { Link, useRouterState, useNavigate } from '@tanstack/react-router';
 import type { Client } from '@/types';
@@ -10,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { getClientDisplayName } from '@/lib/client-utils';
 import { useAddClientDialog } from './add-client-dialog-context';
 import { useAuthStore } from '@/stores/auth-store';
+import { useThemeStore, type ThemePreference } from '@/stores/theme-store';
 import { logoutCurrentSession } from '@/lib/auth';
 import type { ResourceScope } from '@/lib/resource-scope';
 import { useTranslation } from 'react-i18next';
@@ -52,9 +54,87 @@ const LANGUAGE_LABEL_KEYS: Record<SupportedLocale, string> = {
   'zh-CN': 'common.chinese',
 };
 
+const THEME_LABEL_KEYS: Record<ThemePreference, string> = {
+  light: 'common.themeLight',
+  dark: 'common.themeDark',
+  system: 'common.themeSystem',
+};
+
 const DOCS_URL = 'https://netsgo.zs.uy';
 
 const NAV_ITEM_CLASS = 'rounded-md font-medium text-muted-foreground hover:text-foreground';
+const SIDEBAR_SEARCH_THRESHOLD = 10;
+const SIDEBAR_COLLAPSE_LIMIT = 50;
+const SIDEBAR_PING_LIMIT = 20;
+
+const ClientSidebarMenuItem = memo(function ClientSidebarMenuItem({
+  clientId,
+  displayName,
+  tooltip,
+  isOnline,
+  proxyCount,
+  isSelected,
+  scopeKind,
+  scopeUserId,
+  enablePing,
+}: {
+  clientId: string;
+  displayName: string;
+  tooltip: string;
+  isOnline: boolean;
+  proxyCount: number;
+  isSelected: boolean;
+  scopeKind: ResourceScope['kind'];
+  scopeUserId?: string;
+  enablePing: boolean;
+}) {
+  const statusDot = isOnline ? (
+    <span className="relative flex h-2 w-2 shrink-0">
+      {enablePing && (
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+      )}
+      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+    </span>
+  ) : (
+    <span className="h-2 w-2 rounded-full bg-muted-foreground/50 shrink-0" />
+  );
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        asChild
+        isActive={isSelected}
+        tooltip={tooltip}
+        className={cn(NAV_ITEM_CLASS, !isOnline && !isSelected && 'opacity-60')}
+      >
+        {scopeKind === 'admin-user' && scopeUserId ? (
+          <Link
+            to="/dashboard/users/$userId/clients/$clientId"
+            params={{ userId: scopeUserId, clientId }}
+          >
+            {statusDot}
+            <ServerIcon className="opacity-70 shrink-0" />
+            <span>{displayName}</span>
+          </Link>
+        ) : (
+          <Link
+            to="/dashboard/clients/$clientId"
+            params={{ clientId }}
+          >
+            {statusDot}
+            <ServerIcon className="opacity-70 shrink-0" />
+            <span>{displayName}</span>
+          </Link>
+        )}
+      </SidebarMenuButton>
+      {proxyCount > 0 && (
+        <SidebarMenuBadge>
+          {proxyCount}
+        </SidebarMenuBadge>
+      )}
+    </SidebarMenuItem>
+  );
+});
 
 export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps) {
   const { t, i18n } = useTranslation();
@@ -62,6 +142,11 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
   const navigate = useNavigate();
   const principal = useAuthStore((state) => state.user);
   const isAdmin = principal?.is_admin === true;
+  const themePreference = useThemeStore((state) => state.preference);
+  const cycleTheme = useThemeStore((state) => state.cyclePreference);
+  const ThemeIcon = themePreference === 'light' ? Sun : themePreference === 'dark' ? Moon : LaptopMinimal;
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expanded, setExpanded] = useState(false);
 
   const handleLogout = async () => {
     await logoutCurrentSession();
@@ -88,6 +173,35 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
       return aOnline - bOnline;
     });
   }, [clients]);
+
+  const onlineCount = useMemo(
+    () => sortedClients.reduce((acc, client) => acc + (client.online ? 1 : 0), 0),
+    [sortedClients],
+  );
+
+  const filteredClients = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return sortedClients;
+    return sortedClients.filter((client) => (
+      getClientDisplayName(client).toLowerCase().includes(q)
+      || client.info.hostname.toLowerCase().includes(q)
+      || (client.info.ip && client.info.ip.toLowerCase().includes(q))
+    ));
+  }, [searchQuery, sortedClients]);
+
+  const visibleClients = useMemo(() => {
+    if (expanded || searchQuery.trim() || filteredClients.length <= SIDEBAR_COLLAPSE_LIMIT) {
+      return filteredClients;
+    }
+    const sliced = filteredClients.slice(0, SIDEBAR_COLLAPSE_LIMIT);
+    const selectedBeyondSlice = filteredClients
+      .slice(SIDEBAR_COLLAPSE_LIMIT)
+      .find((client) => pathname.endsWith(`/clients/${client.id}`));
+    return selectedBeyondSlice ? [...sliced, selectedBeyondSlice] : sliced;
+  }, [expanded, filteredClients, pathname, searchQuery]);
+
+  const showSearch = sortedClients.length > SIDEBAR_SEARCH_THRESHOLD || searchQuery.length > 0;
+  const canToggleExpand = !searchQuery.trim() && filteredClients.length > SIDEBAR_COLLAPSE_LIMIT;
 
   return (
     <Sidebar collapsible="offcanvas">
@@ -180,7 +294,21 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
             <LayersPlus />
             <span className="sr-only">{t('dashboard.addClient')}</span>
           </SidebarGroupAction>
-          <SidebarGroupContent className='mt-1'>
+          <SidebarGroupContent className="mt-1">
+            {showSearch && !isLoading && clients.length > 0 && (
+              <div className="px-2 pb-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={t('dashboard.searchClientsPlaceholder')}
+                    className="h-7 w-full rounded-md border border-sidebar-border bg-background/60 pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none"
+                  />
+                </div>
+              </div>
+            )}
             {isLoading ? (
               <div className="flex flex-col gap-2 px-2 pt-2">
                 {[1, 2, 3].map((i) => (
@@ -197,7 +325,7 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
                   <div className="h-10 w-10 rounded-full bg-muted/50 flex items-center justify-center mb-3 group-hover:bg-background border border-transparent group-hover:border-border/50 transition-colors">
                     <LayersPlus className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
                   </div>
-                  
+
                   <h3 className="text-sm font-medium text-foreground mb-1">
                     {t('dashboard.addNode')}
                   </h3>
@@ -206,61 +334,55 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
                   </p>
                 </button>
               </div>
+            ) : visibleClients.length === 0 ? (
+              <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                {t('dashboard.noMatchingClients')}
+              </div>
             ) : (
-              <SidebarMenu>
-                {sortedClients.map((client) => {
-                  const isOnline = client.online;
-                  const isSelected = pathname.endsWith(`/clients/${client.id}`);
+              <>
+                <SidebarMenu>
+                  {visibleClients.map((client) => {
+                    const isSelected = pathname.endsWith(`/clients/${client.id}`);
+                    const tooltip = client.display_name
+                      ? `${client.display_name} (${client.info.hostname})`
+                      : client.info.hostname;
 
-                  return (
-                    <SidebarMenuItem key={client.id}>
-                      <SidebarMenuButton
-                        asChild
-                        isActive={isSelected}
-                        tooltip={client.display_name ? `${client.display_name} (${client.info.hostname})` : client.info.hostname}
-                        className={cn(NAV_ITEM_CLASS, !isOnline && !isSelected && 'opacity-60')}
-                      >
-                        {scope.kind === 'admin-user' ? (
-                          <Link
-                            to="/dashboard/users/$userId/clients/$clientId"
-                            params={{ userId: scope.userId, clientId: client.id }}
-                          >
-                            {isOnline ? (
-                              <span className="relative flex h-2 w-2 shrink-0">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                              </span>
-                            ) : (
-                              <span className="h-2 w-2 rounded-full bg-muted-foreground/50 shrink-0" />
-                            )}
-                            <ServerIcon className="opacity-70 shrink-0" />
-                            <span>{getClientDisplayName(client)}</span>
-                          </Link>
-                        ) : <Link
-                          to="/dashboard/clients/$clientId"
-                          params={{ clientId: client.id }}
-                        >
-                          {isOnline ? (
-                            <span className="relative flex h-2 w-2 shrink-0">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                            </span>
-                          ) : (
-                            <span className="h-2 w-2 rounded-full bg-muted-foreground/50 shrink-0" />
-                          )}
-                          <ServerIcon className="opacity-70 shrink-0" />
-                          <span>{getClientDisplayName(client)}</span>
-                        </Link>}
-                      </SidebarMenuButton>
-                      {(client.proxies?.length ?? 0) > 0 && (
-                        <SidebarMenuBadge>
-                          {client.proxies!.length}
-                        </SidebarMenuBadge>
-                      )}
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
+                    return (
+                      <ClientSidebarMenuItem
+                        key={client.id}
+                        clientId={client.id}
+                        displayName={getClientDisplayName(client)}
+                        tooltip={tooltip}
+                        isOnline={client.online}
+                        proxyCount={client.proxies?.length ?? 0}
+                        isSelected={isSelected}
+                        scopeKind={scope.kind}
+                        scopeUserId={scope.kind === 'admin-user' ? scope.userId : undefined}
+                        enablePing={onlineCount <= SIDEBAR_PING_LIMIT || isSelected}
+                      />
+                    );
+                  })}
+                </SidebarMenu>
+                {canToggleExpand && (
+                  <button
+                    type="button"
+                    onClick={() => setExpanded((prev) => !prev)}
+                    className="mt-1 flex w-full items-center justify-center gap-1 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                  >
+                    {expanded ? (
+                      <>
+                        <ChevronUp className="h-3.5 w-3.5" />
+                        <span>{t('dashboard.collapseClients')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="h-3.5 w-3.5" />
+                        <span>{t('dashboard.showAllClients', { count: filteredClients.length })}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </>
             )}
           </SidebarGroupContent>
         </SidebarGroup> : null}
@@ -296,6 +418,17 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton
+                tooltip={t('common.theme')}
+                className={NAV_ITEM_CLASS}
+                onClick={cycleTheme}
+              >
+                <ThemeIcon className="h-4 w-4" />
+                <span>{t('common.theme')}</span>
+                <span className="ml-auto text-xs">{t(THEME_LABEL_KEYS[themePreference])}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
                 tooltip={t('common.language')}
                 className={NAV_ITEM_CLASS}
                 onClick={() => void i18n.changeLanguage(nextLanguage)}
@@ -305,6 +438,19 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
                 <span className="ml-auto text-xs">{t(LANGUAGE_LABEL_KEYS[currentLanguage])}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {principal ? (
+              <SidebarMenuItem>
+                <div className="mt-1 flex items-center gap-2 rounded-md border border-sidebar-border/60 bg-sidebar-accent/30 px-2.5 py-1.5 text-xs">
+                  <UserRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate font-medium text-sidebar-foreground">
+                    {principal.username}
+                  </span>
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    {principal.is_admin ? t('users.admin') : t('users.member')}
+                  </span>
+                </div>
+              </SidebarMenuItem>
+            ) : null}
             <SidebarMenuItem>
               <AlertDialog>
                 <AlertDialogTrigger asChild>

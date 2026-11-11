@@ -1,16 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { useQueries } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { GitBranchPlus, LayersPlus, Waypoints, X } from 'lucide-react';
 
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { useClients } from '@/hooks/use-clients';
-import { buildClientTrafficQueryKey, buildClientTrafficUrl } from '@/hooks/use-client-traffic';
+import { useRealtimeTraffic } from '@/hooks/use-realtime-traffic';
 import { useAddClientDialog } from '@/components/custom/client/add-client-dialog-context';
 import { TunnelDialog } from '@/components/custom/tunnel/TunnelDialog';
-import { api } from '@/lib/api';
 import type { ResourceScope } from '@/lib/resource-scope';
 import type { Client, ClientTrafficResponse } from '@/types';
 import {
@@ -76,29 +74,26 @@ export function NetworkTopology({ scope }: { scope: ResourceScope }) {
   );
   const activeTopologyFocusId = topologyFocusNode?.id ?? null;
   const topologyHeaderTitle = topologyFocusNode?.label ?? t('dashboard.topologyOverviewHeader');
-  const onlineClientIds = useMemo(
-    () => (clients ?? [])
-      .filter((client) => client.online)
-      .map((client) => client.id)
-      .sort(),
+  const onlineClientIdSet = useMemo(
+    () => new Set((clients ?? []).filter((client) => client.online).map((client) => client.id)),
     [clients],
   );
-  const trafficQueries = useQueries({
-    queries: onlineClientIds.map((clientId) => ({
-      queryKey: buildClientTrafficQueryKey(scope, clientId, '60s'),
-      queryFn: () => api.get<ClientTrafficResponse>(buildClientTrafficUrl(scope, clientId, '60s')),
-      staleTime: 30_000,
-      refetchInterval: 10_000,
-      refetchOnWindowFocus: false,
-    })),
+  const { data: realtimeTraffic } = useRealtimeTraffic(scope, {
+    enabled: onlineClientIdSet.size > 0,
   });
   const trafficByClientId = useMemo(() => {
     const traffic = new Map<string, ClientTrafficResponse | undefined>();
-    onlineClientIds.forEach((clientId, index) => {
-      traffic.set(clientId, trafficQueries[index]?.data);
-    });
+    for (const item of realtimeTraffic?.clients ?? []) {
+      if (!onlineClientIdSet.has(item.client_id)) {
+        continue;
+      }
+      traffic.set(item.client_id, {
+        resolution: item.resolution,
+        items: item.items ?? [],
+      });
+    }
     return traffic;
-  }, [onlineClientIds, trafficQueries]);
+  }, [onlineClientIdSet, realtimeTraffic]);
   const trafficSnapshot = useMemo(
     () => buildTopologyTrafficSnapshot(graph, trafficByClientId),
     [graph, trafficByClientId],

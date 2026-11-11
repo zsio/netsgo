@@ -42,7 +42,11 @@ import type { ResourceScope } from '@/lib/resource-scope';
 import type { Client, PortRange, TransportPolicy, TunnelFormType, TunnelTopology } from '@/types';
 import { i18n } from '@/i18n';
 import { useTranslation } from 'react-i18next';
-import { getInitialTunnelFormState, type TunnelDialogEditData } from './tunnel-dialog-form';
+import {
+  countConfiguredAdvancedSettings,
+  getInitialTunnelFormState,
+  type TunnelDialogEditData,
+} from './tunnel-dialog-form';
 import {
   getDefaultSourceCidrs,
   isDefaultSourceCidrs,
@@ -365,7 +369,24 @@ function TunnelDialogForm({
   const [socks5TargetPorts, setSocks5TargetPorts] = useState(initialForm.socks5TargetPorts);
   const socks5DialTimeout = initialForm.socks5DialTimeout;
   const [confirmNoAuthRisk, setConfirmNoAuthRisk] = useState(initialForm.confirmNoAuthRisk);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(
+    () => isEdit && countConfiguredAdvancedSettings(initialForm) > 0,
+  );
+
+  const configuredAdvancedCount = countConfiguredAdvancedSettings({
+    topology,
+    type,
+    transportPolicy,
+    sourceCidrs,
+    httpAuthEnabled,
+    socks5AuthEnabled,
+    socks5TargetCidrs,
+    socks5TargetHosts,
+    socks5TargetPorts,
+    totalBps,
+    ingressBps,
+    egressBps,
+  });
 
   const clients = props.clients ?? [];
   const selectedTargetClientId = targetClientId || (props.mode === 'create' ? props.clientId : props.tunnel?.target?.client_id ?? props.tunnel?.owner_client_id ?? props.tunnel?.clientId ?? '');
@@ -896,11 +917,19 @@ function TunnelDialogForm({
         <div>
           <button
             type="button"
+            aria-label={t('tunnels.advancedSettings')}
             className="flex w-full items-center justify-between py-1 text-left text-sm font-medium text-muted-foreground hover:text-foreground"
             onClick={() => setAdvancedOpen((value) => !value)}
             aria-expanded={advancedOpen}
           >
-            <span>{t('tunnels.advancedSettings')}</span>
+            <span className="inline-flex items-center gap-2">
+              <span>{t('tunnels.advancedSettings')}</span>
+              {!advancedOpen && configuredAdvancedCount > 0 && (
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                  {t('tunnels.advancedConfiguredCount', { count: configuredAdvancedCount })}
+                </span>
+              )}
+            </span>
             <ChevronDown className={cn('h-4 w-4 transition-transform', advancedOpen && 'rotate-180')} />
           </button>
           {advancedOpen && (
@@ -981,7 +1010,7 @@ function TunnelDialogForm({
                     </label>
                   </div>
                   {httpAuthEnabled && (
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <Input
                         aria-label={t('tunnels.httpUsername')}
                         placeholder={t('tunnels.httpUsername')}
@@ -1012,7 +1041,7 @@ function TunnelDialogForm({
                   <p className="text-[11px] text-muted-foreground">
                     {t('tunnels.socks5TargetHelp')}
                   </p>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">{t('tunnels.socks5TargetCidrs')}</label>
                       <Input
@@ -1071,7 +1100,7 @@ function TunnelDialogForm({
                       </label>
                     </div>
                     {socks5AuthEnabled && (
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <Input
                           aria-label={t('tunnels.socks5Username')}
                           placeholder={t('tunnels.socks5Username')}
@@ -1133,9 +1162,9 @@ function TunnelDialogForm({
                 <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                   {t('tunnels.advancedPerformance')}
                 </p>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {isClientToClient && (
-                    <div className="col-span-2 space-y-1.5">
+                    <div className="space-y-1.5 sm:col-span-2">
                       <label className="text-sm font-medium">{t('tunnels.totalLimit')}</label>
                       <InputGroup>
                         <InputGroupInput aria-label={t('tunnels.totalLimit')} type="number" step="any" placeholder="0" value={totalBps} onChange={(e) => { clearMutationFeedback(); setTotalBps(e.target.value); }} min={0} />
