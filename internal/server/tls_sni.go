@@ -24,13 +24,12 @@ type sniAcceptedConn struct {
 // until HTTP accepts them, or until forwarding finishes.
 type sniListener struct {
 	net.Listener
-	ready   chan sniAcceptedConn
-	done    chan struct{}
-	mu      sync.Mutex
-	closed  bool
-	conns   map[net.Conn]struct{}
-	workers sync.WaitGroup
-	route   func(net.Conn, string) bool
+	ready  chan sniAcceptedConn
+	done   chan struct{}
+	mu     sync.Mutex
+	closed bool
+	conns  map[net.Conn]struct{}
+	route  func(net.Conn, string) bool
 }
 
 func newSNIListener(listener net.Listener, route func(net.Conn, string) bool) *sniListener {
@@ -71,14 +70,12 @@ func (l *sniListener) acceptLoop() {
 			return
 		}
 		l.conns[conn] = struct{}{}
-		l.workers.Add(1)
 		l.mu.Unlock()
 		go l.dispatch(conn)
 	}
 }
 
 func (l *sniListener) dispatch(raw net.Conn) {
-	defer l.workers.Done()
 	handedOff := false
 	defer func() {
 		l.mu.Lock()
@@ -140,7 +137,9 @@ func (l *sniListener) stop() {
 
 func (l *sniListener) Close() error {
 	l.stop()
-	l.workers.Wait()
+	// Forwarding routes register with Server's long-lived handler lifecycle.
+	// Shutdown(ctx) owns that bounded wait; listener Close must also return
+	// promptly when a route is waiting on bandwidth rather than socket I/O.
 	return nil
 }
 

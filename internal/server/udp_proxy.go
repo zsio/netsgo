@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"netsgo/internal/connlimit"
 	"netsgo/pkg/mux"
 	"netsgo/pkg/protocol"
 )
@@ -402,6 +404,9 @@ func (s *Server) udpReadLoop(client *ClientConn, tunnel *ProxyTunnel, state *UDP
 			// Open a new yamux stream.
 			stream, err := s.openStreamToClientForActivation(client, tunnel, activation)
 			if err != nil {
+				if errors.Is(err, connlimit.ErrReached) || mux.IsClosedStream(err) {
+					continue
+				}
 				log.Printf("⚠️ UDP proxy [%s] failed to open stream: %v", activation.config.Name, err)
 				s.markUDPProxyRuntimeErrorIfCurrent(
 					client,

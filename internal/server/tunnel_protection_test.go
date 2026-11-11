@@ -68,6 +68,63 @@ func TestConnectionLimitPreservesExistingTrafficAndRecovers(t *testing.T) {
 	}
 }
 
+func TestUDPConnectionLimitRejectsNewSourceWithoutStoppingTunnel(t *testing.T) {
+	s := newUnifiedE2ETestServer(t)
+	s.MaxConnections = 1
+	ts := newIPv4HTTPTestServer(t, s.newHTTPMux())
+	defer ts.Close()
+	token := loginAdminTokenLocal(t, s.StartHTTPOnly(), "admin", "password123")
+	c := startUnifiedE2EClient(t, s, ts.URL, "udp-capacity-target")
+	id := waitForUnifiedE2EClientReady(t, s, c)
+	backendHost, backendPort := startTestUDPEchoService(t)
+	port := reserveUDPPort(t)
+	body := []byte(fmt.Sprintf(`{"name":"udp-capacity","topology":"server_expose","ingress":{"location":"server","type":"udp_listen","config":{"bind_ip":"127.0.0.1","port":%d,"allowed_source_cidrs":["127.0.0.0/8"]}},"target":{"location":"client","client_id":%q,"type":"udp_service","config":{"host":%q,"port":%d}},"transport_policy":"server_relay_only"}`, port, id, backendHost, backendPort))
+	resp := doMuxRequest(t, s.StartHTTPOnly(), http.MethodPost, "/api/tunnels", token, body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("create UDP=%d %s", resp.Code, resp.Body.String())
+	}
+	var created tunnelSpecAPI
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	waitForUnifiedTunnelRuntimeState(t, s, token, created.ID, tunnelRuntimeStateActive)
+	dial := func() net.Conn {
+		t.Helper()
+		conn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn
+	}
+	echo := func(conn net.Conn) {
+		t.Helper()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		payload := []byte("existing UDP association")
+		if _, err := conn.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]byte, len(payload)+1)
+		if n, err := conn.Read(buf); err != nil || !bytes.Equal(buf[:n], payload) {
+			t.Fatalf("UDP echo=%q err=%v", buf[:n], err)
+		}
+	}
+	first, excess := dial(), dial()
+	echo(first)
+	_ = excess.SetDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, err := excess.Write([]byte("new source")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := excess.Read(make([]byte, 32)); err == nil {
+		t.Fatal("excess UDP association was admitted")
+	}
+	echo(first)
+	waitForUnifiedTunnelRuntimeState(t, s, token, created.ID, tunnelRuntimeStateActive)
+	if active := s.dataConnections.Active(); active != 1 {
+		t.Fatalf("active UDP associations=%d, want 1", active)
+	}
+}
+
 func testConnectionLimitRecovery(t *testing.T, side string) {
 	s := newUnifiedE2ETestServer(t)
 	if side == "server" {

@@ -127,6 +127,51 @@ func TestSNIListenerCloseUnblocksPendingHelloAndAccept(t *testing.T) {
 	}
 }
 
+func TestSNIListenerCloseDoesNotWaitForForwardingRoute(t *testing.T) {
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	listener := newSNIListener(raw, func(net.Conn, string) bool {
+		close(entered)
+		// Closing the socket cannot interrupt non-I/O work such as a
+		// bandwidth reservation. Server.Shutdown(ctx) bounds its own wait.
+		<-release
+		close(finished)
+		return true
+	})
+	defer func() {
+		close(release)
+		_ = listener.Close()
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Error("forwarding route did not finish after release")
+		}
+	}()
+	peer, err := net.DialTimeout("tcp", raw.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = peer.Close() }()
+	if _, err := peer.Write(helloRecord(captureClientHello(t, "app.example.test", tls.VersionTLS13))); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("forwarding route did not start")
+	}
+	closed := make(chan struct{})
+	go func() { _ = listener.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("listener close waited for forwarding work")
+	}
+}
+
 type resourceLimitedListener struct {
 	net.Listener
 	failed atomic.Bool
