@@ -104,14 +104,13 @@ export function isTopologyOverview(focusId: string | null) {
 export function getTunnelEdgeEmphasis(edge: TopologyEdge, state: TopologyViewState): TopologyLinkEmphasis {
   const focusId = normalizeTopologyFocusId(state.focusId);
   if (focusId === null) {
-    if (
-      state.hoverNodeId
-      && state.hoverNodeId !== SERVER_NODE_ID
-      && topologyEdgeTouches(edge, state.hoverNodeId)
-    ) {
-      return 'strong';
+    if (state.hoveredTunnelId) {
+      return edge.id === state.hoveredTunnelId ? 'strong' : 'muted';
     }
-    return 'hidden';
+    if (state.hoverNodeId) {
+      return topologyEdgeTouches(edge, state.hoverNodeId) ? 'strong' : 'muted';
+    }
+    return 'muted';
   }
 
   return topologyEdgeTouches(edge, focusId) ? 'strong' : 'hidden';
@@ -322,8 +321,8 @@ export function computeEdgeOffsets(edges: TopologyEdge[]): Map<string, number> {
       const edge = group[index];
       let offset = (index - (group.length - 1) / 2) * 30;
       const touchesServer = edge.sourceId === SERVER_NODE_ID || edge.targetId === SERVER_NODE_ID;
-      if (touchesServer && Math.abs(offset) < 1) {
-        offset = 18;
+      if (Math.abs(offset) < 1) {
+        offset = touchesServer ? 20 : -24;
       }
       offsets.set(edge.id, offset);
     }
@@ -342,13 +341,35 @@ export interface QuadraticEdgeGeometry {
   midpoint: TopologyPoint;
 }
 
-/** 依据统一法线方向（按端点 id 排序）计算带偏移的二次贝塞尔曲线。 */
+export function getNodeBoundaryRadius(nodeId: string): number {
+  return nodeId === SERVER_NODE_ID ? 28 : 23;
+}
+
+export function trimLineSegment(
+  source: TopologyPoint,
+  target: TopologyPoint,
+  sourceTrim: number,
+  targetTrim: number,
+): string | null {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist <= sourceTrim + targetTrim + 6) {
+    return null;
+  }
+  const ux = dx / dist;
+  const uy = dy / dist;
+  return `M ${source.x + ux * sourceTrim} ${source.y + uy * sourceTrim} L ${target.x - ux * targetTrim} ${target.y - uy * targetTrim}`;
+}
+
+/** 依据统一法线方向（按端点 id 排序）计算带偏移的二次贝塞尔曲线，支持按节点外圈半径裁剪端点。 */
 export function computeQuadraticEdge(
   sourceId: string,
   targetId: string,
   source: TopologyPoint,
   target: TopologyPoint,
   offset: number,
+  trim?: { source?: number; target?: number },
 ): QuadraticEdgeGeometry {
   const [a, b] = sourceId < targetId ? [source, target] : [target, source];
   const dx = b.x - a.x;
@@ -360,11 +381,28 @@ export function computeQuadraticEdge(
   const controlX = (source.x + target.x) / 2 + nx * offset;
   const controlY = (source.y + target.y) / 2 + ny * offset;
 
+  const maxTrim = distance * 0.38;
+  const sTrim = Math.min(maxTrim, Math.max(0, trim?.source ?? 0));
+  const tTrim = Math.min(maxTrim, Math.max(0, trim?.target ?? 0));
+
+  const sx = controlX - source.x;
+  const sy = controlY - source.y;
+  const sLen = Math.hypot(sx, sy) || 1;
+
+  const tx = controlX - target.x;
+  const ty = controlY - target.y;
+  const tLen = Math.hypot(tx, ty) || 1;
+
+  const startX = source.x + (sx / sLen) * sTrim;
+  const startY = source.y + (sy / sLen) * sTrim;
+  const endX = target.x + (tx / tLen) * tTrim;
+  const endY = target.y + (ty / tLen) * tTrim;
+
   return {
-    path: `M ${source.x} ${source.y} Q ${controlX} ${controlY} ${target.x} ${target.y}`,
+    path: `M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`,
     midpoint: {
-      x: (source.x + 2 * controlX + target.x) / 4,
-      y: (source.y + 2 * controlY + target.y) / 4,
+      x: (startX + 2 * controlX + endX) / 4,
+      y: (startY + 2 * controlY + endY) / 4,
     },
   };
 }

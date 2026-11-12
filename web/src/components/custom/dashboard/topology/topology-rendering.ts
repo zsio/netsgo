@@ -3,84 +3,58 @@ import type { TunnelStatusPresentation } from '@/lib/tunnel-model';
 
 import {
   EMPTY_TOPOLOGY_TRAFFIC_RATE,
-  type TopologyLinkEmphasis,
   type TopologyTrafficRate,
 } from './topology-model';
 
 export type StatusKey = TunnelStatusPresentation['key'];
 
-export const EDGE_STROKE: Record<StatusKey, string> = {
-  exposed: 'stroke-cyan-400/90',
-  pending: 'stroke-violet-400/85',
-  offline: 'stroke-amber-400/80',
-  stopped: 'stroke-slate-400/55',
-  error: 'stroke-rose-500/90',
-};
-
-export const EDGE_FLOW_COLORS: Record<StatusKey, { start: string; middle: string; end: string; spark: string }> = {
-  exposed: {
-    start: '#00e5ff',
-    middle: '#2dff9d',
-    end: '#4f7cff',
-    spark: '#f8fafc',
-  },
-  pending: {
-    start: '#a855f7',
-    middle: '#22d3ee',
-    end: '#6366f1',
-    spark: '#f0abfc',
-  },
-  offline: {
-    start: '#f59e0b',
-    middle: '#fde047',
-    end: '#fb7185',
-    spark: '#fffbeb',
-  },
-  stopped: {
-    start: '#64748b',
-    middle: '#cbd5e1',
-    end: '#38bdf8',
-    spark: '#f8fafc',
-  },
-  error: {
-    start: '#ff2d55',
-    middle: '#f97316',
-    end: '#a855f7',
-    spark: '#ffe4e6',
-  },
-};
-
 export const STATUS_DOT: Record<StatusKey, string> = {
   exposed: 'bg-emerald-500',
   pending: 'bg-sky-500',
   offline: 'bg-amber-500',
-  stopped: 'bg-muted-foreground/60',
-  error: 'bg-destructive',
+  stopped: 'bg-zinc-400 dark:bg-zinc-500',
+  error: 'bg-rose-500',
 };
 
 export const STATUS_TEXT: Record<StatusKey, string> = {
-  exposed: 'text-emerald-600',
-  pending: 'text-sky-600',
-  offline: 'text-amber-600',
+  exposed: 'text-emerald-600 dark:text-emerald-400',
+  pending: 'text-sky-600 dark:text-sky-400',
+  offline: 'text-amber-600 dark:text-amber-400',
   stopped: 'text-muted-foreground',
-  error: 'text-destructive',
+  error: 'text-rose-600 dark:text-rose-400',
 };
 
-export const LABEL_HALO = {
-  paintOrder: 'stroke',
-  stroke: 'var(--color-background)',
-  strokeWidth: 3,
-  strokeLinejoin: 'round',
-} as const;
+export const STATUS_PORT_BORDER: Record<StatusKey, string> = {
+  exposed: 'border-emerald-500',
+  pending: 'border-sky-500',
+  offline: 'border-amber-500',
+  stopped: 'border-zinc-400 dark:border-zinc-500',
+  error: 'border-rose-500',
+};
 
-export function statusLabel(t: (key: string, options?: Record<string, unknown>) => string, status: TunnelStatusPresentation) {
+export const STATUS_WIRE_BASE: Record<StatusKey, string> = {
+  exposed: 'stroke-emerald-500/45 dark:stroke-emerald-500/40',
+  pending: 'stroke-sky-500/50',
+  offline: 'stroke-amber-500/55',
+  stopped: 'stroke-zinc-400/45 dark:stroke-zinc-600/60',
+  error: 'stroke-rose-500/60',
+};
+
+export const STATUS_WIRE_FLOW: Record<StatusKey, string> = {
+  exposed: 'stroke-emerald-500 dark:stroke-emerald-400',
+  pending: 'stroke-sky-500 dark:stroke-sky-400',
+  offline: 'stroke-amber-500',
+  stopped: 'stroke-zinc-400',
+  error: 'stroke-rose-500 dark:stroke-rose-400',
+};
+
+export function statusLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  status: TunnelStatusPresentation,
+) {
   return t(`tunnels.status${status.key[0].toUpperCase()}${status.key.slice(1)}`, {
     defaultValue: status.label,
   });
-}
-
-export function truncateLabel(value: string, max = 16) {
-  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
 export function rateOrZero(rate: TopologyTrafficRate | undefined) {
@@ -97,32 +71,11 @@ export function trafficIntensity(rate: TopologyTrafficRate | undefined) {
   return Math.min(1, Math.log10(totalBps + 1) / 6);
 }
 
-export function flowDuration(rate: TopologyTrafficRate | undefined) {
-  return `${(1.55 - trafficIntensity(rate) * 0.85).toFixed(2)}s`;
-}
-
 export function tunnelStreamDuration(rate: TopologyTrafficRate | undefined) {
-  return `${(1.05 - trafficIntensity(rate) * 0.45).toFixed(2)}s`;
-}
-
-export function trafficStrokeWidth(rate: TopologyTrafficRate | undefined, base: number, emphasis: TopologyLinkEmphasis) {
-  const emphasisBoost = emphasis === 'strong' ? 0.45 : 0;
-  return base + trafficIntensity(rate) * 1.3 + emphasisBoost;
-}
-
-export function emphasisOpacity(emphasis: TopologyLinkEmphasis) {
-  switch (emphasis) {
-    case 'strong':
-      return 0.92;
-    case 'muted':
-      return 0.2;
-    case 'hidden':
-    default:
-      return 0;
-  }
+  return `${(1.2 - trafficIntensity(rate) * 0.5).toFixed(2)}s`;
 }
 
 export function formatTrafficPair(rate: TopologyTrafficRate | undefined) {
   const value = rateOrZero(rate);
-  return `↓ ${formatNetSpeed(value.ingressBps)}  ↑ ${formatNetSpeed(value.egressBps)}`;
+  return `↓ ${formatNetSpeed(value.ingressBps)} · ↑ ${formatNetSpeed(value.egressBps)}`;
 }

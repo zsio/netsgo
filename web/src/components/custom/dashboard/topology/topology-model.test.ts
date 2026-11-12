@@ -10,10 +10,12 @@ import {
   computeEdgeOffsets,
   computeQuadraticEdge,
   getControlLinkEmphasis,
+  getNodeBoundaryRadius,
   getTunnelEdgeEmphasis,
   getTopologyNeighborIds,
   normalizeTopologyFocusId,
   shouldRenderControlLink,
+  trimLineSegment,
 } from './topology-model';
 
 const capabilities: TunnelCapabilities = {
@@ -246,7 +248,7 @@ describe('topology link emphasis', () => {
     expect(normalizeTopologyFocusId(SERVER_NODE_ID)).toBeNull();
   });
 
-  test('overview renders control links and hides tunnel edges by default', () => {
+  test('overview renders control links and subtly shows tunnel edges by default', () => {
     const graph = buildTopologyGraph([
       createClient({ proxies: [createTunnel()] }),
     ]);
@@ -254,7 +256,7 @@ describe('topology link emphasis', () => {
 
     expect(shouldRenderControlLink('client-a', state)).toBe(true);
     expect(getControlLinkEmphasis('client-a', state)).toBe('strong');
-    expect(getTunnelEdgeEmphasis(graph.edges[0], state)).toBe('hidden');
+    expect(getTunnelEdgeEmphasis(graph.edges[0], state)).toBe('muted');
   });
 
   test('overview strongly reveals tunnels related to the hovered client', () => {
@@ -269,16 +271,21 @@ describe('topology link emphasis', () => {
     })).toBe('strong');
   });
 
-  test('overview ignores hovered tunnel state', () => {
+  test('overview highlights a directly hovered tunnel edge', () => {
     const graph = buildTopologyGraph([
-      createClient({ proxies: [createTunnel()] }),
+      createClient({ proxies: [createTunnel(), createTunnel({ id: 'tunnel-2', remote_port: 9001 })] }),
     ]);
 
     expect(getTunnelEdgeEmphasis(graph.edges[0], {
       focusId: null,
       hoverNodeId: null,
       hoveredTunnelId: 'tunnel-1',
-    })).toBe('hidden');
+    })).toBe('strong');
+    expect(getTunnelEdgeEmphasis(graph.edges[1], {
+      focusId: null,
+      hoverNodeId: null,
+      hoveredTunnelId: 'tunnel-1',
+    })).toBe('muted');
   });
 
   test('client focus shows related tunnel edges and emphasizes the focused client control link', () => {
@@ -318,7 +325,7 @@ describe('computeEdgeOffsets', () => {
   });
 });
 
-describe('computeQuadraticEdge', () => {
+describe('computeQuadraticEdge and boundary trimming', () => {
   test('offsets the midpoint along the pair normal regardless of edge direction', () => {
     const a = { x: 0, y: 0 };
     const b = { x: 200, y: 0 };
@@ -328,5 +335,19 @@ describe('computeQuadraticEdge', () => {
 
     expect(forward.midpoint.y).toBeCloseTo(backward.midpoint.y);
     expect(Math.abs(forward.midpoint.y)).toBeGreaterThan(0);
+  });
+
+  test('trims control line and quadratic curve endpoints outside node boundaries', () => {
+    expect(getNodeBoundaryRadius(SERVER_NODE_ID)).toBeGreaterThan(getNodeBoundaryRadius('client-a'));
+
+    const line = trimLineSegment({ x: 0, y: 0 }, { x: 0, y: 200 }, 28, 23);
+    expect(line).toBe('M 0 28 L 0 177');
+    expect(trimLineSegment({ x: 0, y: 0 }, { x: 0, y: 40 }, 28, 23)).toBeNull();
+
+    const trimmed = computeQuadraticEdge('a', 'b', { x: 0, y: 0 }, { x: 200, y: 0 }, 0, {
+      source: 25,
+      target: 30,
+    });
+    expect(trimmed.path).toBe('M 25 0 Q 100 0 170 0');
   });
 });
