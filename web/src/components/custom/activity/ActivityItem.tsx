@@ -25,35 +25,16 @@ const severityMarkerClass: Record<ActivitySeverity, string> = {
   error: 'text-rose-500',
 };
 
+import {
+  formatActivityItemReason,
+  formatActivityItemSummary,
+  readableActivityClientName,
+} from './activity-text';
+
 interface ActivityReference {
   key: string;
   relation: string;
   name: string;
-}
-
-function readableClientName(item: ActivityItemType, clientId: string, t: TFunction) {
-  const subject = item.clients.find((candidate) => candidate.client_id === clientId);
-  return subject?.display_name?.trim() || subject?.hostname?.trim() || t('activity.unknownClient');
-}
-
-function readableTunnelName(item: ActivityItemType, tunnelId: string, t: TFunction) {
-  const subject = item.tunnels.find((candidate) => candidate.tunnel_id === tunnelId);
-  return subject?.name?.trim() || t('activity.unknownTunnel');
-}
-
-function activitySummary(item: ActivityItemType, t: TFunction) {
-  if (item.payload_version !== 1 || !item.payload.summary_key) return t('activity.unknownSummary');
-  const args = { ...item.payload.summary_args };
-  // 主题资源的当前名称优先；缺失时也回填，兼容未携带名称的旧记录
-  // （如 P2P attach/detach 事件），模板没有对应占位符时不会受影响。
-  const client = item.clients.find((subject) => subject.relation === 'subject');
-  const tunnel = item.tunnels.find((subject) => subject.relation === 'subject');
-  if (client) args.client_name = readableClientName(item, client.client_id, t);
-  if (tunnel) args.tunnel_name = readableTunnelName(item, tunnel.tunnel_id, t);
-  return t(item.payload.summary_key, {
-    ...args,
-    defaultValue: t('activity.unknownSummary'),
-  });
 }
 
 // 摘要通常已经点名了操作方；system/unknown 只是记录方占位，没有信息量。
@@ -63,7 +44,7 @@ function actorLabel(item: ActivityItemType, summary: string, t: TFunction) {
   const subject = item.actor.type === 'client' && item.actor.id
     ? item.clients.find((candidate) => candidate.client_id === item.actor.id)
     : undefined;
-  const rawName = (subject ? readableClientName(item, subject.client_id, t) : '') || item.actor.name?.trim();
+  const rawName = (subject ? readableActivityClientName(item, subject.client_id, t) : '') || item.actor.name?.trim();
   const name = rawName && rawName !== item.actor.id ? rawName : '';
   const echoesCategory = item.actor.type === item.category;
   if (!name || summary.includes(name)) {
@@ -131,28 +112,12 @@ function activityReferences(item: ActivityItemType, summary: string, omitSubject
     ...tunnelReferences(item, summary, omitSubjectId, t),
   ];
 }
-// 离线原因只展示可归因的条目。链路中断（断网、进程退出、代理断开）无法归因，
-// 只显示“已离线”，不把断开表现当成原因；服务端仍完整记录 reason_code 供审计。
-const offlineCauseCode: Record<string, true> = {
-  normal_closure: true,
-  server_shutdown: true,
-  timeout: true,
-  user_disabled: true,
-  replaced: true,
-};
-
-function reasonText(item: ActivityItemType, t: TFunction) {
-  const code = item.payload.reason_code;
-  if (!code || code === 'unknown') return '';
-  if (item.category === 'client' && item.action === 'offline' && !offlineCauseCode[code]) return '';
-  return t(`activity.reason.${code}`, { defaultValue: '' });
-}
 
 export function ActivityItem({ item, omitSubjectId }: { item: ActivityItemType; omitSubjectId?: string }) {
   const { t } = useTranslation();
-  const summary = activitySummary(item, t);
+  const summary = formatActivityItemSummary(item, t);
   const AccentIcon = severityAccentIcon[item.severity];
-  const reason = reasonText(item, t);
+  const reason = formatActivityItemReason(item, t);
   const reasonLabel = item.category === 'client' && item.action === 'offline'
     ? t('activity.diagnostic.clientOffline')
     : t('activity.diagnostic.reason');

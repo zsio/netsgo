@@ -1,4 +1,4 @@
-import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { useParams } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 
 import { OverviewPage } from '@/components/custom/dashboard/OverviewPage';
@@ -10,8 +10,6 @@ import { adminUserResourceScope } from '@/lib/resource-scope';
 export function UserWorkspacePage() {
   const { t } = useTranslation();
   const { userId } = useParams({ from: '/dashboard/users/$userId' });
-  const search = useSearch({ from: '/dashboard/users/$userId' });
-  const navigate = useNavigate({ from: '/dashboard/users/$userId' });
   const user = useManagedUser(userId);
   const scope = adminUserResourceScope(userId);
 
@@ -49,13 +47,7 @@ export function UserWorkspacePage() {
           </span>
         </div>
       </div>
-      <OverviewPage
-        scope={scope}
-        tab={search.tab}
-        onTabChange={(tab) => {
-          navigate({ search: { tab }, replace: true });
-        }}
-      />
+      <OverviewPage scope={scope} />
     </>
   );
 }

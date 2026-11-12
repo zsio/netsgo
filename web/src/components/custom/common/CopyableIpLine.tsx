@@ -15,13 +15,13 @@ export function CopyableIpLine({ icon, value, title, primary = false }: Copyable
 
   return (
     <div className={primary ? 'font-medium text-sm text-foreground min-w-0' : 'text-xs text-muted-foreground min-w-0'}>
-      <span className="inline-flex items-center gap-1.5 min-w-0 group/ip">
+      <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 group/ip">
         <span className="shrink-0 text-muted-foreground" title={title} aria-label={title}>{icon}</span>
-        <span className="font-mono break-all">{value}</span>
+        <span className="min-w-0 truncate font-mono" title={value}>{value}</span>
         <CopyButton
           value={value}
           title={t('clients.copyLabel', { label: title })}
-          className="opacity-0 group-hover/ip:opacity-100 focus-visible:opacity-100"
+          className="shrink-0 opacity-0 group-hover/ip:opacity-100 focus-visible:opacity-100"
         />
       </span>
     </div>
