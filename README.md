@@ -56,6 +56,10 @@
 
 For more documentation and usage guides, visit the official website: [https://netsgo.zs.uy](https://netsgo.zs.uy).
 
+### One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/NetsGo/)
+
 ### One-line install
 
 ```bash
