@@ -108,7 +108,7 @@ jobs:
           cargo build --release --locked -p netsgo-desktop-service --bin netsgo-desktop-service
       - name: Test desktop and background controller
         working-directory: client-desktop
-        run: cargo test --workspace --locked
+        run: cargo test --locked -p netsgo-client-core -p netsgo-desktop-service -p netsgo-desktop-updater -p netsgo-sidecar-proto
       - name: Validate real system service lifecycle
         run: bun scripts/test-desktop-startup.mjs
 
