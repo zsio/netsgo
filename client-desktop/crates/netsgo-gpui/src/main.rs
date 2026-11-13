@@ -2238,17 +2238,23 @@ fn main() {
     let (supervisor, notify_rx) =
         ClientSupervisor::new(data_dir).expect("failed to initialize NetsGo desktop supervisor");
 
-    application()
+    let window_slot: MainWindowSlot = Rc::new(RefCell::new(None));
+    let reopen_slot = Rc::clone(&window_slot);
+    let reopen_supervisor = supervisor.clone();
+    let reopen_updater = updater.clone();
+    let app = application()
         .with_assets(assets::AllAssets)
-        .with_quit_mode(QuitMode::Explicit)
-        .run(move |cx| {
+        .with_quit_mode(QuitMode::Explicit);
+    app.on_reopen(move |cx| {
+        ensure_main_window(&reopen_slot, &reopen_supervisor, &reopen_updater, cx);
+    });
+    app.run(move |cx| {
             init(cx);
             let initial = supervisor.view_state();
             apply_appearance_preference(initial.appearance, None, cx);
 
             let tray = DesktopTray::build(initial.connected_count, initial.sessions.len(), supervisor.is_service_managed());
 
-            let window_slot: MainWindowSlot = Rc::new(RefCell::new(None));
             if !login_start || tray.is_none() { ensure_main_window(&window_slot, &supervisor, &updater, cx); }
 
             let sup_for_quit = supervisor.clone();
