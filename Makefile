@@ -64,6 +64,28 @@ package-desktop-macos-local: build-desktop-macos-local
 	@echo "📦 打包 macOS desktop dmg..."
 	@scripts/package-macos-dmg.sh "$(DESKTOP_MACOS_APP)" "$(DESKTOP_MACOS_DMG)"
 
+
+# ========== GPUI 原生客户端 (client-desktop/) ==========
+.PHONY: build-client-desktop-sidecar build-client-desktop dev-client-desktop test-client-desktop package-client-desktop
+build-client-desktop-sidecar:
+	@VERSION="$(VERSION)" COMMIT="$(COMMIT)" DATE="$(DATE)" SIDECAR_OUT_DIR="client-desktop/binaries" scripts/build-desktop-sidecar.sh "$(DESKTOP_TARGET_TRIPLE)"
+
+build-client-desktop: build-client-desktop-sidecar
+	@echo "🖥️  构建 GPUI client-desktop..."
+	cd client-desktop && NETSGO_DESKTOP_VERSION="$(VERSION)" cargo build --release --locked -p netsgo-gpui
+	@echo "✅ client-desktop 构建完成: client-desktop/target/release/netsgo-desktop"
+
+dev-client-desktop: build-client-desktop-sidecar
+	cd client-desktop && NETSGO_DESKTOP_VERSION="$(VERSION)" cargo run -p netsgo-gpui
+
+test-client-desktop:
+	cd client-desktop && cargo test --workspace
+	bun test scripts/desktop-release.test.mjs
+
+# CLIENT_DESKTOP_TARGET: osx-arm64 / osx-x64 / win-x64; VERSION 必须是发布 tag。
+package-client-desktop:
+	bun scripts/package-client-desktop.mjs "$(CLIENT_DESKTOP_TARGET)" "$(VERSION)"
+
 # 清理
 clean:
 	@echo "🧹 清理构建产物..."

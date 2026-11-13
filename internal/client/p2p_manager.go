@@ -238,6 +238,9 @@ func (m *clientPeerManager) watchSession(session *clientPeerSession) {
 	case <-session.peer.Ready():
 		if session.peer.Available() {
 			m.sendStatus(session.id, protocol.P2PStateConnected, "")
+			if m.client != nil {
+				m.client.emitSidecarSnapshot("p2p_connected")
+			}
 			go m.acceptLoop(session)
 		} else {
 			m.sendStatus(session.id, protocol.P2PStateFailed, "data channel unavailable")
@@ -262,6 +265,9 @@ func (m *clientPeerManager) watchSession(session *clientPeerSession) {
 		m.reportSessionTraffic(session)
 		m.sendStatus(session.id, protocol.P2PStateFailed, reason)
 		m.removeAndClose(session.id)
+		if m.client != nil {
+			m.client.emitSidecarSnapshot("p2p_failed")
+		}
 	case <-m.closed:
 		return
 	}

@@ -88,6 +88,8 @@ type Client struct {
 	dataHandshakeTimeout time.Duration
 	currentRuntime       *sessionRuntime
 	nextRuntimeEpoch     atomic.Uint64
+	stopCh               chan struct{}
+	stopOnce             sync.Once
 }
 
 type clientRunError struct {
@@ -160,6 +162,7 @@ func New(serverAddr, key string) *Client {
 		done:                 make(chan struct{}),
 		startTime:            time.Now(),
 		dataHandshakeTimeout: 10 * time.Second,
+		stopCh:               make(chan struct{}),
 	}
 }
 
@@ -391,8 +394,15 @@ func retryIntervalWithJitter(disconnectTime time.Time, jitter float64) time.Dura
 // Start starts the client, connects to the server, and begins work.
 // If the connection drops, it reconnects automatically except for unrecoverable local errors.
 func (c *Client) Start() error {
+	c.ensureStopCh()
+	if c.isStopping() {
+		return nil
+	}
 	for {
 		err := c.connectAndRun()
+		if c.isStopping() {
+			return nil
+		}
 		if err != nil {
 			// Authentication failure is fatal and should not trigger reconnect.
 			if c.DisableReconnect {
@@ -417,7 +427,13 @@ func (c *Client) Start() error {
 		for {
 			interval := retryInterval(disconnectTime)
 			c.logger().Info("client.reconnecting", "Reconnecting", map[string]any{"delay_ms": interval.Milliseconds()})
-			time.Sleep(interval)
+			timer := time.NewTimer(interval)
+			select {
+			case <-c.stopCh:
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
 
 			serverAddr, _ := c.currentServerState()
 			c.logger().Info("client.reconnect_attempt", "Attempting to reconnect", map[string]any{"server": serverAddr})
@@ -454,6 +470,10 @@ func isFatalError(err error) bool {
 // It sends a normal WebSocket close frame so the server knows the disconnect was intentional.
 func (c *Client) Shutdown() {
 	c.logger().Info("client.shutdown_started", "Starting graceful client shutdown", nil)
+	c.ensureStopCh()
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+	})
 
 	if rt := c.getCurrentRuntime(); rt != nil {
 		// Flush direct payload counters while the authenticated control channel is
@@ -472,6 +492,29 @@ func (c *Client) Shutdown() {
 	c.cleanup()
 
 	c.logger().Info("client.shutdown_complete", "Graceful client shutdown complete", nil)
+}
+
+func (c *Client) ensureStopCh() {
+	c.mu.Lock()
+	if c.stopCh == nil {
+		c.stopCh = make(chan struct{})
+	}
+	c.mu.Unlock()
+}
+
+func (c *Client) isStopping() bool {
+	c.mu.Lock()
+	ch := c.stopCh
+	c.mu.Unlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) stopRuntime(rt *sessionRuntime, reason string) {
@@ -538,6 +581,7 @@ func (c *Client) cleanup() {
 	c.ClientID = ""
 	c.dataToken = ""
 	c.mu.Unlock()
+	c.emitSidecarSnapshot("cleanup")
 }
 
 func (c *Client) failRuntime(rt *sessionRuntime, reason string) {
@@ -605,6 +649,7 @@ func (c *Client) connectAndRun() error {
 	}
 	c.logger().Info("client.data_channel_established", "Data channel established", nil)
 	rt.peerManager = newClientPeerManager(c, rt)
+	c.emitSidecarSnapshot("connected")
 	c.refreshPublicIPsAsync(true)
 
 	rt.wg.Add(1)
@@ -1313,6 +1358,7 @@ func (c *Client) reportProbeRuntime(rt *sessionRuntime) {
 		log.Printf("⚠️ Failed to report probe data: %v", err)
 		c.failRuntime(rt, "probe_write_failed")
 	}
+	c.emitSidecarSnapshot("probe")
 }
 
 // refreshPublicIPsAsync fetches and caches public IPs in the background.
@@ -1347,6 +1393,7 @@ func (c *Client) refreshPublicIPsAsync(force bool) {
 		}
 		c.publicIPFetched = time.Now()
 		c.mu.Unlock()
+		c.emitSidecarSnapshot("public_ip")
 	}()
 }
 
@@ -1391,6 +1438,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				}
 				if ack.Accepted {
 					log.Printf("✅ Accepted tunnel provisioning config from server [%s] role=%s", req.TunnelID, req.Role)
+					c.emitSidecarSnapshot("tunnel_provisioned")
 				} else {
 					log.Printf("⚠️ Rejected tunnel provisioning config from server [%s] role=%s: %s", req.TunnelID, req.Role, ack.Message)
 				}
@@ -1414,6 +1462,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				Message:           "provision accepted",
 			})
 			log.Printf("✅ Accepted tunnel provisioning config from server [%s]", req.Name)
+			c.emitSidecarSnapshot("proxy_provisioned")
 
 			if err := rt.writeJSON(resp); err != nil {
 				log.Printf("⚠️ Failed to send provisioning ACK [%s]: %v", req.Name, err)
@@ -1470,6 +1519,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			if err := rt.peerManager.handleGrant(grant); err != nil {
 				log.Printf("⚠️ P2P grant rejected: %v", err)
 			}
+			c.emitSidecarSnapshot("p2p_grant")
 
 		case protocol.MsgTypeP2PTunnelRevoke:
 			var revoke protocol.P2PTunnelRevoke
@@ -1477,12 +1527,14 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				continue
 			}
 			rt.peerManager.handleRevoke(revoke)
+			c.emitSidecarSnapshot("p2p_revoke")
 
 		case protocol.MsgTypeP2PClosed:
 			var status protocol.P2PSessionStatus
 			if err := msg.ParsePayload(&status); err == nil && rt.peerManager != nil {
 				rt.peerManager.removeAndClose(status.SessionID)
 			}
+			c.emitSidecarSnapshot("p2p_closed")
 
 		case protocol.MsgTypeP2PCreditDemand:
 			var demand protocol.P2PCreditDemand
@@ -1510,6 +1562,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			if resp.Success {
 				c.applyProxyCreateResponse(resp)
 				log.Printf("✅ Proxy tunnel created successfully [%s], public port: %d", resp.Name, resp.RemotePort)
+				c.emitSidecarSnapshot("proxy_created")
 			} else {
 				log.Printf("❌ Failed to create proxy tunnel [%s]: %s", resp.Name, resp.Message)
 			}
@@ -1526,6 +1579,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 				}
 				c.handleTunnelUnprovision(req)
 				log.Printf("🔌 Tunnel unprovisioned: %s role=%s (reason: %s)", req.TunnelID, req.Role, req.Reason)
+				c.emitSidecarSnapshot("tunnel_unprovisioned")
 				continue
 			}
 
@@ -1537,6 +1591,7 @@ func (c *Client) controlLoopRuntime(rt *sessionRuntime) {
 			}
 			c.proxies.Delete(req.Name)
 			log.Printf("🔌 Proxy tunnel closed: %s (reason: %s)", req.Name, req.Reason)
+			c.emitSidecarSnapshot("proxy_closed")
 
 		default:
 			log.Printf("📩 Received control message: %s", msg.Type)

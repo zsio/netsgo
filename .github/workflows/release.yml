@@ -15,6 +15,10 @@ concurrency:
 jobs:
   release-gate:
     runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.desktop-plan.outputs.enabled }}
+      desktop-signing: ${{ steps.desktop-plan.outputs.signing }}
+      desktop-matrix: ${{ steps.desktop-plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -27,6 +31,9 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           scripts/validate-release-tag.sh "$tag"
           scripts/validate-beta-increment.sh "$tag"
+      - name: Read desktop release plan
+        id: desktop-plan
+        run: bun scripts/desktop-release.mjs plan "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
       - name: Verify install/update scripts
         shell: bash
         run: |
@@ -37,6 +44,125 @@ jobs:
           scripts/test-update-helpers.sh
           bun scripts/generate-standalone-update-scripts.mjs
           git diff --exit-code scripts/install.sh scripts/upgrade.sh
+      - name: Verify desktop release policy
+        run: bun test scripts/desktop-release.test.mjs
+
+  desktop:
+    needs: release-gate
+    if: ${{ needs.release-gate.outputs.desktop == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.release-gate.outputs.desktop-matrix) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.1'
+          targets: ${{ matrix.triple }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client-desktop
+      - name: Install pinned desktop packager
+        run: dotnet tool install --global vpk --version 1.2.161
+      - name: Test desktop
+        working-directory: client-desktop
+        run: cargo test --workspace --locked
+      - name: Prepare macOS signing and notarization
+        if: runner.os == 'macOS' && needs.release-gate.outputs.desktop-signing == 'required'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_CERTIFICATE_BASE64:?Configure the Developer ID Application and Installer certificates}"
+          : "${APPLE_ID:?Configure Apple notarization credentials}"
+          keychain="$RUNNER_TEMP/netsgo-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/netsgo-signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/netsgo-signing.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          xcrun notarytool store-credentials netsgo --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$keychain"
+          echo "VPK_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "VPK_NOTARY_PROFILE=netsgo" >> "$GITHUB_ENV"
+      - name: Prepare Windows signing
+        if: runner.os == 'Windows' && needs.release-gate.outputs.desktop-signing == 'required'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (!$env:WINDOWS_CERTIFICATE_BASE64) { throw 'Configure WINDOWS_CERTIFICATE_BASE64 for public releases' }
+          $file = Join-Path $env:RUNNER_TEMP 'netsgo-signing.pfx'
+          [IO.File]::WriteAllBytes($file, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $file -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          "VPK_SIGN_PARAMS=/sha1 $($certificate.Thumbprint) /fd sha256 /td sha256 /tr https://timestamp.digicert.com" >> $env:GITHUB_ENV
+      - name: Package desktop application
+        env:
+          NETSGO_DESKTOP_SIGNING: ${{ needs.release-gate.outputs.desktop-signing }}
+          VPK_SIGN_APP_IDENTITY: ${{ secrets.APPLE_SIGN_APP_IDENTITY }}
+          VPK_SIGN_INSTALL_IDENTITY: ${{ secrets.APPLE_SIGN_INSTALL_IDENTITY }}
+        run: bun scripts/package-client-desktop.mjs "${{ matrix.target }}" "${{ github.ref_name }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.target }}
+          path: client-desktop/dist/${{ matrix.target }}/
+          if-no-files-found: error
+      - name: Remove temporary signing files
+        if: always() && runner.os == 'macOS' && needs.release-gate.outputs.desktop-signing == 'required'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/netsgo-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/netsgo-signing.p12"
+
+  publish-desktop:
+    needs: [release-gate, desktop, binaries, mirror-source-to-cnb]
+    if: ${{ needs.release-gate.outputs.desktop == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: netsgo-release-index
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: desktop-*
+          path: desktop-artifacts
+      - name: Arrange platform artifacts
+        shell: bash
+        run: |
+          mkdir -p desktop-dist
+          for dir in desktop-artifacts/desktop-*; do
+            mv "$dir" "desktop-dist/${dir##*/desktop-}"
+          done
+      - name: Publish and verify both desktop mirrors
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CNB_REPO_URL: ${{ secrets.CNB_REPO_URL }}
+          CNB_USERNAME: ${{ secrets.CNB_USERNAME }}
+          CNB_PASSWORD: ${{ secrets.CNB_PASSWORD }}
+          NETSGO_RELEASE_SIGNING_KEY_PEM: ${{ secrets.NETSGO_RELEASE_SIGNING_KEY_PEM }}
+        run: bun scripts/publish-desktop-release.mjs
 
   web-dist:
     runs-on: ubuntu-latest
@@ -159,6 +285,9 @@ jobs:
 
   publish-release-index:
     runs-on: ubuntu-latest
+    concurrency:
+      group: netsgo-release-index
+      cancel-in-progress: false
     permissions:
       contents: write
     needs:

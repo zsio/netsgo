@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"netsgo/internal/client"
 	"os"
 	"strings"
 	"testing"
@@ -61,5 +63,42 @@ func TestClientCommandHelpIncludesImportantFlags(t *testing.T) {
 		if !strings.Contains(help, want) {
 			t.Fatalf("client help missing %q:\n%s", want, help)
 		}
+	}
+}
+
+func TestRunSidecarStdinControlSnapshotAndEOF(t *testing.T) {
+	var out bytes.Buffer
+	logger := client.NewEventLogger(client.LogFormatJSON, &out)
+	c := client.New("http://127.0.0.1:9527", "")
+	c.Logger = logger
+
+	var stopReason string
+	input := strings.NewReader("{\"cmd\":\"snapshot\"}\n")
+	runSidecarStdinControl(input, c, logger, func(reason string) {
+		stopReason = reason
+	})
+
+	if stopReason != "parent_stdin_closed" {
+		t.Fatalf("stopReason = %q, want parent_stdin_closed", stopReason)
+	}
+	if !strings.Contains(out.String(), `"event":"client.runtime_snapshot"`) {
+		t.Fatalf("expected runtime_snapshot event in output:\n%s", out.String())
+	}
+}
+
+func TestRunSidecarStdinControlShutdownCommand(t *testing.T) {
+	var out bytes.Buffer
+	logger := client.NewEventLogger(client.LogFormatJSON, &out)
+	c := client.New("http://127.0.0.1:9527", "")
+	c.Logger = logger
+
+	var stopReason string
+	input := strings.NewReader("{\"cmd\":\"shutdown\"}\n{\"cmd\":\"snapshot\"}\n")
+	runSidecarStdinControl(input, c, logger, func(reason string) {
+		stopReason = reason
+	})
+
+	if stopReason != "control_shutdown" {
+		t.Fatalf("stopReason = %q, want control_shutdown", stopReason)
 	}
 }

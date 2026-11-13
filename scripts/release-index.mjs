@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { compareTags } from './desktop-release.mjs';
 
 const [, , command] = process.argv;
 
@@ -191,6 +192,8 @@ async function buildIndex() {
   await writeFile(path.join(releasesDir, `${tag}.json`), JSON.stringify(release, null, 2) + '\n');
 
   const latest = await readExistingLatest(outDir);
+  const previousVersion = latest.channels[channel]?.latest;
+  if (previousVersion && compareTags(previousVersion, tag) > 0) return;
   latest.generated_at = generatedAt;
   const releaseURLs = [{ provider: 'github', url: githubReleaseDetailURL(repo, tag) }];
   if (cnbRepoSlug) releaseURLs.unshift({ provider: 'cnb', url: cnbReleaseDetailURL(cnbRepoSlug, tag) });

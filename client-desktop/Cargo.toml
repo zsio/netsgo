@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/netsgo-sidecar-proto",
+    "crates/netsgo-client-core",
+    "crates/netsgo-gpui",
+    "crates/netsgo-desktop-updater",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["NetsGo Contributors"]
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+dirs = "6"
+open = "5"
+image = { version = "0.25", default-features = false, features = ["png"] }
+gpui-kit = "0.9.1"
+tray-icon = "0.26"
+velopack = { version = "=1.2.161", features = ["public-utils"] }
+
+[profile.dev.package]
+gpui-pre = { opt-level = 3 }
+gpui-component = { opt-level = 3 }
+gpui-kit = { opt-level = 3 }
+gpui-kit-assets = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
