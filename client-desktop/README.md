@@ -8,6 +8,7 @@
 - `crates/netsgo-client-core`：零 UI 依赖的客户端核心层（`ClientSupervisor` 有限状态机、多节点 Profile 隔离目录、Lifeline 防孤儿进程守护）。
 - `crates/netsgo-gpui`：GPUI 原生界面与系统托盘常驻壳（`gpui-kit` + `tray-icon`）。
 - `crates/netsgo-desktop-updater`：独立的签名清单、双源下载与整包安装协调。
+- `crates/netsgo-desktop-service`：系统服务宿主、受认证的本机控制接口、配置迁移与自启动管理。
 
 ## 本地开发与构建
 
@@ -30,7 +31,7 @@ make build-client-desktop
 
 更新检查与 Server 连接无关。客户端并发读取 GitHub / CNB 的签名清单，选择当前平台和通道的最高版本；一个源失败或滞后不会隐藏另一个源的新版本。下载优先采用成功返回新版本的源，超时、损坏或校验失败会尝试另一源。下载不影响隧道，用户选择“重启并更新”后才退出。重启仅恢复更新前正在运行的连接，已有配置和凭证保留在应用数据目录中。
 
-桌面程序和 Go sidecar 作为一个 Velopack 包更新。安装使用固定版本的 Velopack Rust SDK / `vpk`（1.2.161），关闭其启动时自动应用缓存更新的默认行为。清单为 Ed25519 签名信封，签名覆盖平台、版本、更新说明、下载地址和 SHA-256；客户端公钥在构建时从 `scripts/common-update.sh` 提取，与现有发布签名密钥一致。更新包缓存也会在使用前重新校验。
+桌面程序、Go sidecar 和后台宿主作为一个 Velopack 包更新。安装使用固定版本的 Velopack Rust SDK / `vpk`（1.2.161），关闭其启动时自动应用缓存更新的默认行为。清单为 Ed25519 签名信封，签名覆盖平台、版本、更新说明、下载地址和 SHA-256；客户端公钥在构建时从 `scripts/common-update.sh` 提取，与现有发布签名密钥一致。更新包缓存也会在使用前重新校验。
 
 静态清单位于 `release-index` 分支的 `updates/desktop-v1/<target>.json`，独立于现有 CLI 的 `updates/index-v1/`。不需要部署更新 API 或额外服务器。
 
@@ -87,6 +88,14 @@ macOS 可先用下述命令验证真实安装器。测试只操作临时目录�
 ```bash
 bun scripts/test-desktop-upgrade.mjs /path/to/old-Portable.zip /path/to/new-full.nupkg v0.2.0
 ```
+
+## 启动与后台运行
+
+左下角“设置”提供两个独立开关：登录后启动托盘界面，以及未登录操作系统时运行后台连接。后一项通过 macOS LaunchDaemon / Windows Service 实现，使用独立宿主进程持有 Go sidecar；界面通过本机认证接口管理它，退出或注销不会断开隧道。详细使用条件见 [安装说明](INSTALL.md#自启动与免登录运行)，实现约束见 [服务设计](SERVICE_DESIGN.md)。
+
+完整更新包同时包含界面、Go client 和后台宿主。启用服务后，更新先请求系统管理员授权替换后台程序并确认启动成功，再交给 Velopack 替换界面。升级失败会恢复原后台程序；停用服务则把配置和凭证迁回桌面数据目录。
+
+真实系统服务安装、升级、失败回滚和停用验证只在一次性的 GitHub Actions runner 执行：手动运行 Release workflow 并勾选 `validate_startup`。本地 Rust 测试只使用临时目录，不修改真实启动项。
 
 ## 边车与核心约束
 

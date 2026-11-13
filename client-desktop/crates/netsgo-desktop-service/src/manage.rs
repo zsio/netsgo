@@ -223,39 +223,37 @@ fn execute(request: &Request) -> Result<()> {
         )?;
         public_manifest(&root.join("service.json"))?;
         platform::register_service(&root, &request.owner)?;
-        let deadline = Instant::now() + Duration::from_secs(25);
-        loop {
-            if ipc::call(&data, ipc::Command::State)
-                .is_ok_and(|reply| reply.version == request.version)
-            {
-                break;
-            }
-            if Instant::now() >= deadline {
-                bail!("后台服务未能正常启动，正在恢复原配置");
-            }
-            thread::sleep(Duration::from_millis(250));
-        }
+        wait_for_version(&data, &request.version)?;
         Ok(())
     })();
     if let Err(error) = result {
-        let _ = platform::stop_service();
-        if replaced_binary {
-            let _ = fs::remove_dir_all(root.join("bin"));
-            if backup.exists() {
-                let _ = fs::rename(&backup, root.join("bin"));
+        let recovery = (|| -> Result<()> {
+            platform::stop_service()?;
+            if replaced_binary {
+                fs::remove_dir_all(root.join("bin"))?;
+                if backup.exists() {
+                    fs::rename(&backup, root.join("bin"))?;
+                }
             }
-        }
-        if let Some(previous) = previous {
-            let _ = private_json(&root.join("service.json"), &previous);
-            let _ = public_manifest(&root.join("service.json"));
-            if previous.enabled {
-                let _ = private_json(&data.join(RESUME_FILE), &request.resume);
-                let _ = own_file(&data.join(RESUME_FILE), &request.owner);
-                let _ = platform::register_service(&root, &previous.owner);
+            if let Some(previous) = previous {
+                private_json(&root.join("service.json"), &previous)?;
+                public_manifest(&root.join("service.json"))?;
+                if previous.enabled {
+                    private_json(&data.join(RESUME_FILE), &request.resume)?;
+                    own_file(&data.join(RESUME_FILE), &request.owner)?;
+                    platform::register_service(&root, &previous.owner)?;
+                    wait_for_version(&data, &previous.version)?;
+                }
+            } else {
+                platform::unregister_service()?;
+                if root.join("service.json").exists() {
+                    fs::remove_file(root.join("service.json"))?;
+                }
             }
-        } else {
-            let _ = platform::unregister_service();
-            let _ = fs::remove_file(root.join("service.json"));
+            Ok(())
+        })();
+        if let Err(recovery_error) = recovery {
+            return Err(error.context(format!("恢复原后台服务也未完成：{recovery_error:#}")));
         }
         return Err(error);
     }
@@ -263,6 +261,19 @@ fn execute(request: &Request) -> Result<()> {
         let _ = fs::remove_dir_all(backup);
     }
     Ok(())
+}
+
+fn wait_for_version(data: &Path, version: &str) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(25);
+    loop {
+        if ipc::call(data, ipc::Command::State).is_ok_and(|reply| reply.version == version) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("后台服务未能正常启动");
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn validate_request(request: &Request) -> Result<()> {
