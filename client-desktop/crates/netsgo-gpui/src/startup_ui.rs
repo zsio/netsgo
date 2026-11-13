@@ -52,7 +52,7 @@ impl NetsGoDesktopView {
     ) -> impl IntoElement {
         let startup = self.supervisor.startup_view();
         let busy = startup.busy || self.startup_pending.is_some();
-        let enabled = self.update_state.can_install && !busy;
+        let enabled = self.update_state.can_install && !busy && !self.update_state.status.busy();
         let old_service = startup
             .service_version
             .as_deref()

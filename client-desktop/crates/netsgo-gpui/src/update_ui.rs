@@ -188,7 +188,7 @@ impl NetsGoDesktopView {
                                             })
                                             .primary()
                                             .small()
-                                            .disabled(update.status.busy())
+                                            .disabled(update.status.busy() || (update.downloaded && self.supervisor.startup_view().busy))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 if this.update_state.downloaded {
                                                     let service = this.supervisor.clone();

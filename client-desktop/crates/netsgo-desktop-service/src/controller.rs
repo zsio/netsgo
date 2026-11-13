@@ -309,28 +309,48 @@ impl DesktopSupervisor {
         }
     }
     pub fn update_for_app(&self, package: &Path) -> Result<()> {
-        if !self.is_service_managed() {
-            return Ok(());
-        }
-        let binaries = manage::unpack_binaries(package)?;
-        manage::request(
-            manage::Operation::Upgrade,
-            &self.root,
-            Some(binaries.path()),
-            self.service_restart_profile_ids(),
-        )?;
-        wait_for_service(&platform::data_root()?)?;
-        Ok(())
+        self.service_operation(|| {
+            if !self.is_service_managed() {
+                return Ok(());
+            }
+            let binaries = manage::unpack_binaries(package)?;
+            manage::request(
+                manage::Operation::Upgrade,
+                &self.root,
+                Some(binaries.path()),
+                self.service_restart_profile_ids(),
+            )?;
+            wait_for_service(&platform::data_root()?)?;
+            Ok(())
+        })
     }
     pub fn repair_service(&self) -> Result<()> {
-        manage::request(
-            manage::Operation::Upgrade,
-            &self.root,
-            None,
-            self.service_restart_profile_ids(),
-        )?;
-        wait_for_service(&platform::data_root()?)?;
-        Ok(())
+        self.service_operation(|| {
+            if !self.is_service_managed() {
+                bail!("后台服务尚未启用");
+            }
+            manage::request(
+                manage::Operation::Upgrade,
+                &self.root,
+                None,
+                self.service_restart_profile_ids(),
+            )?;
+            wait_for_service(&platform::data_root()?)?;
+            Ok(())
+        })
+    }
+    fn service_operation(&self, operation: impl FnOnce() -> Result<()>) -> Result<()> {
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.busy {
+                bail!("正在配置后台运行，请稍候再更新");
+            }
+            state.busy = true;
+        }
+        let result = operation();
+        self.state.lock().unwrap().busy = false;
+        let _ = self.notify.send(SupervisorNotification::Updated);
+        result
     }
     pub fn running_profile_ids(&self) -> Vec<String> {
         self.view_state()
