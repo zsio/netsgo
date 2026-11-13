@@ -30,6 +30,7 @@ pub struct Owner {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub owner: Owner,
+    pub user_root: PathBuf,
     pub enabled: bool,
     pub version: String,
 }
@@ -135,9 +136,11 @@ pub fn read_manifest() -> Result<Option<Manifest>> {
         Err(error) => Err(error.into()),
     }
 }
-pub fn owned_manifest() -> Result<Option<Manifest>> {
+pub fn owned_manifest(user_root: &Path) -> Result<Option<Manifest>> {
     let id = owner()?.id;
-    Ok(read_manifest()?.filter(|manifest| manifest.owner.id == id))
+    let user_root = user_root.canonicalize()?;
+    Ok(read_manifest()?
+        .filter(|manifest| manifest.owner.id == id && manifest.user_root == user_root))
 }
 pub fn binary_name(name: &str) -> String {
     format!("{name}{}", if cfg!(windows) { ".exe" } else { "" })

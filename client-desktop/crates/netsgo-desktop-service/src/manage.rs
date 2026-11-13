@@ -158,6 +158,9 @@ fn execute(request: &Request) -> Result<()> {
         if previous.owner.id != request.owner.id {
             bail!("这台电脑的后台服务属于其他用户，请先由原用户停用");
         }
+        if previous.enabled && previous.user_root != request.user_root {
+            bail!("后台服务使用其他应用数据目录，请从原安装位置管理它");
+        }
         if request.operation == Operation::Install && previous.enabled {
             bail!("后台服务已启用，请重新打开客户端以接管");
         }
@@ -177,6 +180,7 @@ fn execute(request: &Request) -> Result<()> {
                 &root.join("service.json"),
                 &Manifest {
                     owner: request.owner.clone(),
+                    user_root: request.user_root.clone(),
                     enabled: false,
                     version: request.version.clone(),
                 },
@@ -217,6 +221,7 @@ fn execute(request: &Request) -> Result<()> {
             &root.join("service.json"),
             &Manifest {
                 owner: request.owner.clone(),
+                user_root: request.user_root.clone(),
                 enabled: true,
                 version: request.version.clone(),
             },

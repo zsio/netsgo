@@ -77,14 +77,15 @@ jobs:
         run: bun scripts/repair-desktop-index.mjs "$RELEASE_TAG"
 
   startup-validation:
-    if: github.event_name == 'workflow_dispatch' && inputs.validate_startup
+    needs: release-gate
+    if: always() && ((github.event_name == 'workflow_dispatch' && inputs.validate_startup) || (github.event_name == 'push' && needs.release-gate.outputs.desktop == 'true'))
     strategy:
       fail-fast: false
       matrix:
         os: [macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
     env:
-      NETSGO_DESKTOP_VERSION: v0.1.20-beta.4
+      NETSGO_DESKTOP_VERSION: ${{ github.event_name == 'push' && github.ref_name || 'v0.1.20-beta.4' }}
       NETSGO_STARTUP_SYSTEM_TEST: '1'
     steps:
       - uses: actions/checkout@v6
@@ -198,7 +199,7 @@ jobs:
           rm -f "$RUNNER_TEMP/netsgo-signing.p12"
 
   publish-desktop:
-    needs: [release-gate, desktop, binaries, mirror-source-to-cnb]
+    needs: [release-gate, desktop, startup-validation, binaries, mirror-source-to-cnb]
     if: ${{ needs.release-gate.outputs.desktop == 'true' }}
     runs-on: ubuntu-latest
     permissions:

@@ -123,7 +123,7 @@ impl DesktopSupervisor {
     pub fn new(root: PathBuf) -> Result<(Self, mpsc::Receiver<SupervisorNotification>)> {
         let (notify, rx) = mpsc::channel();
         let (local, local_rx) = ClientSupervisor::new(root.clone())?;
-        let backend = if platform::owned_manifest()?.is_some_and(|manifest| manifest.enabled) {
+        let backend = if platform::owned_manifest(&root)?.is_some_and(|manifest| manifest.enabled) {
             Backend::Service(Remote::new(
                 platform::data_root()?,
                 local.view_state(),
@@ -252,7 +252,7 @@ impl DesktopSupervisor {
                 Ok(())
             }
             Err(error) => {
-                match platform::owned_manifest() {
+                match platform::owned_manifest(&self.root) {
                     Ok(Some(manifest)) if manifest.enabled => {
                         if enabled {
                             let mut view = match &old {
@@ -317,7 +317,7 @@ impl DesktopSupervisor {
             manage::Operation::Upgrade,
             &self.root,
             Some(binaries.path()),
-            self.running_profile_ids(),
+            self.service_restart_profile_ids(),
         )?;
         wait_for_service(&platform::data_root()?)?;
         Ok(())
@@ -327,7 +327,7 @@ impl DesktopSupervisor {
             manage::Operation::Upgrade,
             &self.root,
             None,
-            self.running_profile_ids(),
+            self.service_restart_profile_ids(),
         )?;
         wait_for_service(&platform::data_root()?)?;
         Ok(())
@@ -338,6 +338,23 @@ impl DesktopSupervisor {
             .into_iter()
             .filter(|s| s.phase.is_running())
             .map(|s| s.profile.id)
+            .collect()
+    }
+    fn service_restart_profile_ids(&self) -> Vec<String> {
+        let state = self.state.lock().unwrap();
+        let Backend::Service(remote) = &state.backend else {
+            return Vec::new();
+        };
+        let remote = remote.state.lock().unwrap();
+        remote
+            .view
+            .sessions
+            .iter()
+            .filter(|s| {
+                s.phase.is_running()
+                    || (remote.error.is_some() && s.profile.auto_connect && s.has_saved_token)
+            })
+            .map(|s| s.profile.id.clone())
             .collect()
     }
     pub fn has_any_running(&self) -> bool {
