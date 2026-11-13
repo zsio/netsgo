@@ -79,9 +79,11 @@ pub fn request(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
+#[cfg(target_os = "macos")]
 fn apple_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -335,15 +337,15 @@ fn copy_state(from: &Path, to: &Path, owner: &Owner, staging_root: &Path) -> Res
         Err(error) => return Err(error.into()),
     };
     let stage = tempfile::tempdir_in(staging_root)?;
-    platform::private_staging(stage.path())?;
+    platform::private_staging(stage.path()).context("保护配置迁移暂存目录")?;
     let profiles = stage.path().join("profiles");
     if from.join("profiles").exists() {
-        copy_tree(&from.join("profiles"), &profiles)?;
+        copy_tree(&from.join("profiles"), &profiles).context("复制连接凭证到暂存目录")?;
     } else {
         fs::create_dir(&profiles)?;
     }
     let service_access = to == platform::data_root()?;
-    platform::protect_data(stage.path(), owner, service_access)?;
+    platform::protect_data(stage.path(), owner, service_access).context("设置暂存凭证目录权限")?;
     fs::create_dir_all(to)?;
     let old_config = fs::read(config_file_path(to)).ok();
     let old_profiles = to.join(format!("profiles-backup-{}", stamp()));
@@ -368,7 +370,7 @@ fn copy_state(from: &Path, to: &Path, owner: &Owner, staging_root: &Path) -> Res
         }
         #[cfg(windows)]
         {
-            platform::protect_data(to, owner, service_access)?;
+            platform::protect_data(to, owner, service_access).context("设置迁移后凭证目录权限")?;
         }
         Ok(())
     })();
@@ -479,6 +481,8 @@ fn public_manifest(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o644))?;
     }
+    #[cfg(windows)]
+    let _ = path;
     Ok(())
 }
 

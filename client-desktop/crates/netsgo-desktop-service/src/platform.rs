@@ -10,6 +10,7 @@ use std::{
 
 pub const SERVICE_NAME: &str = "NetsGoDesktop";
 pub const DAEMON_LABEL: &str = "uy.zs.netsgo.desktop.service";
+#[cfg(target_os = "macos")]
 const LOGIN_LABEL: &str = "uy.zs.netsgo.desktop.login";
 
 #[derive(Clone, Debug)]
@@ -331,6 +332,7 @@ pub fn register_service(root: &Path, owner: &Owner) -> Result<()> {
     }
     #[cfg(windows)]
     {
+        let _ = owner;
         let binary = format!(
             "\"{}\" --service --data-dir \"{}\"",
             root.join("bin")
@@ -426,11 +428,13 @@ pub fn protect_root(root: &Path) -> Result<()> {
 pub fn private_staging(data: &Path) -> Result<()> {
     #[cfg(windows)]
     {
+        let installer = owner()?;
         output(command("icacls.exe").arg(data).args([
             "/inheritance:r",
             "/grant:r",
             "*S-1-5-18:(OI)(CI)F",
             "*S-1-5-32-544:(OI)(CI)F",
+            &format!("*{}:(OI)(CI)F", installer.id),
         ]))?;
     }
     #[cfg(unix)]
