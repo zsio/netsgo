@@ -56,8 +56,8 @@ function ConnectionStatusPill() {
           title={visibleStatus === 'reconnecting' ? t('common.sseReconnecting') : t('common.sseDisconnected')}
           className={
             visibleStatus === 'reconnecting'
-              ? 'inline-flex h-7 items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 text-xs font-medium text-amber-600 dark:text-amber-400'
-              : 'inline-flex h-7 items-center gap-1.5 rounded-full border border-destructive/30 bg-destructive/10 px-2.5 text-xs font-medium text-destructive'
+              ? 'inline-flex h-7 items-center gap-1.5 rounded-full border border-status-warning-border bg-status-warning-soft px-2.5 text-xs font-medium text-status-warning-fg'
+              : 'inline-flex h-7 items-center gap-1.5 rounded-full border border-status-danger-border bg-status-danger-soft px-2.5 text-xs font-medium text-status-danger-fg'
           }
         >
           {visibleStatus === 'reconnecting' ? (
@@ -88,7 +88,7 @@ function GitHubStarLink() {
     >
       <Github className="h-3.5 w-3.5" />
       <span className="hidden sm:inline">Star</span>
-      <Star className="h-3.5 w-3.5 text-amber-500" />
+      <Star className="h-3.5 w-3.5 text-primary/85" />
     </a>
   );
 }
@@ -161,7 +161,7 @@ function TopBarInner({ scope }: { scope: ResourceScope | null }) {
             >
               <DualTriggerCard
                 triggers={
-                  <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
+                  <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/45 border border-border/60 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
                     <Monitor className="h-3.5 w-3.5" />
                     <span className="font-mono tracking-tight">{onlineClientCount}/{totalClients}</span>
                   </div>
@@ -169,44 +169,44 @@ function TopBarInner({ scope }: { scope: ResourceScope | null }) {
               >
                 <div className="flex flex-col gap-2.5">
                   <div className="flex items-center justify-between gap-6 text-sm">
-                    <div className="flex items-center gap-2.5 text-emerald-500">
-                      <Monitor className="h-4 w-4" />
+                    <div className="flex items-center gap-2.5 text-status-online-fg">
+                      <Monitor className="h-4 w-4 text-status-online" />
                       <span className="font-medium">{t('dashboard.onlineNodes')}</span>
                     </div>
-                    <span className="font-bold font-mono">{onlineClientCount}</span>
+                    <span className="font-bold font-mono text-foreground">{onlineClientCount}</span>
                   </div>
                   <div className="flex items-center justify-between gap-6 text-sm">
-                    <div className="flex items-center gap-2.5 text-rose-500">
+                    <div className="flex items-center gap-2.5 text-muted-foreground">
                       <MonitorOff className="h-4 w-4" />
                       <span className="font-medium">{t('dashboard.offlineNodes')}</span>
                     </div>
-                    <span className="font-bold font-mono">{offlineClientCount}</span>
+                    <span className="font-bold font-mono text-foreground">{offlineClientCount}</span>
                   </div>
                 </div>
               </DualTriggerCard>
 
               <DualTriggerCard
                 triggers={
-                  <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/40 border border-border/40 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
-                    <Zap className="h-3.5 w-3.5" />
+                  <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-md bg-muted/45 border border-border/60 text-muted-foreground cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors group">
+                    <Zap className="h-3.5 w-3.5 text-primary" />
                     <span className="font-mono tracking-tight">{activeTunnels}/{totalTunnels}</span>
                   </div>
                 }
               >
                 <div className="flex flex-col gap-2.5">
                   <div className="flex items-center justify-between gap-6 text-sm">
-                    <div className="flex items-center gap-2.5 text-blue-500">
-                      <Zap className="h-4 w-4" />
+                    <div className="flex items-center gap-2.5 text-brand-strong">
+                      <Zap className="h-4 w-4 text-primary" />
                       <span className="font-medium">{t('dashboard.activeTunnels')}</span>
                     </div>
-                    <span className="font-bold font-mono">{activeTunnels}</span>
+                    <span className="font-bold font-mono text-foreground">{activeTunnels}</span>
                   </div>
                   <div className="flex items-center justify-between gap-6 text-sm">
-                    <div className="flex items-center gap-2.5 text-amber-500">
+                    <div className="flex items-center gap-2.5 text-muted-foreground">
                       <Pause className="h-4 w-4" />
                       <span className="font-medium">{t('dashboard.inactiveTunnels')}</span>
                     </div>
-                    <span className="font-bold font-mono">{inactiveTunnels}</span>
+                    <span className="font-bold font-mono text-foreground">{inactiveTunnels}</span>
                   </div>
                 </div>
               </DualTriggerCard>

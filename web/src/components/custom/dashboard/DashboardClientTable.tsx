@@ -185,13 +185,13 @@ const DashboardClientDesktopRow = memo(function DashboardClientDesktopRow({
       <td className="px-6 py-3 font-medium text-foreground">{getClientDisplayName(client)}</td>
       <td className="px-6 py-3">
         {client.online ? (
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-500 text-xs font-medium">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-status-online-border bg-status-online-soft px-2.5 py-0.5 text-xs font-medium text-status-online-fg">
+            <div className="w-1.5 h-1.5 rounded-full bg-status-online" />
             {t('clients.online')}
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted text-muted-foreground text-xs font-medium">
-            <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground" />
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+            <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60" />
             {t('clients.offline')}
           </span>
         )}
@@ -253,10 +253,12 @@ export function DashboardClientTableContent({
   const emptyMessage = sortedClients.length === 0 ? t('dashboard.noClients') : t('dashboard.noMatchingClients');
 
   return (
-    <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden">
-      <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-border/40 bg-muted/20 flex items-center justify-between gap-3">
-        <h3 className="font-semibold text-foreground flex items-center gap-2">
-          <Laptop className="h-5 w-5 text-primary" />
+    <div className="rounded-xl border border-border/60 bg-card shadow-2xs overflow-hidden">
+      <div className="px-4 sm:px-5 py-3 border-b border-border/50 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/60 text-foreground">
+            <Laptop className="size-4" />
+          </span>
           {t('dashboard.onlineEndpoints')}
         </h3>
         <div className="flex items-center gap-2">

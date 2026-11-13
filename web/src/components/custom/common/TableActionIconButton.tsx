@@ -10,11 +10,11 @@ interface TableActionIconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButto
 }
 
 const toneStyles: Record<Tone, string> = {
-  neutral: 'text-muted-foreground hover:text-foreground hover:bg-muted/45',
-  primary: 'text-primary hover:text-primary hover:bg-primary/10',
-  success: 'text-emerald-500 hover:text-emerald-600 hover:bg-emerald-500/10',
-  warning: 'text-amber-500 hover:text-amber-600 hover:bg-amber-500/10',
-  destructive: 'text-destructive hover:text-destructive hover:bg-destructive/10',
+  neutral: 'text-muted-foreground hover:text-foreground hover:bg-muted/55',
+  primary: 'text-brand-strong hover:text-brand-strong hover:bg-brand-soft',
+  success: 'text-status-online-fg hover:text-status-online-fg hover:bg-status-online-soft',
+  warning: 'text-status-warning-fg hover:text-status-warning-fg hover:bg-status-warning-soft',
+  destructive: 'text-status-danger-fg hover:text-status-danger-fg hover:bg-status-danger-soft',
 };
 
 export function TableActionIconButton({

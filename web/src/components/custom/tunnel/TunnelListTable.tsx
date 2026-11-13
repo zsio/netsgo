@@ -173,7 +173,7 @@ export function TunnelListTable({
       <div className="flex items-center justify-end gap-1">
         {showTraffic24h && canStop && (
           <button
-            className="p-1.5 hover:bg-primary/10 rounded text-primary"
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-brand-soft hover:text-brand-strong"
             title={t('tunnels.rateTrend')}
             aria-label={t('tunnels.rateTrend')}
             onClick={() => setSpeedTarget(tunnel)}
@@ -183,7 +183,7 @@ export function TunnelListTable({
         )}
         {canEdit && !canStop && (
           <button
-            className="p-1.5 hover:bg-blue-500/10 rounded text-blue-500"
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title={t('common.edit')}
             aria-label={t('common.edit')}
             onClick={() => setEditTarget(tunnel)}
@@ -193,7 +193,7 @@ export function TunnelListTable({
         )}
         {canResume && (
           <button
-            className="p-1.5 hover:bg-emerald-500/10 rounded text-emerald-500"
+            className="rounded-md p-1.5 text-status-online-fg transition-colors hover:bg-status-online-soft"
             title={t('tunnels.resume')}
             aria-label={t('tunnels.resume')}
             onClick={() => resumeTunnel.mutate(actionArgs(tunnel.id), {
@@ -206,7 +206,7 @@ export function TunnelListTable({
         )}
         {canStop && (
           <button
-            className="p-1.5 hover:bg-slate-500/10 rounded text-slate-500"
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title={t('tunnels.stop')}
             aria-label={t('tunnels.stop')}
             onClick={() => stopTunnel.mutate(actionArgs(tunnel.id), {
@@ -219,7 +219,7 @@ export function TunnelListTable({
         )}
         {canEdit && canStop && (
           <button
-            className="p-1.5 hover:bg-blue-500/10 rounded text-blue-500"
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title={t('common.edit')}
             aria-label={t('common.edit')}
             onClick={() => setEditTarget(tunnel)}
@@ -229,7 +229,7 @@ export function TunnelListTable({
         )}
         {canMigrate && hasMigrationCandidate && (
           <button
-            className="p-1.5 hover:bg-primary/10 rounded text-primary"
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-brand-soft hover:text-brand-strong"
             title={t('tunnels.migrateTunnel')}
             aria-label={t('tunnels.migrateTunnel')}
             onClick={() => setMigrateTargetId(tunnel.id)}
@@ -239,7 +239,7 @@ export function TunnelListTable({
         )}
         {canDelete && (
           <button
-            className="p-1.5 hover:bg-destructive/10 rounded text-destructive"
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-status-danger-soft hover:text-status-danger-fg"
             title={t('common.delete')}
             aria-label={t('common.delete')}
             onClick={() => setDeleteTarget({ id: tunnel.id, name: tunnel.name, clientId: tunnel.clientId })}
@@ -253,11 +253,15 @@ export function TunnelListTable({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden">
+      <div className="rounded-xl border border-border/60 bg-card shadow-2xs overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between gap-3 border-b border-border/40 bg-muted/20 px-4 py-3 sm:px-6 sm:py-4">
-          <h3 className="flex min-w-0 items-center gap-2 font-semibold text-foreground">
-            {icon || <ArrowRightLeft className="h-5 w-5 text-primary" />}
+        <div className="flex items-center justify-between gap-3 border-b border-border/50 px-4 py-3 sm:px-6 sm:py-3.5">
+          <h3 className="flex min-w-0 items-center gap-2.5 text-sm font-semibold text-foreground">
+            {icon || (
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/60 text-foreground">
+                <ArrowRightLeft className="size-4" />
+              </span>
+            )}
             {title}
             <span className="bg-muted text-muted-foreground px-2 py-0.5 rounded-full text-xs font-normal">
               {tunnels.length}
@@ -557,13 +561,13 @@ function TunnelSpeedLimit({ tunnel }: { tunnel: TunnelEntry }) {
     <div className="flex flex-col gap-0.5 font-mono text-xs leading-4 text-muted-foreground">
       {hasIngressLimit && (
         <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-          <ArrowDown className="h-3.5 w-3.5 text-emerald-500" />
+          <ArrowDown className="h-3.5 w-3.5 text-flow-down" />
           <span>{formatNetSpeed(tunnel.ingress_bps)}</span>
         </span>
       )}
       {hasEgressLimit && (
         <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-          <ArrowUp className="h-3.5 w-3.5 text-sky-500" />
+          <ArrowUp className="h-3.5 w-3.5 text-flow-up" />
           <span>{formatNetSpeed(tunnel.egress_bps)}</span>
         </span>
       )}
@@ -594,7 +598,7 @@ function TunnelEndpointCell({
           {endpoint.nodeLabel}
         </span>
       )}
-      <span className="block truncate font-mono text-xs text-primary" title={endpoint.addressLabel}>
+      <span className="block truncate font-mono text-xs text-muted-foreground" title={endpoint.addressLabel}>
         {endpoint.addressLabel}
       </span>
     </div>
@@ -613,20 +617,20 @@ function TunnelStatusBadge({
   const { t } = useTranslation();
   const dotClassName = cn(
     'size-1.5 rounded-full',
-    status.key === 'exposed' && 'bg-emerald-500',
-    status.key === 'pending' && 'bg-sky-500',
-    status.key === 'offline' && 'bg-amber-500',
-    status.key === 'stopped' && 'bg-muted-foreground',
-    status.key === 'error' && 'bg-destructive',
+    status.key === 'exposed' && 'bg-status-online',
+    status.key === 'pending' && 'bg-status-pending',
+    status.key === 'offline' && 'bg-status-warning',
+    status.key === 'stopped' && 'bg-muted-foreground/60',
+    status.key === 'error' && 'bg-status-danger',
   );
 
   const badgeClassName = cn(
     'gap-1.5',
-    status.key === 'exposed' && 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
-    status.key === 'pending' && 'bg-sky-500/10 text-sky-600 border-sky-500/20',
-    status.key === 'offline' && 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+    status.key === 'exposed' && 'bg-status-online-soft text-status-online-fg border-status-online-border',
+    status.key === 'pending' && 'bg-status-pending-soft text-status-pending-fg border-status-pending-border',
+    status.key === 'offline' && 'bg-status-warning-soft text-status-warning-fg border-status-warning-border',
     status.key === 'stopped' && 'bg-muted text-muted-foreground border-border/60',
-    status.key === 'error' && 'bg-destructive/10 text-destructive border-destructive/20',
+    status.key === 'error' && 'bg-status-danger-soft text-status-danger-fg border-status-danger-border',
   );
 
   const issueItems = sortTunnelIssues(issues ?? []);

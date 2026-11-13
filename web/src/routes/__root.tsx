@@ -10,16 +10,17 @@ function RootLayout() {
 
   return (
     <TooltipProvider>
-      <div className="relative flex h-dvh min-h-dvh w-full min-w-0 flex-col overflow-hidden bg-background text-foreground font-sans selection:bg-primary/30 dark:bg-black">
+      <div className="relative flex h-dvh min-h-dvh w-full min-w-0 flex-col overflow-hidden bg-background text-foreground font-sans selection:bg-primary/20 selection:text-foreground">
         <div
-          className="pointer-events-none absolute inset-0 z-0 opacity-55 dark:hidden"
+          className="pointer-events-none absolute inset-0 z-0 opacity-45 dark:hidden"
           style={{
             backgroundImage: `
-              linear-gradient(to right, #e7e5e4 1px, transparent 1px),
-              linear-gradient(to bottom, #e7e5e4 1px, transparent 1px)
+              radial-gradient(ellipse 80% 42% at 50% -12%, rgba(244, 129, 32, 0.055), transparent 70%),
+              linear-gradient(to right, #e6e1d8 1px, transparent 1px),
+              linear-gradient(to bottom, #e6e1d8 1px, transparent 1px)
             `,
-            backgroundSize: '20px 20px',
-            backgroundPosition: '0 0, 0 0',
+            backgroundSize: '100% 100%, 24px 24px, 24px 24px',
+            backgroundPosition: '0 0, 0 0, 0 0',
             maskImage: `
               repeating-linear-gradient(
                 to right,
@@ -57,14 +58,14 @@ function RootLayout() {
           }}
         />
         <div
-          className="pointer-events-none absolute inset-0 z-0 hidden opacity-55 dark:block"
+          className="pointer-events-none absolute inset-0 z-0 hidden dark:block"
           style={{
-            background: '#000000',
             backgroundImage: `
-              linear-gradient(to right, rgba(75, 85, 99, 0.4) 1px, transparent 1px),
-              linear-gradient(to bottom, rgba(75, 85, 99, 0.4) 1px, transparent 1px)
+              radial-gradient(ellipse 75% 38% at 50% -10%, rgba(244, 129, 32, 0.065), transparent 72%),
+              linear-gradient(to right, rgba(245, 238, 228, 0.038) 1px, transparent 1px),
+              linear-gradient(to bottom, rgba(245, 238, 228, 0.038) 1px, transparent 1px)
             `,
-            backgroundSize: '40px 40px',
+            backgroundSize: '100% 100%, 32px 32px, 32px 32px',
           }}
         />
         <div className="relative z-10 flex min-h-0 flex-1 flex-col">

@@ -60,7 +60,7 @@ function formatTimestamp(value: string) {
 
 function statusBadgeClass(status: string) {
   return status === 'active'
-    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+    ? 'border-status-online-border bg-status-online-soft text-status-online-fg'
     : 'bg-muted text-muted-foreground';
 }
 

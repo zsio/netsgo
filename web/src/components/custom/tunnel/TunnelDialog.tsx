@@ -983,7 +983,7 @@ function TunnelDialogForm({
                   {t('tunnels.sourceCidrsHelp')}
                 </p>
                 {showLoopbackCIDRWarning && (
-                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                  <p className="text-[11px] text-status-warning-fg">
                     {t('tunnels.sourceCidrsLoopbackWarning')}
                   </p>
                 )}
@@ -1124,25 +1124,25 @@ function TunnelDialogForm({
                     )}
                     <FieldErrorText error={fieldError} fields={['ingress.config.auth', 'ingress.config.auth.username', 'ingress.config.auth.password']} />
                     {!isClientToClient && !socks5AuthEnabled && (
-                      <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5">
+                      <div className="space-y-2 rounded-lg border border-status-warning-border bg-status-warning-soft px-3 py-2.5">
                         <div className="flex items-start gap-2">
-                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-status-warning" />
                           <div className="space-y-0.5">
-                            <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">
+                            <p className="text-xs font-semibold text-status-warning-fg">
                               {t('tunnels.socks5NoAuthTitle')}
                             </p>
-                            <p className="text-[11px] leading-snug text-amber-700/90 dark:text-amber-200/80">
+                            <p className="text-[11px] leading-snug text-status-warning-fg/85">
                               {t('tunnels.socks5NoAuthDesc')}
                             </p>
                           </div>
                         </div>
                         <label
                           htmlFor="tunnel-socks5-no-auth"
-                          className="flex items-start gap-2 text-xs font-medium text-amber-800 dark:text-amber-200"
+                          className="flex items-start gap-2 text-xs font-medium text-status-warning-fg"
                         >
                           <Checkbox
                             id="tunnel-socks5-no-auth"
-                            className="mt-0.5 border-amber-500/60 data-checked:border-amber-600 data-checked:bg-amber-600"
+                            className="mt-0.5 border-status-warning-border data-checked:border-status-warning-fg data-checked:bg-status-warning-fg"
                             checked={confirmNoAuthRisk}
                             onCheckedChange={(checked) => {
                               clearMutationFeedback();
