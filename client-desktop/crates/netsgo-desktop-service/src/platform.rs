@@ -459,20 +459,27 @@ pub fn protect_data(data: &Path, owner: &Owner, service_access: bool) -> Result<
     }
     #[cfg(windows)]
     {
-        output(command("icacls.exe").arg(data).args([
+        let mut acl = command("icacls.exe");
+        acl.arg(data).args([
             "/inheritance:r",
             "/grant:r",
             "*S-1-5-18:(OI)(CI)F",
             "*S-1-5-32-544:(OI)(CI)F",
-            "*S-1-5-19:(OI)(CI)M",
             &format!("*{}:(OI)(CI)M", owner.id),
-            "/T",
-        ]))?;
-        if !service_access {
+        ]);
+        if service_access {
+            acl.arg("*S-1-5-19:(OI)(CI)M");
+        } else {
+            acl.args(["/remove:g", "*S-1-5-19"]);
+        }
+        output(&mut acl)?;
+        // Protect the root once, then inherit that ACL. Recursively disabling inheritance
+        // also strips the inherited grants from files that have just been copied.
+        if fs::read_dir(data)?.next().is_some() {
             output(
                 command("icacls.exe")
-                    .arg(data)
-                    .args(["/remove:g", "*S-1-5-19", "/T"]),
+                    .arg(data.join("*"))
+                    .args(["/reset", "/T", "/Q"]),
             )?;
         }
     }

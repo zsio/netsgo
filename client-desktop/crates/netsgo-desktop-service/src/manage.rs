@@ -547,10 +547,23 @@ mod tests {
         .unwrap();
         private_json(&config_file_path(&source), &DesktopConfig::new_default()).unwrap();
         copy_state(&source, &target, &platform::owner().unwrap(), root.path()).unwrap();
-        assert_eq!(
-            fs::read(target.join("profiles/server/client/netsgo.db")).unwrap(),
-            database
-        );
+        let migrated = fs::read(target.join("profiles/server/client/netsgo.db"));
+        #[cfg(windows)]
+        if migrated.is_err() {
+            eprintln!("owner: {}", platform::owner().unwrap().id);
+            eprintln!(
+                "{}",
+                String::from_utf8_lossy(
+                    &platform::command("icacls.exe")
+                        .arg(&target)
+                        .arg("/T")
+                        .output()
+                        .unwrap()
+                        .stdout
+                )
+            );
+        }
+        assert_eq!(migrated.unwrap(), database);
         let backup = fs::read_dir(&target)
             .unwrap()
             .map(|entry| entry.unwrap().path())
