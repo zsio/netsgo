@@ -38,11 +38,19 @@ pub struct Manifest {
 
 pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[allow(unused_mut)]
-    let mut command = Command::new(program);
+    let mut command = Command::new(program.as_ref());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
+        // A PowerShell 7 parent can export module paths incompatible with Windows PowerShell.
+        if program
+            .as_ref()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("powershell.exe")
+        {
+            command.env_remove("PSModulePath");
+        }
     }
     command
 }

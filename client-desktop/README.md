@@ -95,10 +95,10 @@ bun scripts/test-desktop-upgrade.mjs /path/to/old-Portable.zip /path/to/new-full
 
 完整更新包同时包含界面、Go client 和后台宿主。启用服务后，更新先请求系统管理员授权替换后台程序并确认启动成功，再交给 Velopack 替换界面。升级失败会恢复原后台程序；停用服务则把配置和凭证迁回桌面数据目录。
 
-真实系统服务安装、升级、失败回滚和停用验证只在一次性的 GitHub Actions runner 执行：手动运行 Release workflow 并勾选 `validate_startup`。本地 Rust 测试只使用临时目录，不修改真实启动项。
+真实系统服务安装、升级、失败回滚、自动重连和停用验证只在一次性的 GitHub Actions runner 执行：手动运行 Release workflow 并勾选 `validate_startup`。桌面版 tag 发布时同样执行，验证通过后才公布桌面更新。本地 Rust 测试只使用临时目录，不修改真实启动项。
 
 ## 边车与核心约束
 
 - 所有认证、重连退避、yamux 数据通道、P2P 打洞以及未来扩展的 `TunnelSpec` 端点（如串口隧道等）均由 `netsgo client` 统一承载，保证 CLI 与桌面端行为严格一致。
-- 边车启动携带 `--control-stdio --log-format json`：当桌面宿主退出或崩溃导致 `stdin` 关闭时，Go 边车自动优雅释放控制连接与 `locks/client.lock`。
+- 边车启动携带 `--control-stdio --log-format json`：当连接宿主（桌面程序或后台服务）退出或崩溃导致 `stdin` 关闭时，Go 边车自动优雅释放控制连接与 `locks/client.lock`。
 - 详情中的持续运行时长表示当前边车进程的运行时间：以 Go 快照为基准，在两次快照之间由本地单调时钟推进；同一进程自动重连时继续累计，重新启动边车时重新计时。

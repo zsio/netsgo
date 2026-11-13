@@ -15,7 +15,11 @@ const windows = process.platform === 'win32';
 assert.ok(windows || process.platform === 'darwin');
 const ext = windows ? '.exe' : '';
 function run(command, args, allowFailure = false) {
-  const result = spawnSync(command, args, { encoding: 'utf8', timeout: 120000 });
+  const env = { ...process.env };
+  if (command === 'powershell.exe') {
+    for (const key of Object.keys(env)) if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  }
+  const result = spawnSync(command, args, { encoding: 'utf8', timeout: 120000, env });
   if (result.error) throw result.error;
   if (result.status !== 0 && !allowFailure) throw new Error(`${command}: ${result.stdout}\n${result.stderr}`);
   return result;
