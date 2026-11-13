@@ -45,10 +45,12 @@ try {
     `-s -w -X netsgo/pkg/version.Current=${tag} -X netsgo/pkg/version.Commit=${commit} -X netsgo/pkg/version.Date=${date}`,
     '-o', path.join(staging, `netsgo${ext}`), './cmd/netsgo'],
   { CGO_ENABLED: '0', GOOS: platform.goos, GOARCH: platform.goarch });
-  run('cargo', ['build', '--release', '--locked', '--target', platform.triple, '-p', 'netsgo-gpui'],
+  run('cargo', ['build', '--release', '--locked', '--target', platform.triple, '-p', 'netsgo-gpui', '-p', 'netsgo-desktop-service', '--bins'],
     { NETSGO_DESKTOP_VERSION: tag }, desktop);
   const executable = `netsgo-desktop${ext}`;
   await cp(path.join(desktop, 'target', platform.triple, 'release', executable), path.join(staging, executable));
+  const service = `netsgo-desktop-service${ext}`;
+  await cp(path.join(desktop, 'target', platform.triple, 'release', service), path.join(staging, service));
 
   const args = ['pack', '--packId', appId, '--packVersion', tag.slice(1), '--packTitle', 'NetsGo',
     '--packAuthors', 'NetsGo', '--mainExe', executable, '--runtime', target,

@@ -213,7 +213,7 @@ pub fn slug_profile_id(server: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionPhase {
     Idle,
     Saved,
@@ -246,7 +246,7 @@ impl ConnectionPhase {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogLine {
     pub timestamp: String,
     pub level: String,
@@ -255,7 +255,7 @@ pub struct LogLine {
 }
 
 /// Independent runtime view for a single server profile.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileSessionView {
     pub profile: ServerProfile,
     pub phase: ConnectionPhase,
@@ -269,7 +269,7 @@ pub struct ProfileSessionView {
 }
 
 /// Aggregate multi-server workspace view consumed by GPUI and the system tray.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SupervisorViewState {
     pub appearance: AppearancePreference,
     pub auto_reconnect_on_launch: bool,
@@ -293,7 +293,7 @@ impl SupervisorViewState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRequest {
     pub profile_id: String,
     pub name: String,
@@ -304,7 +304,7 @@ pub struct StartRequest {
     pub tls_fingerprint: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SupervisorNotification {
     Updated,
     SessionError {
@@ -1271,7 +1271,7 @@ pub fn normalize_server_compare(server: &str) -> String {
     server.trim().trim_end_matches('/').to_string()
 }
 
-fn config_file_path(root_dir: &Path) -> PathBuf {
+pub fn config_file_path(root_dir: &Path) -> PathBuf {
     root_dir.join("desktop-config.json")
 }
 

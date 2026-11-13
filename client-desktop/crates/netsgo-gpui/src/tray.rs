@@ -9,10 +9,11 @@ pub const MENU_ID_UPDATE: &str = "netsgo.check_update";
 pub struct DesktopTray {
     tray: TrayIcon,
     toggle_item: MenuItem,
+    quit_item: MenuItem,
 }
 
 impl DesktopTray {
-    pub fn build(connected_count: usize, total_profiles: usize) -> Option<Self> {
+    pub fn build(connected_count: usize, total_profiles: usize, service_managed: bool) -> Option<Self> {
         let menu = Menu::new();
         let show_item = MenuItem::with_id(MENU_ID_SHOW, "打开 NetsGo 窗口", true, None);
         let (toggle_label, toggle_enabled) =
@@ -22,11 +23,14 @@ impl DesktopTray {
         let separator = PredefinedMenuItem::separator();
         let quit_item = MenuItem::with_id(MENU_ID_QUIT, "退出 NetsGo", true, None);
         let update_item = MenuItem::with_id(MENU_ID_UPDATE, "检查更新…", true, None);
+        let settings_item = MenuItem::with_id("netsgo.settings", "启动设置…", true, None);
+        if service_managed { quit_item.set_text("退出界面（保持后台连接）"); }
 
         let _ = menu.append(&show_item);
         let _ = menu.append(&toggle_item);
         let _ = menu.append(&separator);
         let _ = menu.append(&update_item);
+        let _ = menu.append(&settings_item);
         let _ = menu.append(&quit_item);
 
         let icon = build_status_icon(connected_count > 0)?;
@@ -37,7 +41,7 @@ impl DesktopTray {
             .build()
             .ok()?;
 
-        Some(Self { tray, toggle_item })
+        Some(Self { tray, toggle_item, quit_item })
     }
 
     pub fn sync_summary(
@@ -46,10 +50,12 @@ impl DesktopTray {
         running_count: usize,
         total_profiles: usize,
         total_tunnels: usize,
+        service_managed: bool,
     ) {
         let (label, enabled) = toggle_label(connected_count, running_count, total_profiles);
         self.toggle_item.set_text(label);
         self.toggle_item.set_enabled(enabled);
+        self.quit_item.set_text(if service_managed { "退出界面（保持后台连接）" } else { "退出 NetsGo" });
 
         if let Some(icon) = build_status_icon(connected_count > 0) {
             let _ = self.tray.set_icon(Some(icon));
@@ -73,6 +79,7 @@ pub fn drain_tray_actions() -> Vec<TrayCommand> {
             MENU_ID_CONNECT => actions.push(TrayCommand::ToggleAll),
             MENU_ID_QUIT => actions.push(TrayCommand::Quit),
             MENU_ID_UPDATE => actions.push(TrayCommand::CheckUpdate),
+            "netsgo.settings" => actions.push(TrayCommand::Settings),
             _ => {}
         }
     }
@@ -86,6 +93,7 @@ pub fn drain_tray_actions() -> Vec<TrayCommand> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayCommand {
+    Settings,
     CheckUpdate,
     ShowWindow,
     ToggleAll,

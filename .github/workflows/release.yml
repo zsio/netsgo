@@ -8,8 +8,13 @@ on:
     inputs:
       repair_desktop_tag:
         description: 'Repair the CNB update index for an already published desktop tag'
-        required: true
+        required: false
         type: string
+      validate_startup:
+        description: 'Validate desktop startup services on disposable macOS/Windows runners'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,7 +60,7 @@ jobs:
         run: bun test scripts/desktop-release.test.mjs
 
   repair-desktop-index:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.repair_desktop_tag != ''
     runs-on: ubuntu-latest
     concurrency:
       group: netsgo-release-index
@@ -70,6 +75,42 @@ jobs:
           CNB_USERNAME: ${{ secrets.CNB_USERNAME }}
           CNB_PASSWORD: ${{ secrets.CNB_PASSWORD }}
         run: bun scripts/repair-desktop-index.mjs "$RELEASE_TAG"
+
+  startup-validation:
+    if: github.event_name == 'workflow_dispatch' && inputs.validate_startup
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    env:
+      NETSGO_DESKTOP_VERSION: v0.1.20-beta.4
+      NETSGO_STARTUP_SYSTEM_TEST: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.1'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client-desktop
+      - name: Build service validation binaries
+        shell: bash
+        run: |
+          mkdir -p bin
+          if [ "$RUNNER_OS" = Windows ]; then ext=.exe; else ext=; fi
+          CGO_ENABLED=0 go build -tags dev -trimpath -o "bin/netsgo$ext" ./cmd/netsgo
+          cd client-desktop
+          cargo build --release --locked -p netsgo-desktop-service --bin netsgo-desktop-service
+      - name: Test desktop and background controller
+        working-directory: client-desktop
+        run: cargo test --workspace --locked
+      - name: Validate real system service lifecycle
+        run: bun scripts/test-desktop-startup.mjs
 
   desktop:
     needs: release-gate

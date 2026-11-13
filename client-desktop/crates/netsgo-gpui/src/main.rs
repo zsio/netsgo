@@ -3,6 +3,7 @@
 mod theme_tokens;
 mod tray;
 mod update_ui;
+mod startup_ui;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -22,10 +23,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use netsgo_client_core::{
     default_desktop_data_dir, normalize_server_compare, parse_connect_command,
-    AppearancePreference, ClientSupervisor, ConnectionPhase, ParsedConnectCommand,
+    AppearancePreference, ConnectionPhase, ParsedConnectCommand,
     ProfileSessionView, StartRequest, SupervisorNotification, SupervisorViewState,
 };
 use netsgo_sidecar_proto::{AuthMode, SidecarTunnelSnapshot};
+use netsgo_desktop_service::DesktopSupervisor as ClientSupervisor;
 use netsgo_desktop_updater::{DesktopUpdater, UpdateStatus, UpdateView};
 use theme_tokens::{apply_appearance_preference, brand_logo_image, format_uptime, SurfaceTokens};
 use tray::{drain_tray_actions, DesktopTray, TrayCommand};
@@ -34,6 +36,7 @@ actions!(netsgo_desktop, [QuitApp, RefreshSnapshot]);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DetailMode {
+    Settings,
     Updates,
     /// Selected server's live status, quick controls, and tunnels
     SessionDetail,
@@ -50,6 +53,8 @@ enum OnboardingEntryTab {
 }
 
 struct NetsGoDesktopView {
+    startup_pending: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    startup_feedback: Option<(bool, String)>,
     updater: DesktopUpdater,
     update_state: UpdateView,
     supervisor: ClientSupervisor,
@@ -172,6 +177,8 @@ impl NetsGoDesktopView {
         };
 
         Self {
+            startup_pending: None,
+            startup_feedback: None,
             update_state: updater.view(),
             updater,
             supervisor,
@@ -193,6 +200,10 @@ impl NetsGoDesktopView {
     }
 
     fn reload_from_supervisor(&mut self, cx: &mut Context<Self>) {
+        if let Some(result) = self.startup_pending.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.startup_feedback = Some(match result { Ok(message) => (true, message), Err(error) => (false, error) });
+            self.startup_pending = None;
+        }
         self.state = self.supervisor.view_state();
         self.update_state = self.updater.view();
         cx.notify();
@@ -1992,6 +2003,7 @@ impl Render for NetsGoDesktopView {
                                     .p_5()
                                     .overflow_y_scrollbar()
                                     .child(match (&self.detail_mode, &selected) {
+                                        (DetailMode::Settings, _) => self.render_startup_settings(&tokens, cx).into_any_element(),
                                         (DetailMode::Updates, _) => self.render_updates(&tokens, cx).into_any_element(),
                                         (
                                             DetailMode::AddOrEditServer { editing_profile_id },
@@ -2217,9 +2229,12 @@ fn main() {
     }
     let updater = DesktopUpdater::new();
     let args: Vec<String> = std::env::args().collect();
+    let login_start = args.iter().any(|arg| arg == "--netsgo-autostart");
     let resume_profiles = args.windows(2).find(|pair| pair[0] == "--netsgo-update-resume")
         .and_then(|pair| serde_json::from_str::<Vec<String>>(&pair[1]).ok());
     let data_dir = default_desktop_data_dir();
+    let Some(instance) = netsgo_desktop_service::GuiInstance::claim(&data_dir, !login_start).expect("failed to claim desktop instance") else { return; };
+    let instance = std::sync::Arc::new(instance);
     let (supervisor, notify_rx) =
         ClientSupervisor::new(data_dir).expect("failed to initialize NetsGo desktop supervisor");
 
@@ -2231,21 +2246,22 @@ fn main() {
             let initial = supervisor.view_state();
             apply_appearance_preference(initial.appearance, None, cx);
 
-            let tray = DesktopTray::build(initial.connected_count, initial.sessions.len());
+            let tray = DesktopTray::build(initial.connected_count, initial.sessions.len(), supervisor.is_service_managed());
 
             let window_slot: MainWindowSlot = Rc::new(RefCell::new(None));
-            ensure_main_window(&window_slot, &supervisor, &updater, cx);
+            if !login_start || tray.is_none() { ensure_main_window(&window_slot, &supervisor, &updater, cx); }
 
             let sup_for_quit = supervisor.clone();
             cx.on_app_quit(move |_| {
                 let sup = sup_for_quit.clone();
                 async move {
-                    let _ = sup.disconnect_all();
+                    let _ = sup.shutdown_ui();
                 }
             })
             .detach();
 
-            if let Some(ids) = resume_profiles {
+            if !supervisor.is_service_managed() {
+              if let Some(ids) = resume_profiles {
                 let sup_resume = supervisor.clone();
                 cx.background_executor().spawn(async move {
                     for id in ids { let _ = sup_resume.reconnect_profile(&id); }
@@ -2257,6 +2273,7 @@ fn main() {
                         sup_auto.reconnect_all_saved();
                     })
                     .detach();
+            }
             }
 
             let sup_poll = supervisor.clone();
@@ -2288,7 +2305,8 @@ fn main() {
                         }
                     }
 
-                    let tray_cmds = drain_tray_actions();
+                    let mut tray_cmds = drain_tray_actions();
+                    if instance.take_activation() { tray_cmds.push(TrayCommand::ShowWindow); }
                     if dirty || !tray_cmds.is_empty() || tick.is_multiple_of(12) {
                         let should_quit = cx.update(|cx| {
                             let update = updater.view();
@@ -2329,6 +2347,12 @@ fn main() {
                                             view.update(cx, |this, cx| { this.detail_mode = DetailMode::Updates; cx.notify(); });
                                         }
                                     }
+                                    TrayCommand::Settings => {
+                                        ensure_main_window(&slot_poll, &sup_poll, &updater, cx);
+                                        if let Some((_, view)) = slot_poll.borrow().as_ref() {
+                                            view.update(cx, |this, cx| { this.detail_mode = DetailMode::Settings; cx.notify(); });
+                                        }
+                                    }
                                     TrayCommand::ToggleAll => {
                                         let s = sup_poll.clone();
                                         if s.has_any_running() {
@@ -2358,6 +2382,7 @@ fn main() {
                                     latest.running_count,
                                     latest.sessions.len(),
                                     latest.total_tunnels,
+                                    sup_poll.is_service_managed(),
                                 );
                             }
 
@@ -2372,7 +2397,7 @@ fn main() {
 
                         if should_quit {
                             let sup = sup_poll.clone();
-                            cx.background_executor().spawn(async move { let _ = sup.disconnect_all(); }).await;
+                            cx.background_executor().spawn(async move { let _ = sup.shutdown_ui(); }).await;
                             cx.update(|cx| cx.quit());
                             return;
                         }

@@ -72,7 +72,7 @@ build-client-desktop-sidecar:
 
 build-client-desktop: build-client-desktop-sidecar
 	@echo "🖥️  构建 GPUI client-desktop..."
-	cd client-desktop && NETSGO_DESKTOP_VERSION="$(VERSION)" cargo build --release --locked -p netsgo-gpui
+	cd client-desktop && NETSGO_DESKTOP_VERSION="$(VERSION)" cargo build --release --locked -p netsgo-gpui -p netsgo-desktop-service --bins
 	@echo "✅ client-desktop 构建完成: client-desktop/target/release/netsgo-desktop"
 
 dev-client-desktop: build-client-desktop-sidecar

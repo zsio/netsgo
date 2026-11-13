@@ -21,10 +21,10 @@ impl NetsGoDesktopView {
         } else {
             tokens.text_muted
         };
-        div().pt_2().border_t_1().border_color(tokens.border).child(
+        h_flex().gap_1().pt_2().border_t_1().border_color(tokens.border).child(
             h_flex()
                 .id("desktop-version")
-                .w_full()
+                .flex_1().min_w_0()
                 .px_2()
                 .py_2()
                 .rounded(px(7.))
@@ -54,7 +54,8 @@ impl NetsGoDesktopView {
                         .text_color(color)
                         .child(label),
                 ),
-        )
+        ).child(Button::new("desktop-settings").label("设置").small()
+            .on_click(cx.listener(|this, _, _, cx| { this.detail_mode = DetailMode::Settings; cx.notify(); })))
     }
 
     pub(super) fn render_updates(
@@ -190,8 +191,10 @@ impl NetsGoDesktopView {
                                             .disabled(update.status.busy())
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 if this.update_state.downloaded {
+                                                    let service = this.supervisor.clone();
                                                     this.updater.install(
                                                         this.supervisor.running_profile_ids(),
+                                                        move |package| service.update_for_app(package),
                                                     );
                                                 } else {
                                                     this.updater.download();

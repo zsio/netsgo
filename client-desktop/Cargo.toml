@@ -5,6 +5,7 @@ members = [
     "crates/netsgo-client-core",
     "crates/netsgo-gpui",
     "crates/netsgo-desktop-updater",
+    "crates/netsgo-desktop-service",
 ]
 
 [workspace.package]

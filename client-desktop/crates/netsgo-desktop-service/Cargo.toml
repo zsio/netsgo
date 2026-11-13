@@ -1,0 +1,29 @@
+[package]
+name = "netsgo-desktop-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+netsgo-client-core = { path = "../netsgo-client-core" }
+getrandom = "0.3"
+subtle = "2"
+fs2 = "0.4"
+ctrlc = { version = "3", features = ["termination"] }
+tempfile = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+winreg = "0.55"
+
+[[bin]]
+name = "netsgo-desktop-service"
+path = "src/main.rs"

@@ -208,7 +208,7 @@ impl DesktopUpdater {
     }
 
     /// Arm the external installer first. The GUI shuts down sidecars and quits only after Restarting.
-    pub fn install(&self, resume_profiles: Vec<String>) {
+    pub fn install(&self, resume_profiles: Vec<String>, prepare_service: impl FnOnce(&std::path::Path) -> Result<()> + Send + 'static) {
         let prepared = {
             let mut state = self.0.lock().unwrap();
             if state.view.status.busy() {
@@ -225,6 +225,8 @@ impl DesktopUpdater {
         thread::spawn(move || {
             let result = (|| -> Result<()> {
                 // Recheck even cached packages immediately before execution.
+                verify_file(&prepared.path, &prepared.info.TargetFullRelease)?;
+                prepare_service(&prepared.path)?;
                 verify_file(&prepared.path, &prepared.info.TargetFullRelease)?;
                 let args = vec![
                     "--netsgo-update-resume".to_owned(),

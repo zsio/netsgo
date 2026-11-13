@@ -20,3 +20,4 @@ serde.workspace = true
 serde_json.workspace = true
 netsgo-desktop-updater = { path = "../netsgo-desktop-updater" }
 velopack.workspace = true
+netsgo-desktop-service = { path = "../netsgo-desktop-service" }
