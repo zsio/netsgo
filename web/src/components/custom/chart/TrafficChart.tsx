@@ -45,12 +45,11 @@ const RANGE_OPTIONS: Array<{ value: ClientTrafficRange; label: string }> = [
 ];
 
 const PALETTE = [
-  '#10b981', // emerald
-  '#0ea5e9', // sky
-  '#8b5cf6', // violet
-  '#f59e0b', // amber
-  '#ec4899', // pink
-  '#14b8a6', // teal
+  'var(--chart-1)', // brand amber-orange
+  'var(--chart-2)', // warm teal
+  'var(--chart-3)', // solar gold
+  'var(--chart-4)', // sage green
+  'var(--chart-5)', // terracotta coral
 ] as const;
 
 const RANGE_CHART_CONFIG: Partial<
@@ -286,7 +285,7 @@ export function TrafficChart({ scope, clientId, tunnels }: TrafficChartProps) {
             </div>
           ) : null}
 
-          <div className="inline-flex items-center rounded-lg border border-border/65 bg-muted/50 p-0.5">
+          <div className="inline-flex items-center rounded-lg border border-border/70 bg-muted/55 p-0.5">
             {RANGE_OPTIONS.map((option) => {
               const active = option.value === range;
               return (
@@ -298,7 +297,7 @@ export function TrafficChart({ scope, clientId, tunnels }: TrafficChartProps) {
                   className={cn(
                     'rounded-md px-2.5 py-1 font-mono text-xs font-medium transition-all',
                     active
-                      ? 'bg-background text-foreground shadow-2xs'
+                      ? 'bg-card text-brand-strong shadow-2xs ring-1 ring-brand-soft-border/80'
                       : 'text-muted-foreground hover:text-foreground',
                   )}
                 >

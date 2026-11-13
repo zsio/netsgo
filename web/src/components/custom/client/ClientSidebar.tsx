@@ -71,7 +71,8 @@ const THEME_LABEL_KEYS: Record<ThemePreference, string> = {
 
 const DOCS_URL = 'https://netsgo.zs.uy';
 
-const NAV_ITEM_CLASS = 'rounded-md font-medium text-muted-foreground hover:text-foreground';
+const NAV_ITEM_CLASS =
+  'rounded-md font-medium text-muted-foreground hover:text-foreground data-[active=true]:bg-brand-soft data-[active=true]:text-brand-strong data-[active=true]:[&_svg]:text-primary';
 const SIDEBAR_SEARCH_THRESHOLD = 10;
 const SIDEBAR_COLLAPSE_LIMIT = 50;
 const SIDEBAR_PING_LIMIT = 20;
@@ -100,12 +101,12 @@ const ClientSidebarMenuItem = memo(function ClientSidebarMenuItem({
   const statusDot = isOnline ? (
     <span className="relative flex h-2 w-2 shrink-0">
       {enablePing && (
-        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-status-online opacity-65" />
       )}
-      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+      <span className="relative inline-flex rounded-full h-2 w-2 bg-status-online" />
     </span>
   ) : (
-    <span className="h-2 w-2 rounded-full bg-muted-foreground/50 shrink-0" />
+    <span className="h-2 w-2 rounded-full bg-muted-foreground/45 shrink-0" />
   );
 
   return (
@@ -466,7 +467,7 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
                       tooltip={principal.username}
                       className="rounded-lg px-2 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
                     >
-                      <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/12 text-xs font-semibold uppercase text-primary">
+                      <div className="flex size-7 shrink-0 items-center justify-center rounded-md border border-brand-soft-border bg-brand-soft text-xs font-semibold uppercase text-brand-strong">
                         {principal.username.slice(0, 1) || 'U'}
                       </div>
                       <div className="grid flex-1 text-left text-sm leading-tight">
@@ -488,7 +489,7 @@ export function ClientSidebar({ scope, clients, isLoading }: ClientSidebarProps)
                   >
                     <DropdownMenuLabel className="p-0 font-normal">
                       <div className="flex items-center gap-2.5 px-2.5 py-2 text-left text-sm">
-                        <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/12 text-xs font-semibold uppercase text-primary">
+                        <div className="flex size-7 shrink-0 items-center justify-center rounded-md border border-brand-soft-border bg-brand-soft text-xs font-semibold uppercase text-brand-strong">
                           {principal.username.slice(0, 1) || 'U'}
                         </div>
                         <div className="grid flex-1 text-left text-sm leading-tight">

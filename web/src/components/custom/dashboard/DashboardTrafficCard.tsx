@@ -174,8 +174,8 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
 
   const chartConfig = useMemo<ChartConfig>(
     () => ({
-      outRate: { label: t('traffic.outbound'), color: '#0ea5e9' },
-      negInRate: { label: t('traffic.inbound'), color: '#10b981' },
+      outRate: { label: t('traffic.outbound'), color: 'var(--flow-up)' },
+      negInRate: { label: t('traffic.inbound'), color: 'var(--flow-down)' },
     }),
     [t],
   );
@@ -194,9 +194,9 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
   return (
     <section className="flex h-full min-h-[316px] flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-2xs">
       {/* 卡片头部 */}
-      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-4 py-2.5 sm:px-5">
+      <div className="flex items-center justify-between gap-2 border-b border-border/60 px-4 py-2.5 sm:px-5">
         <div className="flex items-center gap-2.5">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/60 text-foreground">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-brand-soft-border bg-brand-soft text-brand-strong">
             <Activity className="size-4" />
           </span>
           <h3 className="text-sm font-semibold text-foreground">
@@ -204,7 +204,7 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
           </h3>
         </div>
 
-        <div className="inline-flex items-center rounded-lg border border-border/60 bg-muted/45 p-0.5">
+        <div className="inline-flex items-center rounded-lg border border-border/70 bg-muted/55 p-0.5">
           {RANGE_OPTIONS.map((option) => {
             const active = option.value === range;
             return (
@@ -219,7 +219,7 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
                 className={cn(
                   'rounded-md px-2 py-0.5 font-mono text-[11px] font-medium transition-colors',
                   active
-                    ? 'bg-background text-foreground shadow-2xs'
+                    ? 'bg-card text-brand-strong shadow-2xs ring-1 ring-brand-soft-border/80'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -234,14 +234,14 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 pt-2.5 pb-0.5 text-xs sm:px-5">
         <div className="flex items-center gap-4">
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-sky-500" />
+            <span className="size-2 rounded-full bg-flow-up" />
             <span className="text-muted-foreground">↑ {t('traffic.outbound')}</span>
             <span className="font-mono font-semibold tabular-nums text-foreground">
               {formatTrafficRate(summary.headlineOutRate)}
             </span>
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-emerald-500" />
+            <span className="size-2 rounded-full bg-flow-down" />
             <span className="text-muted-foreground">↓ {t('traffic.inbound')}</span>
             <span className="font-mono font-semibold tabular-nums text-foreground">
               {formatTrafficRate(summary.headlineInRate)}
@@ -260,7 +260,7 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
         </div>
       </div>
 
-      {/* 上下行 Y 轴镜像对称波形（+Y 上行天青向上，-Y 下行翠绿向下） */}
+      {/* 上下行 Y 轴镜像对称波形（+Y 上行暖橙向上，-Y 下行青绿向下） */}
       {isHistoryPending ? (
         <div className="flex flex-1 items-center justify-center px-4 py-3 sm:px-5">
           <Skeleton className="h-[212px] w-full rounded-lg" />
@@ -269,13 +269,13 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
         <div className="relative flex min-h-[218px] min-w-0 flex-1 flex-col justify-end px-2 pt-1 pb-2.5 sm:px-3">
           <span
             aria-hidden
-            className="pointer-events-none absolute top-2 right-5 z-10 font-mono text-[10px] font-medium text-sky-600/80 dark:text-sky-400/80"
+            className="pointer-events-none absolute top-2 right-5 z-10 font-mono text-[10px] font-medium text-flow-up-fg/85"
           >
             ↑ {t('traffic.outbound')}
           </span>
           <span
             aria-hidden
-            className="pointer-events-none absolute right-5 bottom-8 z-10 font-mono text-[10px] font-medium text-emerald-600/80 dark:text-emerald-400/80"
+            className="pointer-events-none absolute right-5 bottom-8 z-10 font-mono text-[10px] font-medium text-flow-down-fg/85"
           >
             ↓ {t('traffic.inbound')}
           </span>
@@ -285,14 +285,14 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
               <AreaChart data={summary.series} margin={{ top: 10, right: 14, left: 2, bottom: 0 }}>
                 <defs>
                   <linearGradient id={outGradId} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#0ea5e9" stopOpacity={0.34} />
-                    <stop offset="72%" stopColor="#0ea5e9" stopOpacity={0.08} />
-                    <stop offset="100%" stopColor="#0ea5e9" stopOpacity={0.01} />
+                    <stop offset="0%" stopColor="var(--flow-up)" stopOpacity={0.32} />
+                    <stop offset="72%" stopColor="var(--flow-up)" stopOpacity={0.08} />
+                    <stop offset="100%" stopColor="var(--flow-up)" stopOpacity={0.01} />
                   </linearGradient>
                   <linearGradient id={inGradId} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#10b981" stopOpacity={0.01} />
-                    <stop offset="28%" stopColor="#10b981" stopOpacity={0.08} />
-                    <stop offset="100%" stopColor="#10b981" stopOpacity={0.34} />
+                    <stop offset="0%" stopColor="var(--flow-down)" stopOpacity={0.01} />
+                    <stop offset="28%" stopColor="var(--flow-down)" stopOpacity={0.08} />
+                    <stop offset="100%" stopColor="var(--flow-down)" stopOpacity={0.3} />
                   </linearGradient>
                   <filter id={glowId} x="-10%" y="-20%" width="120%" height="140%">
                     <feGaussianBlur stdDeviation="1.4" result="blur" />
@@ -338,8 +338,8 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
                 {/* 中心 0 速率基准线 */}
                 <ReferenceLine
                   y={0}
-                  stroke={hasAnyTraffic ? 'var(--foreground)' : '#10b981'}
-                  strokeOpacity={hasAnyTraffic ? 0.2 : 0.38}
+                  stroke={hasAnyTraffic ? 'var(--foreground)' : 'var(--flow-up)'}
+                  strokeOpacity={hasAnyTraffic ? 0.18 : 0.34}
                   strokeWidth={1}
                 />
 
@@ -347,7 +347,7 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
                 {range === '60s' && lastPoint ? (
                   <ReferenceLine
                     x={lastPoint.timestamp}
-                    stroke="#10b981"
+                    stroke="var(--flow-up)"
                     strokeOpacity={0.22}
                     strokeDasharray="2 2"
                   />
@@ -387,7 +387,7 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
                   type="monotone"
                   dataKey="outRate"
                   baseValue={0}
-                  stroke="#0ea5e9"
+                  stroke="var(--flow-up)"
                   strokeOpacity={summary.peakOutRate > 0 ? 1 : 0}
                   fill={`url(#${outGradId})`}
                   strokeWidth={1.85}
@@ -401,7 +401,7 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
                   type="monotone"
                   dataKey="negInRate"
                   baseValue={0}
-                  stroke="#10b981"
+                  stroke="var(--flow-down)"
                   strokeOpacity={summary.peakInRate > 0 ? 1 : 0}
                   fill={`url(#${inGradId})`}
                   strokeWidth={1.85}
@@ -417,7 +417,7 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
                     x={lastPoint.timestamp}
                     y={lastPoint.negInRate}
                     r={3}
-                    fill="#10b981"
+                    fill={lastPoint.inRate > 0 ? 'var(--flow-down)' : 'var(--flow-up)'}
                     stroke="var(--background)"
                     strokeWidth={1.5}
                   />
@@ -427,7 +427,7 @@ export function DashboardTrafficCard({ scope }: { scope: ResourceScope }) {
                     x={lastPoint.timestamp}
                     y={lastPoint.outRate}
                     r={3}
-                    fill="#0ea5e9"
+                    fill="var(--flow-up)"
                     stroke="var(--background)"
                     strokeWidth={1.5}
                   />

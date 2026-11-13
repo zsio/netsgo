@@ -22,16 +22,16 @@ const MAX_VISIBLE_ITEMS = 5;
 
 function SeverityIndicator({ severity }: { severity: ActivitySeverity }) {
   if (severity === 'error') {
-    return <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-rose-500" strokeWidth={2.2} />;
+    return <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-status-danger" strokeWidth={2.2} />;
   }
   if (severity === 'warning') {
-    return <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" strokeWidth={2.2} />;
+    return <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-status-warning" strokeWidth={2.2} />;
   }
   return (
     <span
       className={cn(
         'mt-1.5 size-2 shrink-0 rounded-full',
-        severity === 'info' ? 'bg-emerald-500/85' : 'bg-muted-foreground/45',
+        severity === 'info' ? 'bg-primary/80' : 'bg-muted-foreground/45',
       )}
     />
   );

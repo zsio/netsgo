@@ -87,8 +87,8 @@ export function TrafficRateChart({ scope, clientId, tunnelFilter }: TrafficRateC
   const gradientPrefix = useId().replace(/:/g, '');
   const chartConfig = useMemo<ChartConfig>(
     () => ({
-      outRate: { label: t('traffic.outbound'), color: '#0ea5e9' },
-      negInRate: { label: t('traffic.inbound'), color: '#10b981' },
+      outRate: { label: t('traffic.outbound'), color: 'var(--flow-up)' },
+      negInRate: { label: t('traffic.inbound'), color: 'var(--flow-down)' },
     }),
     [t],
   );
@@ -126,14 +126,14 @@ export function TrafficRateChart({ scope, clientId, tunnelFilter }: TrafficRateC
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1 text-xs">
         <div className="flex items-center gap-4">
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-sky-500" />
+            <span className="size-2 rounded-full bg-flow-up" />
             <span className="text-muted-foreground">↑ {t('dashboard.realtimeAvgOutbound')}</span>
             <span className="font-mono font-semibold tabular-nums text-foreground">
               {formatTrafficRate(stats.avgOut)}
             </span>
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-emerald-500" />
+            <span className="size-2 rounded-full bg-flow-down" />
             <span className="text-muted-foreground">↓ {t('dashboard.realtimeAvgInbound')}</span>
             <span className="font-mono font-semibold tabular-nums text-foreground">
               {formatTrafficRate(stats.avgIn)}
@@ -152,17 +152,17 @@ export function TrafficRateChart({ scope, clientId, tunnelFilter }: TrafficRateC
         </div>
       </div>
 
-      {/* 上下行 Y 轴镜像对称波形（+Y 上行向上，-Y 下行向下） */}
+      {/* 上下行 Y 轴镜像对称波形（+Y 上行暖橙向上，-Y 下行青绿向下） */}
       <div className="relative h-72 min-w-0 w-full">
         <span
           aria-hidden
-          className="pointer-events-none absolute top-1.5 right-3 z-10 font-mono text-[10px] font-medium text-sky-600/80 dark:text-sky-400/80"
+          className="pointer-events-none absolute top-1.5 right-3 z-10 font-mono text-[10px] font-medium text-flow-up-fg/85"
         >
           ↑ {t('traffic.outbound')}
         </span>
         <span
           aria-hidden
-          className="pointer-events-none absolute right-3 bottom-8 z-10 font-mono text-[10px] font-medium text-emerald-600/80 dark:text-emerald-400/80"
+          className="pointer-events-none absolute right-3 bottom-8 z-10 font-mono text-[10px] font-medium text-flow-down-fg/85"
         >
           ↓ {t('traffic.inbound')}
         </span>
@@ -171,14 +171,14 @@ export function TrafficRateChart({ scope, clientId, tunnelFilter }: TrafficRateC
           <AreaChart data={stats.series} margin={{ top: 10, right: 12, left: 2, bottom: 4 }}>
             <defs>
               <linearGradient id={outGradId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#0ea5e9" stopOpacity={0.34} />
-                <stop offset="72%" stopColor="#0ea5e9" stopOpacity={0.08} />
-                <stop offset="100%" stopColor="#0ea5e9" stopOpacity={0.01} />
+                <stop offset="0%" stopColor="var(--flow-up)" stopOpacity={0.32} />
+                <stop offset="72%" stopColor="var(--flow-up)" stopOpacity={0.08} />
+                <stop offset="100%" stopColor="var(--flow-up)" stopOpacity={0.01} />
               </linearGradient>
               <linearGradient id={inGradId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#10b981" stopOpacity={0.01} />
-                <stop offset="28%" stopColor="#10b981" stopOpacity={0.08} />
-                <stop offset="100%" stopColor="#10b981" stopOpacity={0.34} />
+                <stop offset="0%" stopColor="var(--flow-down)" stopOpacity={0.01} />
+                <stop offset="28%" stopColor="var(--flow-down)" stopOpacity={0.08} />
+                <stop offset="100%" stopColor="var(--flow-down)" stopOpacity={0.3} />
               </linearGradient>
             </defs>
             <CartesianGrid
@@ -212,8 +212,8 @@ export function TrafficRateChart({ scope, clientId, tunnelFilter }: TrafficRateC
             />
             <ReferenceLine
               y={0}
-              stroke={hasAnyTraffic ? 'var(--foreground)' : '#10b981'}
-              strokeOpacity={hasAnyTraffic ? 0.2 : 0.38}
+              stroke={hasAnyTraffic ? 'var(--foreground)' : 'var(--flow-up)'}
+              strokeOpacity={hasAnyTraffic ? 0.18 : 0.34}
               strokeWidth={1}
             />
             <ChartTooltip
@@ -249,7 +249,7 @@ export function TrafficRateChart({ scope, clientId, tunnelFilter }: TrafficRateC
               type="monotone"
               dataKey="outRate"
               baseValue={0}
-              stroke="#0ea5e9"
+              stroke="var(--flow-up)"
               strokeOpacity={stats.peakOut > 0 ? 1 : 0}
               fill={`url(#${outGradId})`}
               strokeWidth={1.85}
@@ -261,7 +261,7 @@ export function TrafficRateChart({ scope, clientId, tunnelFilter }: TrafficRateC
               type="monotone"
               dataKey="negInRate"
               baseValue={0}
-              stroke="#10b981"
+              stroke="var(--flow-down)"
               strokeOpacity={stats.peakIn > 0 ? 1 : 0}
               fill={`url(#${inGradId})`}
               strokeWidth={1.85}

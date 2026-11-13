@@ -80,20 +80,20 @@ export function ServerHubCard({
       className={cn(
         'relative z-10 rounded-xl border bg-card p-3.5 shadow-2xs transition-all duration-200',
         highlighted
-          ? 'border-foreground/45 ring-2 ring-foreground/8'
-          : 'border-border/75 hover:border-foreground/30',
+          ? 'border-primary/55 ring-2 ring-brand-soft'
+          : 'border-border/80 hover:border-brand-soft-border',
         dimmed && 'opacity-40',
       )}
     >
       <PortSocket
         portKey="server-out"
         side="right"
-        borderClass={onlineClientCount > 0 ? 'border-emerald-500' : 'border-zinc-400 dark:border-zinc-500'}
+        borderClass={highlighted ? 'border-primary' : onlineClientCount > 0 ? 'border-status-online' : 'border-muted-foreground/55'}
         highlighted={highlighted}
       />
 
       <div className="flex items-start gap-2.5">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-brand-soft-border bg-brand-soft text-brand-strong">
           <ServerIcon className="size-4" strokeWidth={1.85} />
         </span>
         <div className="min-w-0 flex-1">
@@ -101,8 +101,8 @@ export function ServerHubCard({
             <span className="truncate text-xs font-semibold text-foreground">
               {t('dashboard.topologyServerHub')}
             </span>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-status-online-border bg-status-online-soft px-2 py-0.5 text-[10px] font-medium text-status-online-fg">
+              <span className="size-1.5 rounded-full bg-status-online" />
               {t('dashboard.topologyServerOnline')}
             </span>
           </div>
@@ -170,15 +170,15 @@ export function PeerIngressCard({
         'relative z-10 cursor-pointer rounded-xl border bg-card text-left shadow-2xs transition-all duration-200',
         compact ? 'px-3 py-2' : 'px-3.5 py-2.5',
         focused || highlighted
-          ? 'border-foreground/45 ring-2 ring-foreground/8'
-          : 'border-border/75 hover:border-foreground/30',
+          ? 'border-primary/55 ring-2 ring-brand-soft'
+          : 'border-border/80 hover:border-brand-soft-border',
         dimmed && 'opacity-40',
       )}
     >
       <PortSocket
         portKey={`peer-out:${node.id}`}
         side="right"
-        borderClass={node.online ? 'border-emerald-500' : 'border-amber-500'}
+        borderClass={highlighted || focused ? 'border-primary' : node.online ? 'border-status-online' : 'border-status-warning'}
         highlighted={highlighted || focused}
       />
 
@@ -186,7 +186,7 @@ export function PeerIngressCard({
         <span
           className={cn(
             'size-2 shrink-0 rounded-full',
-            node.online ? 'bg-emerald-500' : 'bg-zinc-400 dark:bg-zinc-500',
+            node.online ? 'bg-status-online' : 'bg-muted-foreground/50',
           )}
         />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
@@ -246,13 +246,13 @@ export function TunnelRouteCard({
         'relative z-10 flex cursor-pointer flex-col rounded-xl border bg-card text-left shadow-2xs transition-all duration-200',
         compact ? 'gap-1 px-3 py-2' : 'gap-1.5 px-3.5 py-2.5',
         highlighted
-          ? 'border-foreground/45 ring-2 ring-foreground/8'
-          : 'border-border/75 hover:border-foreground/30',
+          ? 'border-primary/55 ring-2 ring-brand-soft'
+          : 'border-border/80 hover:border-brand-soft-border',
         dimmed && 'opacity-35',
       )}
     >
-      <PortSocket portKey={route.routeInPortKey} side="left" borderClass={portBorder} highlighted={highlighted} />
-      <PortSocket portKey={route.routeOutPortKey} side="right" borderClass={portBorder} highlighted={highlighted} />
+      <PortSocket portKey={route.routeInPortKey} side="left" borderClass={highlighted ? 'border-primary' : portBorder} highlighted={highlighted} />
+      <PortSocket portKey={route.routeOutPortKey} side="right" borderClass={highlighted ? 'border-primary' : portBorder} highlighted={highlighted} />
 
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="shrink-0 rounded-md border border-border/70 bg-muted/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase leading-none text-foreground/85">
@@ -287,18 +287,18 @@ export function TunnelRouteCard({
         </span>
 
         {active ? (
-          <span className="ml-auto inline-flex shrink-0 items-center gap-2 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-            <span className="inline-flex items-center gap-0.5">
+          <span className="ml-auto inline-flex shrink-0 items-center gap-2 text-[10px] font-medium">
+            <span className="inline-flex items-center gap-0.5 text-flow-down-fg">
               <ArrowDown className="size-2.5" />
               {formatNetSpeed(rate.ingressBps)}
             </span>
-            <span className="inline-flex items-center gap-0.5">
+            <span className="inline-flex items-center gap-0.5 text-flow-up-fg">
               <ArrowUp className="size-2.5" />
               {formatNetSpeed(rate.egressBps)}
             </span>
           </span>
         ) : edge.status.key === 'error' && edge.status.description ? (
-          <span className="ml-auto max-w-[160px] truncate font-sans text-[10px] text-rose-600 dark:text-rose-400" title={edge.status.description}>
+          <span className="ml-auto max-w-[160px] truncate font-sans text-[10px] text-status-danger-fg" title={edge.status.description}>
             {edge.status.description}
           </span>
         ) : null}
@@ -346,13 +346,13 @@ export function TunnelBundleCard({
         'group relative z-10 flex cursor-pointer flex-col rounded-xl border bg-card text-left shadow-2xs transition-all duration-200',
         compact ? 'gap-1 px-3 py-2' : 'gap-1.5 px-3.5 py-2.5',
         highlighted
-          ? 'border-foreground/45 ring-2 ring-foreground/8'
-          : 'border-border/75 hover:border-foreground/30',
+          ? 'border-primary/55 ring-2 ring-brand-soft'
+          : 'border-border/80 hover:border-brand-soft-border',
         dimmed && 'opacity-35',
       )}
     >
-      <PortSocket portKey={bundle.routeInPortKey} side="left" borderClass={portBorder} highlighted={highlighted} />
-      <PortSocket portKey={bundle.routeOutPortKey} side="right" borderClass={portBorder} highlighted={highlighted} />
+      <PortSocket portKey={bundle.routeInPortKey} side="left" borderClass={highlighted ? 'border-primary' : portBorder} highlighted={highlighted} />
+      <PortSocket portKey={bundle.routeOutPortKey} side="right" borderClass={highlighted ? 'border-primary' : portBorder} highlighted={highlighted} />
 
       <div className="flex min-w-0 items-center gap-1.5">
         <Layers className="size-3.5 shrink-0 text-muted-foreground" />
@@ -375,8 +375,8 @@ export function TunnelBundleCard({
 
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {bundle.errorCount > 0 ? (
-            <span className="inline-flex items-center gap-1 text-[10.5px] font-medium text-rose-600 dark:text-rose-400">
-              <span className="size-1.5 rounded-full bg-rose-500" />
+            <span className="inline-flex items-center gap-1 text-[10.5px] font-medium text-status-danger-fg">
+              <span className="size-1.5 rounded-full bg-status-danger" />
               {t('dashboard.topologyBundleErrors', { count: bundle.errorCount })}
             </span>
           ) : (
@@ -409,12 +409,12 @@ export function TunnelBundleCard({
         ) : null}
 
         {active ? (
-          <span className="ml-auto inline-flex shrink-0 items-center gap-2 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-            <span className="inline-flex items-center gap-0.5">
+          <span className="ml-auto inline-flex shrink-0 items-center gap-2 text-[10px] font-medium">
+            <span className="inline-flex items-center gap-0.5 text-flow-down-fg">
               <ArrowDown className="size-2.5" />
               {formatNetSpeed(bundle.totalRate.ingressBps)}
             </span>
-            <span className="inline-flex items-center gap-0.5">
+            <span className="inline-flex items-center gap-0.5 text-flow-up-fg">
               <ArrowUp className="size-2.5" />
               {formatNetSpeed(bundle.totalRate.egressBps)}
             </span>
@@ -437,7 +437,7 @@ export function ControlBridgeCard({
   hasOnlineClient: boolean;
 }) {
   const { t } = useTranslation();
-  const socketClass = hasOnlineClient ? 'border-emerald-500' : 'border-zinc-400 dark:border-zinc-500';
+  const socketClass = hasOnlineClient ? 'border-status-online' : 'border-muted-foreground/55';
 
   return (
     <div className="relative z-10 rounded-xl border border-dashed border-border/90 bg-card/90 px-4 py-3.5 shadow-2xs">
@@ -448,7 +448,7 @@ export function ControlBridgeCard({
         <span
           className={cn(
             'size-2 shrink-0 rounded-full',
-            hasOnlineClient ? 'bg-emerald-500' : 'bg-zinc-400 dark:bg-zinc-500',
+            hasOnlineClient ? 'bg-status-online' : 'bg-muted-foreground/50',
           )}
         />
         <span className="text-xs font-semibold text-foreground">
@@ -494,7 +494,11 @@ export function IdleControlRow({
   onHover: (hovering: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const socketClass = hasOnlineUnrouted ? 'border-emerald-500/75' : 'border-zinc-400 dark:border-zinc-500';
+  const socketClass = highlighted
+    ? 'border-primary'
+    : hasOnlineUnrouted
+      ? 'border-status-online/80'
+      : 'border-muted-foreground/55';
 
   return (
     <div
@@ -502,7 +506,7 @@ export function IdleControlRow({
       onMouseLeave={() => onHover(false)}
       className={cn(
         'relative z-10 flex items-center justify-between gap-2 rounded-xl border border-dashed bg-card/75 px-3.5 py-2 transition-all duration-200',
-        highlighted ? 'border-foreground/40' : 'border-border/75',
+        highlighted ? 'border-primary/50 bg-brand-soft/40' : 'border-border/75',
         dimmed && 'opacity-35',
       )}
     >
@@ -513,7 +517,7 @@ export function IdleControlRow({
         <span
           className={cn(
             'size-1.5 rounded-full',
-            hasOnlineUnrouted ? 'bg-emerald-500/80' : 'bg-zinc-400 dark:bg-zinc-500',
+            hasOnlineUnrouted ? 'bg-status-online/85' : 'bg-muted-foreground/50',
           )}
         />
         {t('dashboard.topologyIdleControlTitle')}
@@ -575,17 +579,17 @@ export function ClientNodeCard({
         'relative z-10 flex cursor-pointer flex-col rounded-xl border bg-card text-left shadow-2xs transition-all duration-200',
         compact ? 'gap-1 px-3 py-2' : 'gap-2 p-3.5',
         focused
-          ? 'border-foreground/55 ring-2 ring-foreground/10'
+          ? 'border-primary/65 ring-2 ring-brand-soft'
           : highlighted
-            ? 'border-foreground/40 ring-2 ring-foreground/8'
-            : 'border-border/75 hover:border-foreground/30',
+            ? 'border-primary/50 ring-2 ring-brand-soft'
+            : 'border-border/80 hover:border-brand-soft-border',
         dimmed && 'opacity-35',
       )}
     >
       <PortSocket
         portKey={`client-in:${node.id}`}
         side="left"
-        borderClass={node.online ? 'border-emerald-500' : 'border-zinc-400 dark:border-zinc-500'}
+        borderClass={focused || highlighted ? 'border-primary' : node.online ? 'border-status-online' : 'border-muted-foreground/55'}
         highlighted={focused || highlighted}
       />
 
@@ -594,8 +598,8 @@ export function ClientNodeCard({
           className={cn(
             'size-2 shrink-0 rounded-full',
             node.online
-              ? 'bg-emerald-500 ring-3 ring-emerald-500/15'
-              : 'bg-zinc-400 dark:bg-zinc-500',
+              ? 'bg-status-online ring-3 ring-status-online/15'
+              : 'bg-muted-foreground/50',
           )}
         />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground" title={node.label}>
@@ -603,7 +607,7 @@ export function ClientNodeCard({
         </span>
 
         {focused ? (
-          <span className="shrink-0 rounded-full bg-foreground px-2 py-0.5 text-[9.5px] font-medium text-background">
+          <span className="shrink-0 rounded-full border border-brand-soft-border bg-brand-soft px-2 py-0.5 text-[9.5px] font-medium text-brand-strong">
             {t('dashboard.topologyFocusedBadge')}
           </span>
         ) : null}
@@ -648,11 +652,11 @@ export function ClientNodeCard({
               <span>{clientIp || (client ? `${client.info.os}/${client.info.arch}` : '-')}</span>
               <span className="text-muted-foreground/85">
                 {' · '}
-                <span className={cn(cpuPercent >= 85 && 'font-medium text-amber-600 dark:text-amber-400')}>
+                <span className={cn(cpuPercent >= 85 && 'font-medium text-status-warning-fg')}>
                   CPU {cpuPercent}%
                 </span>
                 {' · '}
-                <span className={cn(memPercent >= 85 && 'font-medium text-amber-600 dark:text-amber-400')}>
+                <span className={cn(memPercent >= 85 && 'font-medium text-status-warning-fg')}>
                   MEM {memPercent}%
                 </span>
               </span>
@@ -685,7 +689,7 @@ export function ClientNodeCard({
               <div
                 className={cn(
                   'h-full rounded-full transition-all duration-500',
-                  cpuPercent >= 85 ? 'bg-amber-500' : 'bg-zinc-700 dark:bg-zinc-300',
+                  cpuPercent >= 85 ? 'bg-status-warning' : 'bg-meter-track',
                 )}
                 style={{ width: `${cpuPercent}%` }}
               />
@@ -700,7 +704,7 @@ export function ClientNodeCard({
               <div
                 className={cn(
                   'h-full rounded-full transition-all duration-500',
-                  memPercent >= 85 ? 'bg-amber-500' : 'bg-zinc-700 dark:bg-zinc-300',
+                  memPercent >= 85 ? 'bg-status-warning' : 'bg-meter-track',
                 )}
                 style={{ width: `${memPercent}%` }}
               />

@@ -66,7 +66,7 @@ export function CopyButton({
       aria-label={ariaLabel}
       onClick={handleCopy}
     >
-      {copied ? <Check className={cn(iconClassName, 'text-emerald-500')} /> : <Copy className={iconClassName} />}
+      {copied ? <Check className={cn(iconClassName, 'text-status-online')} /> : <Copy className={iconClassName} />}
     </button>
   );
 }

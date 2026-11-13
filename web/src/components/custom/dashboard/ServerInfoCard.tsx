@@ -54,10 +54,10 @@ function PartitionRow({
           className={cn(
             'h-full rounded-full transition-all duration-500',
             tone === 'critical'
-              ? 'bg-rose-500'
+              ? 'bg-status-danger'
               : tone === 'warning'
-                ? 'bg-amber-500'
-                : 'bg-zinc-800 dark:bg-zinc-200',
+                ? 'bg-status-warning'
+                : 'bg-meter-track',
           )}
           style={{ width: `${clamped}%` }}
         />
@@ -98,8 +98,8 @@ function CompactResourceMeter({
         <span
           className={cn(
             'shrink-0 font-mono font-semibold text-foreground',
-            tone === 'critical' && 'text-rose-600 dark:text-rose-400',
-            tone === 'warning' && 'text-amber-600 dark:text-amber-400',
+            tone === 'critical' && 'text-status-danger-fg',
+            tone === 'warning' && 'text-status-warning-fg',
           )}
         >
           {`${Math.round(clamped)}%`}
@@ -111,10 +111,10 @@ function CompactResourceMeter({
           className={cn(
             'h-full rounded-full transition-all duration-500',
             tone === 'critical'
-              ? 'bg-rose-500'
+              ? 'bg-status-danger'
               : tone === 'warning'
-                ? 'bg-amber-500'
-                : 'bg-zinc-800 dark:bg-zinc-200',
+                ? 'bg-status-warning'
+                : 'bg-meter-track',
           )}
           style={{ width: `${clamped}%` }}
         />

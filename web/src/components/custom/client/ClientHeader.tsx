@@ -122,7 +122,7 @@ export function ClientHeader({ scope, client, onShowActivity }: ClientHeaderProp
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-7 w-7 text-emerald-500 hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                        className="h-7 w-7 text-status-online-fg hover:text-status-online-fg hover:bg-status-online-soft transition-colors"
                         onClick={saveDisplayName}
                         disabled={isSaving}
                       >
@@ -189,11 +189,11 @@ export function ClientHeader({ scope, client, onShowActivity }: ClientHeaderProp
               <span
                 className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${
                   client.online
-                    ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                    : 'border-destructive/25 bg-destructive/10 text-destructive'
+                    ? 'border-status-online-border bg-status-online-soft text-status-online-fg'
+                    : 'border-border/70 bg-muted/60 text-muted-foreground'
                 }`}
               >
-                <span className={`size-1.5 rounded-full ${client.online ? 'bg-emerald-500' : 'bg-destructive'}`} />
+                <span className={`size-1.5 rounded-full ${client.online ? 'bg-status-online' : 'bg-muted-foreground/60'}`} />
                 {client.online ? t('clients.online') : t('clients.offline')}
               </span>
               <span className="font-mono text-xs bg-muted/50 px-1.5 py-0.5 rounded">{client.id.slice(0, 8)}</span>

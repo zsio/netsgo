@@ -25,8 +25,8 @@ export function useParticleCanvas(canvasRef: React.RefObject<HTMLCanvasElement |
         vy: (Math.random() - 0.5) * 0.4,
         radius: Math.random() * 2 + 1,
         color: isAccent
-          ? 'rgba(251, 133, 4, 0.7)'   // brand orange
-          : 'rgba(160, 160, 170, 0.35)', // neutral gray
+          ? 'rgba(244, 129, 32, 0.62)'   // warm cloudflare amber-orange
+          : 'rgba(148, 140, 130, 0.32)', // warm stone neutral
       });
     }
     particles.current = arr;
@@ -74,8 +74,8 @@ export function useParticleCanvas(canvasRef: React.RefObject<HTMLCanvasElement |
           const dy = pts[i].y - pts[j].y;
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist < maxDist) {
-            const alpha = (1 - dist / maxDist) * 0.15;
-            ctx.strokeStyle = `rgba(251, 133, 4, ${alpha})`;
+            const alpha = (1 - dist / maxDist) * 0.13;
+            ctx.strokeStyle = `rgba(244, 129, 32, ${alpha})`;
             ctx.lineWidth = 0.8;
             ctx.beginPath();
             ctx.moveTo(pts[i].x, pts[i].y);

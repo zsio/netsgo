@@ -67,10 +67,10 @@ import { SettingsSectionCard } from './security/security-primitives';
 type LocalPortRange = PortRange & { _id: string };
 
 const SEVERITY_DOT_CLASS: Record<ActivitySeverity, string> = {
-  debug: 'bg-zinc-400',
-  info: 'bg-sky-500',
-  warning: 'bg-amber-500',
-  error: 'bg-rose-500',
+  debug: 'bg-muted-foreground/50',
+  info: 'bg-primary',
+  warning: 'bg-status-warning',
+  error: 'bg-status-danger',
 };
 
 function toLocalPortRanges(ports?: PortRange[]): LocalPortRange[] {
@@ -491,7 +491,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
             <p className="text-xs text-muted-foreground">{SERVER_ADDR_HELP_TEXT}</p>
 
             {initialServerAddrIsLegacy && serverAddr.trim() === initialServerAddr ? (
-              <p className="text-xs text-amber-600 dark:text-amber-400">
+              <p className="text-xs text-status-warning-fg">
                 {t('admin.legacyServerAddrWarning')}
               </p>
             ) : null}
@@ -531,7 +531,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
             portRanges.length === 0 ? (
               <Badge
                 variant="outline"
-                className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                className="border-status-warning-border bg-status-warning-soft text-status-warning-fg"
               >
                 {t('admin.portPoolUnrestrictedBadge')}
               </Badge>
@@ -599,8 +599,8 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
 
           {/* Empty Warning or Port Range Rows */}
           {portRanges.length === 0 ? (
-            <div className="flex items-center gap-2.5 px-4 py-3.5 text-xs text-amber-600 dark:text-amber-400 sm:px-5">
-              <ShieldAlert className="size-4 shrink-0" />
+            <div className="flex items-center gap-2.5 px-4 py-3.5 text-xs text-status-warning-fg sm:px-5">
+              <ShieldAlert className="size-4 shrink-0 text-status-warning" />
               <span>{t('admin.openPortsWarning')}</span>
             </div>
           ) : (
@@ -738,7 +738,7 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                   <span
                     className={cn(
                       'size-2 shrink-0 rounded-full',
-                      SEVERITY_DOT_CLASS[severity] ?? 'bg-zinc-400',
+                      SEVERITY_DOT_CLASS[severity] ?? 'bg-muted-foreground/50',
                     )}
                   />
                   <span className="text-sm font-medium text-foreground">
@@ -810,9 +810,9 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                   initial={{ opacity: 0, y: 4 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -4 }}
-                  className="inline-flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400"
+                  className="inline-flex items-center gap-1.5 font-medium text-status-online-fg"
                 >
-                  <span className="size-2 rounded-full bg-emerald-500" />
+                  <span className="size-2 rounded-full bg-status-online" />
                   {t('admin.configSaved')}
                 </motion.span>
               ) : isDirty ? (
@@ -821,9 +821,9 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                   initial={{ opacity: 0, y: 4 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -4 }}
-                  className="inline-flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400"
+                  className="inline-flex items-center gap-1.5 font-medium text-brand-strong"
                 >
-                  <span className="size-2 rounded-full bg-amber-500" />
+                  <span className="size-2 rounded-full bg-primary" />
                   {t('admin.unsavedChangesHint')}
                 </motion.span>
               ) : (
@@ -885,8 +885,8 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
       >
         <AlertDialogContent className="!max-w-lg w-[calc(100vw-2rem)]">
           <AlertDialogHeader>
-            <AlertDialogMedia className="bg-amber-500/10">
-              <AlertTriangle className="text-amber-500" />
+            <AlertDialogMedia className="bg-status-warning-soft">
+              <AlertTriangle className="text-status-warning" />
             </AlertDialogMedia>
             <AlertDialogTitle>{t('admin.affectedPortsTitle')}</AlertDialogTitle>
             <AlertDialogDescription>
@@ -920,12 +920,12 @@ function AdminConfigForm({ initialConfig }: { initialConfig: AdminConfig }) {
                       <span
                         className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${
                           affectedTunnelStatus(tunnel).key === 'exposed'
-                            ? 'bg-emerald-500/10 text-emerald-600'
+                            ? 'bg-status-online-soft text-status-online-fg'
                             : affectedTunnelStatus(tunnel).key === 'stopped'
-                              ? 'bg-amber-500/10 text-amber-600'
+                              ? 'bg-status-warning-soft text-status-warning-fg'
                               : affectedTunnelStatus(tunnel).key === 'error'
-                                ? 'bg-destructive/10 text-destructive'
-                                : 'bg-zinc-500/10 text-zinc-500'
+                                ? 'bg-status-danger-soft text-status-danger-fg'
+                                : 'bg-muted text-muted-foreground'
                         }`}
                       >
                         {affectedTunnelStatus(tunnel).label}

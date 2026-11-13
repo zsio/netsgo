@@ -1,11 +1,19 @@
-# 多用户功能执行规划
+# 多用户设计契约与原执行规划
 
 ## 文档状态
 
-- [KNOWN] 状态：`Implemented`，待发布前复跑完整 E2E 门禁；当前实现以代码和测试为准，本节以下的 `[FRAME]` 条目保留为设计契约。
+- [KNOWN] 状态：`Implemented`，已移出待开发索引；发布时仍需按既有 CI / E2E 门禁回归。当前实现以代码和测试为准，本节以下的 `[FRAME]` 条目保留为设计契约，原分阶段计划用于追溯设计与验收范围。
 - [FRAME] 优先级：High。
-- [FRAME] 本文是当前多用户工作的唯一执行规划；旧方案中的有效期、配额、公开注册和通知设计全部由本文取代。
+- [FRAME] 本文保留多用户功能的设计契约；旧方案中的有效期、配额、公开注册和通知设计全部由本文取代。
 - [KNOWN] 当前用户运行态收敛默认超时为 10 秒，测试可覆盖该内部时长，生产不增加配置项。
+
+## 当前实现入口
+
+- [KNOWN] `012_multi_user_ownership.sql` 已建立统一用户与 Session 表，并迁移资源所有权；`storage_schema_test.go` 覆盖旧数据回填、严格迁移拒绝旧版本、校验失败回滚和孤儿安全凭据拒绝迁移。
+- [KNOWN] `user_api.go`、`user_store.go`、`user_policy.go` 和 `user_lifecycle_gate.go` 已实现管理 API、最后一个正常管理员保护、禁用/恢复、物理删除及运行态收敛。
+- [KNOWN] `auth_middleware.go`、`resource_scope.go`、`events.go`、流量与活动存储按当前用户或管理员显式目标用户范围授权；相关 API 和生命周期竞态有 Go 测试。
+- [KNOWN] 管理员用户列表、用户资源视图和作用域 Query Key 已实现；`web/e2e/multi_user_lifecycle.pw.ts` 与 `multi_user_live_isolation.pw.ts` 覆盖浏览器生命周期及两个用户的实时隔离。
+- [KNOWN] 最近一次文档核实的实际执行范围见 [Issue 索引](../issues.md#本次验证范围)；存在 E2E 测试不等于本次已重跑全部部署矩阵。
 
 ## 先固定一个不能含糊的状态语义
 
@@ -83,7 +91,9 @@ user_operational = user row exists AND status = 'active'
 - [FRAME] 不为 Web 与 Server API 保留旧接口 fallback；二者同二进制、同版本升级。
 - [FRAME] 多用户迁移严格不可降级；不设计 Server 回滚、降级 migration、双写补偿或回滚兼容路径。
 
-## 当前实现证据与改造约束
+## 实施前基线与改造约束（历史背景）
+
+本节中的“当前”指多用户改造前的基线。`admin_users` / `admin_sessions`、资源缺少用户所有权和全局 Query Key 等描述记录的是当时需要替换的状态；现状见上方“当前实现入口”。
 
 - [KNOWN] `internal/server/migrations/001_server_runtime_schema.sql` 中的登录身份当前存放在 `admin_users`，Web Session 当前存放在 `admin_sessions`。
 - [KNOWN] `internal/server/auth_middleware.go` 的 JWT 当前只携带 `sid`，`RequireAuth` 只从 `admin_sessions` 解析主体。

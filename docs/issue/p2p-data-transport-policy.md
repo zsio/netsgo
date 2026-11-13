@@ -2,7 +2,7 @@
 
 ## 状态
 
-Implemented and locally validated; carrier-grade NAT and passive ICE-TCP deployment validation remain open
+UDP 数据路径已实现并有本地回归覆盖；真实运营商网络部署验证仍待补充。Passive ICE-TCP 尚未实现，属于后续原型范围，不是当前可用能力。
 
 ## 严重程度
 
@@ -32,7 +32,7 @@ High
 
 [KNOWN] `/api/tunnels` 已对能力匹配的 `client_to_client` 开放 `direct_preferred` 和 `direct_only`；旧 Client、能力未知或实现标识不匹配的 Client 仍只能使用 relay。Web 已开放三种策略，默认仍为 `server_relay_only`。
 
-[KNOWN] 当前 `client_to_client` 路径是 Ingress Client -> Server -> Target Client：Ingress Client 向 Server 打开 yamux stream，Server 校验隧道身份后向 Target Client 打开第二条 yamux stream，再在两条 stream 间转发 payload。
+[KNOWN] `client_to_client` 的 Server 中继路径是 Ingress Client -> Server -> Target Client：Ingress Client 向 Server 打开 yamux stream，Server 校验隧道身份后向 Target Client 打开第二条 yamux stream，再在两条 stream 间转发 payload。选择 `peer_direct` 时，业务 payload 走两端共享的 PeerConnection。
 
 [KNOWN] 当前 UDP 隧道会将每个 datagram 帧化后放入可靠逻辑 stream，并在目的端还原。因此 TCP、UDP-over-stream 和 SOCKS5 已经共享同一套底层逻辑 stream 传输。
 
@@ -258,14 +258,16 @@ NetsGo /ws/control（认证、信令、授权、续期）
 ## 仍有意保持开放的决策
 
 - [KNOWN] Peer 实现已固定为 Pion WebRTC/ICE/DataChannel，第一版不使用 quic-go；当前选择是在一个可靠有序 detached DataChannel 上复用 yamux stream。
-- [KNOWN] Peer session 已固定为按 Client pair 共享；精确空闲关闭、重建和最大并发资源上限仍需实现阶段确定。
+- [KNOWN] Peer session 已按 Client pair 共享；最后一条 tunnel grant 撤销、租约到期或 Client 会话失效时关闭，generation 或 owner epoch 变化时重建。额外的空闲回收策略与最大并发 pair session 上限仍需单独决定。
 - [KNOWN] 第一版不使用 TURN，`direct_only` 不允许 relay。Server 已提供同数字端口的 UDP STUN listener。Pion vnet 已覆盖 full-cone、address-restricted、port-restricted、symmetric、公网端、STUN 故障、candidate 异常、IPv6、丢包/延迟/重复包和并发 stream；独立 Linux network namespace 的双 NAT Docker E2E 还验证了 direct、UDP 全阻断后的 relay fallback、解除阻断后的生产定时重试恢复。真实运营商 CGNAT、移动网络和企业防火墙仍需独立部署验证。
 - [KNOWN] Passive ICE-TCP 是机会性备用路径的原型目标，而不是已经确认的第一版能力。Pion 在 Linux、macOS、Windows、IPv4/IPv6、同 LAN、外部可达 listener 和 UDP 阻断场景下的实际覆盖必须由原型固定；第一版不承诺 TCP srflx、simultaneous-open 或严格 NAT TCP 打洞。
 - [KNOWN] P2P sender-credit 与 relay 共享限速已经实现 work-conserving 公平调度，最大连续调度块为 256 KiB；仍需真实高延迟网络 benchmark 调整性能参数。
 - [KNOWN] 共享总额度使用 `total_bps`；旧方向字段继续兼容，当前没有退出时间表。
 - [KNOWN] 未来客户端 C 中继的协议、选择规则、资源授权和计量方式不属于第一版，需要独立设计。
 
-## 已获得的验证证据
+## 已有测试覆盖与历史验证记录
+
+以下记录包含此前实施阶段的验证结果，不代表每次文档核实都重新执行了全部矩阵；最近一次核实的实际执行范围见 [Issue 索引](../issues.md#本次验证范围)。
 
 - [KNOWN] `pkg/p2p/network_test.go` 与 `network_matrix_extended_test.go` 使用 Pion vnet 构造真实路由与 NAT 行为，不使用两个 localhost socket 冒充 NAT；矩阵同时固定成功与预期失败组合，并覆盖 malformed/error STUN、candidate 延迟/逆序/重复、IPv4/IPv6、多地址、受损网络、大 payload、并发 stream 和持续低速传输。
 - [KNOWN] `pkg/p2p/session_test.go` 验证真实 Pion PeerConnection、detached DataChannel、超过 1 MiB 的双向 payload、16 条并发 yamux stream 和有界关闭；`datachannel_stream_test.go` 单独验证大 Write 分片和任意小 Read 不改变字节序列。

@@ -26,9 +26,16 @@ const osLabels: Record<string, string> = {
   windows: 'Windows',
 };
 
-function ProgressBar({ value, label, total, colorClass = 'bg-primary' }: { value: number; label: string; total?: string; colorClass?: string }) {
+function resolveUsageBarClass(percent: number, warnAt = 82, critAt = 92) {
+  if (percent >= critAt) return 'bg-status-danger';
+  if (percent >= warnAt) return 'bg-status-warning';
+  return 'bg-meter-track';
+}
+
+function ProgressBar({ value, label, total, colorClass }: { value: number; label: string; total?: string; colorClass?: string }) {
   const { t } = useTranslation();
   const percent = value.toFixed(1);
+  const resolvedColor = colorClass ?? resolveUsageBarClass(value);
   return (
     <div className="flex flex-col gap-1.5 w-full">
       <div className="flex justify-between items-center text-xs gap-2">
@@ -37,8 +44,8 @@ function ProgressBar({ value, label, total, colorClass = 'bg-primary' }: { value
           {total ? t('clients.percentOfTotal', { percent, total }) : `${percent}%`}
         </span>
       </div>
-      <div className="h-2 w-full bg-secondary overflow-hidden rounded-full">
-        <div className={`h-full ${colorClass} transition-all duration-500`} style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
+      <div className="h-1.5 w-full bg-muted overflow-hidden rounded-full">
+        <div className={`h-full rounded-full ${resolvedColor} transition-all duration-500`} style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
       </div>
     </div>
   );
@@ -70,9 +77,9 @@ export function ClientInfoCard({ scope, client, onRequestDelete }: ClientInfoCar
     : '-';
 
   return (
-    <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden flex flex-col">
+    <div className="rounded-xl border border-border/60 bg-card shadow-2xs overflow-hidden flex flex-col">
       {/* Device Info Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 divide-y sm:divide-y-0 border-b border-border/40 last:border-b-0">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 divide-y sm:divide-y-0 border-b border-border/50 last:border-b-0">
         <div className="p-4 sm:p-5 flex flex-col gap-1.5 sm:border-r border-border/40">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Monitor className="w-4 h-4" />{t('clients.operatingSystem')}</span>
@@ -128,12 +135,12 @@ export function ClientInfoCard({ scope, client, onRequestDelete }: ClientInfoCar
           </div>
           <span className="flex min-w-0 items-center gap-2 font-medium text-sm">
             <span className="inline-flex min-w-0 items-center gap-1">
-              <ArrowDownCircle className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+              <ArrowDownCircle className="h-3.5 w-3.5 shrink-0 text-flow-down" />
               <span className="truncate">{formatBandwidthLimit(client.ingress_bps)}</span>
             </span>
             <span className="text-muted-foreground">/</span>
             <span className="inline-flex min-w-0 items-center gap-1">
-              <ArrowUpCircle className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+              <ArrowUpCircle className="h-3.5 w-3.5 shrink-0 text-flow-up" />
               <span className="truncate">{formatBandwidthLimit(client.egress_bps)}</span>
             </span>
           </span>
@@ -158,21 +165,21 @@ export function ClientInfoCard({ scope, client, onRequestDelete }: ClientInfoCar
 
       {/* Hardware Stats */}
       {isOnline && stats && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 bg-muted/5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 bg-muted/20">
           {/* CPU */}
-          <div className="p-4 sm:p-5 flex flex-col gap-3 border-b sm:border-b lg:border-b-0 border-border/40 sm:border-r">
+          <div className="p-4 sm:p-5 flex flex-col gap-3 border-b sm:border-b lg:border-b-0 border-border/50 sm:border-r">
             <div className="flex items-center gap-2 text-foreground font-medium text-sm">
-              <Cpu className="w-4 h-4 text-blue-500 shrink-0" />
+              <Cpu className="w-4 h-4 text-muted-foreground shrink-0" />
               CPU
               <span className="ml-auto text-xs text-muted-foreground font-normal">{t('clients.cpuCores', { count: stats.num_cpu })}</span>
             </div>
-            <ProgressBar value={stats.cpu_usage} label={t('clients.usageLabel')} colorClass="bg-blue-500" />
+            <ProgressBar value={stats.cpu_usage} label={t('clients.usageLabel')} />
           </div>
 
           {/* Memory */}
-          <div className="p-4 sm:p-5 flex flex-col gap-3 border-b sm:border-b lg:border-b-0 border-border/40 lg:border-r sm:[&:nth-child(2)]:border-r-0 lg:[&:nth-child(2)]:border-r">
+          <div className="p-4 sm:p-5 flex flex-col gap-3 border-b sm:border-b lg:border-b-0 border-border/50 lg:border-r sm:[&:nth-child(2)]:border-r-0 lg:[&:nth-child(2)]:border-r">
             <div className="flex items-center gap-2 text-foreground font-medium text-sm min-w-0">
-              <Database className="w-4 h-4 text-emerald-500 shrink-0" />
+              <Database className="w-4 h-4 text-muted-foreground shrink-0" />
               <span className="shrink-0">{t('clients.memory')}</span>
               <DualTriggerCard
                 side="bottom"
@@ -203,14 +210,13 @@ export function ClientInfoCard({ scope, client, onRequestDelete }: ClientInfoCar
               value={memPercent}
               label={t('clients.memory')}
               total={stats.mem_total ? formatBytes(stats.mem_total) : undefined}
-              colorClass={memPercent > 85 ? 'bg-destructive' : 'bg-emerald-500'}
             />
           </div>
 
           {/* Disk */}
-          <div className="p-4 sm:p-5 flex flex-col gap-3 border-b sm:border-b-0 border-border/40 sm:border-r">
+          <div className="p-4 sm:p-5 flex flex-col gap-3 border-b sm:border-b-0 border-border/50 sm:border-r">
             <div className="flex items-center gap-2 text-foreground font-medium text-sm">
-              <HardDrive className="w-4 h-4 text-amber-500 shrink-0" />
+              <HardDrive className="w-4 h-4 text-muted-foreground shrink-0" />
               <span className="shrink-0">{t('clients.disk')}</span>
               {multipleDisks && (
                 <span className="ml-auto text-xs text-muted-foreground font-normal hidden lg:inline">{t('clients.hoverForDetails')}</span>
@@ -226,7 +232,7 @@ export function ClientInfoCard({ scope, client, onRequestDelete }: ClientInfoCar
                       value={diskPercent}
                       label={t('clients.allPartitions')}
                       total={stats.disk_total ? formatBytes(stats.disk_total) : undefined}
-                      colorClass={diskPercent > 90 ? 'bg-destructive' : 'bg-amber-500'}
+                      colorClass={resolveUsageBarClass(diskPercent, 85, 92)}
                     />
                   </div>
                 }
@@ -244,7 +250,7 @@ export function ClientInfoCard({ scope, client, onRequestDelete }: ClientInfoCar
                         value={dpPercent}
                         label={p.path}
                         total={formatBytes(p.total)}
-                        colorClass={dpPercent > 90 ? 'bg-destructive' : 'bg-amber-500'}
+                        colorClass={resolveUsageBarClass(dpPercent, 85, 92)}
                       />
                     );
                   })}
@@ -255,7 +261,7 @@ export function ClientInfoCard({ scope, client, onRequestDelete }: ClientInfoCar
                 value={diskPercent}
                 label={diskPartitions[0]?.path || t('clients.disk')}
                 total={stats.disk_total ? formatBytes(stats.disk_total) : undefined}
-                colorClass={diskPercent > 90 ? 'bg-destructive' : 'bg-amber-500'}
+                colorClass={resolveUsageBarClass(diskPercent, 85, 92)}
               />
             )}
           </div>
@@ -263,21 +269,21 @@ export function ClientInfoCard({ scope, client, onRequestDelete }: ClientInfoCar
           {/* Network */}
           <div className="p-4 sm:p-5 flex flex-col gap-3">
             <div className="flex items-center gap-2 text-foreground font-medium text-sm">
-              <Globe className="w-4 h-4 text-violet-500 shrink-0" />
+              <Globe className="w-4 h-4 text-muted-foreground shrink-0" />
               {t('clients.networkIo')}
             </div>
             <div className="flex flex-col gap-1.5 mt-auto">
               <div className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-1">
-                  <ArrowDownCircle className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                  <ArrowDownCircle className="h-3.5 w-3.5 text-flow-down shrink-0" />
                   <span className="font-mono font-medium">{formatNetSpeed(stats.net_recv_speed)}</span>
                 </div>
                 <div className="flex items-center gap-1">
-                  <ArrowUpCircle className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                  <ArrowUpCircle className="h-3.5 w-3.5 text-flow-up shrink-0" />
                   <span className="font-mono font-medium">{formatNetSpeed(stats.net_sent_speed)}</span>
                 </div>
               </div>
-              <div className="text-[10px] text-muted-foreground/60">
+              <div className="text-[10px] text-muted-foreground/70">
                 {t('clients.totalTraffic', { recv: formatBytes(stats.net_recv), sent: formatBytes(stats.net_sent) })}
               </div>
             </div>

@@ -428,13 +428,13 @@ export function TopologyCanvas({
         key: 'issues',
         label: t('dashboard.topologyFilterIssues'),
         count: flow.filterCounts.issues,
-        dotClass: flow.filterCounts.issues > 0 ? 'bg-rose-500' : undefined,
+        dotClass: flow.filterCounts.issues > 0 ? 'bg-status-danger' : undefined,
       },
       {
         key: 'active',
         label: t('dashboard.topologyFilterActive'),
         count: flow.filterCounts.active,
-        dotClass: flow.filterCounts.active > 0 ? 'bg-emerald-500' : undefined,
+        dotClass: flow.filterCounts.active > 0 ? 'bg-status-online' : undefined,
       },
     ];
     if (flow.filterCounts.c2c > 0 || quickFilter === 'c2c') {
@@ -491,10 +491,10 @@ export function TopologyCanvas({
                     setQuickFilter(pill.key);
                   }}
                   className={cn(
-                    'inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium transition-colors',
+                    'inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors',
                     selected
-                      ? 'bg-foreground text-background shadow-2xs'
-                      : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground',
+                      ? 'border-brand-soft-border bg-brand-soft text-brand-strong shadow-2xs'
+                      : 'border-transparent text-muted-foreground hover:bg-muted/80 hover:text-foreground',
                   )}
                 >
                   {pill.dotClass && !selected ? (
@@ -506,7 +506,7 @@ export function TopologyCanvas({
                       className={cn(
                         'rounded-full px-1.5 py-px font-mono text-[10px] leading-tight',
                         selected
-                          ? 'bg-background/20 text-background'
+                          ? 'bg-primary/15 text-brand-strong'
                           : 'bg-muted text-muted-foreground',
                       )}
                     >
@@ -520,10 +520,10 @@ export function TopologyCanvas({
         </div>
       ) : null}
 
-      {/* 舞台主区域：克制的浅灰/深锌底色，无杂乱花纹与光晕 */}
+      {/* 舞台主区域：温润云石微底色 */}
       <div
         className={cn(
-          'min-h-0 flex-1 overflow-y-auto bg-muted/25 px-5 py-4 dark:bg-zinc-950/45 sm:px-6 sm:py-5',
+          'min-h-0 flex-1 overflow-y-auto bg-muted/30 px-5 py-4 dark:bg-background/50 sm:px-6 sm:py-5',
           !isFullscreen && 'max-h-[640px]',
         )}
       >
@@ -603,9 +603,11 @@ export function TopologyCanvas({
                           strokeLinecap="round"
                           className={cn(
                             'transition-opacity duration-200',
-                            wire.online
-                              ? 'stroke-emerald-500/55 dark:stroke-emerald-400/50'
-                              : 'stroke-zinc-400/50 dark:stroke-zinc-600/65',
+                            wire.highlighted
+                              ? 'stroke-primary/80'
+                              : wire.online
+                                ? 'stroke-status-online/50'
+                                : 'stroke-muted-foreground/45',
                           )}
                           style={{ opacity: wire.dimmed ? 0.2 : wire.highlighted ? 1 : 0.85 }}
                         />
@@ -614,6 +616,7 @@ export function TopologyCanvas({
 
                     const statusKey = wire.statusKey ?? 'stopped';
                     const dashedStatus = statusKey === 'offline' || statusKey === 'stopped';
+                    const highlightWithBrand = wire.highlighted && statusKey !== 'error';
                     const baseWidth = wire.isBundle
                       ? wire.highlighted
                         ? 2.4
@@ -634,7 +637,7 @@ export function TopologyCanvas({
                           strokeWidth={baseWidth}
                           strokeDasharray={dashedStatus ? '4 5' : undefined}
                           strokeLinecap="round"
-                          className={STATUS_WIRE_BASE[statusKey]}
+                          className={highlightWithBrand ? 'stroke-primary/50' : STATUS_WIRE_BASE[statusKey]}
                         />
                         {wire.flowing ? (
                           <path
@@ -643,7 +646,7 @@ export function TopologyCanvas({
                             strokeWidth={wire.highlighted || wire.hasLiveTraffic ? baseWidth + 0.15 : baseWidth}
                             strokeDasharray="7 21"
                             strokeLinecap="round"
-                            className={STATUS_WIRE_FLOW[statusKey]}
+                            className={highlightWithBrand ? 'stroke-primary' : STATUS_WIRE_FLOW[statusKey]}
                             style={{
                               animation: `topology-stream ${wire.duration} linear infinite`,
                               opacity: wire.highlighted || wire.hasLiveTraffic ? 0.95 : 0.55,
@@ -815,15 +818,15 @@ export function TopologyCanvas({
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 bg-card px-5 py-2.5 text-[11px] text-muted-foreground">
         <div className="flex flex-wrap items-center gap-3.5">
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-emerald-500" />
+            <span className="size-1.5 rounded-full bg-status-online" />
             {t('tunnels.statusExposed')}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-amber-500" />
+            <span className="size-1.5 rounded-full bg-status-warning" />
             {t('tunnels.statusOffline')}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-rose-500" />
+            <span className="size-1.5 rounded-full bg-status-danger" />
             {t('tunnels.statusError')}
           </span>
           <span className="inline-flex items-center gap-1.5">

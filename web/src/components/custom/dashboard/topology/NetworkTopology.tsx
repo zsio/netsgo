@@ -202,7 +202,7 @@ export function NetworkTopology({ scope }: { scope: ResourceScope }) {
   const summaryPills = hasClients ? (
     <div className="hidden items-center gap-1.5 sm:flex">
       <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-        <span className="size-1.5 rounded-full bg-emerald-500" />
+        <span className="size-1.5 rounded-full bg-status-online" />
         {t('dashboard.topologyNodeCount', {
           online: onlineClientIdSet.size,
           total: totalClientCount,
@@ -269,7 +269,7 @@ export function NetworkTopology({ scope }: { scope: ResourceScope }) {
         {hasClients ? (
           !isFullscreen && canvasEl
         ) : (
-          <div className="flex flex-col items-center justify-center gap-4 bg-muted/20 py-14 text-muted-foreground dark:bg-zinc-950/40">
+          <div className="flex flex-col items-center justify-center gap-4 bg-muted/25 py-14 text-muted-foreground dark:bg-background/45">
             <Waypoints className="h-10 w-10 opacity-25" />
             <p className="text-sm">{t('dashboard.noClients')}</p>
             <Button type="button" variant="secondary" size="sm" onClick={openAddClientDialog}>
