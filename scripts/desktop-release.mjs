@@ -1,6 +1,7 @@
 import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import { readFile, readdir, stat, mkdir, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +13,15 @@ export const platforms = {
   'osx-x64': { os: 'macos-15-intel', triple: 'x86_64-apple-darwin', goos: 'darwin', goarch: 'amd64' },
   'win-x64': { os: 'windows-2022', triple: 'x86_64-pc-windows-msvc', goos: 'windows', goarch: 'amd64' },
 };
+
+export function cloneReleaseIndex(repository, directory, env = {}) {
+  // The index is pushed to another hosting provider, which may reject shallow history.
+  const result = spawnSync('git', ['clone', '--single-branch', '--branch', 'release-index', repository, directory], {
+    env: { ...process.env, ...env }, encoding: 'utf8',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Could not clone release index: ${result.stderr}`);
+}
 
 export function parseTag(tag) {
   const match = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.([1-9]\d*))?$/.exec(tag);

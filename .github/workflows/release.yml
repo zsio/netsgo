@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      repair_desktop_tag:
+        description: 'Repair the CNB update index for an already published desktop tag'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,6 +20,7 @@ concurrency:
 
 jobs:
   release-gate:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       desktop: ${{ steps.desktop-plan.outputs.enabled }}
@@ -46,6 +53,23 @@ jobs:
           git diff --exit-code scripts/install.sh scripts/upgrade.sh
       - name: Verify desktop release policy
         run: bun test scripts/desktop-release.test.mjs
+
+  repair-desktop-index:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: netsgo-release-index
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - name: Verify published packages and repair CNB index
+        env:
+          RELEASE_TAG: ${{ inputs.repair_desktop_tag }}
+          CNB_REPO_URL: ${{ secrets.CNB_REPO_URL }}
+          CNB_USERNAME: ${{ secrets.CNB_USERNAME }}
+          CNB_PASSWORD: ${{ secrets.CNB_PASSWORD }}
+        run: bun scripts/repair-desktop-index.mjs "$RELEASE_TAG"
 
   desktop:
     needs: release-gate

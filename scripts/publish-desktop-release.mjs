@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { appId, collectRelease, releasePlan, root, sha256File, signingKey, writeFeed } from './desktop-release.mjs';
+import { appId, cloneReleaseIndex, collectRelease, releasePlan, root, sha256File, signingKey, writeFeed } from './desktop-release.mjs';
 
 // This script only runs in the tag workflow, under the shared release-index job lock.
 const required = name => {
@@ -68,7 +68,7 @@ const ghAuth = gitAuth('x-access-token', ghToken);
 try {
   const exists = run('git', ['ls-remote', '--exit-code', '--heads', ghRepo, 'release-index'], root, ghAuth, true);
   if (exists.status === 0) {
-    run('git', ['clone', '--depth', '1', '--branch', 'release-index', ghRepo, indexDir], root, ghAuth);
+    cloneReleaseIndex(ghRepo, indexDir, ghAuth);
   } else if (exists.status === 2) {
     run('git', ['init', '-b', 'release-index', indexDir], root);
   } else { throw new Error('Could not read the current release index'); }
