@@ -4293,6 +4293,7 @@ dependencies = [
  "getrandom 0.3.4",
  "libc",
  "netsgo-client-core",
+ "objc2-foundation 0.3.2",
  "serde",
  "serde_json",
  "subtle",

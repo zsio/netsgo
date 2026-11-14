@@ -51,6 +51,16 @@ try {
   await cp(path.join(desktop, 'target', platform.triple, 'release', executable), path.join(staging, executable));
   const service = `netsgo-desktop-service${ext}`;
   await cp(path.join(desktop, 'target', platform.triple, 'release', service), path.join(staging, service));
+  if (platform.goos === 'windows') {
+    await cp(path.join(staging, service), path.join(staging, 'netsgo-uninstall.exe'));
+  } else {
+    const helper = path.join(staging, 'NetsGo Uninstaller.app', 'Contents');
+    await mkdir(path.join(helper, 'MacOS'), { recursive: true });
+    await mkdir(path.join(helper, 'Resources'));
+    await cp(path.join(staging, service), path.join(helper, 'MacOS', 'netsgo-uninstall'));
+    await cp(path.join(root, 'desktop/src-tauri/icons/icon.icns'), path.join(helper, 'Resources/icon.icns'));
+    await writeFile(path.join(helper, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>uy.zs.netsgo.desktop.uninstaller</string><key>CFBundleName</key><string>NetsGo Uninstaller</string><key>CFBundleDisplayName</key><string>卸载 NetsGo</string><key>CFBundleExecutable</key><string>netsgo-uninstall</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleIconFile</key><string>icon.icns</string><key>CFBundleVersion</key><string>${tag.slice(1)}</string><key>LSUIElement</key><true/></dict></plist>`);
+  }
 
   const args = ['pack', '--packId', appId, '--packVersion', tag.slice(1), '--packTitle', 'NetsGo',
     '--packAuthors', 'NetsGo', '--mainExe', executable, '--runtime', target,
@@ -70,6 +80,20 @@ try {
     if (platform.goos === 'darwin') args.push('--signAppIdentity', '-', '--noInst');
   }
   run(vpk, args, signingEnv);
+
+  if (platform.goos === 'darwin') {
+    for (const name of await readdir(output)) {
+      if (!name.endsWith('-Portable.zip')) continue;
+      const portable = await mkdtemp(path.join(os.tmpdir(), 'netsgo-portable-'));
+      try {
+        const archive = path.join(output, name);
+        run('ditto', ['-x', '-k', archive, portable]);
+        await cp(path.join(portable, 'NetsGo.app/Contents/MacOS/NetsGo Uninstaller.app'), path.join(portable, 'NetsGo Uninstaller.app'), { recursive: true });
+        await rm(archive);
+        run('ditto', ['-c', '-k', '--sequesterRsrc', portable, archive]);
+      } finally { await rm(portable, { recursive: true, force: true }); }
+    }
+  }
 
   // Put architecture into every public filename, including nupkg names produced by older packagers.
   const feedPath = path.join(output, `releases.${channel}-${target}.json`);

@@ -19,6 +19,7 @@ pub enum Operation {
     Install,
     Uninstall,
     Upgrade,
+    Remove,
 }
 #[derive(Serialize, Deserialize)]
 struct Request {
@@ -28,6 +29,8 @@ struct Request {
     source_bin: PathBuf,
     version: String,
     resume: Vec<String>,
+    #[serde(default)]
+    installation: Option<crate::presence::Installation>,
 }
 #[derive(Serialize, Deserialize)]
 struct Response {
@@ -40,6 +43,9 @@ pub fn request(
     source: Option<&Path>,
     resume: Vec<String>,
 ) -> Result<()> {
+    if operation == Operation::Remove {
+        return remove_request(user_root);
+    }
     let host_dir = platform::source_bin()?;
     let source_bin = source.unwrap_or(&host_dir).canonicalize()?;
     let version = String::from_utf8(
@@ -61,15 +67,19 @@ pub fn request(
         source_bin,
         version,
         resume,
+        installation: crate::presence::Installation::current().ok(),
     };
+    run_request(
+        &host_dir.join(platform::binary_name("netsgo-desktop-service")),
+        &request,
+    )
+}
+
+fn run_request(host: &Path, request: &Request) -> Result<()> {
     let temp = tempfile::tempdir()?;
     let file = temp.path().join("request.json");
-    private_json(&file, &request)?;
-    elevate(
-        &host_dir.join(platform::binary_name("netsgo-desktop-service")),
-        &file,
-    )
-    .context("后台服务配置未完成；如取消了管理员授权，原运行方式会保留")?;
+    private_json(&file, request)?;
+    elevate(host, &file).context("后台服务配置未完成；如取消了管理员授权，原运行方式会保留")?;
     let response: Response = serde_json::from_slice(
         &fs::read(temp.path().join("result.json")).context("系统安装器未返回结果")?,
     )?;
@@ -77,6 +87,33 @@ pub fn request(
         bail!("{error}");
     }
     Ok(())
+}
+
+fn remove_request(user_root: &Path) -> Result<()> {
+    // Run outside both the app and machine directories, so Windows can remove their executables.
+    let original = crate::uninstall::helper_path()?;
+    let temp = tempfile::tempdir()?;
+    let host = temp
+        .path()
+        .join(platform::binary_name("netsgo-desktop-service"));
+    fs::copy(&original, &host)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&host, fs::Permissions::from_mode(0o755))?;
+    }
+    run_request(
+        &host,
+        &Request {
+            operation: Operation::Remove,
+            owner: platform::owner()?,
+            user_root: user_root.canonicalize()?,
+            source_bin: temp.path().to_owned(),
+            version: crate::BUILD_VERSION.into(),
+            resume: Vec::new(),
+            installation: None,
+        },
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -136,8 +173,11 @@ fn elevate(host: &Path, file: &Path) -> Result<()> {
 }
 
 pub fn execute_request(file: &Path) -> Result<()> {
-    let request: Request = serde_json::from_slice(&fs::read(file)?)?;
-    let result = execute(&request);
+    let mut request: Request = serde_json::from_slice(&fs::read(file)?)?;
+    let result = (|| -> Result<()> {
+        request.user_root = request.user_root.canonicalize()?;
+        execute(&request)
+    })();
     let response = Response {
         error: result.err().map(|e| format!("{e:#}")),
     };
@@ -156,6 +196,9 @@ fn execute(request: &Request) -> Result<()> {
     let root = platform::machine_root()?;
     let data = root.join("data");
     let previous = platform::read_manifest()?;
+    if request.operation == Operation::Remove {
+        return remove_installed_service(request, &root, previous);
+    }
     if let Some(previous) = &previous {
         if previous.owner.id != request.owner.id {
             bail!("这台电脑的后台服务属于其他用户，请先由原用户停用");
@@ -217,6 +260,11 @@ fn execute(request: &Request) -> Result<()> {
             copy_state(&request.user_root, &data, &request.owner, &root)?;
         }
         fs::create_dir_all(&data)?;
+        if let Some(installation) = &request.installation {
+            crate::presence::bind(&data, installation)?;
+            own_file(&data.join(crate::presence::BINDING_FILE), &request.owner)?;
+        }
+        crate::presence::clear_stop(&data)?;
         private_json(&data.join(RESUME_FILE), &request.resume)?;
         own_file(&data.join(RESUME_FILE), &request.owner)?;
         private_json(
@@ -316,12 +364,67 @@ fn validate_request(request: &Request) -> Result<()> {
             bail!("用户身份校验失败");
         }
     }
+    if request.operation == Operation::Remove {
+        return Ok(());
+    }
     for name in ["netsgo-desktop-service", "netsgo"] {
         let metadata = fs::symlink_metadata(request.source_bin.join(platform::binary_name(name)))?;
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             bail!("后台服务程序文件无效");
         }
     }
+    Ok(())
+}
+
+fn remove_installed_service(
+    request: &Request,
+    root: &Path,
+    previous: Option<Manifest>,
+) -> Result<()> {
+    let Some(mut manifest) = previous else {
+        if root.exists() {
+            bail!("后台目录缺少所有者记录，请保留应用并联系维护者清理");
+        }
+        return Ok(());
+    };
+    if manifest.owner.id != request.owner.id || manifest.user_root != request.user_root {
+        bail!("后台服务属于其他用户或数据目录，未执行删除");
+    }
+    let metadata = fs::symlink_metadata(root)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("后台程序目录无效");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            bail!("后台程序目录不能是重解析点");
+        }
+    }
+    platform::stop_service()?;
+    if manifest.enabled {
+        copy_state(&root.join("data"), &request.user_root, &request.owner, root)
+            .context("保留连接配置失败，已保留应用和后台文件，请重试卸载")?;
+    }
+    platform::unregister_service()?;
+    manifest.enabled = false;
+    private_json(&root.join("service.json"), &manifest)?;
+    public_manifest(&root.join("service.json"))?;
+    // Keep the ownership record until all other files are gone, so a failed cleanup is retryable.
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_name() == "service.json" {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            fs::remove_dir_all(entry.path())?;
+        } else {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    fs::remove_file(root.join("service.json"))?;
+    fs::remove_dir(root)?;
     Ok(())
 }
 

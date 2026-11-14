@@ -124,6 +124,10 @@ impl DesktopSupervisor {
         let (notify, rx) = mpsc::channel();
         let (local, local_rx) = ClientSupervisor::new(root.clone())?;
         let backend = if platform::owned_manifest(&root)?.is_some_and(|manifest| manifest.enabled) {
+            // Also binds beta.4 services whose earlier installer did not record the app path.
+            if let Ok(installation) = crate::presence::Installation::current() {
+                crate::presence::bind(&platform::data_root()?, &installation)?;
+            }
             Backend::Service(Remote::new(
                 platform::data_root()?,
                 local.view_state(),
@@ -167,7 +171,14 @@ impl DesktopSupervisor {
             Backend::Local(_) => (None, None),
             Backend::Service(remote) => {
                 let remote = remote.state.lock().unwrap();
-                (remote.version.clone(), remote.error.clone())
+                (
+                    remote.version.clone(),
+                    remote.error.clone().or_else(|| {
+                        platform::data_root()
+                            .ok()
+                            .and_then(|data| crate::presence::pause_reason(&data))
+                    }),
+                )
             }
         };
         StartupView {
@@ -180,6 +191,10 @@ impl DesktopSupervisor {
     }
     pub fn set_login_enabled(&self, enabled: bool) -> Result<()> {
         platform::set_login_enabled(enabled)
+    }
+    pub fn launch_uninstaller(&self) -> Result<()> {
+        let installation = crate::presence::Installation::current()?;
+        crate::uninstall::launch(&self.root, Some(&installation.app_root), false)
     }
     pub fn shutdown_ui(&self) -> Result<()> {
         if let Backend::Local(local) = self.state.lock().unwrap().backend.clone() {
@@ -365,6 +380,7 @@ impl DesktopSupervisor {
         let Backend::Service(remote) = &state.backend else {
             return Vec::new();
         };
+        let paused = crate::presence::pause_reason(&remote.data).is_some();
         let remote = remote.state.lock().unwrap();
         remote
             .view
@@ -372,7 +388,9 @@ impl DesktopSupervisor {
             .iter()
             .filter(|s| {
                 s.phase.is_running()
-                    || (remote.error.is_some() && s.profile.auto_connect && s.has_saved_token)
+                    || ((remote.error.is_some() || paused)
+                        && s.profile.auto_connect
+                        && s.has_saved_token)
             })
             .map(|s| s.profile.id.clone())
             .collect()

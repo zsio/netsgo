@@ -4,8 +4,10 @@ mod instance;
 pub mod ipc;
 pub mod manage;
 pub mod platform;
+pub mod presence;
 #[cfg(test)]
 mod tests;
+pub mod uninstall;
 
 pub use controller::DesktopSupervisor;
 pub use instance::GuiInstance;

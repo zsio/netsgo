@@ -93,6 +93,13 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-dotnet@v4
+        if: runner.os == 'Windows'
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install native uninstaller fixture packager
+        if: runner.os == 'Windows'
+        run: dotnet tool install --global vpk --version 1.2.161
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.99.1'

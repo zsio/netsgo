@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -43,6 +43,8 @@ await copyFile(path.join(root, 'client-desktop/target/release', `netsgo-desktop-
 await copyFile(path.join(root, 'bin', `netsgo${ext}`), path.join(source, `netsgo${ext}`));
 const version = run(agent, ['--version']).stdout.trim();
 assert.match(version, /^v\d+\.\d+\.\d+/);
+process.env.NETSGO_DESKTOP_DATA_DIR = user;
+let application;
 const sqliteBytes = Buffer.from('fixture identity bytes; never transmit or log real credentials');
 await writeFile(path.join(user, 'desktop-config.json'), JSON.stringify({ profiles: [{ id: 'fixture', name: 'Before', server: 'http://127.0.0.1:1', auto_connect: false }] }));
 await writeFile(path.join(user, 'profiles/fixture/client/netsgo.db'), sqliteBytes);
@@ -51,7 +53,7 @@ async function manage(operation, sourceBin = source, expectFailure = false) {
   const request = path.join(temp, 'request.json');
   const resultFile = path.join(temp, 'result.json');
   await rm(resultFile, { force: true });
-  await writeFile(request, JSON.stringify({ operation, owner, user_root: user, source_bin: sourceBin, version, resume: resumeLive ? ['live'] : [] }), { mode: 0o600 });
+  await writeFile(request, JSON.stringify({ operation, owner, user_root: user, source_bin: sourceBin, version, resume: resumeLive ? ['live'] : [], installation: application }), { mode: 0o600 });
   if (windows) run(agent, ['--manage-request', request]);
   else run('sudo', ['-n', agent, '--manage-request', request]);
   const result = JSON.parse(await readFile(resultFile, 'utf8'));
@@ -82,6 +84,29 @@ async function eventually(check, label, timeout = 35000) {
     await new Promise(resolve => setTimeout(resolve, 300));
   } while (Date.now() < deadline);
   throw new Error(`${label} did not become ready${lastError ? `: ${lastError.message}` : ''}`);
+}
+if (windows) {
+  const local = run('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetFolderPath('LocalApplicationData')"]).stdout.trim();
+  const appRoot = path.join(local, 'NetsGo.Desktop');
+  try { await readFile(path.join(appRoot, 'current/sq.version')); throw new Error('Refusing to replace an installed app'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await copyFile(agent, path.join(source, 'netsgo-desktop.exe'));
+  await copyFile(agent, path.join(source, 'netsgo-uninstall.exe'));
+  const output = path.join(temp, 'installer');
+  run('vpk', ['pack', '--packId', 'NetsGo.Desktop', '--packTitle', 'NetsGo', '--packVersion', version.slice(1), '--packDir', source,
+    '--mainExe', 'netsgo-desktop.exe', '--runtime', 'win-x64', '--outputDir', output, '--delta', 'None', '--skip-updates', '--yes']);
+  const setup = (await readdir(output)).find(name => name.endsWith('Setup.exe'));
+  assert.ok(setup);
+  run(path.join(output, setup), ['--silent']);
+  await eventually(async () => { try { await readFile(path.join(appRoot, 'current/sq.version')); return true; } catch { return false; } }, 'Installed app');
+  run(path.join(appRoot, 'current/netsgo-desktop-service.exe'), ['--register-uninstaller']);
+  application = { app_root: appRoot, executable: path.join(appRoot, 'current/netsgo-desktop.exe') };
+} else {
+  const appRoot = path.join(temp, 'NetsGo.app');
+  await mkdir(path.join(appRoot, 'Contents/MacOS'), { recursive: true });
+  await writeFile(path.join(appRoot, 'Contents/Info.plist'), '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>uy.zs.netsgo.desktop</string></dict></plist>');
+  await copyFile(agent, path.join(appRoot, 'Contents/MacOS/netsgo-desktop'));
+  application = { app_root: appRoot, executable: path.join(appRoot, 'Contents/MacOS/netsgo-desktop') };
 }
 const port = await new Promise((resolve, reject) => {
   const listener = net.createServer(); listener.on('error', reject);
@@ -161,14 +186,59 @@ try {
   await eventually(async () => JSON.parse(await readFile(path.join(machine, 'data/agent.endpoint.json'), 'utf8')).pid !== beforeRestart && await liveConnected(), 'Boot auto-connect');
   assert.equal((await liveConnected()).snapshot.client_id, clientId);
   console.log('Verified saved-token auto-connect after OS-managed restart, with no desktop process');
+  if (!windows) {
+    const moved = `${application.app_root}.moved`;
+    await rename(application.app_root, moved);
+    await eventually(async () => (await call({ op: 'state' })).state.running_count === 0, 'Removed-app pause');
+    assert.ok((await call({ op: 'reconnect', args: 'live' })).error, 'A removed app must not be able to start a new connection');
+    await rename(moved, application.app_root);
+    assert.equal((await eventually(liveConnected, 'Connection after atomic app replacement')).snapshot.client_id, clientId);
+    console.log('Verified app removal pauses all connections and an atomic update resumes the same identity');
+  }
   await manage('Uninstall'); installed = false;
   assert.equal(JSON.parse(await readFile(path.join(machine, 'service.json'), 'utf8')).enabled, false);
   assert.equal(JSON.parse(await readFile(path.join(user, 'desktop-config.json'), 'utf8')).profiles[0].name, 'Background survives detached UI');
   assert.deepEqual(await readFile(path.join(user, 'profiles/fixture/client/netsgo.db')), sqliteBytes);
   assert.ok((await readFile(path.join(user, 'profiles/live/client/netsgo.db'))).length > 0);
   console.log('Verified disabling and migration back to the desktop data directory');
+  await manage('Install'); installed = true;
+  await eventually(liveConnected, 'Re-enabled service before app uninstall');
+  if (windows) {
+    run('reg.exe', ['add', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'NetsGoDesktop', '/t', 'REG_SZ', '/d', `"${application.executable}" --netsgo-autostart`, '/f']);
+  } else {
+    const agents = path.join(os.homedir(), 'Library/LaunchAgents'); await mkdir(agents, { recursive: true });
+    await writeFile(path.join(agents, 'uy.zs.netsgo.desktop.login.plist'), '<?xml version="1.0"?><plist version="1.0"><dict><key>Label</key><string>uy.zs.netsgo.desktop.login</string><key>RunAtLoad</key><true/></dict></plist>');
+  }
+  // A failing cleanup must keep the application and its live service intact.
+  const wrongRoot = path.join(temp, 'wrong/netsgo-desktop'); await mkdir(wrongRoot, { recursive: true });
+  const rejected = run(agent, ['--uninstall-app', '--worker', '--quiet', '--app-path', application.app_root, '--data-dir', wrongRoot], true);
+  assert.notEqual(rejected.status, 0);
+  await readFile(application.executable);
+  await eventually(liveConnected, 'Service after rejected uninstall');
+  if (windows) {
+    const keyPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\NetsGo.Desktop';
+    const command = run('powershell.exe', ['-NoProfile', '-Command', `(Get-ItemProperty -LiteralPath '${keyPath}').QuietUninstallString`]).stdout.trim();
+    assert.ok(command.includes('netsgo-uninstall.exe'), 'Apps & features must use the cleanup wrapper');
+    const argumentsFromRegistry = [...command.matchAll(/"([^"]*)"|([^\s]+)/g)].map(match => match[1] ?? match[2]);
+    run(argumentsFromRegistry[0], argumentsFromRegistry.slice(1));
+    await eventually(async () => { try { await readFile(path.join(machine, 'service.json')); return false; } catch (e) { return e.code === 'ENOENT'; } }, 'Complete background removal', 60000);
+    await eventually(async () => { try { await readFile(application.executable); return false; } catch (e) { return e.code === 'ENOENT'; } }, 'Native Windows app uninstall', 60000);
+    assert.notEqual(run('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'NetsGoDesktop'], true).status, 0);
+  } else {
+    // The CI runner has sudo authorization instead of an interactive password prompt.
+    await manage('Remove');
+    run(agent, ['--uninstall-app', '--worker', '--quiet', '--app-path', application.app_root, '--data-dir', user]);
+    await assert.rejects(readFile(application.executable));
+    await assert.rejects(readFile(path.join(os.homedir(), 'Library/LaunchAgents/uy.zs.netsgo.desktop.login.plist')));
+  }
+  installed = false;
+  assert.notEqual(serviceCheck().status, 0, 'No system service may remain registered');
+  await assert.rejects(readFile(path.join(machine, 'service.json')));
+  assert.deepEqual(await readFile(path.join(user, 'profiles/fixture/client/netsgo.db')), sqliteBytes);
+  assert.ok((await readFile(path.join(user, 'profiles/live/client/netsgo.db'))).length > 0);
+  console.log('Verified application uninstall with both startup switches enabled: no service, no autostart, and credentials retained');
 } finally {
-  if (installed) { try { await manage('Uninstall'); } catch (error) { console.error(`Cleanup failed: ${error.message}`); } }
+  if (installed) { try { await manage('Remove'); } catch (error) { console.error(`Cleanup failed: ${error.message}`); } }
   server.kill();
   // The runner is disposable; retain files for job diagnostics rather than touching other services.
   console.log(`System-service test diagnostics: ${temp}`);

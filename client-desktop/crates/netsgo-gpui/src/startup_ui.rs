@@ -5,6 +5,7 @@ enum StartupAction {
     Login(bool),
     Boot(bool),
     Repair,
+    Uninstall,
 }
 
 impl NetsGoDesktopView {
@@ -35,6 +36,7 @@ impl NetsGoDesktopView {
                 StartupAction::Repair => {
                     supervisor.repair_service().map(|_| "后台服务已修复并更新")
                 }
+                StartupAction::Uninstall => supervisor.launch_uninstaller().map(|_| "卸载窗口已打开，请按系统提示操作"),
             };
             let _ = tx.send(
                 result
@@ -77,6 +79,11 @@ impl NetsGoDesktopView {
                         .on_click(cx.listener(|this, _, _, cx| this.change_startup(StartupAction::Repair, cx)))))
                 .child(div().text_size(px(11.)).text_color(tokens.text_muted).child("启动磁盘尚未解锁时无法运行，例如 FileVault 解锁界面或 BitLocker 启动 PIN。网络可用后才会建立连接。")))
             .when(!self.update_state.can_install, |el| el.child(div().text_size(px(12.)).text_color(tokens.text_secondary).child("请从完整安装包启动 NetsGo 后再配置启动设置。")))
+            .child(v_flex().p_4().gap_3().rounded(px(12.)).border_1().border_color(tokens.border)
+                .child(div().text_size(px(14.)).child("卸载应用"))
+                .child(div().text_size(px(12.)).text_color(tokens.text_secondary).child("自动停止隧道、清理自启动和后台程序，保留连接配置与凭证。无需先关闭上面的开关。"))
+                .child(Button::new("uninstall-netsgo").label("卸载 NetsGo…").small().disabled(!enabled)
+                    .on_click(cx.listener(|this, _, _, cx| this.change_startup(StartupAction::Uninstall, cx)))))
             .when(busy, |el| el.child(div().text_size(px(12.)).text_color(tokens.text_secondary).child("正在配置，请按系统提示完成管理员授权…")))
             .when_some(self.startup_feedback.clone(), |el, (success, message)| el.child(div().text_size(px(12.)).text_color(if success { tokens.text_secondary } else { tokens.danger }).child(message)))
     }

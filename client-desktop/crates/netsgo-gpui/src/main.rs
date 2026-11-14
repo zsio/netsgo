@@ -2222,7 +2222,16 @@ fn ensure_main_window(
 }
 
 fn main() {
-    velopack::VelopackApp::build().set_auto_apply_on_startup(false).run();
+    let startup = velopack::VelopackApp::build().set_auto_apply_on_startup(false);
+    #[cfg(windows)]
+    let mut startup = startup
+        .on_after_install_fast_callback(|_| { let _ = netsgo_desktop_service::uninstall::register_system_uninstaller(); })
+        .on_after_update_fast_callback(|_| { let _ = netsgo_desktop_service::uninstall::register_system_uninstaller(); })
+        .on_before_uninstall_fast_callback(|_| netsgo_desktop_service::uninstall::fast_uninstall_hook());
+    #[cfg(not(windows))]
+    let mut startup = startup;
+    startup.run();
+    let _ = netsgo_desktop_service::uninstall::register_system_uninstaller();
     if std::env::args().nth(1).as_deref() == Some("--version") {
         println!("NetsGo Desktop {}", netsgo_desktop_updater::BUILD_VERSION);
         return;
@@ -2233,6 +2242,7 @@ fn main() {
     let resume_profiles = args.windows(2).find(|pair| pair[0] == "--netsgo-update-resume")
         .and_then(|pair| serde_json::from_str::<Vec<String>>(&pair[1]).ok());
     let data_dir = default_desktop_data_dir();
+    if netsgo_desktop_service::uninstall::is_running(&data_dir) { return; }
     let Some(instance) = netsgo_desktop_service::GuiInstance::claim(&data_dir, !login_start).expect("failed to claim desktop instance") else { return; };
     let instance = std::sync::Arc::new(instance);
     let (supervisor, notify_rx) =
@@ -2313,6 +2323,7 @@ fn main() {
 
                     let mut tray_cmds = drain_tray_actions();
                     if instance.take_activation() { tray_cmds.push(TrayCommand::ShowWindow); }
+                    if instance.take_uninstall_request() { tray_cmds.push(TrayCommand::Quit); }
                     if dirty || !tray_cmds.is_empty() || tick.is_multiple_of(12) {
                         let should_quit = cx.update(|cx| {
                             let update = updater.view();

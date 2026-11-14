@@ -1,7 +1,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use anyhow::{Context, Result};
-use netsgo_desktop_service::{host, manage, BUILD_VERSION};
+use netsgo_desktop_service::{host, manage, uninstall, BUILD_VERSION};
 use std::{
     path::PathBuf,
     sync::{
@@ -21,6 +21,14 @@ fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("--version") {
         println!("{BUILD_VERSION}");
         return Ok(());
+    }
+    if args.iter().any(|arg| arg == "--register-uninstaller") {
+        return uninstall::register_system_uninstaller();
+    }
+    if args.iter().any(|arg| arg == "--uninstall-app")
+        || (args.len() == 1 && uninstall::is_uninstaller_bundle())
+    {
+        return uninstall::cli(&args);
     }
     if let Some(index) = args.iter().position(|arg| arg == "--manage-request") {
         return manage::execute_request(std::path::Path::new(

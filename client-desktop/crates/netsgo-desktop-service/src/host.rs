@@ -51,23 +51,35 @@ pub fn run(data: &Path, stop: Arc<AtomicBool>) -> Result<()> {
     tmp.persist(&path).map_err(|e| e.error)?;
     let errors = Arc::new(Mutex::new(VecDeque::new()));
     let active = Arc::new(AtomicUsize::new(0));
-    match fs::read(data.join(crate::manage::RESUME_FILE)) {
+    let mut resume = match fs::read(data.join(crate::manage::RESUME_FILE)) {
         Ok(bytes) => {
             let ids: Vec<String> = serde_json::from_slice(&bytes)?;
             fs::remove_file(data.join(crate::manage::RESUME_FILE))?;
-            for id in ids {
-                let _ = supervisor.reconnect_profile(&id);
-            }
+            Some(ids)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            supervisor.reconnect_all_saved()
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
+    };
+    let mut paused = crate::presence::pause_reason(data).is_some();
+    if !paused {
+        reconnect(&supervisor, resume.take());
     }
     let mut snapshot_at = Instant::now();
+    let mut presence_at = Instant::now();
     let result = (|| -> Result<()> {
         while !stop.load(Ordering::SeqCst) {
             drain(&notifications, &errors);
+            if presence_at.elapsed() >= Duration::from_millis(250) {
+                let should_pause = crate::presence::pause_reason(data).is_some();
+                if should_pause && !paused {
+                    resume = Some(supervisor.running_profile_ids());
+                    supervisor.disconnect_all()?;
+                } else if !should_pause && paused {
+                    reconnect(&supervisor, resume.take());
+                }
+                paused = should_pause;
+                presence_at = Instant::now();
+            }
             if snapshot_at.elapsed() >= Duration::from_secs(3) {
                 supervisor.request_all_snapshots();
                 snapshot_at = Instant::now();
@@ -85,8 +97,9 @@ pub fn run(data: &Path, stop: Arc<AtomicBool>) -> Result<()> {
                         stop.clone(),
                         endpoint.token.clone(),
                     );
+                    let data = data.to_owned();
                     thread::spawn(move || {
-                        let _ = handle(socket, &token, &supervisor, &errors, &stop);
+                        let _ = handle(socket, &token, &supervisor, &errors, &stop, &data);
                         active.fetch_sub(1, Ordering::SeqCst);
                     });
                 }
@@ -102,6 +115,16 @@ pub fn run(data: &Path, stop: Arc<AtomicBool>) -> Result<()> {
     let _ = supervisor.disconnect_all();
     let _ = fs::remove_file(&path);
     result
+}
+
+fn reconnect(supervisor: &ClientSupervisor, ids: Option<Vec<String>>) {
+    if let Some(ids) = ids {
+        for id in ids {
+            let _ = supervisor.reconnect_profile(&id);
+        }
+    } else {
+        supervisor.reconnect_all_saved();
+    }
 }
 
 fn drain(
@@ -125,6 +148,7 @@ fn handle(
     supervisor: &ClientSupervisor,
     errors: &Mutex<VecDeque<SupervisorNotification>>,
     stop: &AtomicBool,
+    data: &Path,
 ) -> Result<()> {
     socket.set_read_timeout(Some(Duration::from_secs(2)))?;
     socket.set_write_timeout(Some(Duration::from_secs(2)))?;
@@ -136,6 +160,14 @@ fn handle(
         bail!("后台服务正在停止");
     }
     let result: Result<Value> = (|| {
+        if !matches!(
+            &request.command,
+            Command::State | Command::Disconnect(_) | Command::Snapshot(_)
+        ) {
+            if let Some(reason) = crate::presence::pause_reason(data) {
+                bail!("{reason}");
+            }
+        }
         let value = match request.command {
             Command::State => Value::Null,
             Command::Appearance(pref) => {

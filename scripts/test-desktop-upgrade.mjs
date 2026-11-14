@@ -22,7 +22,7 @@ function run(command, args, allowFailure = false) {
 }
 try {
   run('ditto', ['-x', '-k', path.resolve(previousZip), temp]);
-  const apps = (await readdir(temp)).filter(name => name.endsWith('.app'));
+  const apps = (await readdir(temp)).filter(name => name === 'NetsGo.app');
   assert.equal(apps.length, 1);
   const app = path.join(temp, apps[0]);
   const macOS = path.join(app, 'Contents/MacOS');
