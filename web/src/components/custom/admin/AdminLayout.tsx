@@ -27,19 +27,19 @@ export function AdminLayout() {
         </div>
         <Tabs value={activeTab} className="w-full">
           <TabsList className="h-9 w-full justify-start sm:w-fit">
-            <TabsTrigger value="config" asChild className="px-3">
+            <TabsTrigger value="config" asChild className="px-3 data-active:text-brand-strong data-active:[&_svg]:text-primary">
               <Link to="/dashboard/admin/config">
                 <SlidersHorizontal data-icon="inline-start" />
                 <span>{t('admin.serviceConfigTab')}</span>
               </Link>
             </TabsTrigger>
-            <TabsTrigger value="access-control" asChild className="px-3">
+            <TabsTrigger value="access-control" asChild className="px-3 data-active:text-brand-strong data-active:[&_svg]:text-primary">
               <Link to="/dashboard/admin/access-control">
                 <ShieldAlert data-icon="inline-start" />
                 <span>{t('admin.accessControlTab')}</span>
               </Link>
             </TabsTrigger>
-            <TabsTrigger value="security" asChild className="px-3">
+            <TabsTrigger value="security" asChild className="px-3 data-active:text-brand-strong data-active:[&_svg]:text-primary">
               <Link to="/dashboard/admin/security">
                 <ShieldCheck data-icon="inline-start" />
                 <span>{t('admin.securityTab')}</span>

@@ -26,6 +26,18 @@ createRoot(document.getElementById('root')!).render(
             border: '1px solid var(--border)',
             borderRadius: 'var(--radius-lg)',
           },
+          success: {
+            iconTheme: {
+              primary: 'var(--status-online)',
+              secondary: 'var(--popover)',
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: 'var(--status-danger)',
+              secondary: 'var(--popover)',
+            },
+          },
         }}
       />
     </QueryClientProvider>

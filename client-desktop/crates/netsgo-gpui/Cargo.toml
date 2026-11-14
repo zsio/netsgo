@@ -1,0 +1,23 @@
+[package]
+name = "netsgo-gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "netsgo-desktop"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+gpui-kit.workspace = true
+tray-icon.workspace = true
+image.workspace = true
+netsgo-client-core = { path = "../netsgo-client-core" }
+netsgo-sidecar-proto = { path = "../netsgo-sidecar-proto" }
+open.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+netsgo-desktop-updater = { path = "../netsgo-desktop-updater" }
+velopack.workspace = true
+netsgo-desktop-service = { path = "../netsgo-desktop-service" }

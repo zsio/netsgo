@@ -1,0 +1,9 @@
+{
+  "tag": "v0.1.20-beta.5",
+  "signing": "unsigned",
+  "targets": [
+    "osx-arm64",
+    "osx-x64",
+    "win-x64"
+  ]
+}

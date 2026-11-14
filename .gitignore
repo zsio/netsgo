@@ -75,6 +75,11 @@ desktop/src-tauri/*.crt
 desktop/src-tauri/*.key
 desktop/src-tauri/*.pem
 desktop/src-tauri/*.mobileprovision
+# 桌面客户端 GPUI (client-desktop/)
+client-desktop/target/
+client-desktop/dist/
+client-desktop/binaries/*
+!client-desktop/binaries/.gitkeep
 *.local
 logs/
 *.log

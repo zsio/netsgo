@@ -148,7 +148,7 @@ export function VersionUpdateIndicator({ scope, target, label }: VersionUpdateIn
       <DialogTrigger asChild>
         <button
           type="button"
-          className="inline-flex size-4 shrink-0 items-center justify-center text-amber-500 transition-colors hover:text-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="inline-flex size-4 shrink-0 items-center justify-center text-primary transition-colors hover:text-brand-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           aria-label={t('updates.availableLabel', { label: displayLabel, version: data?.latest_version })}
         >
           <CircleAlert className="size-3.5" />

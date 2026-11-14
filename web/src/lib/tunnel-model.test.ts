@@ -483,6 +483,16 @@ describe('tunnel-model', () => {
     expect(view.transportLabel).toBe('Prefer peer-to-peer · P2P direct');
     expect(view.p2pLabel).toBe('P2P connected');
     expect(view.ingressWarning).toBe('Ingress binds to a wildcard address and is exposed to the ingress client network.');
+
+    const relayView = buildTunnelViewModel(
+      createTunnel({
+        topology: 'client_to_client',
+        transport_policy: 'server_relay_only',
+        actual_transport: 'server_relay',
+      }),
+      true,
+    );
+    expect(relayView.transportLabel).toBe('Server relay');
   });
 
   test('host-backed 目标配置使用 host 字段展示目标地址', () => {

@@ -138,12 +138,41 @@ export function getControlLinkEmphasis(clientId: string, state: TopologyViewStat
   return 'strong';
 }
 
+const ASCII_LABEL_HEAD_RE = /^[0-9A-Za-z]/;
+const latinLabelCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+const cjkLabelCollator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+
+/**
+ * 自然名称比较器：
+ * 1. ASCII 字母/数字开头的节点名（如主机名、IP 标识）排在非 ASCII（如中文别名）之前，避免中英文混排时中文无故抢占首位；
+ * 2. 各自内部启用 numeric 自然序（如 node-2 < node-10），中文内部按拼音排序；
+ * 3. 大小写相同时用码点兜底保证确定性。
+ */
+export function compareTopologyLabel(a: string, b: string): number {
+  const trimA = a.trim();
+  const trimB = b.trim();
+  const aIsAscii = ASCII_LABEL_HEAD_RE.test(trimA);
+  const bIsAscii = ASCII_LABEL_HEAD_RE.test(trimB);
+  if (aIsAscii !== bIsAscii) {
+    return aIsAscii ? -1 : 1;
+  }
+  const primary = (aIsAscii ? latinLabelCollator : cjkLabelCollator).compare(trimA, trimB);
+  if (primary !== 0) {
+    return primary;
+  }
+  return trimA < trimB ? -1 : trimA > trimB ? 1 : 0;
+}
+
 function sortClientsForTopology(clients: Client[]) {
   return [...clients].sort((a, b) => {
     if (a.online !== b.online) {
       return a.online ? -1 : 1;
     }
-    return getClientDisplayName(a).localeCompare(getClientDisplayName(b));
+    const labelDiff = compareTopologyLabel(getClientDisplayName(a), getClientDisplayName(b));
+    if (labelDiff !== 0) {
+      return labelDiff;
+    }
+    return compareTopologyLabel(a.id, b.id);
   });
 }
 

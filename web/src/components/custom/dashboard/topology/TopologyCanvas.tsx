@@ -1,8 +1,6 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRightLeft,
-  ChevronLeft,
-  ChevronRight,
   Globe,
   Laptop,
   Search,
@@ -38,6 +36,7 @@ import {
 import {
   STATUS_WIRE_BASE,
   STATUS_WIRE_FLOW,
+  STATUS_WIRE_STOP_COLOR,
   hasTraffic,
   tunnelStreamDuration,
   type StatusKey,
@@ -92,20 +91,13 @@ export function TopologyCanvas({
   isFullscreen: boolean;
 }) {
   const { t } = useTranslation();
+  const svgIdPrefix = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const stageRef = useRef<HTMLDivElement>(null);
   const [hoverTarget, setHoverTarget] = useState<HoverTarget>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [quickFilter, setQuickFilter] = useState<TopologyQuickFilter>('all');
-  const [pageState, setPageState] = useState<{ scopeKey: string; page: number }>({
-    scopeKey: '',
-    page: 0,
-  });
   const [portMap, setPortMap] = useState<Map<string, TopologyPoint>>(() => new Map());
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
-
-  const scopeKey = `${focusId ?? 'overview'}|${quickFilter}|${searchQuery.trim().toLowerCase()}`;
-  const currentPage = pageState.scopeKey === scopeKey ? pageState.page : 0;
-  const pageSize = isFullscreen ? 10 : 6;
 
   const flow = useMemo(
     () =>
@@ -113,26 +105,14 @@ export function TopologyCanvas({
         searchQuery,
         quickFilter,
         trafficSnapshot,
-        page: currentPage,
-        clientPageSize: pageSize,
-        routePageSize: pageSize,
       }),
-    [currentPage, focusId, graph, pageSize, quickFilter, searchQuery, trafficSnapshot],
-  );
-
-  const handlePageChange = useCallback(
-    (nextPage: number) => {
-      setHoverTarget(null);
-      setPageState({ scopeKey, page: nextPage });
-    },
-    [scopeKey],
+    [focusId, graph, quickFilter, searchQuery, trafficSnapshot],
   );
 
   const handleResetFilters = useCallback(() => {
     setHoverTarget(null);
     setSearchQuery('');
     setQuickFilter('all');
-    setPageState({ scopeKey: '', page: 0 });
   }, []);
 
   const measurePorts = useCallback(() => {
@@ -367,18 +347,22 @@ export function TopologyCanvas({
 
     if (flow.unroutedClients.length > 0) {
       const anyOnlineUnrouted = flow.unroutedClients.some((n) => n.online);
-      list.push({
-        key: 'idle-in',
-        fromPort: 'server-out',
-        toPort: 'idle-in',
-        kind: 'control',
-        online: anyOnlineUnrouted,
-        flowing: false,
-        hasLiveTraffic: false,
-        duration: '1.20s',
-        highlighted: isIdleHighlighted,
-        dimmed: hasHover && !isIdleHighlighted,
-      });
+      // 当左栏下方存在 C2C 监听节点时，静息态隐藏从顶部 Server 斜穿 C2C 连线区的控制虚线，仅在悬浮关联项时按需显现
+      const showIdleIngressWire = flow.ingressPeers.length === 0 || isIdleHighlighted;
+      if (showIdleIngressWire) {
+        list.push({
+          key: 'idle-in',
+          fromPort: 'server-out',
+          toPort: 'idle-in',
+          kind: 'control',
+          online: anyOnlineUnrouted,
+          flowing: false,
+          hasLiveTraffic: false,
+          duration: '1.20s',
+          highlighted: isIdleHighlighted,
+          dimmed: hasHover && !isIdleHighlighted,
+        });
+      }
       for (const client of flow.unroutedClients) {
         const hi = isIdleHighlighted && isClientHighlighted(client.id);
         list.push({
@@ -399,6 +383,7 @@ export function TopologyCanvas({
     return list;
   }, [
     flow.hasEmptyFilterResult,
+    flow.ingressPeers.length,
     flow.middleItems,
     flow.targetClients,
     flow.unroutedClients,
@@ -428,13 +413,13 @@ export function TopologyCanvas({
         key: 'issues',
         label: t('dashboard.topologyFilterIssues'),
         count: flow.filterCounts.issues,
-        dotClass: flow.filterCounts.issues > 0 ? 'bg-rose-500' : undefined,
+        dotClass: flow.filterCounts.issues > 0 ? 'bg-status-danger' : undefined,
       },
       {
         key: 'active',
         label: t('dashboard.topologyFilterActive'),
         count: flow.filterCounts.active,
-        dotClass: flow.filterCounts.active > 0 ? 'bg-emerald-500' : undefined,
+        dotClass: flow.filterCounts.active > 0 ? 'bg-status-online' : undefined,
       },
     ];
     if (flow.filterCounts.c2c > 0 || quickFilter === 'c2c') {
@@ -491,10 +476,10 @@ export function TopologyCanvas({
                     setQuickFilter(pill.key);
                   }}
                   className={cn(
-                    'inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium transition-colors',
+                    'inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors',
                     selected
-                      ? 'bg-foreground text-background shadow-2xs'
-                      : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground',
+                      ? 'border-brand-soft-border bg-brand-soft text-brand-strong shadow-2xs'
+                      : 'border-transparent text-muted-foreground hover:bg-muted/80 hover:text-foreground',
                   )}
                 >
                   {pill.dotClass && !selected ? (
@@ -506,7 +491,7 @@ export function TopologyCanvas({
                       className={cn(
                         'rounded-full px-1.5 py-px font-mono text-[10px] leading-tight',
                         selected
-                          ? 'bg-background/20 text-background'
+                          ? 'bg-primary/15 text-brand-strong'
                           : 'bg-muted text-muted-foreground',
                       )}
                     >
@@ -520,15 +505,15 @@ export function TopologyCanvas({
         </div>
       ) : null}
 
-      {/* 舞台主区域：克制的浅灰/深锌底色，无杂乱花纹与光晕 */}
+      {/* 舞台主区域：全局一屏平铺，温润细点阵画布衬托卡片层次 */}
       <div
         className={cn(
-          'min-h-0 flex-1 overflow-y-auto bg-muted/25 px-5 py-4 dark:bg-zinc-950/45 sm:px-6 sm:py-5',
-          !isFullscreen && 'max-h-[640px]',
+          'min-h-0 flex-1 bg-muted/20 bg-[radial-gradient(color-mix(in_oklab,var(--foreground)_8.5%,transparent)_1px,transparent_1px)] bg-[size:16px_16px] px-5 py-4 dark:bg-background/55 sm:px-6 sm:py-5',
+          isFullscreen && 'overflow-y-auto',
         )}
       >
         {flow.hasEmptyFilterResult ? (
-          <div className="flex min-h-[200px] flex-col items-center justify-center gap-2.5 rounded-xl border border-dashed border-border/75 bg-card/65 px-6 py-10 text-center">
+          <div className="flex min-h-[200px] flex-col items-center justify-center gap-2.5 rounded-lg border border-dashed border-border/75 bg-card/65 px-6 py-10 text-center">
             <span className="flex size-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
               <SearchX className="size-4" />
             </span>
@@ -548,7 +533,7 @@ export function TopologyCanvas({
         ) : (
           <>
             {/* 三栏列标题 */}
-            <div className="mb-3 grid grid-cols-[216px_minmax(240px,1fr)_232px] items-center gap-9 px-0.5 text-[11px] font-medium text-muted-foreground xl:grid-cols-[240px_minmax(280px,1fr)_284px] xl:gap-12">
+            <div className="mb-3 grid grid-cols-[208px_minmax(260px,1fr)_276px] items-center gap-7 px-0.5 text-[11px] font-medium text-muted-foreground xl:grid-cols-[232px_minmax(320px,1fr)_324px] xl:gap-10">
               <div className="flex items-center gap-1.5">
                 <Globe className="size-3.5 text-muted-foreground/80" />
                 <span>{t('dashboard.topologyColIngress')}</span>
@@ -556,7 +541,7 @@ export function TopologyCanvas({
               <div className="flex items-center gap-1.5">
                 <ArrowRightLeft className="size-3.5 text-muted-foreground/80" />
                 <span>{t('dashboard.topologyColRoutes')}</span>
-                <span className="rounded-full bg-muted px-1.5 py-px font-mono text-[10px] text-muted-foreground">
+                <span className="rounded-full bg-muted px-1.5 py-px font-mono text-[10px] tabular-nums text-muted-foreground">
                   {flow.totalScopedRoutes}
                 </span>
               </div>
@@ -564,7 +549,7 @@ export function TopologyCanvas({
                 <span className="flex items-center gap-1.5">
                   <Laptop className="size-3.5 text-muted-foreground/80" />
                   <span>{t('dashboard.topologyColClients')}</span>
-                  <span className="rounded-full bg-muted px-1.5 py-px font-mono text-[10px] text-muted-foreground">
+                  <span className="rounded-full bg-muted px-1.5 py-px font-mono text-[10px] tabular-nums text-muted-foreground">
                     {flow.totalScopedClients}
                   </span>
                 </span>
@@ -574,10 +559,10 @@ export function TopologyCanvas({
               </div>
             </div>
 
-            {/* 三栏流向舞台 + 精确端口三次贝塞尔连线层 */}
+            {/* 三栏流向舞台 + 光纤渐变端口贝塞尔连线层 */}
             <div
               ref={stageRef}
-              className="relative grid min-h-[164px] grid-cols-[216px_minmax(240px,1fr)_232px] items-stretch gap-9 xl:grid-cols-[240px_minmax(280px,1fr)_284px] xl:gap-12"
+              className="relative grid min-h-[160px] grid-cols-[208px_minmax(260px,1fr)_276px] items-stretch gap-7 xl:grid-cols-[232px_minmax(320px,1fr)_324px] xl:gap-10"
             >
               {stageSize.width > 0 && stageSize.height > 0 && (
                 <svg
@@ -586,7 +571,41 @@ export function TopologyCanvas({
                   height={stageSize.height}
                   className="pointer-events-none absolute inset-0 z-0 overflow-visible"
                 >
-                  {wireDescriptors.map((wire) => {
+                  <defs>
+                    {wireDescriptors.map((wire, idx) => {
+                      if (wire.kind === 'control') return null;
+                      const statusKey = wire.statusKey ?? 'stopped';
+                      if (statusKey === 'offline' || statusKey === 'stopped') return null;
+                      const start = portMap.get(wire.fromPort);
+                      const end = portMap.get(wire.toPort);
+                      if (!start || !end) return null;
+
+                      const highlightWithBrand = wire.highlighted && statusKey !== 'error';
+                      const strokeColor = highlightWithBrand
+                        ? 'var(--primary)'
+                        : STATUS_WIRE_STOP_COLOR[statusKey];
+                      const edgeOpacity = wire.highlighted ? 0.96 : 0.84;
+                      const midOpacity = wire.highlighted ? 0.64 : 0.26;
+
+                      return (
+                        <linearGradient
+                          key={wire.key}
+                          id={`${svgIdPrefix}-wire-${idx}`}
+                          gradientUnits="userSpaceOnUse"
+                          x1={start.x}
+                          y1={start.y}
+                          x2={end.x}
+                          y2={end.y}
+                        >
+                          <stop offset="0%" stopColor={strokeColor} stopOpacity={edgeOpacity} />
+                          <stop offset="50%" stopColor={strokeColor} stopOpacity={midOpacity} />
+                          <stop offset="100%" stopColor={strokeColor} stopOpacity={edgeOpacity} />
+                        </linearGradient>
+                      );
+                    })}
+                  </defs>
+
+                  {wireDescriptors.map((wire, idx) => {
                     const start = portMap.get(wire.fromPort);
                     const end = portMap.get(wire.toPort);
                     if (!start || !end) return null;
@@ -598,55 +617,82 @@ export function TopologyCanvas({
                           key={wire.key}
                           d={d}
                           fill="none"
-                          strokeWidth={wire.highlighted ? 1.85 : 1.35}
-                          strokeDasharray="4 5"
+                          strokeWidth={wire.highlighted ? 1.7 : 1.2}
+                          strokeDasharray="3.5 4.5"
                           strokeLinecap="round"
                           className={cn(
                             'transition-opacity duration-200',
-                            wire.online
-                              ? 'stroke-emerald-500/55 dark:stroke-emerald-400/50'
-                              : 'stroke-zinc-400/50 dark:stroke-zinc-600/65',
+                            wire.highlighted
+                              ? 'stroke-primary/80'
+                              : wire.online
+                                ? 'stroke-status-online/45'
+                                : 'stroke-muted-foreground/40',
                           )}
-                          style={{ opacity: wire.dimmed ? 0.2 : wire.highlighted ? 1 : 0.85 }}
+                          style={{ opacity: wire.dimmed ? 0.16 : wire.highlighted ? 1 : 0.78 }}
                         />
                       );
                     }
 
                     const statusKey = wire.statusKey ?? 'stopped';
                     const dashedStatus = statusKey === 'offline' || statusKey === 'stopped';
+                    const highlightWithBrand = wire.highlighted && statusKey !== 'error';
+                    const strokeColor = highlightWithBrand
+                      ? 'var(--primary)'
+                      : STATUS_WIRE_STOP_COLOR[statusKey];
                     const baseWidth = wire.isBundle
                       ? wire.highlighted
-                        ? 2.4
-                        : 1.85
+                        ? 2.2
+                        : 1.65
                       : wire.highlighted
-                        ? 2.1
-                        : 1.5;
+                        ? 1.95
+                        : 1.35;
 
                     return (
                       <g
                         key={wire.key}
                         className="transition-opacity duration-200"
-                        style={{ opacity: wire.dimmed ? 0.18 : 1 }}
+                        style={{ opacity: wire.dimmed ? 0.15 : 1 }}
                       >
+                        {wire.highlighted && !dashedStatus ? (
+                          <path
+                            d={d}
+                            fill="none"
+                            stroke={strokeColor}
+                            strokeWidth={baseWidth + 3.5}
+                            strokeOpacity={0.12}
+                            strokeLinecap="round"
+                          />
+                        ) : null}
                         <path
                           d={d}
                           fill="none"
+                          stroke={dashedStatus ? undefined : `url(#${svgIdPrefix}-wire-${idx})`}
                           strokeWidth={baseWidth}
                           strokeDasharray={dashedStatus ? '4 5' : undefined}
                           strokeLinecap="round"
-                          className={STATUS_WIRE_BASE[statusKey]}
+                          className={
+                            dashedStatus
+                              ? highlightWithBrand
+                                ? 'stroke-primary/55'
+                                : STATUS_WIRE_BASE[statusKey]
+                              : undefined
+                          }
                         />
                         {wire.flowing ? (
                           <path
                             d={d}
                             fill="none"
-                            strokeWidth={wire.highlighted || wire.hasLiveTraffic ? baseWidth + 0.15 : baseWidth}
-                            strokeDasharray="7 21"
+                            strokeWidth={
+                              wire.highlighted || wire.hasLiveTraffic ? baseWidth + 0.15 : baseWidth
+                            }
+                            strokeDasharray="7 22"
                             strokeLinecap="round"
-                            className={STATUS_WIRE_FLOW[statusKey]}
+                            className={
+                              highlightWithBrand ? 'stroke-primary' : STATUS_WIRE_FLOW[statusKey]
+                            }
                             style={{
                               animation: `topology-stream ${wire.duration} linear infinite`,
-                              opacity: wire.highlighted || wire.hasLiveTraffic ? 0.95 : 0.55,
+                              opacity: wire.highlighted || wire.hasLiveTraffic ? 0.95 : 0.52,
                             }}
                           />
                         ) : null}
@@ -657,7 +703,7 @@ export function TopologyCanvas({
               )}
 
               {/* 第 1 栏：公网入口与服务端枢纽（+ 按需 C2C 点对点监听入口） */}
-              <div data-flow-col="ingress" className="flex flex-col justify-center gap-2.5">
+              <div data-flow-col="ingress" className="flex flex-col justify-center gap-3">
                 <ServerHubCard
                   serverEndpoint={serverEndpoint}
                   onlineClientCount={onlineClientCount}
@@ -669,8 +715,8 @@ export function TopologyCanvas({
                 />
 
                 {flow.ingressPeers.length > 0 ? (
-                  <div className="mt-1 flex flex-col gap-2">
-                    <div className="px-0.5 text-[10px] font-medium text-muted-foreground">
+                  <div className="mt-0.5 flex flex-col gap-2 border-t border-dashed border-border/60 pt-2.5">
+                    <div className="px-0.5 text-[10px] font-medium tracking-wide text-muted-foreground">
                       {t('dashboard.topologyPeerIngress')}
                     </div>
                     {flow.ingressPeers.map((peer) => {
@@ -679,6 +725,7 @@ export function TopologyCanvas({
                         <PeerIngressCard
                           key={peer.id}
                           node={peer}
+                          routeCount={flow.c2cRouteCountByPeerId.get(peer.id) ?? 0}
                           compact={flow.compact}
                           focused={flow.focusClientId === peer.id}
                           highlighted={hi}
@@ -700,7 +747,7 @@ export function TopologyCanvas({
               {/* 第 2 栏：隧道转发规则 / 聚合规则束 / 控制连接通道 */}
               <div
                 data-flow-col="routes"
-                className={cn('flex flex-col justify-center', flow.compact ? 'gap-1.5' : 'gap-2')}
+                className={cn('flex flex-col justify-center', flow.compact ? 'gap-2' : 'gap-2.5')}
               >
                 {flow.middleItems.length === 0 ? (
                   <ControlBridgeCard
@@ -763,6 +810,7 @@ export function TopologyCanvas({
                       <IdleControlRow
                         unroutedCount={flow.unroutedClients.length}
                         hasOnlineUnrouted={flow.unroutedClients.some((n) => n.online)}
+                        showIngressPort={flow.ingressPeers.length === 0 || isIdleHighlighted}
                         highlighted={isIdleHighlighted}
                         dimmed={hasHover && !isIdleHighlighted}
                         onHover={(hovering) =>
@@ -777,7 +825,7 @@ export function TopologyCanvas({
               {/* 第 3 栏：目标客户端节点 */}
               <div
                 data-flow-col="clients"
-                className={cn('flex flex-col justify-center', flow.compact ? 'gap-1.5' : 'gap-2.5')}
+                className={cn('flex flex-col justify-center', flow.compact ? 'gap-2' : 'gap-2.5')}
               >
                 {flow.targetClients.map((node) => {
                   const hi = isClientHighlighted(node.id);
@@ -811,19 +859,19 @@ export function TopologyCanvas({
         )}
       </div>
 
-      {/* 底部图例与单屏分片翻页栏 */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 bg-card px-5 py-2.5 text-[11px] text-muted-foreground">
+      {/* 底部状态图例栏 */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 bg-card px-5 py-2 text-[11px] text-muted-foreground">
         <div className="flex flex-wrap items-center gap-3.5">
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-emerald-500" />
+            <span className="size-1.5 rounded-full bg-status-online" />
             {t('tunnels.statusExposed')}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-amber-500" />
+            <span className="size-1.5 rounded-full bg-status-warning" />
             {t('tunnels.statusOffline')}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-rose-500" />
+            <span className="size-1.5 rounded-full bg-status-danger" />
             {t('tunnels.statusError')}
           </span>
           <span className="inline-flex items-center gap-1.5">
@@ -834,7 +882,7 @@ export function TopologyCanvas({
                 x2="16"
                 y2="3"
                 strokeDasharray="3 3"
-                strokeWidth="1.35"
+                strokeWidth="1.25"
                 className="stroke-muted-foreground/75"
               />
             </svg>
@@ -842,55 +890,15 @@ export function TopologyCanvas({
           </span>
         </div>
 
-        <div className="flex items-center gap-3">
-          {flow.pagination.mode !== null && flow.pagination.totalPages > 1 ? (
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-[11px] text-muted-foreground">
-                {flow.pagination.mode === 'clients'
-                  ? t('dashboard.topologyNodePageInfo', {
-                      start: flow.pagination.rangeStart,
-                      end: flow.pagination.rangeEnd,
-                      total: flow.pagination.totalItems,
-                    })
-                  : t('dashboard.topologyRoutePageInfo', {
-                      start: flow.pagination.rangeStart,
-                      end: flow.pagination.rangeEnd,
-                      total: flow.pagination.totalItems,
-                    })}
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  disabled={flow.pagination.page <= 0}
-                  onClick={() => handlePageChange(flow.pagination.page - 1)}
-                  className="flex size-6 items-center justify-center rounded-md border border-border/75 bg-background text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-40"
-                  aria-label="Previous page"
-                >
-                  <ChevronLeft className="size-3.5" />
-                </button>
-                <button
-                  type="button"
-                  disabled={flow.pagination.page >= flow.pagination.totalPages - 1}
-                  onClick={() => handlePageChange(flow.pagination.page + 1)}
-                  className="flex size-6 items-center justify-center rounded-md border border-border/75 bg-background text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-40"
-                  aria-label="Next page"
-                >
-                  <ChevronRight className="size-3.5" />
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {flow.focusClientId ? (
-            <button
-              type="button"
-              onClick={() => onFocusChange(null)}
-              className="text-[11px] text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline sm:hidden"
-            >
-              {t('dashboard.topologyBack')}
-            </button>
-          ) : null}
-        </div>
+        {flow.focusClientId ? (
+          <button
+            type="button"
+            onClick={() => onFocusChange(null)}
+            className="text-[11px] text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline sm:hidden"
+          >
+            {t('dashboard.topologyBack')}
+          </button>
+        ) : null}
       </div>
     </div>
   );

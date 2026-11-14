@@ -569,7 +569,7 @@ function getTransportLabel(tunnel: ProxyConfig) {
   const actual = tunnel.transport?.actual ?? tunnel.actual_transport ?? 'unknown';
   const policyLabel = i18n.t(transportPolicyLabelKeys[policy] ?? policy);
   const actualLabel = i18n.t(actualTransportLabelKeys[actual] ?? actual);
-  return `${policyLabel} · ${actualLabel}`;
+  return policyLabel === actualLabel ? actualLabel : `${policyLabel} · ${actualLabel}`;
 }
 
 function getP2PLabel(tunnel: ProxyConfig) {

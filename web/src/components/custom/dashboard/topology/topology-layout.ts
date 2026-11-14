@@ -1,6 +1,7 @@
 import {
   EMPTY_TOPOLOGY_TRAFFIC_RATE,
   SERVER_NODE_ID,
+  compareTopologyLabel,
   normalizeTopologyFocusId,
   topologyEdgeTouches,
   type TopologyEdge,
@@ -57,15 +58,13 @@ export interface TopologyFlowOptions {
   searchQuery?: string;
   quickFilter?: TopologyQuickFilter;
   trafficSnapshot?: TopologyTrafficSnapshot;
-  page?: number;
-  clientPageSize?: number;
-  routePageSize?: number;
   bundleThreshold?: number;
 }
 
 export interface StructuredTopologyFlow {
   focusClientId: string | null;
   ingressPeers: TopologyNode[];
+  c2cRouteCountByPeerId: Map<string, number>;
   routes: StructuredRouteItem[];
   middleItems: StructuredMiddleItem[];
   targetClients: TopologyNode[];
@@ -78,14 +77,6 @@ export interface StructuredTopologyFlow {
   showScaleToolbar: boolean;
   hasEmptyFilterResult: boolean;
   filterCounts: TopologyFilterCounts;
-  pagination: {
-    mode: 'clients' | 'routes' | null;
-    page: number;
-    totalPages: number;
-    totalItems: number;
-    rangeStart: number;
-    rangeEnd: number;
-  };
 }
 
 function matchesClientQuery(node: TopologyNode, q: string): boolean {
@@ -147,7 +138,7 @@ function buildRouteBundle(
     const rateA = trafficSnapshot?.tunnelRates.get(a.id)?.totalBps ?? 0;
     const rateB = trafficSnapshot?.tunnelRates.get(b.id)?.totalBps ?? 0;
     if (rateA !== rateB) return rateB - rateA;
-    return a.edge.tunnel.name.localeCompare(b.edge.tunnel.name);
+    return compareTopologyLabel(a.edge.tunnel.name, b.edge.tunnel.name);
   });
 
   for (const item of sortedGroup) {
@@ -189,9 +180,6 @@ export function buildStructuredTopologyFlow(
     searchQuery = '',
     quickFilter = 'all',
     trafficSnapshot,
-    page: rawPage = 0,
-    clientPageSize = 6,
-    routePageSize = 6,
     bundleThreshold = 5,
   } = options;
 
@@ -253,64 +241,153 @@ export function buildStructuredTopologyFlow(
     );
   });
 
-  const candidateClients: TopologyNode[] = (() => {
+  // 计算左栏 C2C 入口节点的固定顺序（在线优先 -> 出向规则数降序 -> 自然名称序），供三栏统一对齐
+  const c2cSourceCountByClient = new Map<string, number>();
+  for (const edge of scopedEdges) {
+    if (edge.sourceId !== SERVER_NODE_ID) {
+      c2cSourceCountByClient.set(edge.sourceId, (c2cSourceCountByClient.get(edge.sourceId) ?? 0) + 1);
+    }
+  }
+  const orderedPeerClients = allClients
+    .filter((node) => (c2cSourceCountByClient.get(node.id) ?? 0) > 0)
+    .sort((a, b) => {
+      if (a.online !== b.online) return a.online ? -1 : 1;
+      const outDiff = (c2cSourceCountByClient.get(b.id) ?? 0) - (c2cSourceCountByClient.get(a.id) ?? 0);
+      if (outDiff !== 0) return outDiff;
+      const labelDiff = compareTopologyLabel(a.label, b.label);
+      return labelDiff !== 0 ? labelDiff : compareTopologyLabel(a.id, b.id);
+    });
+  const peerRankById = new Map(orderedPeerClients.map((node, index) => [node.id, index]));
+
+  // 统计每个目标客户端的入向流向归属与 C2C 入口重心（0: 纯公网, 1: 公网+C2C混合, 2: 纯C2C, 3: 无转发规则待命）
+  interface ClientFlowMetrics {
+    serverInCount: number;
+    c2cInCount: number;
+    totalInCount: number;
+    c2cBarycenter: number;
+    hasErrorIn: boolean;
+    flowBucket: 0 | 1 | 2 | 3;
+  }
+  const EMPTY_FLOW_METRICS: ClientFlowMetrics = {
+    serverInCount: 0,
+    c2cInCount: 0,
+    totalInCount: 0,
+    c2cBarycenter: 0,
+    hasErrorIn: false,
+    flowBucket: 3,
+  };
+
+  const flowMetricsByClientId = new Map<string, ClientFlowMetrics>();
+  for (const node of allClients) {
+    let serverInCount = 0;
+    let c2cInCount = 0;
+    let c2cRankSum = 0;
+    let hasErrorIn = false;
+
+    for (const edge of scopedEdges) {
+      if (edge.targetId !== node.id) continue;
+      if (edge.status.key === 'error') hasErrorIn = true;
+      if (edge.sourceId === SERVER_NODE_ID) {
+        serverInCount += 1;
+      } else {
+        c2cInCount += 1;
+        c2cRankSum += peerRankById.get(edge.sourceId) ?? 0;
+      }
+    }
+
+    const totalInCount = serverInCount + c2cInCount;
+    const flowBucket: 0 | 1 | 2 | 3 =
+      serverInCount > 0 && c2cInCount === 0
+        ? 0
+        : serverInCount > 0 && c2cInCount > 0
+          ? 1
+          : c2cInCount > 0
+            ? 2
+            : 3;
+
+    flowMetricsByClientId.set(node.id, {
+      serverInCount,
+      c2cInCount,
+      totalInCount,
+      c2cBarycenter: c2cInCount > 0 ? c2cRankSum / c2cInCount : 0,
+      hasErrorIn,
+      flowBucket,
+    });
+  }
+
+  const compareClientTieBreakers = (
+    a: TopologyNode,
+    b: TopologyNode,
+    ma: ClientFlowMetrics,
+    mb: ClientFlowMetrics,
+  ): number => {
+    const inDiff = mb.totalInCount - ma.totalInCount;
+    if (inDiff !== 0) return inDiff;
+
+    const totalDiff = (tunnelCountByClientId.get(b.id) ?? 0) - (tunnelCountByClientId.get(a.id) ?? 0);
+    if (totalDiff !== 0) return totalDiff;
+
+    const errDiff = (mb.hasErrorIn ? 1 : 0) - (ma.hasErrorIn ? 1 : 0);
+    if (errDiff !== 0) return errDiff;
+
+    const labelDiff = compareTopologyLabel(a.label, b.label);
+    return labelDiff !== 0 ? labelDiff : compareTopologyLabel(a.id, b.id);
+  };
+
+  // 全局零交叉流向对齐：严格按 公网目标 -> 混合 -> C2C目标(按左栏重心) -> 待命节点 纵向单调对齐
+  const compareForScreenFlow = (a: TopologyNode, b: TopologyNode): number => {
+    const ma = flowMetricsByClientId.get(a.id) ?? EMPTY_FLOW_METRICS;
+    const mb = flowMetricsByClientId.get(b.id) ?? EMPTY_FLOW_METRICS;
+
+    if (ma.flowBucket !== mb.flowBucket) return ma.flowBucket - mb.flowBucket;
+    if (Math.abs(ma.c2cBarycenter - mb.c2cBarycenter) > 1e-6) {
+      return ma.c2cBarycenter - mb.c2cBarycenter;
+    }
+    if (a.online !== b.online) return a.online ? -1 : 1;
+
+    return compareClientTieBreakers(a, b, ma, mb);
+  };
+
+  const targetClients: TopologyNode[] = (() => {
+    let filtered: TopologyNode[];
     if (focusClientId) {
       const keepIds = new Set<string>([focusClientId]);
       for (const edge of scopedEdges) {
         if (edge.targetId !== SERVER_NODE_ID) keepIds.add(edge.targetId);
       }
-      return allClients.filter((node) => keepIds.has(node.id));
-    }
-
-    const edgeTargetIds = new Set<string>();
-    for (const edge of scopedEdges) {
-      if (edge.targetId !== SERVER_NODE_ID) {
-        edgeTargetIds.add(edge.targetId);
-      }
-    }
-
-    return allClients.filter((node) => {
-      if (quickFilter === 'active' || quickFilter === 'c2c') {
-        return edgeTargetIds.has(node.id);
-      }
-      if (quickFilter === 'issues') {
-        if (edgeTargetIds.has(node.id)) return true;
-        if (!node.online) {
-          return !query || matchesClientQuery(node, query);
+      filtered = allClients.filter((node) => keepIds.has(node.id));
+    } else {
+      const edgeTargetIds = new Set<string>();
+      for (const edge of scopedEdges) {
+        if (edge.targetId !== SERVER_NODE_ID) {
+          edgeTargetIds.add(edge.targetId);
         }
-        return false;
       }
-      if (query) {
-        return matchesClientQuery(node, query) || edgeTargetIds.has(node.id);
-      }
-      return true;
-    });
+
+      filtered = allClients.filter((node) => {
+        if (quickFilter === 'active' || quickFilter === 'c2c') {
+          return edgeTargetIds.has(node.id);
+        }
+        if (quickFilter === 'issues') {
+          if (edgeTargetIds.has(node.id)) return true;
+          if (!node.online) {
+            return !query || matchesClientQuery(node, query);
+          }
+          return false;
+        }
+        if (query) {
+          return matchesClientQuery(node, query) || edgeTargetIds.has(node.id);
+        }
+        return true;
+      });
+    }
+
+    return [...filtered].sort(compareForScreenFlow);
   })();
 
-  // 第 2 步：分页切片（全览按客户端分页，聚焦态按规则分页）
-  let pagedClients = candidateClients;
-  let paginationMode: 'clients' | 'routes' | null = null;
-  let page = 0;
-  let totalPages = 1;
-  let totalItems = candidateClients.length;
-  let rangeStart = candidateClients.length > 0 ? 1 : 0;
-  let rangeEnd = candidateClients.length;
+  const targetOrder = new Map(targetClients.map((node, index) => [node.id, index]));
 
-  if (!focusClientId && candidateClients.length > clientPageSize) {
-    paginationMode = 'clients';
-    totalItems = candidateClients.length;
-    totalPages = Math.max(1, Math.ceil(totalItems / clientPageSize));
-    page = Math.max(0, Math.min(rawPage, totalPages - 1));
-    const startIdx = page * clientPageSize;
-    pagedClients = candidateClients.slice(startIdx, startIdx + clientPageSize);
-    rangeStart = startIdx + 1;
-    rangeEnd = startIdx + pagedClients.length;
-  }
-
-  const targetOrder = new Map(pagedClients.map((node, index) => [node.id, index]));
-  const clientOrder = new Map(allClients.map((node, index) => [node.id, index]));
-
-  let sortedRoutes: StructuredRouteItem[] = scopedEdges
+  const sortedRoutes: StructuredRouteItem[] = scopedEdges
     .filter((edge) => targetOrder.has(edge.targetId))
     .map((edge) => {
       const isServerExpose = edge.sourceId === SERVER_NODE_ID;
@@ -328,32 +405,21 @@ export function buildStructuredTopologyFlow(
       };
     })
     .sort((a, b) => {
+      const sourceRankA = a.kind === 'server_expose' ? -1 : (peerRankById.get(a.sourceNodeId) ?? 0);
+      const sourceRankB = b.kind === 'server_expose' ? -1 : (peerRankById.get(b.sourceNodeId) ?? 0);
+      if (sourceRankA !== sourceRankB) return sourceRankA - sourceRankB;
+
       const targetDiff = (targetOrder.get(a.targetClientId) ?? 0) - (targetOrder.get(b.targetClientId) ?? 0);
       if (targetDiff !== 0) return targetDiff;
 
-      const sourceRankA = a.kind === 'server_expose' ? -1 : (clientOrder.get(a.sourceNodeId) ?? 0);
-      const sourceRankB = b.kind === 'server_expose' ? -1 : (clientOrder.get(b.sourceNodeId) ?? 0);
-      if (sourceRankA !== sourceRankB) return sourceRankA - sourceRankB;
+      const errDiff = (b.edge.status.key === 'error' ? 1 : 0) - (a.edge.status.key === 'error' ? 1 : 0);
+      if (errDiff !== 0) return errDiff;
 
-      return a.edge.tunnel.name.localeCompare(b.edge.tunnel.name);
+      const nameDiff = compareTopologyLabel(a.edge.tunnel.name, b.edge.tunnel.name);
+      return nameDiff !== 0 ? nameDiff : compareTopologyLabel(a.id, b.id);
     });
 
-  if (focusClientId && sortedRoutes.length > routePageSize) {
-    paginationMode = 'routes';
-    totalItems = sortedRoutes.length;
-    totalPages = Math.max(1, Math.ceil(totalItems / routePageSize));
-    page = Math.max(0, Math.min(rawPage, totalPages - 1));
-    const startIdx = page * routePageSize;
-    sortedRoutes = sortedRoutes.slice(startIdx, startIdx + routePageSize);
-    rangeStart = startIdx + 1;
-    rangeEnd = startIdx + sortedRoutes.length;
-
-    // 聚焦分页后仅保留当前页涉及的目标节点与焦点节点
-    const activeTargets = new Set<string>([focusClientId, ...sortedRoutes.map((r) => r.targetClientId)]);
-    pagedClients = pagedClients.filter((n) => activeTargets.has(n.id));
-  }
-
-  // 第 3 步：全览模式下，当规则数超过阈值时，自动将同 (源 -> 目标) 的多条并行隧道聚合成规则束卡片
+  // 第 2 步：全览模式下，当规则数超过阈值时，自动将同 (源 -> 目标) 的多条并行隧道聚合成规则束卡片
   const shouldBundle = !focusClientId && sortedRoutes.length > bundleThreshold;
   const middleItems: StructuredMiddleItem[] = (() => {
     if (!shouldBundle) {
@@ -381,42 +447,40 @@ export function buildStructuredTopologyFlow(
   })();
 
   const ingressPeerIds = new Set<string>();
-  for (const item of middleItems) {
-    if (item.kind === 'client_to_client' && clientById.has(item.sourceNodeId)) {
-      ingressPeerIds.add(item.sourceNodeId);
+  const c2cRouteCountByPeerId = new Map<string, number>();
+  for (const route of sortedRoutes) {
+    if (route.kind === 'client_to_client' && clientById.has(route.sourceNodeId)) {
+      ingressPeerIds.add(route.sourceNodeId);
+      c2cRouteCountByPeerId.set(
+        route.sourceNodeId,
+        (c2cRouteCountByPeerId.get(route.sourceNodeId) ?? 0) + 1,
+      );
     }
   }
-  const ingressPeers = allClients.filter((node) => ingressPeerIds.has(node.id));
+  const ingressPeers = orderedPeerClients.filter((node) => ingressPeerIds.has(node.id));
 
   const routedTargetIds = new Set(middleItems.map((item) => item.targetClientId));
-  const unroutedClients = pagedClients.filter((node) => !routedTargetIds.has(node.id));
+  const unroutedClients = targetClients.filter((node) => !routedTargetIds.has(node.id));
   const serverExposeCount = graph.edges.filter((edge) => edge.sourceId === SERVER_NODE_ID).length;
-  const compact = pagedClients.length > 4 || middleItems.length > 5;
-  const hasEmptyFilterResult = allClients.length > 0 && pagedClients.length === 0;
+  const compact = targetClients.length > 4 || middleItems.length > 5;
+  const hasEmptyFilterResult = allClients.length > 0 && targetClients.length === 0;
 
   return {
     focusClientId,
     ingressPeers,
+    c2cRouteCountByPeerId,
     routes: sortedRoutes,
     middleItems,
-    targetClients: pagedClients,
+    targetClients,
     unroutedClients,
     tunnelCountByClientId,
     serverExposeCount,
     totalScopedRoutes: scopedEdges.length,
-    totalScopedClients: candidateClients.length,
+    totalScopedClients: targetClients.length,
     compact,
     showScaleToolbar,
     hasEmptyFilterResult,
     filterCounts,
-    pagination: {
-      mode: paginationMode,
-      page,
-      totalPages,
-      totalItems,
-      rangeStart,
-      rangeEnd,
-    },
   };
 }
 

@@ -21,6 +21,12 @@ type clientTunnelRuntime struct {
 	tunnelID            string
 	revision            int64
 	role                string
+	name                string
+	topology            string
+	ingressType         string
+	targetType          string
+	listenAddr          string
+	transportPolicy     string
 	listener            net.Listener
 	packetConn          net.PacketConn
 	sourceCIDRs         []*net.IPNet
@@ -28,6 +34,7 @@ type clientTunnelRuntime struct {
 	runMu               sync.Mutex
 	closing             bool
 	tcpConns            sync.Map
+	tcpConnCount        atomic.Int64
 	udpAssociations     sync.Map
 	udpAssociationMu    sync.Mutex
 	udpAssociationCount atomic.Int64
@@ -41,6 +48,9 @@ type fixedServiceTargetRuntime struct {
 	loopRuntime     *sessionRuntime
 	tunnelID        string
 	revision        int64
+	name            string
+	topology        string
+	ingressType     string
 	targetType      string
 	host            string
 	port            int
@@ -138,6 +148,7 @@ func (rt *clientTunnelRuntime) shutdown() {
 			return true
 		})
 		rt.udpAssociationCount.Store(0)
+		rt.tcpConnCount.Store(0)
 	})
 }
 
@@ -169,6 +180,7 @@ func (rt *clientTunnelRuntime) trackTCPConn(conn net.Conn) bool {
 		return false
 	}
 	rt.tcpConns.Store(conn, conn)
+	rt.tcpConnCount.Add(1)
 	return true
 }
 
@@ -176,7 +188,9 @@ func (rt *clientTunnelRuntime) removeTCPConn(conn net.Conn) {
 	if rt == nil || conn == nil {
 		return
 	}
-	rt.tcpConns.Delete(conn)
+	if _, loaded := rt.tcpConns.LoadAndDelete(conn); loaded {
+		rt.tcpConnCount.Add(-1)
+	}
 }
 
 func (rt *clientTunnelRuntime) packetConnForWrite() (net.PacketConn, bool) {
@@ -451,10 +465,16 @@ func (c *Client) startIngressTunnelRuntime(rt *sessionRuntime, req protocol.Tunn
 	addr := net.JoinHostPort(cfg.BindIP, fmt.Sprintf("%d", cfg.Port))
 
 	runtime := &clientTunnelRuntime{
-		tunnelID: req.TunnelID,
-		revision: req.Revision,
-		role:     req.Role,
-		done:     make(chan struct{}),
+		tunnelID:        req.TunnelID,
+		revision:        req.Revision,
+		role:            req.Role,
+		name:            req.Spec.Name,
+		topology:        req.Spec.Topology,
+		ingressType:     req.Spec.Ingress.Type,
+		targetType:      req.Spec.Target.Type,
+		listenAddr:      addr,
+		transportPolicy: req.Spec.TransportPolicy,
+		done:            make(chan struct{}),
 	}
 	policy, err := decodeIngressAccessPolicy(req.Spec.Ingress.Config, true)
 	if err != nil {
@@ -819,6 +839,9 @@ func newFixedServiceTargetRuntime(req protocol.TunnelProvisionRequest) (fixedSer
 	return fixedServiceTargetRuntime{
 		tunnelID:        req.TunnelID,
 		revision:        req.Revision,
+		name:            req.Spec.Name,
+		topology:        req.Spec.Topology,
+		ingressType:     req.Spec.Ingress.Type,
 		targetType:      req.Spec.Target.Type,
 		host:            host,
 		port:            target.Port,

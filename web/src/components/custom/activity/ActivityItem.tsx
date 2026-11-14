@@ -20,9 +20,9 @@ const severityAccentIcon: Partial<Record<ActivitySeverity, LucideIcon>> = {
 
 const severityMarkerClass: Record<ActivitySeverity, string> = {
   debug: 'bg-muted-foreground/40',
-  info: 'bg-sky-500/80',
-  warning: 'text-amber-500',
-  error: 'text-rose-500',
+  info: 'bg-primary/80',
+  warning: 'text-status-warning',
+  error: 'text-status-danger',
 };
 
 import {

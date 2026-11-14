@@ -9,43 +9,51 @@ import {
 export type StatusKey = TunnelStatusPresentation['key'];
 
 export const STATUS_DOT: Record<StatusKey, string> = {
-  exposed: 'bg-emerald-500',
-  pending: 'bg-sky-500',
-  offline: 'bg-amber-500',
-  stopped: 'bg-zinc-400 dark:bg-zinc-500',
-  error: 'bg-rose-500',
+  exposed: 'bg-status-online',
+  pending: 'bg-status-pending',
+  offline: 'bg-status-warning',
+  stopped: 'bg-muted-foreground/55',
+  error: 'bg-status-danger',
 };
 
 export const STATUS_TEXT: Record<StatusKey, string> = {
-  exposed: 'text-emerald-600 dark:text-emerald-400',
-  pending: 'text-sky-600 dark:text-sky-400',
-  offline: 'text-amber-600 dark:text-amber-400',
+  exposed: 'text-status-online-fg',
+  pending: 'text-status-pending-fg',
+  offline: 'text-status-warning-fg',
   stopped: 'text-muted-foreground',
-  error: 'text-rose-600 dark:text-rose-400',
+  error: 'text-status-danger-fg',
 };
 
 export const STATUS_PORT_BORDER: Record<StatusKey, string> = {
-  exposed: 'border-emerald-500',
-  pending: 'border-sky-500',
-  offline: 'border-amber-500',
-  stopped: 'border-zinc-400 dark:border-zinc-500',
-  error: 'border-rose-500',
+  exposed: 'border-status-online',
+  pending: 'border-status-pending',
+  offline: 'border-status-warning',
+  stopped: 'border-muted-foreground/55',
+  error: 'border-status-danger',
 };
 
 export const STATUS_WIRE_BASE: Record<StatusKey, string> = {
-  exposed: 'stroke-emerald-500/45 dark:stroke-emerald-500/40',
-  pending: 'stroke-sky-500/50',
-  offline: 'stroke-amber-500/55',
-  stopped: 'stroke-zinc-400/45 dark:stroke-zinc-600/60',
-  error: 'stroke-rose-500/60',
+  exposed: 'stroke-status-online/35',
+  pending: 'stroke-status-pending/45',
+  offline: 'stroke-status-warning/50',
+  stopped: 'stroke-muted-foreground/35',
+  error: 'stroke-status-danger/55',
 };
 
 export const STATUS_WIRE_FLOW: Record<StatusKey, string> = {
-  exposed: 'stroke-emerald-500 dark:stroke-emerald-400',
-  pending: 'stroke-sky-500 dark:stroke-sky-400',
-  offline: 'stroke-amber-500',
-  stopped: 'stroke-zinc-400',
-  error: 'stroke-rose-500 dark:stroke-rose-400',
+  exposed: 'stroke-status-online',
+  pending: 'stroke-status-pending',
+  offline: 'stroke-status-warning',
+  stopped: 'stroke-muted-foreground/50',
+  error: 'stroke-status-danger',
+};
+
+export const STATUS_WIRE_STOP_COLOR: Record<StatusKey, string> = {
+  exposed: 'var(--status-online)',
+  pending: 'var(--status-pending)',
+  offline: 'var(--status-warning)',
+  stopped: 'var(--muted-foreground)',
+  error: 'var(--status-danger)',
 };
 
 export function statusLabel(

@@ -238,7 +238,7 @@ function ClientAuthRateLimitCard({
 
         {entries.length === 0 ? (
           <div className="flex items-center gap-2.5 px-4 py-3.5 text-xs text-muted-foreground sm:px-5">
-            <span className="size-2 shrink-0 rounded-full bg-emerald-500/80" />
+            <span className="size-2 shrink-0 rounded-full bg-status-online/85" />
             <span className="font-medium text-foreground/80">
               {t('admin.noClientAuthRateLimits')}
             </span>

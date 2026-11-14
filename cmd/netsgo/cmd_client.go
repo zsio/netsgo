@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	"netsgo/internal/client"
@@ -92,15 +93,36 @@ All flags support environment variable configuration with NETSGO_ prefix, e.g.:
 			c.TLSFingerprintExplicit = true
 		}
 
+		var shutdownOnce sync.Once
+		triggerShutdown := func(reason string, extra map[string]any) {
+			shutdownOnce.Do(func() {
+				fields := map[string]any{"reason": reason}
+				for k, v := range extra {
+					fields[k] = v
+				}
+				logger.Info("client.shutdown_requested", "Starting graceful shutdown", fields)
+				c.Shutdown()
+			})
+		}
+
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(sigCh)
 
 		go func() {
-			sig := <-sigCh
+			sig, ok := <-sigCh
+			if !ok {
+				return
+			}
 			logger.Info("client.signal_received", "Received signal, starting graceful shutdown", map[string]any{"signal": sig.String()})
-			c.Shutdown()
-			os.Exit(0)
+			triggerShutdown("signal", map[string]any{"signal": sig.String()})
 		}()
+
+		if viper.GetBool("control-stdio") || viper.GetBool("parent-watch") {
+			go runSidecarStdinControl(os.Stdin, c, logger, func(reason string) {
+				triggerShutdown(reason, nil)
+			})
+		}
 
 		if err := c.Start(); err != nil {
 			fatalClient(logger, fmt.Errorf("client startup failed: %w", err))
@@ -136,6 +158,8 @@ func init() {
 
 	clientCmd.Flags().Bool("tls-skip-verify", false, "Skip TLS certificate verification (dev/test only)")
 	clientCmd.Flags().String("tls-fingerprint", "", "Pin server certificate SHA-256 fingerprint (AA:BB:CC:... format)")
+	clientCmd.Flags().Bool("parent-watch", false, "Exit gracefully when stdin reaches EOF (prevents orphaned sidecar processes)")
+	clientCmd.Flags().Bool("control-stdio", false, "Accept JSON control commands on stdin and exit on stdin EOF")
 
 	if err := viper.BindPFlag("server", clientCmd.Flags().Lookup("server")); err != nil {
 		panic(err)
@@ -153,6 +177,12 @@ func init() {
 		panic(err)
 	}
 	if err := viper.BindPFlag("tls-fingerprint", clientCmd.Flags().Lookup("tls-fingerprint")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("parent-watch", clientCmd.Flags().Lookup("parent-watch")); err != nil {
+		panic(err)
+	}
+	if err := viper.BindPFlag("control-stdio", clientCmd.Flags().Lookup("control-stdio")); err != nil {
 		panic(err)
 	}
 

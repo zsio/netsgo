@@ -45,7 +45,8 @@ commit="${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 date="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 ldflags="${LDFLAGS:--s -w -X netsgo/pkg/version.Current=${version} -X netsgo/pkg/version.Commit=${commit} -X netsgo/pkg/version.Date=${date}}"
 
-out="desktop/src-tauri/binaries/netsgo-${target_triple}${ext}"
+out_dir="${SIDECAR_OUT_DIR:-desktop/src-tauri/binaries}"
+out="${out_dir}/netsgo-${target_triple}${ext}"
 mkdir -p "$(dirname "$out")"
 
 echo "🔨 Building desktop sidecar: ${target_triple} (${goos}/${goarch}${goarm:+/v${goarm}})"

@@ -179,8 +179,8 @@ export function PasskeySection({
         }
       >
         {!passkeySupported && passkeys.length > 0 ? (
-          <div className="flex items-center gap-2.5 bg-amber-500/5 px-4 py-2.5 text-xs text-amber-600 dark:text-amber-400 sm:px-5">
-            <ShieldAlert className="size-4 shrink-0" />
+          <div className="flex items-center gap-2.5 bg-status-warning-soft/70 px-4 py-2.5 text-xs text-status-warning-fg sm:px-5">
+            <ShieldAlert className="size-4 shrink-0 text-status-warning" />
             <span>{unsupportedReason}</span>
           </div>
         ) : null}

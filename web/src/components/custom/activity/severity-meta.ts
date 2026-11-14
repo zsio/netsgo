@@ -25,8 +25,8 @@ export const severityIcon: Record<ActivitySeverity, LucideIcon> = {
 };
 
 export const severityActiveClass: Record<ActivitySeverity, string> = {
-  debug: 'border-slate-400/30 bg-slate-500/10 text-slate-600 dark:text-slate-300',
-  info: 'border-sky-400/30 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-  warning: 'border-amber-400/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
-  error: 'border-rose-400/30 bg-rose-500/10 text-rose-700 dark:text-rose-300',
+  debug: 'border-border bg-muted/75 text-foreground/85',
+  info: 'border-brand-soft-border bg-brand-soft text-brand-strong',
+  warning: 'border-status-warning-border bg-status-warning-soft text-status-warning-fg',
+  error: 'border-status-danger-border bg-status-danger-soft text-status-danger-fg',
 };
