@@ -48,6 +48,7 @@ let application;
 const sqliteBytes = Buffer.from('fixture identity bytes; never transmit or log real credentials');
 await writeFile(path.join(user, 'desktop-config.json'), JSON.stringify({ profiles: [{ id: 'fixture', name: 'Before', server: 'http://127.0.0.1:1', auto_connect: false }] }));
 await writeFile(path.join(user, 'profiles/fixture/client/netsgo.db'), sqliteBytes);
+await writeFile(path.join(user, 'uninstall.lock'), '', { mode: 0o600 });
 let resumeLive = false;
 async function manage(operation, sourceBin = source, expectFailure = false) {
   const request = path.join(temp, 'request.json');

@@ -97,6 +97,8 @@ bun scripts/test-desktop-upgrade.mjs /path/to/old-Portable.zip /path/to/new-full
 
 真实系统服务安装、升级、失败回滚、自动重连和停用验证只在一次性的 GitHub Actions runner 执行：手动运行 Release workflow 并勾选 `validate_startup`。桌面版 tag 发布时同样执行，验证通过后才公布桌面更新。本地 Rust 测试只使用临时目录，不修改真实启动项。
 
+卸载入口会同时处理两种自启动，无需用户先关开关。Windows 注册的系统卸载命令先请求服务清理所需授权，清理成功后调用 Velopack 原生卸载器；原生快速卸载回调不能显示界面或取消卸载，因此仅作为绕过正常入口时的停用保护。macOS 的“卸载 NetsGo”和随包工具执行后台清理后将应用移入废纸篓；直接拖动应用不执行卸载回调，只会触发连接暂停保护。详见 [卸载说明](INSTALL.md#卸载)。
+
 ## 边车与核心约束
 
 - 所有认证、重连退避、yamux 数据通道、P2P 打洞以及未来扩展的 `TunnelSpec` 端点（如串口隧道等）均由 `netsgo client` 统一承载，保证 CLI 与桌面端行为严格一致。

@@ -46,6 +46,7 @@ pub fn request(
     if operation == Operation::Remove {
         return remove_request(user_root);
     }
+    let _configuration = crate::uninstall::configuration_guard(user_root, true)?;
     let host_dir = platform::source_bin()?;
     let source_bin = source.unwrap_or(&host_dir).canonicalize()?;
     let version = String::from_utf8(
@@ -193,6 +194,14 @@ pub fn execute_request(file: &Path) -> Result<()> {
 
 fn execute(request: &Request) -> Result<()> {
     validate_request(request)?;
+    let _configuration = if request.operation == Operation::Remove {
+        None
+    } else {
+        Some(crate::uninstall::configuration_guard(
+            &request.user_root,
+            false,
+        )?)
+    };
     let root = platform::machine_root()?;
     let data = root.join("data");
     let previous = platform::read_manifest()?;

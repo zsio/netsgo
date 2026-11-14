@@ -25,6 +25,40 @@ pub fn is_running(root: &Path) -> bool {
         .is_ok_and(|file| file.try_lock_exclusive().is_err())
 }
 
+pub(crate) fn configuration_guard(root: &Path, create: bool) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create(create)
+        .truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x0020_0000);
+    }
+    let file = options
+        .open(root.join("uninstall.lock"))
+        .context("无法取得后台配置锁，请通过客户端操作")?;
+    if !file.metadata()?.is_file() {
+        bail!("后台配置锁无效");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if file.metadata()?.file_attributes() & 0x400 != 0 {
+            bail!("后台配置锁不能是重解析点");
+        }
+    }
+    FileExt::try_lock_shared(&file).context("应用正在卸载，后台配置未执行")?;
+    Ok(file)
+}
+
 pub fn helper_path() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
     if exe
@@ -129,7 +163,7 @@ pub fn cli(args: &[String]) -> Result<()> {
 fn discover_app_root(user_root: &Path) -> Result<PathBuf> {
     let managed = platform::owned_manifest(user_root)?.is_some();
     if managed {
-        if let Some(installation) = presence::read(&platform::data_root()?)? {
+        if let Some(installation) = presence::read(&platform::data_root()?).ok().flatten() {
             return Ok(installation.app_root);
         }
     }
@@ -153,13 +187,19 @@ fn discover_app_root(user_root: &Path) -> Result<PathBuf> {
                 return Ok(root);
             }
         }
-        if managed {
-            return Ok(PathBuf::from("/Applications/NetsGo.app"));
-        }
-        bail!("无法确定 NetsGo.app 的安装位置，请使用应用设置里的卸载入口")
+        Ok(PathBuf::from("/Applications/NetsGo.app"))
     }
     #[cfg(not(target_os = "macos"))]
     {
+        #[cfg(windows)]
+        {
+            if let Some(local) = dirs::data_local_dir() {
+                let installed = local.join(PACK_ID);
+                if installed.join("current/sq.version").is_file() {
+                    return Ok(installed);
+                }
+            }
+        }
         Ok(installation.app_root)
     }
 }
@@ -207,6 +247,13 @@ fn run(user_root: &Path, app_root: Option<&Path>, quiet: bool) -> Result<bool> {
     let app_root = app_root.context("无法确定应用安装位置，未执行卸载")?;
     validate_app(app_root)?;
     fs::create_dir_all(user_root)?;
+    if user_root.canonicalize()?.starts_with(
+        app_root
+            .canonicalize()
+            .unwrap_or_else(|_| app_root.to_owned()),
+    ) {
+        bail!("连接数据位于程序目录内，请先迁出数据再卸载，未执行删除");
+    }
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -287,6 +334,22 @@ fn remove_application(root: &Path) -> Result<()> {
 #[cfg(windows)]
 fn remove_application(root: &Path) -> Result<()> {
     if !root.exists() {
+        return Ok(());
+    }
+    if root.join(".portable").is_file() {
+        for name in ["current", "packages"] {
+            if root.join(name).exists() {
+                fs::remove_dir_all(root.join(name))?;
+            }
+        }
+        for name in ["NetsGo.exe", "Update.exe", ".portable"] {
+            if root.join(name).exists() {
+                fs::remove_file(root.join(name))?;
+            }
+        }
+        if fs::read_dir(root)?.next().is_none() {
+            fs::remove_dir(root)?;
+        }
         return Ok(());
     }
     let status = platform::command(root.join("Update.exe"))
@@ -430,7 +493,7 @@ fn windows_message(message: &str, confirm: bool) -> i32 {
             std::ptr::null_mut(),
             text.as_ptr(),
             title.as_ptr(),
-            if confirm { 0x31 } else { 0x10 },
+            if confirm { 0x131 } else { 0x10 },
         )
     }
 }
@@ -475,6 +538,22 @@ fn schedule_worker_cleanup() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn uninstall_and_background_configuration_cannot_overlap() {
+        let root = tempfile::tempdir().unwrap();
+        let configuration = configuration_guard(root.path(), true).unwrap();
+        let uninstall = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.path().join("uninstall.lock"))
+            .unwrap();
+        assert!(uninstall.try_lock_exclusive().is_err());
+        drop(configuration);
+        uninstall.try_lock_exclusive().unwrap();
+        assert!(configuration_guard(root.path(), false).is_err());
+        drop(uninstall);
+        assert!(configuration_guard(root.path(), false).is_ok());
+    }
     #[test]
     fn unrelated_directory_cannot_be_uninstalled() {
         let root = tempfile::tempdir().unwrap();

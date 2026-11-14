@@ -59,7 +59,7 @@ try {
     await mkdir(path.join(helper, 'Resources'));
     await cp(path.join(staging, service), path.join(helper, 'MacOS', 'netsgo-uninstall'));
     await cp(path.join(root, 'desktop/src-tauri/icons/icon.icns'), path.join(helper, 'Resources/icon.icns'));
-    await writeFile(path.join(helper, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>uy.zs.netsgo.desktop.uninstaller</string><key>CFBundleName</key><string>NetsGo Uninstaller</string><key>CFBundleDisplayName</key><string>卸载 NetsGo</string><key>CFBundleExecutable</key><string>netsgo-uninstall</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleIconFile</key><string>icon.icns</string><key>CFBundleVersion</key><string>${tag.slice(1)}</string><key>LSUIElement</key><true/></dict></plist>`);
+    await writeFile(path.join(helper, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>uy.zs.netsgo.desktop.uninstaller</string><key>CFBundleName</key><string>NetsGo Uninstaller</string><key>CFBundleDisplayName</key><string>卸载 NetsGo</string><key>CFBundleExecutable</key><string>netsgo-uninstall</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleIconFile</key><string>icon.icns</string><key>CFBundleVersion</key><string>${tag.slice(1).split('-')[0]}</string><key>LSUIElement</key><true/></dict></plist>`);
   }
 
   const args = ['pack', '--packId', appId, '--packVersion', tag.slice(1), '--packTitle', 'NetsGo',
