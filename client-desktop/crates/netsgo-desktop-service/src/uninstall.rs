@@ -448,11 +448,13 @@ fn confirm_uninstall() -> Result<bool> {
     }
     #[cfg(target_os = "macos")]
     {
-        let script = format!("display dialog {} with title \"卸载 NetsGo\" buttons {{\"取消\", \"卸载\"}} default button \"取消\" cancel button \"取消\" with icon caution", apple_string(message));
+        let script = format!("button returned of (display dialog {} with title \"卸载 NetsGo\" buttons {{\"取消\", \"卸载\"}} default button \"取消\" cancel button \"取消\" with icon caution)", apple_string(message));
         let result = platform::command("/usr/bin/osascript")
             .args(["-e", &script])
             .output()?;
-        return Ok(result.status.success());
+        return Ok(
+            result.status.success() && String::from_utf8_lossy(&result.stdout).trim() == "卸载"
+        );
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
